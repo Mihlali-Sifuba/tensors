@@ -9,7 +9,7 @@ from ..tensor import Tensor
 
 def std(value: Any) -> Tensor:
     """Return population standard deviation as a scalar Tensor."""
-    from ..autograd.variable import Variable
+    from ..variable import Variable
 
     if isinstance(value, Variable):
         raise NotImplementedError("Differentiable std is not implemented")

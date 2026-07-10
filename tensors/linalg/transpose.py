@@ -11,7 +11,7 @@ def transpose(value: Any) -> Any:
     Transpose has not yet gained a differentiable operation rule, so Variables
     are deliberately rejected instead of silently dropping their history.
     """
-    from ..autograd.variable import Variable
+    from ..variable import Variable
 
     if isinstance(value, Variable):
         raise NotImplementedError("Differentiable transpose is not implemented")

@@ -8,19 +8,17 @@ Eager operations retain differentiation history::
 
 Differentiation starts from a chosen output::
 
-    from tensors.autograd import backward
+    from tensors import backward
 
     backward(y)
 
     print(w.grad)   # Tensor([1.0, 2.0])
 """
 
-from typing import Any
-
-from ..tensor import Tensor
-from ..ops import Ops
-from ..ops import Add, Sub, Mul, Div, Neg, Slice
-from ..graph.state import get_graph_state
+from .tensor import Tensor
+from .ops import Ops
+from .ops import Add, Sub, Mul, Div, Neg, Slice
+from .graph.state import get_graph_state
 
 
 class Variable:
@@ -154,31 +152,3 @@ class Variable:
         return self._from_operation(
             Slice.forward(self.data, key), "slice", Slice, [self], key=key
         )
-
-
-# -- free functions that return Variables (graph-aware) ---------------
-
-def dot(a: Any, b: Any) -> Variable:
-    """Matrix multiplication between two Variables."""
-    from ..linalg import Dot
-    a = a if isinstance(a, Variable) else Variable(a, requires_grad=False)
-    b = b if isinstance(b, Variable) else Variable(b, requires_grad=False)
-    return Variable._from_operation(
-        Dot.forward(a.data, b.data), "dot", Dot, [a, b]
-    )
-
-
-def sum(var: Variable) -> Variable:
-    """Sum of all elements."""
-    from ..math import Sum as _SumOp
-    return Variable._from_operation(
-        _SumOp.forward(var.data), "sum", _SumOp, [var]
-    )
-
-
-def mean(var: Variable) -> Variable:
-    """Mean of all elements."""
-    from ..math import Mean as _MeanOp
-    return Variable._from_operation(
-        _MeanOp.forward(var.data), "mean", _MeanOp, [var]
-    )
