@@ -1,0 +1,114 @@
+"""Data type definitions for tensors.
+
+Usage::
+
+    import tensors as ts
+
+    t = ts.Tensor([1, 2, 3], dtype=ts.float64)
+    t.dtype          # DataType.float64
+    t.dtype.name     # 'float64'
+    t.dtype.typecode # 'd'
+    t.dtype.size     # 8
+"""
+
+from array import array
+from typing import Any, Iterable
+
+
+class DataType:
+    """Represents a tensor data type.
+
+    Wraps Python's ``array`` module type codes into a clean interface,
+    similar to ``np.float64`` or ``tf.float32``.
+    """
+
+    def __init__(self, name: str, typecode: str, byte_size: int):
+        """
+        Args:
+            name: Human-readable name (e.g. ``'float64'``).
+            typecode: Corresponding ``array`` typecode (e.g. ``'d'``).
+            byte_size: Number of bytes per element.
+        """
+        self._name = name
+        self._typecode = typecode
+        self._byte_size = byte_size
+
+    # -- public read-only properties -------------------------------------------
+
+    @property
+    def name(self) -> str:
+        """Human-readable name, e.g. ``'float64'``."""
+        return self._name
+
+    @property
+    def typecode(self) -> str:
+        """The ``array`` module typecode, e.g. ``'d'``."""
+        return self._typecode
+
+    @property
+    def size(self) -> int:
+        """Number of bytes per element."""
+        return self._byte_size
+
+    # -- helpers ---------------------------------------------------------------
+
+    def make_array(self, values: Iterable) -> array:
+        """Create an ``array`` of this dtype from an iterable of values."""
+        return array(self._typecode, values)
+
+    # -- dunder methods --------------------------------------------------------
+
+    def __repr__(self) -> str:
+        return f"dtype('{self._name}')"
+
+    def __str__(self) -> str:
+        return self._name
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, DataType):
+            return self._typecode == other._typecode
+        if isinstance(other, str):
+            return self._typecode == other
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self._typecode)
+
+
+# ======================================================================
+#  Predefined data types  —  the public API
+# ======================================================================
+
+float64 = DataType("float64", "d", 8)
+float32 = DataType("float32", "f", 4)
+int64   = DataType("int64",   "q", 8)
+int32   = DataType("int32",   "i", 4)
+int16   = DataType("int16",   "h", 2)
+int8    = DataType("int8",    "b", 1)
+uint8   = DataType("uint8",   "B", 1)
+
+# Default dtype used when none is specified
+default = float64
+
+
+# ======================================================================
+#  Lookup helpers
+# ======================================================================
+
+_TYPE_CODE_MAP = {
+    "d": float64,
+    "f": float32,
+    "q": int64,
+    "i": int32,
+    "h": int16,
+    "b": int8,
+    "B": uint8,
+}
+
+
+def from_typecode(code: str) -> DataType:
+    """Look up a :class:`DataType` by its ``array`` typecode string."""
+    dt = _TYPE_CODE_MAP.get(code)
+    if dt is None:
+        raise ValueError(f"Unknown typecode: {code!r}")
+    return dt
