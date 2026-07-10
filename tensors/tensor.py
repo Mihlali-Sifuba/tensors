@@ -1,5 +1,5 @@
 from array import array
-from typing import Union, List, Tuple, Optional
+from typing import Iterable, Union, List, Tuple, Optional
 
 from . import dtype as _dtype
 
@@ -44,6 +44,7 @@ class Tensor:
                 dtype = _dtype.default
         elif isinstance(dtype, str):
             dtype = _dtype.from_typecode(dtype)
+
         if not isinstance(dtype, _dtype.DataType):
             raise TypeError(f"dtype must be a DataType or typecode, got {type(dtype)}")
         self.dtype = dtype
@@ -51,24 +52,24 @@ class Tensor:
         # Handle different input types ----------------------------------
         if isinstance(data, Tensor):
             # Copy from another tensor
-            self._data = dtype.make_array(data._data)
+            self._data = self._make_array(data._data)
             inferred_shape = data.shape
 
         elif isinstance(data, (int, float)):
             # Scalar value
-            self._data = dtype.make_array([data])
+            self._data = self._make_array([data])
             inferred_shape = (1,)
 
         elif isinstance(data, list):
             # Flatten the list if it's nested
             flat_data = self._flatten_list(data)
-            self._data = dtype.make_array(flat_data)
+            self._data = self._make_array(flat_data)
 
             inferred_shape = self._infer_shape(data)
 
         elif isinstance(data, array):
             # Direct array input
-            self._data = dtype.make_array(data)
+            self._data = self._make_array(data)
             inferred_shape = (len(data),)
 
         else:
@@ -85,12 +86,20 @@ class Tensor:
                 f"(expected {total_elements} elements)"
             )
 
+    def _make_array(self, values: Iterable) -> array:
+        """Create this tensor's backing storage."""
+        return array(self.dtype.typecode, values)
+
     def _flatten_list(self, nested_list: List) -> List:
-        """Recursively flatten a nested list into a single list."""
-        result = []
-        for item in nested_list:
+        """Flatten a nested list into a single list (iterative, no recursion limit)."""
+        result: List = []
+        stack: List = [nested_list]
+        while stack:
+            item = stack.pop()
             if isinstance(item, list):
-                result.extend(self._flatten_list(item))
+                # Reverse so original order is preserved when popping
+                for sub in reversed(item):
+                    stack.append(sub)
             else:
                 result.append(item)
         return result
@@ -173,7 +182,7 @@ class Tensor:
                 idx = self._calculate_index((key,))
                 return self._data[idx]
             indices = range(*key.indices(self.shape[0]))
-            values = self.dtype.make_array(self._data[i] for i in indices)
+            values = [self._data[i] for i in indices]
             return Tensor(values, dtype=self.dtype, shape=(len(indices),))
 
         # Tuple of indices/slices — N-dimensional
@@ -230,7 +239,7 @@ class Tensor:
             strides.append(s)
 
         # Extract data by iterating over all index combinations
-        result_data = self.dtype.make_array([])
+        result_data = self._make_array([])
         self._extract_nd(0, 0, ranges, strides, result_data)
 
         return Tensor(result_data, dtype=self.dtype, shape=tuple(new_shape))

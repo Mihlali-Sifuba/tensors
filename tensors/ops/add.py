@@ -13,14 +13,12 @@ def _add_impl(a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
     """Actual addition computation."""
     dtype = result_dtype(a.dtype, b)
     if isinstance(b, (int, float)):
-        data = dtype.make_array(x + b for x in a._data)
+        data = [x + b for x in a._data]
         return Tensor(data, dtype=dtype, shape=a.shape)
     if isinstance(b, Tensor):
         if a.shape != b.shape:
             raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
-        data = dtype.make_array([])
-        for x, y in zip(a._data, b._data):
-            data.append(x + y)
+        data = [x + y for x, y in zip(a._data, b._data)]
         return Tensor(data, dtype=dtype, shape=a.shape)
     raise TypeError(f"Unsupported: {type(b)}")
 

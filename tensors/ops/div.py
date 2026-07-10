@@ -15,12 +15,12 @@ def _div_impl(a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
     if isinstance(b, (int, float)):
         if b == 0:
             raise ZeroDivisionError("Division by zero")
-        data = dtype.make_array(x / b for x in a._data)
+        data = [x / b for x in a._data]
         return Tensor(data, dtype=dtype, shape=a.shape)
     if isinstance(b, Tensor):
         if a.shape != b.shape:
             raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
-        data = dtype.make_array([])
+        data = []
         for x, y in zip(a._data, b._data):
             if y == 0:
                 raise ZeroDivisionError("Division by zero")
@@ -31,7 +31,7 @@ def _div_impl(a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
 
 def _mul_tensors(a: Tensor, b: Tensor) -> Tensor:
     """Element-wise multiply two Tensors (helper for backward)."""
-    data = a.dtype.make_array(x * y for x, y in zip(a._data, b._data))
+    data = [x * y for x, y in zip(a._data, b._data)]
     return Tensor(data, dtype=a.dtype, shape=a.shape)
 
 
@@ -69,5 +69,5 @@ class Div:
             values = (
                 -g * scalar / (x * x) for g, x in zip(grad._data, a._data)
             )
-            return [Tensor(dtype.make_array(values), dtype=dtype, shape=a.shape)]
+            return [Tensor(list(values), dtype=dtype, shape=a.shape)]
         return [Tensor([g / scalar for g in grad._data], dtype=grad.dtype.typecode, shape=grad.shape)]

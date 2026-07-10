@@ -9,7 +9,7 @@ from ._utils import negation_dtype
 def _neg_impl(a: Tensor) -> Tensor:
     """Actual negation computation."""
     dtype = negation_dtype(a.dtype)
-    data = dtype.make_array(-x for x in a._data)
+    data = [-x for x in a._data]
     return Tensor(data, dtype=dtype, shape=a.shape)
 
 
