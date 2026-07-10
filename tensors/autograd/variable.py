@@ -13,11 +13,12 @@ Execution is explicit::
     with Graph() as g:
         g.backward(y)
 
-    print(w.grad)   # Tensor([0.5, 0.5])
+    print(w.grad)   # Tensor([1.0, 2.0])
 """
 
 from ..tensor import Tensor
 from ..ops import Ops
+from ..ops import Add, Sub, Mul, Div, Neg, Slice
 from .graph import _get_graph
 
 
@@ -27,9 +28,10 @@ class Variable:
     Args:
         data: Initial data (Tensor, list, or number).
         name: Optional label for debugging and graph inspection.
+        requires_grad: Whether gradients should be accumulated for this leaf.
     """
 
-    def __init__(self, data, name=None):
+    def __init__(self, data, name=None, requires_grad=True, _register=True):
         if isinstance(data, Tensor):
             self.data = data
         elif isinstance(data, Variable):
@@ -39,9 +41,29 @@ class Variable:
 
         self.grad = None
         self.name = name or f"v{id(self) & 0xFFFF:04x}"
+        self.requires_grad = requires_grad
 
-        # Register as leaf node in the implicit graph
-        self.node = _get_graph().add_node(label="var", output_var=self)
+        if requires_grad and self.dtype.typecode not in {"f", "d"}:
+            raise ValueError("Only floating-point Variables can require gradients")
+
+        self.node = None
+        if _register:
+            self.node = _get_graph().add_node(label="var", output_var=self)
+
+    @classmethod
+    def _from_operation(cls, data, label, op_cls, inputs, **kwargs):
+        """Create a result Variable owned by its operation node."""
+        graph = _get_graph()
+        out = cls(
+            data,
+            requires_grad=any(var.requires_grad for var in inputs),
+            _register=False,
+        )
+        node = graph.add_node(label=label, output_var=out, op_cls=op_cls, **kwargs)
+        out.node = node
+        for index, var in enumerate(inputs):
+            graph.add_edge(var.node, node, label=f"input_{index}")
+        return out
 
     # -- properties mirroring Tensor -----------------------------------
 
@@ -70,115 +92,92 @@ class Variable:
     # -- operators (build graph implicitly) ----------------------------
 
     def __add__(self, other):
-        g = _get_graph()
         if isinstance(other, Variable):
-            out = Variable(Ops.add(self.data, other.data))
-            op = g.add_node(label="add", output_var=out)
-            g.add_edge(self.node, op)
-            g.add_edge(other.node, op)
-            return out
-        out = Variable(self.data + other)
-        op = g.add_node(label="add", output_var=out)
-        g.add_edge(self.node, op)
-        return out
+            return self._from_operation(
+                Ops.add(self.data, other.data), "add", Add, [self, other]
+            )
+        return self._from_operation(
+            Ops.add(self.data, other), "add", Add, [self], scalar=other
+        )
 
     def __radd__(self, other):
-        g = _get_graph()
-        out = Variable(self.data + other)
-        op = g.add_node(label="add", output_var=out)
-        g.add_edge(self.node, op)
-        return out
+        return self + other
 
     def __sub__(self, other):
-        g = _get_graph()
         if isinstance(other, Variable):
-            out = Variable(Ops.subtract(self.data, other.data))
-            op = g.add_node(label="sub", output_var=out)
-            g.add_edge(self.node, op)
-            g.add_edge(other.node, op)
-            return out
-        out = Variable(self.data - other)
-        op = g.add_node(label="sub", output_var=out)
-        g.add_edge(self.node, op)
-        return out
+            return self._from_operation(
+                Ops.subtract(self.data, other.data), "sub", Sub, [self, other]
+            )
+        return self._from_operation(
+            Ops.subtract(self.data, other), "sub", Sub, [self], scalar=other
+        )
 
     def __rsub__(self, other):
-        g = _get_graph()
-        out = Variable(-self.data + other)
-        op = g.add_node(label="neg", output_var=out)
-        g.add_edge(self.node, op)
-        return out
+        return (-self) + other
 
     def __mul__(self, other):
-        g = _get_graph()
         if isinstance(other, Variable):
-            out = Variable(Ops.multiply(self.data, other.data))
-            op = g.add_node(label="mul", output_var=out)
-            g.add_edge(self.node, op)
-            g.add_edge(other.node, op)
-            return out
-        out = Variable(self.data * other)
-        op = g.add_node(label="mul", output_var=out, scalar=other)
-        g.add_edge(self.node, op)
-        return out
+            return self._from_operation(
+                Ops.multiply(self.data, other.data), "mul", Mul, [self, other]
+            )
+        return self._from_operation(
+            Ops.multiply(self.data, other), "mul", Mul, [self], scalar=other
+        )
 
     def __rmul__(self, other):
-        g = _get_graph()
-        out = Variable(self.data * other)
-        op = g.add_node(label="mul", output_var=out, scalar=other)
-        g.add_edge(self.node, op)
-        return out
+        return self * other
 
     def __truediv__(self, other):
-        g = _get_graph()
         if isinstance(other, Variable):
-            out = Variable(Ops.divide(self.data, other.data))
-            op = g.add_node(label="div", output_var=out)
-            g.add_edge(self.node, op)
-            g.add_edge(other.node, op)
-            return out
-        out = Variable(self.data / other)
-        op = g.add_node(label="div", output_var=out, scalar=other)
-        g.add_edge(self.node, op)
-        return out
+            return self._from_operation(
+                Ops.divide(self.data, other.data), "div", Div, [self, other]
+            )
+        return self._from_operation(
+            Ops.divide(self.data, other), "div", Div, [self], scalar=other
+        )
+
+    def __rtruediv__(self, other):
+        return self._from_operation(
+            Div.forward_reverse(self.data, other),
+            "div",
+            Div,
+            [self],
+            scalar=other,
+            reverse=True,
+        )
 
     def __neg__(self):
-        g = _get_graph()
-        out = Variable(Ops.multiply(self.data, -1))
-        op = g.add_node(label="neg", output_var=out)
-        g.add_edge(self.node, op)
-        return out
+        return self._from_operation(Ops.neg(self.data), "neg", Neg, [self])
 
     def __getitem__(self, key):
-        return Variable(self.data[key])
+        return self._from_operation(
+            Slice.forward(self.data, key), "slice", Slice, [self], key=key
+        )
 
 
 # -- free functions that return Variables (graph-aware) ---------------
 
 def dot(a, b):
     """Matrix multiplication between two Variables."""
-    b = b if isinstance(b, Variable) else Variable(b)
-    g = _get_graph()
-    out = Variable(Ops.dot(a.data, b.data))
-    op = g.add_node(label="dot", output_var=out)
-    g.add_edge(a.node, op)
-    g.add_edge(b.node, op)
-    return out
+    from ..ops import Dot
+    a = a if isinstance(a, Variable) else Variable(a, requires_grad=False)
+    b = b if isinstance(b, Variable) else Variable(b, requires_grad=False)
+    return Variable._from_operation(
+        Ops.dot(a.data, b.data), "dot", Dot, [a, b]
+    )
 
 
 def sum(var):
     """Sum of all elements."""
-    g = _get_graph()
-    out = Variable(Ops.sum(var.data))
-    op = g.add_node(label="sum", output_var=out)
-    g.add_edge(var.node, op)
-    return out
+    from ..ops import Sum as _SumOp
+    return Variable._from_operation(
+        Ops.sum(var.data), "sum", _SumOp, [var]
+    )
 
 
 def mean(var):
     """Mean of all elements."""
-    g = _get_graph()
-    out = Variable(Ops.mean(var.data))
-    op = g.add_node(label="mean", output_var=out)
-    g.add_edge(var.node, op)
-    return out
+    from ..ops import Mean as _MeanOp
+    return Variable._from_operation(
+        Ops.mean(var.data), "mean", _MeanOp, [var]
+    )

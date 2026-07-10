@@ -16,12 +16,13 @@ class Node:
 
     _next_id = 0
 
-    def __init__(self, label=None, output_var=None, **kwargs):
+    def __init__(self, label=None, output_var=None, op_cls=None, **kwargs):
         self.id = Node._next_id
         Node._next_id += 1
 
         self.label = label               # e.g. "var", "add", "mul", "dot"
         self.output_var = output_var     # the Variable this node produces
+        self.op_cls = op_cls             # e.g. Add, Mul, Dot (None for leaf vars)
         self.args = kwargs               # extra metadata for backward
 
         self._in_edges = []   # edges from input nodes → this node
