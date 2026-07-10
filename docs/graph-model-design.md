@@ -67,6 +67,57 @@ prediction = model(x)  # calls model.forward(x) through Graph.__call__
 The existing graph-execution method named `forward` should therefore be
 renamed internally, for example to `_replay`, `_run`, or `_execute`.
 
+## Functional Model API
+
+For a small functional model, `Graph` can also be used directly as a Python
+decorator:
+
+```python
+weight = Variable([0.1], name="weight")
+bias = Variable([0.0], name="bias")
+
+
+@Graph
+def model(x):
+    return x * weight + bias
+```
+
+This is equivalent to:
+
+```python
+def model_function(x):
+    return x * weight + bias
+
+
+model = Graph(model_function)
+```
+
+After decoration, `model` is a callable graph-function rather than a plain
+Python function:
+
+```python
+prediction = model(x)
+```
+
+`@Graph` is deliberately preferred over a separate `@Graph.function`
+decorator. A graph is a function representation, so the direct decorator is
+both concise and Python-native. It complements the subclass API:
+
+```python
+@Graph
+def model(x):
+    ...
+
+
+class Model(Graph):
+    def forward(self, x):
+        ...
+```
+
+Use the functional form for small models whose state can be captured from the
+surrounding scope. Use subclassing for models with explicit state, nested
+graphs, or more substantial behaviour.
+
 ## Execution Lifecycle
 
 The intended lifecycle is:
