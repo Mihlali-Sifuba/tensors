@@ -1,19 +1,18 @@
-"""Matrix multiplication (dot) operation."""
+"""Matrix multiplication and its differentiation rule."""
 
-from typing import List
+from typing import Any, List
 
 from ..tensor import Tensor
-from ._utils import result_dtype
+from ..ops._utils import result_dtype
 
 
 def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
-    """Actual dot product computation (2D matrices only)."""
+    """Actual matrix multiplication for the currently supported 2D inputs."""
     if a.ndim != 2 or b.ndim != 2:
         raise ValueError("Dot product only supported for 2D tensors")
     if a.shape[1] != b.shape[0]:
         raise ValueError(
-            f"Cannot multiply {a.shape} with {b.shape}: "
-            f"inner dimensions must match"
+            f"Cannot multiply {a.shape} with {b.shape}: inner dimensions must match"
         )
 
     dtype = result_dtype(a.dtype, b)
@@ -32,7 +31,7 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
 
 
 def _transpose_impl(t: Tensor) -> Tensor:
-    """Transpose a 2D tensor (helper for backward)."""
+    """Transpose a 2D tensor for matrix operations and backward passes."""
     if t.ndim != 2:
         raise ValueError("Transpose only supported for 2D tensors")
     new_data = t.dtype.make_array([])
@@ -43,7 +42,7 @@ def _transpose_impl(t: Tensor) -> Tensor:
 
 
 class Dot:
-    """Matrix multiplication for 2D tensors — forward and backward."""
+    """2D matrix multiplication with a reverse-mode gradient rule."""
 
     forward = staticmethod(_dot_impl)
 
@@ -53,6 +52,16 @@ class Dot:
         og = grad
         if og.ndim == 1:
             og = Tensor(og._data, shape=(1, og.shape[0]))
-        da = _dot_impl(og, _transpose_impl(b))
-        db = _dot_impl(_transpose_impl(a), og)
-        return [da, db]
+        return [_dot_impl(og, _transpose_impl(b)), _dot_impl(_transpose_impl(a), og)]
+
+
+def dot(a: Any, b: Any) -> Any:
+    """Multiply two 2D Tensors or differentiable Variables."""
+    from ..autograd.variable import Variable, dot as variable_dot
+
+    if isinstance(a, Variable) or isinstance(b, Variable):
+        return variable_dot(a, b)
+    return Dot.forward(a, b)
+
+
+__all__ = ["Dot", "dot", "_transpose_impl"]
