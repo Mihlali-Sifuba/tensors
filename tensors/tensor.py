@@ -326,6 +326,10 @@ class Tensor:
         return wrapped
 
 
+    def __len__(self) -> int:
+        """Return the size of the first dimension."""
+        return self.shape[0]
+
     @property
     def size(self) -> int:
         """Total number of elements."""
@@ -339,6 +343,22 @@ class Tensor:
     def tolist(self) -> List:
         """Convert to Python list."""
         return list(self._data)
+
+    def clone(self) -> 'Tensor':
+        """Return a copy with the same data and dtype."""
+        return Tensor(self)
+
+    def astype(self, dtype: Union[str, _dtype.DataType]) -> 'Tensor':
+        """Return a copy converted to a new dtype."""
+        if isinstance(dtype, str):
+            dtype = _dtype.from_typecode(dtype)
+        if dtype.typecode in {"b", "B", "h", "i", "q"}:
+            values = [int(x) for x in self._data]
+        elif dtype.typecode in {"f", "d"}:
+            values = [float(x) for x in self._data]
+        else:
+            values = list(self._data)
+        return Tensor(values, dtype=dtype, shape=self.shape)
 
     def item(self) -> Union[int, float]:
         """Return the Python scalar stored in a single-element tensor."""
