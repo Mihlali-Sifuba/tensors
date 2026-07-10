@@ -1,25 +1,26 @@
 """Variable — a differentiable wrapper around Tensor.
 
-Building the graph is implicit::
+Eager operations retain differentiation history::
 
     x = Variable([1.0, 2.0])
     w = Variable([0.5, 0.5])
     y = x * w + 1.0
 
-Execution is explicit::
+Differentiation starts from a chosen output::
 
-    from tensors.autograd import Graph
+    from tensors.autograd import backward
 
-    with Graph() as g:
-        g.backward(y)
+    backward(y)
 
     print(w.grad)   # Tensor([1.0, 2.0])
 """
 
+from typing import Any
+
 from ..tensor import Tensor
 from ..ops import Ops
 from ..ops import Add, Sub, Mul, Div, Neg, Slice
-from .graph import _get_graph
+from ..graph.state import get_graph_state
 
 
 class Variable:
@@ -48,12 +49,12 @@ class Variable:
 
         self.node = None
         if _register:
-            self.node = _get_graph().add_node(label="var", output_var=self)
+            self.node = get_graph_state().add_node(label="var", output_var=self)
 
     @classmethod
     def _from_operation(cls, data, label, op_cls, inputs, **kwargs):
         """Create a result Variable owned by its operation node."""
-        graph = _get_graph()
+        graph = get_graph_state()
         out = cls(
             data,
             requires_grad=any(var.requires_grad for var in inputs),
@@ -157,27 +158,27 @@ class Variable:
 
 # -- free functions that return Variables (graph-aware) ---------------
 
-def dot(a, b):
+def dot(a: Any, b: Any) -> Variable:
     """Matrix multiplication between two Variables."""
-    from ..ops import Dot
+    from ..linalg import Dot
     a = a if isinstance(a, Variable) else Variable(a, requires_grad=False)
     b = b if isinstance(b, Variable) else Variable(b, requires_grad=False)
     return Variable._from_operation(
-        Ops.dot(a.data, b.data), "dot", Dot, [a, b]
+        Dot.forward(a.data, b.data), "dot", Dot, [a, b]
     )
 
 
-def sum(var):
+def sum(var: Variable) -> Variable:
     """Sum of all elements."""
-    from ..ops import Sum as _SumOp
+    from ..math import Sum as _SumOp
     return Variable._from_operation(
-        Ops.sum(var.data), "sum", _SumOp, [var]
+        _SumOp.forward(var.data), "sum", _SumOp, [var]
     )
 
 
-def mean(var):
+def mean(var: Variable) -> Variable:
     """Mean of all elements."""
-    from ..ops import Mean as _MeanOp
+    from ..math import Mean as _MeanOp
     return Variable._from_operation(
-        Ops.mean(var.data), "mean", _MeanOp, [var]
+        _MeanOp.forward(var.data), "mean", _MeanOp, [var]
     )

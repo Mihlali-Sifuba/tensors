@@ -331,6 +331,20 @@ class Tensor:
         """Convert to Python list."""
         return list(self._data)
 
+    def item(self) -> Union[int, float]:
+        """Return the Python scalar stored in a single-element tensor."""
+        if self.size != 1:
+            raise ValueError(
+                f"item() requires a tensor with one element, got {self.size}"
+            )
+        return self._data[0]
+
+    def __format__(self, format_spec: str) -> str:
+        """Format a scalar tensor using normal Python numeric formatting."""
+        if self.size != 1:
+            raise TypeError("Only single-element tensors can be formatted as scalars")
+        return format(self.item(), format_spec)
+
     # ---------- Operator Overloads (delegate to ops) ----------
     def __add__(self, other):
         from .ops import Ops

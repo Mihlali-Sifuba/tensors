@@ -49,6 +49,28 @@ class TensorTests(unittest.TestCase):
         self.assertEqual((2 - tensor).tolist(), [1.0, 0.0])
         self.assertEqual((2 / tensor).tolist(), [2.0, 1.0])
 
+    def test_math_namespace_returns_tensor_scalars(self):
+        tensor = ts.Tensor([1.0, 2.0, 3.0])
+
+        self.assertEqual(ts.math.sum(tensor).tolist(), [6.0])
+        self.assertEqual(ts.mean(tensor).tolist(), [2.0])
+
+    def test_linalg_namespace_exposes_dot(self):
+        left = ts.Tensor([[1.0, 2.0]])
+        right = ts.Tensor([[3.0], [4.0]])
+
+        self.assertEqual(ts.linalg.dot(left, right).tolist(), [11.0])
+
+    def test_scalar_tensor_supports_item_and_numeric_formatting(self):
+        value = ts.std(ts.Tensor([1.0, 2.0, 3.0]))
+
+        self.assertAlmostEqual(value.item(), 0.816496580927726)
+        self.assertEqual(f"{value:.4f}", "0.8165")
+
+    def test_item_rejects_multi_element_tensor(self):
+        with self.assertRaisesRegex(ValueError, "one element"):
+            ts.Tensor([1.0, 2.0]).item()
+
 
 if __name__ == "__main__":
     unittest.main()
