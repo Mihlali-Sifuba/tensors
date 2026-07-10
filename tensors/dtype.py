@@ -11,8 +11,7 @@ Usage::
     t.dtype.size     # 8
 """
 
-from array import array
-from typing import Any, Iterable
+from typing import Any
 
 
 class DataType:
@@ -49,12 +48,6 @@ class DataType:
     def size(self) -> int:
         """Number of bytes per element."""
         return self._byte_size
-
-    # -- helpers ---------------------------------------------------------------
-
-    def make_array(self, values: Iterable) -> array:
-        """Create an ``array`` of this dtype from an iterable of values."""
-        return array(self._typecode, values)
 
     # -- dunder methods --------------------------------------------------------
 

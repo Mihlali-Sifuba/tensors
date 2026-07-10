@@ -65,8 +65,11 @@ class Computation:
                 if self.output.dtype.typecode in {"f", "d"}
                 else "d"
             )
-            seed_data = array(typecode, [1.0] * self.output.data.size)
-            self.output.grad = Tensor(seed_data, shape=self.output.data.shape)
+            self.output.grad = Tensor(
+                [1.0] * self.output.data.size,
+                dtype=typecode,
+                shape=self.output.data.shape,
+            )
         else:
             seed = grad if isinstance(grad, Tensor) else Tensor(grad)
             if seed.shape != self.output.data.shape:

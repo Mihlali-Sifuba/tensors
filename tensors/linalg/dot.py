@@ -16,7 +16,7 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
         )
 
     dtype = result_dtype(a.dtype, b)
-    result = dtype.make_array([])
+    result = []
     a_cols = a.shape[1]
     b_cols = b.shape[1]
 
@@ -34,7 +34,7 @@ def _transpose_impl(t: Tensor) -> Tensor:
     """Transpose a 2D tensor for matrix operations and backward passes."""
     if t.ndim != 2:
         raise ValueError("Transpose only supported for 2D tensors")
-    new_data = t.dtype.make_array([])
+    new_data = []
     for j in range(t.shape[1]):
         for i in range(t.shape[0]):
             new_data.append(t._data[i * t.shape[1] + j])
