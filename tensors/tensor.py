@@ -9,7 +9,7 @@ class Tensor:
     A simple tensor implementation using Python's array module.
 
     Supports:
-    - 1D and 2D tensors
+    - N-dimensional tensors
     - Basic operations (add, subtract, multiply)
     - Reshaping
     - Transpose
@@ -115,59 +115,47 @@ class Tensor:
         return total
     
     def _calculate_index(self, indices: Tuple[int, ...]) -> int:
-        """
-        Convert multi-dimensional indices to flat index.
-        Works for 1D and 2D tensors.
-        """
+        """Convert N-dimensional indices to flat index (row-major order)."""
         if len(indices) != self.ndim:
             raise IndexError(
                 f"Expected {self.ndim} indices, got {len(indices)}"
             )
-        
-        # Simple case: 1D tensor
-        if self.ndim == 1:
-            idx = indices[0]
+
+        flat_idx = 0
+        for i, idx in enumerate(indices):
             if idx < 0:
-                idx += self.shape[0]
-            if not (0 <= idx < self.shape[0]):
+                idx += self.shape[i]
+            if not (0 <= idx < self.shape[i]):
                 raise IndexError("Index out of range")
-            return idx
-        
-        # 2D tensor: row-major order
-        if self.ndim == 2:
-            row, col = indices
-            if row < 0:
-                row += self.shape[0]
-            if col < 0:
-                col += self.shape[1]
-            if not (0 <= row < self.shape[0] and 0 <= col < self.shape[1]):
-                raise IndexError("Index out of range")
-            return row * self.shape[1] + col
-        
-        raise NotImplementedError(f"Indexing for {self.ndim}D tensors not implemented")
+            # Stride = product of all remaining dimensions
+            stride = 1
+            for j in range(i + 1, self.ndim):
+                stride *= self.shape[j]
+            flat_idx += idx * stride
+
+        return flat_idx
     
     def __getitem__(self, key):
         """
-        Support indexing and slicing.
-        
-        Examples:
-            tensor[0]           # Get first element (1D)
-            tensor[0, 1]        # Get element at row 0, col 1 (2D)
-            tensor[0, :]        # Get first row (2D)
-            tensor[:, 0]        # Get first column (2D)
+        Support indexing and slicing for N-dimensional tensors.
+
+        Examples::
+            tensor[0]              # First element (1D)
+            tensor[1, 2, 3]        # Element at indices (3D)
+            tensor[0:2]            # First 2 elements (1D)
+            tensor[0, :, 1:3]      # Mixed int/slice (3D)
         """
-        # Handle single integer for 1D tensor
-        if isinstance(key, int):
+        # Single int or slice for 1D tensor
+        if isinstance(key, (int, slice)):
             if self.ndim != 1:
-                raise ValueError(f"Cannot index {self.ndim}D tensor with single integer")
-            idx = self._calculate_index((key,))
-            return self._data[idx]
-        
-        # Handle slice object (1D)
-        if isinstance(key, slice):
-            if self.ndim != 1:
-                raise ValueError(f"Slicing {self.ndim}D tensor with single slice not supported")
-            
+                raise ValueError(
+                    f"Cannot use single {'int' if isinstance(key, int) else 'slice'} "
+                    f"on {self.ndim}D tensor"
+                )
+            if isinstance(key, int):
+                idx = self._calculate_index((key,))
+                return self._data[idx]
+            # Slice
             start, stop, step = key.start, key.stop, key.step
             if start is None:
                 start = 0
@@ -175,168 +163,162 @@ class Tensor:
                 stop = self.shape[0]
             if step is None:
                 step = 1
-            
-            # Handle negative indices
             if start < 0:
                 start += self.shape[0]
             if stop < 0:
                 stop += self.shape[0]
-            
-            slice_data = self._data[start:stop:step]
-            return Tensor(slice_data)
-        
-        # Handle tuple of indices (multi-dimensional)
+            return Tensor(self._data[start:stop:step])
+
+        # Tuple of indices/slices — N-dimensional
         if isinstance(key, tuple):
-            # Handle slice notation
-            if any(isinstance(k, slice) for k in key):
-                # For simplicity, only handle full slices for 2D tensors
-                # (e.g., tensor[0, :] returns a 1D tensor)
-                return self._handle_slice_tuple(key)
-            
-            # Standard indexing
-            idx = self._calculate_index(key)
-            return self._data[idx]
-        
+            if all(isinstance(k, int) for k in key):
+                # All ints — return a scalar
+                idx = self._calculate_index(key)
+                return self._data[idx]
+
+            # Mixed ints and slices — return a sub-tensor
+            return self._nd_slice(key)
+
         raise TypeError(f"Unsupported index type: {type(key)}")
-    
-    def _handle_slice_tuple(self, key: tuple):
-        """
-        Handle slicing with tuple notation.
-        
-        For 2D tensors:
-            tensor[0, :]    -> returns row 0 as 1D tensor
-            tensor[:, 0]    -> returns column 0 as 1D tensor
-        """
-        if self.ndim != 2:
-            raise NotImplementedError(f"Slicing for {self.ndim}D tensors not implemented")
-        
-        row_key, col_key = key
-        
-        # Case 1: row slice, col slice -> 2D tensor
-        if isinstance(row_key, slice) and isinstance(col_key, slice):
-            return self._handle_full_slice(row_key, col_key)
-        
-        # Case 2: int row, slice col -> row as 1D tensor
-        if isinstance(row_key, int) and isinstance(col_key, slice):
-            row = row_key if row_key >= 0 else row_key + self.shape[0]
-            if not (0 <= row < self.shape[0]):
-                raise IndexError("Row index out of range")
-            
-            start, stop, step = col_key.start, col_key.stop, col_key.step
-            if start is None:
-                start = 0
-            if stop is None:
-                stop = self.shape[1]
-            if step is None:
-                step = 1
-            
-            if start < 0:
-                start += self.shape[1]
-            if stop < 0:
-                stop += self.shape[1]
-            
-            # Extract data for this row and slice columns
-            row_start = row * self.shape[1]
-            row_end = (row + 1) * self.shape[1]
-            row_data = self._data[row_start:row_end]
-            slice_data = row_data[start:stop:step]
-            return Tensor(slice_data)
-        
-        # Case 3: slice row, int col -> column as 1D tensor
-        if isinstance(row_key, slice) and isinstance(col_key, int):
-            col = col_key if col_key >= 0 else col_key + self.shape[1]
-            if not (0 <= col < self.shape[1]):
-                raise IndexError("Column index out of range")
-            
-            # Extract data for this column
-            col_data = self.dtype.make_array([])
-            for row in range(self.shape[0]):
-                col_data.append(self._data[row * self.shape[1] + col])
-            return Tensor(col_data)
-        
-        raise NotImplementedError(f"Unsupported slice combination: {key}")
-    
-    def _handle_full_slice(self, row_slice: slice, col_slice: slice):
-        """Handle full 2D slicing (both dimensions are slices)."""
-        # Process row slice
-        r_start, r_stop, r_step = row_slice.start, row_slice.stop, row_slice.step
-        if r_start is None:
-            r_start = 0
-        if r_stop is None:
-            r_stop = self.shape[0]
-        if r_step is None:
-            r_step = 1
-        
-        if r_start < 0:
-            r_start += self.shape[0]
-        if r_stop < 0:
-            r_stop += self.shape[0]
-        
-        # Process col slice
-        c_start, c_stop, c_step = col_slice.start, col_slice.stop, col_slice.step
-        if c_start is None:
-            c_start = 0
-        if c_stop is None:
-            c_stop = self.shape[1]
-        if c_step is None:
-            c_step = 1
-        
-        if c_start < 0:
-            c_start += self.shape[1]
-        if c_stop < 0:
-            c_stop += self.shape[1]
-        
-        # Extract data
+
+    def _nd_slice(self, key: tuple):
+        """General N-dimensional slicing with mixed ints and slices."""
+        if len(key) > self.ndim:
+            raise IndexError(
+                f"Too many indices: {len(key)} for {self.ndim}D tensor"
+            )
+
+        # Build ranges for each dimension and compute output shape
+        ranges = []
+        new_shape = []
+        for dim_idx, k in enumerate(key):
+            if isinstance(k, int):
+                idx = k if k >= 0 else k + self.shape[dim_idx]
+                if not (0 <= idx < self.shape[dim_idx]):
+                    raise IndexError("Index out of range")
+                ranges.append(range(idx, idx + 1))
+                # Int collapses the dimension → not added to new_shape
+            elif isinstance(k, slice):
+                start, stop, step = k.start, k.stop, k.step
+                if start is None:
+                    start = 0
+                if stop is None:
+                    stop = self.shape[dim_idx]
+                if step is None:
+                    step = 1
+                if start < 0:
+                    start += self.shape[dim_idx]
+                if stop < 0:
+                    stop += self.shape[dim_idx]
+                dim_range = range(start, stop, step)
+                ranges.append(dim_range)
+                new_shape.append(len(dim_range))
+            else:
+                raise TypeError(
+                    f"Unsupported index type in tuple: {type(k)}"
+                )
+
+        # If key is shorter than ndim, remaining dims are taken fully
+        while len(ranges) < self.ndim:
+            dim_idx = len(ranges)
+            dim_range = range(self.shape[dim_idx])
+            ranges.append(dim_range)
+            new_shape.append(self.shape[dim_idx])
+
+        # Precompute strides for each dimension
+        strides = []
+        for d in range(self.ndim):
+            s = 1
+            for j in range(d + 1, self.ndim):
+                s *= self.shape[j]
+            strides.append(s)
+
+        # Extract data by iterating over all index combinations
         result_data = self.dtype.make_array([])
-        new_rows = len(range(r_start, r_stop, r_step))
-        new_cols = len(range(c_start, c_stop, c_step))
-        
-        for row in range(r_start, r_stop, r_step):
-            for col in range(c_start, c_stop, c_step):
-                idx = row * self.shape[1] + col
-                result_data.append(self._data[idx])
-        
-        return Tensor(result_data, shape=(new_rows, new_cols))
-    
+        self._extract_nd(0, 0, ranges, strides, result_data)
+
+        return Tensor(result_data, shape=tuple(new_shape))
+
+    def _extract_nd(self, dim: int, flat_offset: int, ranges: list,
+                    strides: list, result: array):
+        """Recursively iterate over N-dimensional index ranges."""
+        if dim == len(ranges):
+            result.append(self._data[flat_offset])
+            return
+
+        for idx in ranges[dim]:
+            self._extract_nd(
+                dim + 1,
+                flat_offset + idx * strides[dim],
+                ranges, strides, result
+            )
+
     def __setitem__(self, key, value):
-        """Support item assignment."""
+        """Support item assignment for N-dimensional tensors."""
         if isinstance(key, int):
             if self.ndim != 1:
-                raise ValueError(f"Cannot assign to {self.ndim}D tensor with single integer")
+                raise ValueError(
+                    f"Cannot assign to {self.ndim}D tensor with single integer"
+                )
             idx = self._calculate_index((key,))
             self._data[idx] = value
             return
-        
+
         if isinstance(key, tuple):
             idx = self._calculate_index(key)
             self._data[idx] = value
             return
-        
+
         raise TypeError(f"Unsupported index type: {type(key)}")
-    
+
     def __repr__(self) -> str:
         """String representation of the tensor."""
-        if self.ndim == 0:
-            return str(self._data[0])
-        
-        # Show shape
-        shape_str = " × ".join(str(d) for d in self.shape)
         dtype_str = self.dtype.name
 
-        # Build a nice representation
+        if self.ndim == 0:
+            return str(self._data[0])
         if self.ndim == 1:
             return f"Tensor({list(self._data)}, shape=({self.shape[0],}), dtype='{dtype_str}')"
 
-        if self.ndim == 2:
-            # Build grid representation
-            rows = []
-            for i in range(self.shape[0]):
-                row_values = []
-                for j in range(self.shape[1]):
-                    row_values.append(str(self._data[i * self.shape[1] + j]))
-                rows.append("[" + " ".join(row_values) + "]")
-            matrix_str = "[\n  " + "\n  ".join(rows) + "\n]"
-            return f"Tensor(\n{matrix_str},\n shape=({self.shape[0]}, {self.shape[1]}), dtype='{dtype_str}'\n)"
+        # Build recursive representation for N-dim
+        lines = self._repr_recursive(0, 0)
+        bracket_repr = "[\n" + "\n".join(lines) + "\n]"
+        return f"Tensor(\n{bracket_repr},\n shape={self.shape}, dtype='{dtype_str}'\n)"
+
+    def _repr_recursive(self, dim: int, offset: int) -> list:
+        """Build repr lines recursively for N-dimensional display."""
+        indent = "  " * dim
+        stride = 1
+        for j in range(dim + 1, self.ndim):
+            stride *= self.shape[j]
+
+        if dim == self.ndim - 1:
+            # Innermost dimension — show values
+            values = " ".join(
+                str(self._data[offset + j]) for j in range(self.shape[dim])
+            )
+            return [f"{indent}[{values}]"]
+
+        # Recurse into sub-blocks
+        lines = []
+        for i in range(self.shape[dim]):
+            sub_lines = self._repr_recursive(dim + 1, offset + i * stride)
+            if dim == 0:
+                lines.extend(sub_lines)
+            else:
+                lines.extend(sub_lines)
+            if i < self.shape[dim] - 1 and dim < self.ndim - 2:
+                lines.append("")
+
+        if dim == 0:
+            return lines
+
+        # Wrap in brackets for inner dimensions
+        wrapped = [f"{indent}["]
+        for line in lines:
+            wrapped.append(line)
+        wrapped.append(f"{indent}]")
+        return wrapped
 
         return f"Tensor(shape={self.shape}, dtype='{self.dtype.name}')"
     @property
