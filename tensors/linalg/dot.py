@@ -3,7 +3,7 @@
 from typing import Any, List
 
 from ..tensor import Tensor
-from ..ops._utils import result_dtype
+from ..dtype import result_dtype
 
 
 def _dot_impl(a: Tensor, b: Tensor) -> Tensor:

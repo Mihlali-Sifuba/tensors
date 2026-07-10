@@ -3,20 +3,18 @@
 from typing import List
 
 from ..tensor import Tensor
-from ._utils import negation_dtype
-
-
-def _neg_impl(a: Tensor) -> Tensor:
-    """Actual negation computation."""
-    dtype = negation_dtype(a.dtype)
-    data = [-x for x in a._data]
-    return Tensor(data, dtype=dtype, shape=a.shape)
+from ..dtype import negation_dtype
 
 
 class Neg:
     """Negation — forward and backward."""
 
-    forward = staticmethod(_neg_impl)
+    @staticmethod
+    def forward(a: Tensor) -> Tensor:
+        """Negate all elements of a tensor."""
+        dtype = negation_dtype(a.dtype)
+        data = [-x for x in a._data]
+        return Tensor(data, dtype=dtype, shape=a.shape)
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
