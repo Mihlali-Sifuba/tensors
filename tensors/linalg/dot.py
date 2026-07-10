@@ -57,10 +57,17 @@ class Dot:
 
 def dot(a: Any, b: Any) -> Any:
     """Multiply two 2D Tensors or differentiable Variables."""
-    from ..autograd.variable import Variable, dot as variable_dot
+    from ..variable import Variable
 
     if isinstance(a, Variable) or isinstance(b, Variable):
-        return variable_dot(a, b)
+        left = a if isinstance(a, Variable) else Variable(a, requires_grad=False)
+        right = b if isinstance(b, Variable) else Variable(b, requires_grad=False)
+        return Variable._from_operation(
+            Dot.forward(left.data, right.data),
+            "dot",
+            Dot,
+            [left, right],
+        )
     return Dot.forward(a, b)
 
 

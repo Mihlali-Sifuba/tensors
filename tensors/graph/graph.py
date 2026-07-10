@@ -11,8 +11,8 @@ from collections.abc import Callable, Iterator
 from typing import Any
 from inspect import getclosurevars
 
-from ..autograd.variable import Variable
-from .execution import replay
+from ..variable import Variable
+from .computation import Computation
 
 
 class Graph:
@@ -34,6 +34,7 @@ class Graph:
         self._input_keywords = ()
         self._input_shapes = ()
         self._outputs = None
+        self._computations: tuple[Computation, ...] = ()
         self._nodes = ()
         self._edges = ()
 
@@ -59,6 +60,7 @@ class Graph:
         self._input_keywords = ()
         self._input_shapes = ()
         self._outputs = None
+        self._computations = ()
         self._nodes = ()
         self._edges = ()
         return self._trace(args, kwargs)
@@ -72,6 +74,20 @@ class Graph:
     def edges(self) -> list[Any]:
         """Edges reachable from this graph's output variables."""
         return list(self._edges)
+
+    @property
+    def computation(self) -> Computation:
+        """Return the single computation produced by this graph."""
+        if not self._computations:
+            raise RuntimeError("Graph has not been called yet")
+        if len(self._computations) != 1:
+            raise RuntimeError("Graph has multiple outputs; use computations")
+        return self._computations[0]
+
+    @property
+    def computations(self) -> tuple[Computation, ...]:
+        """Return computations for every flattened graph output."""
+        return self._computations
 
     def parameters(self) -> list[Variable]:
         """Return persistent trainable Variables owned by this graph.
@@ -135,7 +151,8 @@ class Graph:
         self._input_keywords = keyword_names
         self._input_shapes = tuple(variable.shape for variable in self._input_vars)
         self._outputs = outputs
-        self._nodes, self._edges = self._capture(output_vars)
+        self._computations = tuple(Computation(output) for output in output_vars)
+        self._nodes, self._edges = self._capture(self._computations)
         self._traced = True
         return outputs
 
@@ -182,29 +199,31 @@ class Graph:
             variable.data = data
 
     def _replay(self) -> None:
-        for output in self._iter_output_variables(self._outputs):
-            replay(output)
+        for computation in self._computations:
+            computation.forward()
 
     @staticmethod
-    def _capture(outputs: tuple[Variable, ...]) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+    def _capture(
+        computations: tuple[Computation, ...],
+    ) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
         nodes = []
         edges = []
         visited = set()
         seen_edges = set()
 
-        def visit(node: Any) -> None:
+        def add(node: Any) -> None:
             if node in visited:
                 return
             visited.add(node)
             for edge in node._in_edges:
-                visit(edge.source)
                 if id(edge) not in seen_edges:
                     seen_edges.add(id(edge))
                     edges.append(edge)
             nodes.append(node)
 
-        for output in outputs:
-            visit(output.node)
+        for computation in computations:
+            for node in computation.nodes:
+                add(node)
         return tuple(nodes), tuple(edges)
 
     @staticmethod

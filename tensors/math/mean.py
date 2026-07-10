@@ -30,10 +30,15 @@ class Mean:
 
 def mean(value: Any) -> Any:
     """Return the mean as a Tensor or differentiable Variable scalar."""
-    from ..autograd.variable import Variable, mean as variable_mean
+    from ..variable import Variable
 
     if isinstance(value, Variable):
-        return variable_mean(value)
+        return Variable._from_operation(
+            Mean.forward(value.data),
+            "mean",
+            Mean,
+            [value],
+        )
     if not isinstance(value, Tensor):
         value = Tensor(value)
     dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64

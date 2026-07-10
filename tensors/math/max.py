@@ -8,7 +8,7 @@ from ..tensor import Tensor
 
 def max(value: Any) -> Tensor:
     """Return the maximum as a scalar Tensor."""
-    from ..autograd.variable import Variable
+    from ..variable import Variable
 
     if isinstance(value, Variable):
         raise NotImplementedError("Differentiable max is not implemented")

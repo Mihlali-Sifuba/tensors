@@ -11,7 +11,7 @@ def min(value: Any) -> Tensor:
 
     A differentiable minimum rule is intentionally not provided yet.
     """
-    from ..autograd.variable import Variable
+    from ..variable import Variable
 
     if isinstance(value, Variable):
         raise NotImplementedError("Differentiable min is not implemented")

@@ -49,6 +49,7 @@ should not need to import internal operation or graph-node classes.
 tensors/
 ├── __init__.py            # root public facade
 ├── tensor.py              # Tensor storage, shapes, dtypes, indexing
+├── variable.py            # differentiable value type
 ├── dtype.py
 ├── ops/                   # basic algebra only
 │   ├── __init__.py
@@ -77,10 +78,6 @@ tensors/
 │   ├── min.py
 │   ├── max.py
 │   └── std.py
-├── autograd/              # Variable and gradient propagation
-│   ├── __init__.py
-│   ├── variable.py
-│   └── backward.py
 ├── optim/                 # optimisers, added with the training API
 │   └── __init__.py
 └── graph/                 # reusable graph-functions/models
@@ -118,8 +115,9 @@ The folders have deliberately narrow responsibilities:
 - `math` contains all mathematical functions, including reductions and
   activation functions. It remains flat rather than separating activations or
   reductions into extra namespaces.
-- `autograd` owns gradient-tracking values and gradient propagation.
 - `graph` owns reusable computational model functions and their nodes/edges.
+- `Computation` owns forward and backward execution; `ts.backward` is a root
+  convenience alias.
 - `optim` will own parameter-update algorithms when the training API is built.
 
 Operation classes, `Node`, and `Edge` are implementation or advanced

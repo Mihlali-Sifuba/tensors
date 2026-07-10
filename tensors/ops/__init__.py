@@ -1,4 +1,4 @@
-"""Operations — each op is a class with forward/backward for autograd.
+"""Operations — each op is a class with forward/backward differentiation rules.
 
 Individual op classes:
     Add, Sub, Mul, Div, Neg, Slice

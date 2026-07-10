@@ -146,7 +146,7 @@ Training composes a model graph with an eager loss expression. The model does
 not receive a loss during construction.
 
 ```python
-from tensors.autograd import Graph, Variable, backward, mean
+from tensors import Graph, Variable, backward, mean
 from tensors.optim import SGD
 
 

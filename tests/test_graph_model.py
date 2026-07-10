@@ -12,6 +12,7 @@ class GraphModelTests(unittest.TestCase):
         reset_graph_state()
 
     def test_graph_package_owns_structural_types(self):
+        self.assertEqual(ts.graph.Computation.__module__, "tensors.graph.computation")
         self.assertEqual(ts.graph.Edge.__module__, "tensors.graph.edge")
         self.assertEqual(ts.graph.Node.__module__, "tensors.graph.node")
 
@@ -28,6 +29,7 @@ class GraphModelTests(unittest.TestCase):
         model = Linear()
         first = model(ts.Tensor([3.0]))
         self.assertEqual(first.data.tolist(), [7.0])
+        self.assertIs(model.computation.output, first)
         second = model(ts.Tensor([4.0]))
 
         self.assertIs(first, second)
@@ -46,6 +48,14 @@ class GraphModelTests(unittest.TestCase):
 
         self.assertEqual(result.data.tolist(), [6.0])
         self.assertEqual(model.parameters(), [weight])
+
+    def test_computation_owns_backward_pass(self):
+        value = ts.Variable([3.0])
+        loss = ts.math.sum(value * value)
+
+        ts.graph.Computation(loss).backward()
+
+        self.assertEqual(value.grad.tolist(), [6.0])
 
     def test_external_loss_backpropagates_into_model_parameters(self):
         class Linear(ts.Graph):

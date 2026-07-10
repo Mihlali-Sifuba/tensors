@@ -24,10 +24,15 @@ class Sum:
 
 def sum(value: Any) -> Any:
     """Return the sum as a Tensor or differentiable Variable scalar."""
-    from ..autograd.variable import Variable, sum as variable_sum
+    from ..variable import Variable
 
     if isinstance(value, Variable):
-        return variable_sum(value)
+        return Variable._from_operation(
+            Sum.forward(value.data),
+            "sum",
+            Sum,
+            [value],
+        )
     if not isinstance(value, Tensor):
         value = Tensor(value)
     return Tensor([Sum.forward(value)], dtype=value.dtype)
