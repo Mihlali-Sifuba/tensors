@@ -4,7 +4,6 @@ import threading
 from array import array
 
 from ..tensor import Tensor
-from .. import dtype as _dtype
 from .node import Node
 from .edge import Edge
 
@@ -25,9 +24,7 @@ def _get_graph():
 
 def _reset_graph():
     """Clear the current thread's graph."""
-    if hasattr(_local, "graph"):
-        _local.graph.nodes.clear()
-        _local.graph.edges.clear()
+    _local.graph = _GraphState()
 
 
 # ---------------------------------------------------------------------------
@@ -43,14 +40,18 @@ class _GraphState:
         self.nodes = []       # list of Node
         self.edges = []       # list of Edge
 
-    def add_node(self, label, output_var=None, **kwargs):
+    def add_node(self, label, output_var=None, op_cls=None, **kwargs):
         """Create and register a new Node."""
-        node = Node(label=label, output_var=output_var, **kwargs)
+        node = Node(label=label, output_var=output_var, op_cls=op_cls, **kwargs)
         self.nodes.append(node)
         return node
 
     def add_edge(self, source, target, label=None):
         """Create and register a new Edge between two nodes."""
+        if source not in self.nodes:
+            self.nodes.append(source)
+        if target not in self.nodes:
+            self.nodes.append(target)
         edge = Edge(source, target, label=label)
         self.edges.append(edge)
         return edge
@@ -72,7 +73,7 @@ class Graph:
         with Graph() as g:
             g.backward(y)
 
-        print(w.grad)   # Tensor([0.5, 0.5])
+        print(w.grad)   # Tensor([1.0, 2.0])
     """
 
     def __init__(self):
@@ -91,14 +92,14 @@ class Graph:
     def nodes(self):
         """Inspect the computation nodes captured during this execution."""
         if not hasattr(self, "_captured_nodes"):
-            return []
+            return list(self._state.nodes)
         return list(self._captured_nodes)
 
     @property
     def edges(self):
         """Inspect the computation edges captured during this execution."""
         if not hasattr(self, "_captured_edges"):
-            return []
+            return list(self._state.edges)
         return list(self._captured_edges)
 
     # ------------------------------------------------------------------
@@ -114,34 +115,57 @@ class Graph:
         Returns:
             A dict of {Variable: Tensor} or a single Tensor.
         """
-        order = self._topological_sort()
+        output_node = output_var.node if output_var is not None else None
+        order = self._topological_sort(output_node)
         values = {}
         for node in order:
             if node.label == "var":
                 values[node.output_var] = node.output_var.data
             else:
-                values[node.output_var] = self._exec(node, values)
-        return values.get(output_var) if output_var else values
+                result = self._exec(node, values)
+                node.output_var.data = result
+                values[node.output_var] = result
+        return values.get(output_var) if output_var is not None else values
 
     # ------------------------------------------------------------------
     #  Backward
     # ------------------------------------------------------------------
 
-    def backward(self, loss_var):
+    def backward(self, loss_var, grad=None):
         """Compute gradients via reverse-mode autodiff.
 
         Args:
             loss_var: The Variable to compute gradients from.
         """
-        # Seed gradient — ones matching loss shape
-        from array import array
+        order = self._topological_sort(loss_var.node)
+
+        # Each call is independent. This prevents stale intermediate gradients
+        # from amplifying subsequent backward passes.
+        for node in order:
+            if node.output_var is not None:
+                node.output_var.grad = None
+
+        # Seed gradient — ones matching loss shape unless supplied explicitly.
         loss_shape = loss_var.data.shape
-        seed_data = array(loss_var.dtype.typecode, [1.0] * loss_var.data.size)
-        loss_var.grad = Tensor(seed_data, shape=loss_shape)
+        if grad is None:
+            typecode = (
+                loss_var.dtype.typecode
+                if loss_var.dtype.typecode in {"f", "d"}
+                else "d"
+            )
+            seed_data = array(typecode, [1.0] * loss_var.data.size)
+            loss_var.grad = Tensor(seed_data, shape=loss_shape)
+        else:
+            seed = grad if isinstance(grad, Tensor) else Tensor(grad)
+            if seed.shape != loss_shape:
+                raise ValueError(
+                    f"Gradient shape {seed.shape} does not match loss shape {loss_shape}"
+                )
+            loss_var.grad = seed
 
         # Walk nodes in reverse topological order
-        for node in reversed(self._state.nodes):
-            if node.label == "var":
+        for node in reversed(order):
+            if node.label == "var" or node.op_cls is None:
                 continue
 
             out_var = node.output_var
@@ -149,76 +173,21 @@ class Graph:
             if out_grad is None:
                 continue
 
-            # Get input variables from incoming edges
-            in_vars = [e.source.output_var for e in node._in_edges]
+            # Get input data tensors from incoming edges
+            in_data = [e.source.output_var.data for e in node._in_edges]
 
-            # Dispatch backward
-            if node.label == "add":
-                for v in in_vars:
-                    self._acc_grad(v, out_grad)
-
-            elif node.label == "sub":
-                for i, v in enumerate(in_vars):
-                    if i == 0:
-                        self._acc_grad(v, out_grad)
-                    else:
-                        self._acc_grad(v, _neg_tensor(out_grad))
-
-            elif node.label == "mul":
-                if len(in_vars) > 1:
-                    a, b = in_vars
-                    self._acc_grad(a, _elementwise_mul(out_grad, b.data))
-                    self._acc_grad(b, _elementwise_mul(out_grad, a.data))
-                else:
-                    scalar_val = node.args.get("scalar", 1.0)
-                    self._acc_grad(in_vars[0], _scalar_mul(out_grad, scalar_val))
-
-            elif node.label == "div":
-                if len(in_vars) > 1:
-                    a, b = in_vars
-                    self._acc_grad(a, _elementwise_div(out_grad, b.data))
-                    self._acc_grad(b, _neg_tensor(_elementwise_div(
-                        _elementwise_mul(out_grad, a.data),
-                        _elementwise_mul(b.data, b.data)
-                    )))
-                else:
-                    scalar_val = node.args.get("scalar", 1.0)
-                    self._acc_grad(in_vars[0], _scalar_mul(out_grad, 1.0 / scalar_val))
-
-            elif node.label == "neg":
-                self._acc_grad(in_vars[0], _neg_tensor(out_grad))
-
-            elif node.label == "sum":
-                a = in_vars[0]
-                self._acc_grad(a, Tensor(
-                    [1.0] * a.data.size, dtype=a.dtype.typecode,
-                    shape=a.data.shape
-                ))
-
-            elif node.label == "mean":
-                a = in_vars[0]
-                scale = 1.0 / a.data.size
-                in_shape = a.data.shape
-                g = _scalar_mul(out_grad, scale)
-                if g.shape != in_shape:
-                    if g.size == _total_elements(in_shape):
-                        g = Tensor(g._data, shape=in_shape)
-                self._acc_grad(a, g)
-
-            elif node.label == "dot":
-                a, b = in_vars
-                from ..ops import Ops as _Ops
-                og = out_grad
-                if og.ndim == 1:
-                    og = Tensor(og._data, shape=(1, og.shape[0]))
-                self._acc_grad(a, _Ops.dot(og, _Ops.transpose(b.data)))
-                self._acc_grad(b, _Ops.dot(_Ops.transpose(a.data), og))
+            # Generic dispatch: op_cls knows its own backward
+            grads = node.op_cls.backward(out_grad, *in_data, **node.args)
+            for v, g in zip(
+                [e.source.output_var for e in node._in_edges], grads
+            ):
+                self._acc_grad(v, g)
 
     # ------------------------------------------------------------------
     #  Helpers
     # ------------------------------------------------------------------
 
-    def _topological_sort(self):
+    def _topological_sort(self, output_node=None):
         """Return nodes in topological order (dependencies first)."""
         order = []
         visited = set()
@@ -231,13 +200,16 @@ class Graph:
                 dfs(in_edge.source)
             order.append(node)
 
-        for node in self._state.nodes:
+        roots = [output_node] if output_node is not None else self._state.nodes
+        for node in roots:
             dfs(node)
         return order
 
     @staticmethod
     def _acc_grad(var, grad):
         """Accumulate gradient into a Variable."""
+        if not var.requires_grad:
+            return
         if var.grad is None:
             var.grad = grad
         else:
@@ -245,65 +217,19 @@ class Graph:
             var.grad = Ops.add(var.grad, grad)
 
     def _exec(self, node, values):
-        """Execute a single node during forward."""
-        from ..ops import Ops
+        """Execute a single node during forward using op_cls.forward."""
         in_vars = [e.source.output_var for e in node._in_edges]
-
-        a_val = values[in_vars[0]]
-        b_val = values[in_vars[1]] if len(in_vars) > 1 else None
-
-        if node.label == "add":
-            if b_val is not None:
-                return Ops.add(a_val, b_val)
-            return a_val
-        elif node.label == "sub":
-            if b_val is not None:
-                return Ops.subtract(a_val, b_val)
-            return a_val
-        elif node.label == "mul":
-            if b_val is not None:
-                return Ops.multiply(a_val, b_val)
-            return a_val
-        elif node.label == "div":
-            if b_val is not None:
-                return Ops.divide(a_val, b_val)
-            return a_val
-        elif node.label == "neg":
-            return Ops.multiply(a_val, -1)
-        elif node.label == "dot":
-            return Ops.dot(a_val, b_val)
-        elif node.label == "sum":
-            return Tensor([Ops.sum(a_val)])
-        elif node.label == "mean":
-            return Tensor([Ops.mean(a_val)])
+        args = [values[v] for v in in_vars]
+        if "scalar" in node.args:
+            scalar = node.args["scalar"]
+            if node.args.get("reverse", False):
+                result = node.op_cls.forward_reverse(args[0], scalar)
+            else:
+                result = node.op_cls.forward(args[0], scalar)
+        elif "key" in node.args:
+            result = node.op_cls.forward(args[0], node.args["key"])
         else:
-            raise RuntimeError(f"Unknown label: {node.label}")
-
-
-# ---------------------------------------------------------------------------
-#  Gradient helper functions (small Tensor ops to avoid circular imports)
-# ---------------------------------------------------------------------------
-
-def _neg_tensor(t):
-    return Tensor([-x for x in t._data], dtype=t.dtype.typecode, shape=t.shape)
-
-
-def _scalar_mul(t, s):
-    return Tensor([x * s for x in t._data], dtype=t.dtype.typecode, shape=t.shape)
-
-
-def _elementwise_mul(a, b):
-    from ..ops import Ops
-    if isinstance(b, (int, float)):
-        return _scalar_mul(a, b)
-    return Ops.multiply(a, b)
-
-
-def _elementwise_div(a, b):
-    from ..ops import Ops
-    return Ops.divide(a, b)
-
-
-def _total_elements(shape):
-    from math import prod
-    return prod(shape)
+            result = node.op_cls.forward(*args)
+        if not isinstance(result, Tensor):
+            result = Tensor([result])
+        return result
