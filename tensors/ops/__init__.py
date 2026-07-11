@@ -40,22 +40,6 @@ class Ops:
     divide = staticmethod(Div.forward)
     neg = staticmethod(Neg.forward)
 
-    # -- Shape utilities -----------------------------------------------
-
-    @staticmethod
-    def reshape(tensor: Tensor, *new_shape: int) -> Tensor:
-        """Reshape a tensor (total elements must match)."""
-        from ..tensor import Tensor as _Tensor
-        total = tensor._get_total_elements()
-        new_total = 1
-        for dim in new_shape:
-            new_total *= dim
-        if total != new_total:
-            raise ValueError(
-                f"Cannot reshape tensor of size {total} to shape {new_shape}"
-            )
-        return _Tensor(tensor._data, shape=new_shape)
-
 __all__ = [
     "Add", "Sub", "Mul", "Div", "Neg", "Slice",
     "Ops",
