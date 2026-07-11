@@ -1,0 +1,82 @@
+import unittest
+
+import tensors as ts
+from tensors.graph.state import reset_graph_state
+
+
+class ComputationTests(unittest.TestCase):
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_computation_owns_backward_pass(self):
+        value = ts.Variable([3.0])
+        loss = ts.math.sum(value * value)
+
+        ts.graph.Computation(loss).backward()
+
+        self.assertEqual(value.grad.tolist(), [6.0])
+
+    def test_computation_rejects_non_variable_output(self):
+        with self.assertRaisesRegex(TypeError, "graph node"):
+            ts.graph.Computation(ts.Tensor([1.0]))
+
+    def test_computation_uses_explicit_gradient_seed(self):
+        value = ts.Variable([2.0, 3.0])
+        result = value * value
+
+        ts.graph.Computation(result).backward(ts.Tensor([10.0, 20.0]))
+
+        self.assertEqual(value.grad.tolist(), [40.0, 120.0])
+
+    def test_computation_rejects_gradient_shape_mismatch(self):
+        value = ts.Variable([2.0, 3.0])
+        result = value * value
+
+        with self.assertRaisesRegex(ValueError, "Gradient shape"):
+            ts.graph.Computation(result).backward(ts.Tensor([1.0]))
+
+    def test_multi_output_graph_exposes_computations_tuple(self):
+        @ts.Graph
+        def model(x):
+            return x + 1.0, x * 2.0
+
+        outputs = model(ts.Tensor([3.0]))
+
+        self.assertEqual(outputs[0].data.tolist(), [4.0])
+        self.assertEqual(outputs[1].data.tolist(), [6.0])
+        self.assertEqual(len(model.computations), 2)
+
+    def test_single_computation_property_rejects_multi_output_graph(self):
+        @ts.Graph
+        def model(x):
+            return x + 1.0, x * 2.0
+
+        model(ts.Tensor([3.0]))
+
+        with self.assertRaisesRegex(RuntimeError, "multiple outputs"):
+            _ = model.computation
+
+    def test_external_loss_backpropagates_into_model_parameters(self):
+        class Linear(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.weight = ts.Variable([2.0])
+                self.bias = ts.Variable([1.0])
+
+            def forward(self, x):
+                return x * self.weight + self.bias
+
+        model = Linear()
+        loss = ts.math.sum(model(ts.Tensor([3.0])))
+
+        ts.backward(loss)
+
+        self.assertEqual(model.weight.grad.tolist(), [3.0])
+        self.assertEqual(model.bias.grad.tolist(), [1.0])
+
+
+if __name__ == "__main__":
+    unittest.main()

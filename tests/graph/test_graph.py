@@ -1,0 +1,137 @@
+import unittest
+
+import tensors as ts
+from tensors.graph.state import reset_graph_state
+
+
+class GraphTests(unittest.TestCase):
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_graph_package_owns_structural_types(self):
+        self.assertEqual(ts.graph.Computation.__module__, "tensors.graph.computation")
+        self.assertEqual(ts.graph.Edge.__module__, "tensors.graph.edge")
+        self.assertEqual(ts.graph.Node.__module__, "tensors.graph.node")
+
+    def test_subclass_traces_then_replays_with_tensor_inputs(self):
+        class Linear(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.weight = ts.Variable([2.0])
+                self.bias = ts.Variable([1.0])
+
+            def forward(self, x):
+                return x * self.weight + self.bias
+
+        model = Linear()
+        first = model(ts.Tensor([3.0]))
+        self.assertEqual(first.data.tolist(), [7.0])
+        self.assertIs(model.computation.output, first)
+        second = model(ts.Tensor([4.0]))
+
+        self.assertIs(first, second)
+        self.assertEqual(second.data.tolist(), [9.0])
+        self.assertEqual(len(model.nodes), 5)
+        self.assertEqual(model.parameters(), [model.weight, model.bias])
+
+    def test_function_graph_works_as_a_decorator_target(self):
+        weight = ts.Variable([3.0])
+
+        @ts.Graph
+        def model(x):
+            return x * weight
+
+        result = model(ts.Tensor([2.0]))
+
+        self.assertEqual(result.data.tolist(), [6.0])
+        self.assertEqual(model.parameters(), [weight])
+
+    def test_graph_replays_keyword_inputs(self):
+        @ts.Graph
+        def model(x, scale):
+            return x * scale
+
+        first = model(ts.Tensor([2.0]), scale=ts.Tensor([3.0]))
+        second = model(ts.Tensor([4.0]), scale=ts.Tensor([5.0]))
+
+        self.assertIs(first, second)
+        self.assertEqual(second.data.tolist(), [20.0])
+
+    def test_graph_rejects_wrong_keyword_names_on_replay(self):
+        @ts.Graph
+        def model(x, scale):
+            return x * scale
+
+        model(ts.Tensor([2.0]), scale=ts.Tensor([3.0]))
+
+        with self.assertRaisesRegex(TypeError, "keyword inputs"):
+            model(ts.Tensor([2.0]), other=ts.Tensor([3.0]))
+
+    def test_graph_rejects_wrong_input_count_on_replay(self):
+        @ts.Graph
+        def model(x):
+            return x * 2.0
+
+        model(ts.Tensor([2.0]))
+
+        with self.assertRaisesRegex(TypeError, "expects 1 inputs"):
+            model(ts.Tensor([2.0]), ts.Tensor([3.0]))
+
+    def test_graph_rebuild_traces_new_input_shape(self):
+        @ts.Graph
+        def model(x):
+            return x * 2.0
+
+        model(ts.Tensor([1.0]))
+        rebuilt = model.rebuild(ts.Tensor([1.0, 2.0]))
+
+        self.assertEqual(rebuilt.shape, (2,))
+        self.assertEqual(rebuilt.data.tolist(), [2.0, 4.0])
+
+    def test_graph_rejects_non_variable_output(self):
+        class BadGraph(ts.Graph):
+            def forward(self, x):
+                return x.data
+
+        with self.assertRaisesRegex(TypeError, "must return"):
+            BadGraph()(ts.Tensor([1.0]))
+
+    def test_graph_collects_parameters_from_child_graphs_and_containers(self):
+        class Child(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.weight = ts.Variable([2.0])
+
+            def forward(self, x):
+                return x * self.weight
+
+        class Parent(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.child = Child()
+                self.extra = [ts.Variable([1.0])]
+                self.frozen = ts.Variable([0.0], requires_grad=False)
+
+            def forward(self, x):
+                return self.child(x) + self.extra[0]
+
+        model = Parent()
+
+        self.assertEqual(model.parameters(), [model.child.weight, model.extra[0]])
+
+    def test_replay_rejects_an_input_shape_change(self):
+        @ts.Graph
+        def model(x):
+            return x * 2.0
+
+        model(ts.Tensor([1.0]))
+
+        with self.assertRaisesRegex(ValueError, "Call rebuild"):
+            model(ts.Tensor([1.0, 2.0]))
+
+
+if __name__ == "__main__":
+    unittest.main()
