@@ -2,7 +2,7 @@
 
 from typing import List, Union
 
-from ..tensor import Tensor
+from ..tensor import Tensor, _broadcast_tensors
 from ..dtype import result_dtype
 
 
@@ -22,8 +22,7 @@ class Div:
             data = [x / b for x in a._data]
             return Tensor(data, dtype=dtype, shape=a.shape)
         if isinstance(b, Tensor):
-            if a.shape != b.shape:
-                raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
+            a, b = _broadcast_tensors(a, b)
             data = []
             for x, y in zip(a._data, b._data):
                 if y == 0:

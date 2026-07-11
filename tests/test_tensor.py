@@ -9,8 +9,8 @@ class TensorTests(unittest.TestCase):
 
         self.assertIs((tensor + 1).dtype, ts.float32)
         self.assertIs(tensor[1:3].dtype, ts.float32)
-        self.assertIs(ts.reshape(tensor, 2, 2).dtype, ts.float32)
-        self.assertIs(ts.transpose(ts.reshape(tensor, 2, 2)).dtype, ts.float32)
+        self.assertIs(ts.reshape(tensor, (2, 2)).dtype, ts.float32)
+        self.assertIs(ts.transpose(ts.reshape(tensor, (2, 2))).dtype, ts.float32)
 
     def test_reverse_slice_uses_python_semantics(self):
         tensor = ts.Tensor([1, 2, 3, 4])

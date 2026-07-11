@@ -4,6 +4,21 @@ from typing import Iterable, Union, List, Tuple, Optional
 from . import dtype as _dtype
 
 
+def _broadcast_tensors(a: 'Tensor', b: 'Tensor') -> Tuple['Tensor', 'Tensor']:
+    """Broadcast two tensors to a common shape (last-dim matching)."""
+    if a.shape == b.shape:
+        return a, b
+    if a.ndim < b.ndim:
+        return _broadcast_tensors(b, a)
+    if b.shape == a.shape[-b.ndim:]:
+        tile_count = a.size // b.size
+        tiled = array(b.dtype.typecode, [])
+        for _ in range(tile_count):
+            tiled.extend(b._data)
+        return a, Tensor(tiled, dtype=b.dtype, shape=a.shape)
+    raise ValueError(f"Shapes {a.shape} and {b.shape} cannot be broadcast")
+
+
 class Tensor:
     """
     A simple tensor implementation using Python's array module.
