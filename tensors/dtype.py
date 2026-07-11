@@ -145,4 +145,4 @@ def result_dtype(a_dtype, b=None, *, division=False):
 
 def negation_dtype(a_dtype):
     """Unsigned bytes need a signed type to represent negative values."""
-    return _dtype.int16 if a_dtype.typecode == "B" else a_dtype
+    return int16 if a_dtype.typecode == "B" else a_dtype

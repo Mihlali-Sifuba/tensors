@@ -4,8 +4,6 @@ import tensors as ts
 from tensors.graph import Computation
 from tensors.graph.state import reset_graph_state
 
-Variable = ts.Variable
-
 
 class AutogradTests(unittest.TestCase):
     def setUp(self):
@@ -15,14 +13,14 @@ class AutogradTests(unittest.TestCase):
         reset_graph_state()
 
     def test_operation_result_is_owned_by_operation_node(self):
-        x = Variable([1.0, 2.0])
+        x = ts.Variable([1.0, 2.0])
         result = x + 2.0
 
         self.assertEqual(result.node.label, "add")
         self.assertIs(result.node.inputs[0], x.node)
 
     def test_forward_replays_scalar_and_reduction_operations(self):
-        x = Variable([1.0, 2.0, 3.0])
+        x = ts.Variable([1.0, 2.0, 3.0])
         result = ts.mean(x * 2.0 + 1.0)
 
         replayed = Computation(result).forward()
@@ -30,8 +28,8 @@ class AutogradTests(unittest.TestCase):
         self.assertEqual(replayed.tolist(), [5.0])
 
     def test_sum_propagates_upstream_gradient(self):
-        x = Variable([1.0, 2.0])
-        w = Variable([3.0, 4.0])
+        x = ts.Variable([1.0, 2.0])
+        w = ts.Variable([3.0, 4.0])
         loss = ts.sum(x * w) * 3.0
 
         ts.backward(loss)
@@ -40,7 +38,7 @@ class AutogradTests(unittest.TestCase):
         self.assertEqual(w.grad.tolist(), [3.0, 6.0])
 
     def test_repeated_backward_does_not_reuse_intermediate_gradients(self):
-        x = Variable([1.0, 2.0])
+        x = ts.Variable([1.0, 2.0])
         loss = ts.sum(x * x)
 
         ts.backward(loss)
@@ -52,7 +50,7 @@ class AutogradTests(unittest.TestCase):
         self.assertEqual(second, first)
 
     def test_forward_refreshes_intermediates_used_by_backward(self):
-        x = Variable([2.0])
+        x = ts.Variable([2.0])
         square = x * x
         fourth_power = square * square
         x.data = ts.Tensor([3.0])
@@ -64,7 +62,7 @@ class AutogradTests(unittest.TestCase):
         self.assertEqual(x.grad.tolist(), [108.0])
 
     def test_slice_scatter_backward(self):
-        x = Variable([1.0, 2.0, 3.0])
+        x = ts.Variable([1.0, 2.0, 3.0])
         loss = ts.sum(x[::-1] * 2.0)
 
         ts.backward(loss)
@@ -72,8 +70,8 @@ class AutogradTests(unittest.TestCase):
         self.assertEqual(x.grad.tolist(), [2.0, 2.0, 2.0])
 
     def test_dot_backward_for_2d_tensors(self):
-        x = Variable([[1.0, 2.0]])
-        w = Variable([[3.0], [4.0]])
+        x = ts.Variable([[1.0, 2.0]])
+        w = ts.Variable([[3.0], [4.0]])
         result = ts.linalg.dot(x, w)
 
         replayed = Computation(result).forward()
@@ -84,7 +82,7 @@ class AutogradTests(unittest.TestCase):
         self.assertEqual(w.grad.tolist(), [1.0, 2.0])
 
     def test_reverse_division_backward(self):
-        x = Variable([2.0, 4.0])
+        x = ts.Variable([2.0, 4.0])
         loss = ts.sum(8.0 / x)
 
         ts.backward(loss)
@@ -93,10 +91,10 @@ class AutogradTests(unittest.TestCase):
 
     def test_integer_variables_cannot_require_gradients(self):
         with self.assertRaisesRegex(ValueError, "floating-point"):
-            Variable(ts.Tensor([1, 2], dtype=ts.int32))
+            ts.Variable(ts.Tensor([1, 2], dtype=ts.int32))
 
     def test_empty_mean_has_an_empty_gradient(self):
-        x = Variable([])
+        x = ts.Variable([])
         loss = ts.mean(x)
 
         ts.backward(loss)
@@ -105,7 +103,7 @@ class AutogradTests(unittest.TestCase):
         self.assertEqual(x.grad.tolist(), [])
 
     def test_math_namespace_keeps_variable_reductions_differentiable(self):
-        x = Variable([1.0, 2.0])
+        x = ts.Variable([1.0, 2.0])
         loss = ts.math.sum(x * 3.0)
 
         ts.backward(loss)
