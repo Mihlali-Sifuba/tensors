@@ -105,6 +105,10 @@ class Computation:
                 result = node.op_cls.forward(args[0], scalar)
         elif "key" in node.args:
             result = node.op_cls.forward(args[0], node.args["key"])
+        elif "axis" in node.args:
+            axis = node.args.get("axis")
+            keepdims = node.args.get("keepdims", False)
+            result = node.op_cls.forward(*args, axis=axis, keepdims=keepdims)
         else:
             result = node.op_cls.forward(*args)
 
