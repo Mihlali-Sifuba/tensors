@@ -5,7 +5,7 @@ from .dtype import DataType, float64, float32, int64, int32, int16, int8, uint8
 from .variable import Variable
 from .graph import Graph, backward
 from .linalg import dot, transpose
-from .math import sum, mean, min, max, std, reshape
+from .math import sum, mean, min, max, std, reshape, stack
 
 # Lift all Ops static methods to package-level functions
 add = Ops.add
@@ -18,5 +18,5 @@ __all__ = [
     "graph", "ops", "linalg", "math", "optim",
     "float64", "float32", "int64", "int32", "int16", "int8", "uint8",
     "add", "subtract", "multiply", "divide",
-    "dot", "transpose", "reshape", "sum", "mean", "min", "max", "std",
+    "dot", "transpose", "reshape", "stack", "sum", "mean", "min", "max", "std",
 ]
