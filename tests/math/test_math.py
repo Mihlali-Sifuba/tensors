@@ -69,6 +69,11 @@ class MathTests(unittest.TestCase):
 
         self.assertAlmostEqual(result.item(), 0.816496580927726)
 
+    def test_math_namespace_exposes_std_operation_class(self):
+        result = ts.math.Std.forward(ts.Tensor([1.0, 2.0, 3.0]))
+
+        self.assertAlmostEqual(result.item(), 0.816496580927726)
+
     def test_reshape_error_on_mismatch(self):
         with self.assertRaisesRegex(ValueError, "Cannot reshape"):
             ts.reshape(ts.Tensor([1, 2, 3]), (2,))
@@ -80,6 +85,12 @@ class MathTests(unittest.TestCase):
 
         self.assertEqual(result.shape, (2, 2))
         self.assertIs(result.dtype, ts.float32)
+
+    def test_math_namespace_exposes_reshape_operation_class(self):
+        result = ts.math.Reshape.forward(ts.Tensor([1, 2, 3, 4]), (2, 2))
+
+        self.assertEqual(result.shape, (2, 2))
+        self.assertEqual(result.tolist(), [1.0, 2.0, 3.0, 4.0])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,39 @@
+"""Elementwise rectified linear unit and its differentiation rule."""
+
+from typing import Any, List
+
+from ..tensor import Tensor
+
+
+class ReLU:
+    """Elementwise rectified linear unit with a reverse-mode gradient rule."""
+
+    @staticmethod
+    def forward(a: Tensor) -> Tensor:
+        values = [value if value > 0 else 0 for value in a._data]
+        return Tensor(values, dtype=a.dtype, shape=a.shape)
+
+    @staticmethod
+    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+        a = inputs[0]
+        values = [g if x > 0 else 0 for g, x in zip(grad._data, a._data)]
+        return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
+
+
+def relu(value: Any) -> Any:
+    """Return the elementwise rectified linear unit as a Tensor or Variable."""
+    from ..variable import Variable
+
+    if isinstance(value, Variable):
+        return Variable._from_operation(
+            ReLU.forward(value.data),
+            "relu",
+            ReLU,
+            [value],
+        )
+    if not isinstance(value, Tensor):
+        value = Tensor(value)
+    return ReLU.forward(value)
+
+
+__all__ = ["ReLU", "relu"]
