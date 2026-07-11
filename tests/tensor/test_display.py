@@ -18,6 +18,16 @@ class TensorDisplayTests(unittest.TestCase):
         self.assertIn("[1.0 2.0]", representation)
         self.assertIn("[3.0 4.0]", representation)
 
+    def test_scalar_shape_repr_is_plain_scalar_value(self):
+        representation = repr(ts.Tensor([7.0], shape=()))
+
+        self.assertEqual(representation, "7.0")
+
+    def test_empty_1d_repr_shows_shape_and_dtype(self):
+        representation = repr(ts.Tensor([]))
+
+        self.assertEqual(representation, "Tensor([], shape=(0,), dtype='float64')")
+
     def test_tolist_returns_a_plain_list_copy(self):
         tensor = ts.Tensor([1, 2, 3])
 
