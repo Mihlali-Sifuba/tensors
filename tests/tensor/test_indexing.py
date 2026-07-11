@@ -66,6 +66,22 @@ class TensorIndexingTests(unittest.TestCase):
         self.assertEqual(result.shape, (0,))
         self.assertEqual(result.tolist(), [])
 
+    def test_reverse_slice_preserves_dtype(self):
+        tensor = ts.Tensor([1, 2, 3], dtype=ts.float32)
+
+        result = tensor[::-1]
+
+        self.assertIs(result.dtype, ts.float32)
+        self.assertEqual(result.tolist(), [3.0, 2.0, 1.0])
+
+    def test_nd_slice_preserves_dtype(self):
+        tensor = ts.Tensor([[1, 2], [3, 4]], dtype=ts.int32)
+
+        result = tensor[:, 1]
+
+        self.assertIs(result.dtype, ts.int32)
+        self.assertEqual(result.tolist(), [2, 4])
+
     def test_too_many_indices_are_rejected(self):
         with self.assertRaisesRegex(IndexError, "Too many indices"):
             _ = ts.Tensor([[1, 2]])[0, 0, 0]
@@ -109,6 +125,10 @@ class TensorIndexingTests(unittest.TestCase):
     def test_setitem_rejects_wrong_number_of_tuple_indices(self):
         with self.assertRaisesRegex(IndexError, "Expected 2 indices"):
             ts.Tensor([[1, 2]])[0, 0, 0] = 99
+
+    def test_setitem_rejects_tuple_indices_for_1d_tensor(self):
+        with self.assertRaisesRegex(IndexError, "Expected 1 indices"):
+            ts.Tensor([1, 2])[0, 0] = 99
 
 
 if __name__ == "__main__":
