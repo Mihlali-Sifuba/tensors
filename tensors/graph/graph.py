@@ -13,14 +13,14 @@ from inspect import getclosurevars
 
 from ..variable import Variable
 from .computation import Computation
+from .state import TraceScope
 
 
 class Graph:
-    """A reusable differentiable function.
+    """A callable differentiable model that records its latest computation.
 
-    The first call executes ``forward`` eagerly and records the Variables
-    reachable from its output.  Later compatible calls bind new input data and
-    replay those recorded operations.  A subclass implements ``forward``;
+    Every call executes ``forward`` eagerly and captures the Variables
+    reachable from that call's output.  A subclass implements ``forward``;
     ``Graph(function)`` and ``@Graph`` provide the functional form.
     """
 
@@ -29,10 +29,6 @@ class Graph:
             raise TypeError("Graph expects a callable function or no argument")
 
         self._function = function
-        self._traced = False
-        self._input_vars = ()
-        self._input_keywords = ()
-        self._input_shapes = ()
         self._outputs = None
         self._computations: tuple[Computation, ...] = ()
         self._nodes = ()
@@ -45,25 +41,16 @@ class Graph:
         return self._function(*args, **kwargs)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        """Trace on the first call and replay on later compatible calls."""
-        if not self._traced:
+        """Execute ``forward`` and record a fresh computation."""
+        scope = TraceScope()
+        try:
             return self._trace(args, kwargs)
-
-        self._bind_inputs(args, kwargs)
-        self._replay()
-        return self._outputs
+        finally:
+            scope.close()
 
     def rebuild(self, *args: Any, **kwargs: Any) -> Any:
-        """Discard the current trace and eagerly construct a new one."""
-        self._traced = False
-        self._input_vars = ()
-        self._input_keywords = ()
-        self._input_shapes = ()
-        self._outputs = None
-        self._computations = ()
-        self._nodes = ()
-        self._edges = ()
-        return self._trace(args, kwargs)
+        """Execute ``forward`` and record a fresh computation."""
+        return self(*args, **kwargs)
 
     @property
     def nodes(self) -> list[Any]:
@@ -147,13 +134,9 @@ class Graph:
                 "Graph.forward() must return a Variable or a tuple/list of Variables"
             )
 
-        self._input_vars = input_args + tuple(input_kwargs[name] for name in keyword_names)
-        self._input_keywords = keyword_names
-        self._input_shapes = tuple(variable.shape for variable in self._input_vars)
         self._outputs = outputs
         self._computations = tuple(Computation(output) for output in output_vars)
         self._nodes, self._edges = self._capture(self._computations)
-        self._traced = True
         return outputs
 
     @staticmethod
@@ -174,33 +157,6 @@ class Graph:
         raise TypeError(
             "Graph.forward() must return a Variable or a tuple/list of Variables"
         )
-
-    def _bind_inputs(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
-        if len(args) + len(kwargs) != len(self._input_vars):
-            raise TypeError(
-                f"Graph expects {len(self._input_vars)} inputs, got {len(args) + len(kwargs)}"
-            )
-        if set(kwargs) != set(self._input_keywords):
-            expected = ", ".join(self._input_keywords) or "no keyword inputs"
-            raise TypeError(f"Graph keyword inputs must be {expected}")
-
-        values = list(args) + [kwargs[name] for name in self._input_keywords]
-        for index, (variable, expected_shape, value) in enumerate(
-            zip(self._input_vars, self._input_shapes, values)
-        ):
-            if isinstance(value, Variable):
-                value = value.data
-            data = variable.data.__class__(value)
-            if data.shape != expected_shape:
-                raise ValueError(
-                    f"Graph input {index} has shape {data.shape}; expected "
-                    f"{expected_shape}. Call rebuild() to trace a new shape."
-                )
-            variable.data = data
-
-    def _replay(self) -> None:
-        for computation in self._computations:
-            computation.forward()
 
     @staticmethod
     def _capture(
