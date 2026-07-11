@@ -38,6 +38,34 @@ class TensorIndexingTests(unittest.TestCase):
         self.assertEqual(row_tail.shape, (2,))
         self.assertEqual(row_tail.tolist(), [5.0, 6.0])
 
+    def test_partial_tuple_slice_keeps_remaining_dimensions(self):
+        tensor = ts.Tensor([
+            [[1, 2], [3, 4]],
+            [[5, 6], [7, 8]],
+        ])
+
+        result = tensor[1:]
+
+        self.assertEqual(result.shape, (1, 2, 2))
+        self.assertEqual(result.tolist(), [5.0, 6.0, 7.0, 8.0])
+
+    def test_3d_tuple_slice_with_mixed_indices(self):
+        tensor = ts.Tensor([
+            [[1, 2], [3, 4]],
+            [[5, 6], [7, 8]],
+        ])
+
+        result = tensor[:, 1, :]
+
+        self.assertEqual(result.shape, (2, 2))
+        self.assertEqual(result.tolist(), [3.0, 4.0, 7.0, 8.0])
+
+    def test_empty_slice_returns_empty_tensor(self):
+        result = ts.Tensor([1, 2, 3])[1:1]
+
+        self.assertEqual(result.shape, (0,))
+        self.assertEqual(result.tolist(), [])
+
     def test_too_many_indices_are_rejected(self):
         with self.assertRaisesRegex(IndexError, "Too many indices"):
             _ = ts.Tensor([[1, 2]])[0, 0, 0]
@@ -45,6 +73,10 @@ class TensorIndexingTests(unittest.TestCase):
     def test_out_of_range_index_is_rejected(self):
         with self.assertRaisesRegex(IndexError, "Index out of range"):
             _ = ts.Tensor([1, 2])[2]
+
+    def test_out_of_range_negative_index_is_rejected(self):
+        with self.assertRaisesRegex(IndexError, "Index out of range"):
+            _ = ts.Tensor([1, 2])[-3]
 
     def test_unsupported_index_type_is_rejected(self):
         with self.assertRaisesRegex(TypeError, "Unsupported index type"):
@@ -59,9 +91,24 @@ class TensorIndexingTests(unittest.TestCase):
         matrix[1, 0] = 30
         self.assertEqual(matrix.tolist(), [1.0, 2.0, 30.0, 4.0])
 
+    def test_setitem_supports_negative_indices(self):
+        tensor = ts.Tensor([[1, 2], [3, 4]])
+
+        tensor[-1, -1] = 40
+
+        self.assertEqual(tensor.tolist(), [1.0, 2.0, 3.0, 40.0])
+
     def test_setitem_rejects_single_index_for_nd_tensor(self):
         with self.assertRaisesRegex(ValueError, "Cannot assign"):
             ts.Tensor([[1, 2]])[0] = 99
+
+    def test_setitem_rejects_unsupported_index_type(self):
+        with self.assertRaisesRegex(TypeError, "Unsupported index type"):
+            ts.Tensor([1, 2])["bad"] = 99
+
+    def test_setitem_rejects_wrong_number_of_tuple_indices(self):
+        with self.assertRaisesRegex(IndexError, "Expected 2 indices"):
+            ts.Tensor([[1, 2]])[0, 0, 0] = 99
 
 
 if __name__ == "__main__":
