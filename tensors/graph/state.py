@@ -47,6 +47,26 @@ class GraphState:
 _local = threading.local()
 
 
+class TraceScope:
+    """Internal tracing lifetime guard for nested Graph calls."""
+
+    def __init__(self) -> None:
+        depth = getattr(_local, "trace_depth", 0)
+        self.outermost = depth == 0
+        if self.outermost:
+            reset_graph_state()
+        _local.trace_depth = depth + 1
+        self._closed = False
+
+    def close(self) -> None:
+        """Leave this trace scope."""
+        if self._closed:
+            return
+        depth = getattr(_local, "trace_depth", 0)
+        _local.trace_depth = max(depth - 1, 0)
+        self._closed = True
+
+
 def get_graph_state() -> GraphState:
     """Return the current thread's eager graph state."""
     if not hasattr(_local, "graph"):
@@ -59,4 +79,4 @@ def reset_graph_state() -> None:
     _local.graph = GraphState()
 
 
-__all__ = ["GraphState", "get_graph_state", "reset_graph_state"]
+__all__ = ["GraphState", "TraceScope", "get_graph_state", "reset_graph_state"]
