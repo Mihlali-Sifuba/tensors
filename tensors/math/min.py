@@ -6,6 +6,16 @@ from typing import Any
 from ..tensor import Tensor
 
 
+class Min:
+    """Minimum-value operation."""
+
+    @staticmethod
+    def forward(value: Tensor) -> Tensor:
+        if value.size == 0:
+            raise ValueError("Cannot compute min of empty tensor")
+        return Tensor([builtins.min(value._data)], dtype=value.dtype)
+
+
 def min(value: Any) -> Tensor:
     """Return the minimum as a scalar Tensor.
 
@@ -17,9 +27,7 @@ def min(value: Any) -> Tensor:
         raise NotImplementedError("Differentiable min is not implemented")
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    if value.size == 0:
-        raise ValueError("Cannot compute min of empty tensor")
-    return Tensor([builtins.min(value._data)], dtype=value.dtype)
+    return Min.forward(value)
 
 
-__all__ = ["min"]
+__all__ = ["Min", "min"]

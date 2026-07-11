@@ -49,6 +49,12 @@ class StackTests(unittest.TestCase):
 
         self.assertIs(result.dtype, ts.float32)
 
+    def test_math_namespace_exposes_stack_operation_class(self):
+        result = ts.math.Stack.forward([ts.Tensor([1, 2]), ts.Tensor([3, 4])])
+
+        self.assertEqual(result.shape, (2, 2))
+        self.assertEqual(result.tolist(), [1.0, 2.0, 3.0, 4.0])
+
 
 if __name__ == "__main__":
     unittest.main()
