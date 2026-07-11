@@ -13,9 +13,24 @@ class TensorConstructionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Invalid shape"):
             ts.Tensor([1, 2], shape=(-1, 2))
 
+    def test_bool_shape_dimension_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Invalid shape"):
+            ts.Tensor([1, 2], shape=(True, 2))
+
+    def test_non_iterable_shape_is_rejected(self):
+        with self.assertRaisesRegex(TypeError, "shape must be an iterable"):
+            ts.Tensor([1, 2], shape=2)
+
     def test_shape_size_mismatch_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Data size"):
             ts.Tensor([1, 2, 3], shape=(2, 2))
+
+    def test_nested_empty_lists_infer_zero_width_shape(self):
+        tensor = ts.Tensor([[], []])
+
+        self.assertEqual(tensor.shape, (2, 0))
+        self.assertEqual(tensor.size, 0)
+        self.assertEqual(tensor.tolist(), [])
 
     def test_raw_array_preserves_dtype(self):
         tensor = ts.Tensor(array("f", [1.0, 2.0]))
@@ -38,6 +53,12 @@ class TensorConstructionTests(unittest.TestCase):
 
         self.assertIs(tensor.dtype, ts.float32)
         self.assertEqual(tensor.tolist(), [1.0, 2.0])
+
+    def test_raw_array_can_be_given_explicit_shape(self):
+        tensor = ts.Tensor(array("d", [1.0, 2.0, 3.0, 4.0]), shape=(2, 2))
+
+        self.assertEqual(tensor.shape, (2, 2))
+        self.assertEqual(tensor.tolist(), [1.0, 2.0, 3.0, 4.0])
 
     def test_unknown_dtype_typecode_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unknown typecode"):
@@ -75,6 +96,14 @@ class TensorConstructionTests(unittest.TestCase):
 
         self.assertIs(tensor.astype("f").dtype, ts.float32)
 
+    def test_astype_truncates_float_values_for_integer_dtype(self):
+        tensor = ts.Tensor([1.9, -2.1])
+
+        result = tensor.astype(ts.int32)
+
+        self.assertEqual(result.tolist(), [1, -2])
+        self.assertIs(result.dtype, ts.int32)
+
     def test_len_returns_first_dimension(self):
         self.assertEqual(len(ts.Tensor([1, 2, 3])), 3)
         self.assertEqual(len(ts.Tensor([[1, 2], [3, 4], [5, 6]])), 3)
@@ -88,9 +117,24 @@ class TensorConstructionTests(unittest.TestCase):
         self.assertAlmostEqual(value.item(), 0.816496580927726)
         self.assertEqual(f"{value:.4f}", "0.8165")
 
+    def test_itemsize_matches_dtype_size(self):
+        tensor = ts.Tensor([1, 2], dtype=ts.float32)
+
+        self.assertEqual(tensor.itemsize, ts.float32.size)
+
     def test_item_rejects_multi_element_tensor(self):
         with self.assertRaisesRegex(ValueError, "one element"):
             ts.Tensor([1.0, 2.0]).item()
+
+    def test_format_rejects_multi_element_tensor(self):
+        with self.assertRaisesRegex(TypeError, "single-element"):
+            format(ts.Tensor([1.0, 2.0]), ".2f")
+
+    def test_repr_includes_shape_and_dtype(self):
+        representation = repr(ts.Tensor([[1, 2], [3, 4]], dtype=ts.float32))
+
+        self.assertIn("shape=(2, 2)", representation)
+        self.assertIn("dtype='float32'", representation)
 
 
 if __name__ == "__main__":
