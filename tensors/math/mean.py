@@ -1,48 +1,74 @@
 """Mean and its differentiation rule."""
 
 import builtins
-from typing import Any, List
+from array import array
+from typing import Any, List, Optional
 
 from ..dtype import float64
 from ..tensor import Tensor
-
-
-def _mean_impl(a: Tensor) -> float:
-    if a.size == 0:
-        return 0.0
-    return builtins.sum(a._data) / a.size
+from .sum import _reduce_axis, _sum_impl
 
 
 class Mean:
-    """Mean of all tensor elements with a reverse-mode gradient rule."""
+    """Mean with a reverse-mode gradient rule."""
 
-    forward = staticmethod(_mean_impl)
+    @staticmethod
+    def forward(a: Tensor, axis: Optional[int] = None,
+                keepdims: bool = False) -> Tensor:
+        if a.size == 0:
+            return Tensor([0.0], dtype=a.dtype if a.dtype.typecode in {"f", "d"} else float64)
+        result = _sum_impl(a, axis=axis, keepdims=keepdims)
+        if axis is None:
+            scale = 1.0 / a.size
+            return Tensor([float(result._data[0]) * scale], dtype=result.dtype)
+        result_data = array(
+            result.dtype.typecode,
+            (float(x) / a.shape[axis] for x in result._data),
+        )
+        return Tensor(result_data, dtype=result.dtype, shape=result.shape)
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         a = inputs[0]
-        if a.size == 0:
-            return [Tensor([], dtype=grad.dtype, shape=a.shape)]
-        scale = 1.0 / a.size
-        grad_value = float(next(iter(grad._data)))
-        return [Tensor([grad_value * scale] * a.size, dtype=grad.dtype, shape=a.shape)]
+        axis = kwargs.get("axis", None)
+
+        if axis is None:
+            if a.size == 0:
+                return [Tensor([], dtype=grad.dtype, shape=a.shape)]
+            scale = 1.0 / a.size
+            grad_value = float(next(iter(grad._data)))
+            return [Tensor([grad_value * scale] * a.size, dtype=grad.dtype, shape=a.shape)]
+
+        _, _, axis_size = _reduce_axis(a, axis)
+        scale = 1.0 / axis_size
+
+        # Reuse sum's backward logic scaled by 1/axis_size
+        from .sum import Sum
+        sum_grads = Sum.backward(grad, a, axis=axis)
+        result_data = array(
+            sum_grads[0].dtype.typecode,
+            (float(x) * scale for x in sum_grads[0]._data),
+        )
+        return [Tensor(result_data, dtype=grad.dtype, shape=a.shape)]
 
 
-def mean(value: Any) -> Any:
-    """Return the mean as a Tensor or differentiable Variable scalar."""
+def mean(value: Any, axis: Optional[int] = None,
+         keepdims: bool = False) -> Any:
+    """Return the mean as a Tensor or differentiable Variable."""
     from ..variable import Variable
 
     if isinstance(value, Variable):
         return Variable._from_operation(
-            Mean.forward(value.data),
+            Mean.forward(value.data, axis=axis, keepdims=keepdims),
             "mean",
             Mean,
             [value],
+            axis=axis,
+            keepdims=keepdims,
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
-    return Tensor([Mean.forward(value)], dtype=dtype)
+    return Mean.forward(value, axis=axis, keepdims=keepdims)
 
 
 __all__ = ["Mean", "mean"]
