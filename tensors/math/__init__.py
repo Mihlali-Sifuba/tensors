@@ -6,5 +6,6 @@ from .min import min
 from .max import max
 from .std import std
 from .reshape import reshape
+from .stack import stack
 
-__all__ = ["Sum", "Mean", "sum", "mean", "min", "max", "std", "reshape"]
+__all__ = ["Sum", "Mean", "sum", "mean", "min", "max", "std", "reshape", "stack"]
