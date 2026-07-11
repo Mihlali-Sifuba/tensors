@@ -16,7 +16,7 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(ts.graph.Edge.__module__, "tensors.graph.edge")
         self.assertEqual(ts.graph.Node.__module__, "tensors.graph.node")
 
-    def test_subclass_traces_then_replays_with_tensor_inputs(self):
+    def test_subclass_traces_fresh_with_tensor_inputs(self):
         class Linear(ts.Graph):
             def __init__(self):
                 super().__init__()
@@ -32,8 +32,9 @@ class GraphTests(unittest.TestCase):
         self.assertIs(model.computation.output, first)
         second = model(ts.Tensor([4.0]))
 
-        self.assertIs(first, second)
+        self.assertIsNot(first, second)
         self.assertEqual(second.data.tolist(), [9.0])
+        self.assertIs(model.computation.output, second)
         self.assertEqual(len(model.nodes), 5)
         self.assertEqual(model.parameters(), [model.weight, model.bias])
 
@@ -49,7 +50,7 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(result.data.tolist(), [6.0])
         self.assertEqual(model.parameters(), [weight])
 
-    def test_graph_replays_keyword_inputs(self):
+    def test_graph_traces_fresh_keyword_inputs(self):
         @ts.Graph
         def model(x, scale):
             return x * scale
@@ -57,27 +58,29 @@ class GraphTests(unittest.TestCase):
         first = model(ts.Tensor([2.0]), scale=ts.Tensor([3.0]))
         second = model(ts.Tensor([4.0]), scale=ts.Tensor([5.0]))
 
-        self.assertIs(first, second)
+        self.assertIsNot(first, second)
+        self.assertEqual(first.data.tolist(), [6.0])
         self.assertEqual(second.data.tolist(), [20.0])
+        self.assertIs(model.computation.output, second)
 
-    def test_graph_rejects_wrong_keyword_names_on_replay(self):
+    def test_graph_uses_python_keyword_errors_on_fresh_trace(self):
         @ts.Graph
         def model(x, scale):
             return x * scale
 
         model(ts.Tensor([2.0]), scale=ts.Tensor([3.0]))
 
-        with self.assertRaisesRegex(TypeError, "keyword inputs"):
+        with self.assertRaisesRegex(TypeError, "unexpected keyword argument"):
             model(ts.Tensor([2.0]), other=ts.Tensor([3.0]))
 
-    def test_graph_rejects_wrong_input_count_on_replay(self):
+    def test_graph_uses_python_input_count_errors_on_fresh_trace(self):
         @ts.Graph
         def model(x):
             return x * 2.0
 
         model(ts.Tensor([2.0]))
 
-        with self.assertRaisesRegex(TypeError, "expects 1 inputs"):
+        with self.assertRaisesRegex(TypeError, "takes 1 positional argument"):
             model(ts.Tensor([2.0]), ts.Tensor([3.0]))
 
     def test_graph_rebuild_traces_new_input_shape(self):
@@ -122,15 +125,19 @@ class GraphTests(unittest.TestCase):
 
         self.assertEqual(model.parameters(), [model.child.weight, model.extra[0]])
 
-    def test_replay_rejects_an_input_shape_change(self):
+    def test_graph_allows_input_shape_changes_on_fresh_trace(self):
         @ts.Graph
         def model(x):
             return x * 2.0
 
-        model(ts.Tensor([1.0]))
+        first = model(ts.Tensor([1.0]))
+        second = model(ts.Tensor([1.0, 2.0]))
 
-        with self.assertRaisesRegex(ValueError, "Call rebuild"):
-            model(ts.Tensor([1.0, 2.0]))
+        self.assertEqual(first.shape, (1,))
+        self.assertEqual(first.data.tolist(), [2.0])
+        self.assertEqual(second.shape, (2,))
+        self.assertEqual(second.data.tolist(), [2.0, 4.0])
+        self.assertIs(model.computation.output, second)
 
 
 if __name__ == "__main__":
