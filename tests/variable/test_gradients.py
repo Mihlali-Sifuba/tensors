@@ -63,6 +63,45 @@ class VariableGradientTests(unittest.TestCase):
 
         self.assertEqual(variable.grad.tolist(), [4.0])
 
+    def test_broadcast_addition_reduces_gradients_to_input_shapes(self):
+        column = ts.Variable([[1.0], [2.0]])
+        matrix = ts.Variable([[3.0, 4.0, 5.0], [6.0, 7.0, 8.0]])
+        loss = ts.sum(column + matrix)
+
+        ts.backward(loss)
+
+        self.assertEqual(column.grad.shape, (2, 1))
+        self.assertEqual(column.grad.tolist(), [3.0, 3.0])
+        self.assertEqual(matrix.grad.shape, (2, 3))
+        self.assertEqual(matrix.grad.tolist(), [1.0] * 6)
+
+    def test_broadcast_multiplication_reduces_gradients_to_input_shapes(self):
+        column = ts.Variable([[1.0], [2.0]])
+        matrix = ts.Variable([[3.0, 4.0, 5.0], [6.0, 7.0, 8.0]])
+        loss = ts.sum(column * matrix)
+
+        ts.backward(loss)
+
+        self.assertEqual(column.grad.shape, (2, 1))
+        self.assertEqual(column.grad.tolist(), [12.0, 21.0])
+        self.assertEqual(matrix.grad.shape, (2, 3))
+        self.assertEqual(matrix.grad.tolist(), [1.0, 1.0, 1.0, 2.0, 2.0, 2.0])
+
+    def test_broadcast_division_reduces_gradients_to_input_shapes(self):
+        column = ts.Variable([[8.0], [12.0]])
+        matrix = ts.Variable([[2.0, 4.0, 8.0], [3.0, 6.0, 12.0]])
+        loss = ts.sum(column / matrix)
+
+        ts.backward(loss)
+
+        self.assertEqual(column.grad.shape, (2, 1))
+        self.assertAlmostEqual(column.grad.tolist()[0], 0.875)
+        self.assertAlmostEqual(column.grad.tolist()[1], 0.5833333333333333)
+        self.assertEqual(matrix.grad.shape, (2, 3))
+        expected = [-2.0, -0.5, -0.125, -4.0 / 3.0, -1.0 / 3.0, -1.0 / 12.0]
+        for actual, expected_value in zip(matrix.grad.tolist(), expected):
+            self.assertAlmostEqual(actual, expected_value)
+
 
 if __name__ == "__main__":
     unittest.main()
