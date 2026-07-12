@@ -8,7 +8,7 @@ from .linalg import dot, matmul, transpose
 from .math import (
     sum, mean, min, max,
     sqrt, exp, log, relu, sigmoid, tanh, softplus,
-    std, reshape, stack,
+    std, reshape, stack, concat,
 )
 
 # Lift all Ops static methods to package-level functions
@@ -22,7 +22,7 @@ __all__ = [
     "graph", "ops", "linalg", "math", "optim",
     "float64", "float32", "int64", "int32", "int16", "int8", "uint8",
     "add", "subtract", "multiply", "divide", "pow",
-    "dot", "matmul", "transpose", "reshape", "stack",
+    "dot", "matmul", "transpose", "reshape", "stack", "concat",
     "sum", "mean", "min", "max",
     "sqrt", "exp", "log", "relu", "sigmoid", "tanh", "softplus", "std",
 ]
