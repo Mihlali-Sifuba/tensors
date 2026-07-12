@@ -4,6 +4,7 @@ from typing import List, Union
 
 from ..tensor import Tensor, _broadcast_tensors
 from ..dtype import result_dtype
+from ._utils import unbroadcast
 
 
 Scalar = Union[int, float]
@@ -27,4 +28,7 @@ class Add:
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
-        return [grad] * len(inputs)
+        if len(inputs) == 1:
+            return [grad]
+        left, right = inputs
+        return [unbroadcast(grad, left.shape), unbroadcast(grad, right.shape)]

@@ -2,6 +2,6 @@
 
 from .dot import Dot, dot
 from .matmul import matmul
-from .transpose import transpose
+from .transpose import Transpose, transpose
 
-__all__ = ["Dot", "dot", "matmul", "transpose"]
+__all__ = ["Dot", "dot", "matmul", "Transpose", "transpose"]

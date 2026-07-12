@@ -1,62 +1,238 @@
-"""Matrix multiplication and its differentiation rule."""
+"""General matrix multiplication and its differentiation rule."""
+
+from __future__ import annotations
 
 from typing import Any, List
 
-from ..tensor import Tensor
 from ..dtype import result_dtype
+from ..tensor import Tensor, _broadcast_shape, _coordinates, _flat_index, _shape_size
 
 
-def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
-    """Actual matrix multiplication for the currently supported 2D inputs."""
-    if a.ndim != 2 or b.ndim != 2:
-        raise ValueError("Dot product only supported for 2D tensors")
-    if a.shape[1] != b.shape[0]:
+MatmulMetadata = tuple[
+    bool,
+    bool,
+    tuple[int, ...],
+    int,
+    int,
+    int,
+    tuple[int, ...],
+    tuple[int, ...],
+]
+
+
+def _batch_coordinates(
+    output_coordinates: tuple[int, ...],
+    input_batch_shape: tuple[int, ...],
+) -> tuple[int, ...]:
+    """Map broadcasted batch coordinates to an input's batch coordinates."""
+    padding = len(output_coordinates) - len(input_batch_shape)
+    return tuple(
+        0 if dimension == 1 else output_coordinates[padding + index]
+        for index, dimension in enumerate(input_batch_shape)
+    )
+
+
+def _matmul_metadata(
+    a: Tensor,
+    b: Tensor,
+) -> tuple[MatmulMetadata, tuple[int, ...]]:
+    """Validate operands and return the shape information for matmul."""
+    if a.ndim == 0 or b.ndim == 0:
+        raise ValueError("Matrix multiplication requires tensors with at least one dimension")
+
+    a_vector = a.ndim == 1
+    b_vector = b.ndim == 1
+    a_batch_shape = () if a_vector else a.shape[:-2]
+    b_batch_shape = () if b_vector else b.shape[:-2]
+    a_rows = 1 if a_vector else a.shape[-2]
+    a_columns = a.shape[-1]
+    b_rows = b.shape[0] if b_vector else b.shape[-2]
+    b_columns = 1 if b_vector else b.shape[-1]
+
+    if a_columns != b_rows:
         raise ValueError(
             f"Cannot multiply {a.shape} with {b.shape}: inner dimensions must match"
         )
 
-    dtype = result_dtype(a.dtype, b)
-    result = []
-    a_cols = a.shape[1]
-    b_cols = b.shape[1]
+    batch_shape = _broadcast_shape(a_batch_shape, b_batch_shape)
+    if a_vector and b_vector:
+        output_shape = ()
+    elif a_vector:
+        output_shape = batch_shape + (b_columns,)
+    elif b_vector:
+        output_shape = batch_shape + (a_rows,)
+    else:
+        output_shape = batch_shape + (a_rows, b_columns)
 
-    for i in range(a.shape[0]):
-        for j in range(b_cols):
-            total = 0
-            for k in range(a_cols):
-                total += a._data[i * a_cols + k] * b._data[k * b_cols + j]
-            result.append(total)
+    return (
+        a_vector,
+        b_vector,
+        batch_shape,
+        a_rows,
+        a_columns,
+        b_columns,
+        a_batch_shape,
+        b_batch_shape,
+    ), output_shape
 
-    return Tensor(result, dtype=dtype, shape=(a.shape[0], b.shape[1]))
+
+def _a_index(
+    a: Tensor,
+    a_vector: bool,
+    batch_coordinates: tuple[int, ...],
+    row: int,
+    column: int,
+) -> int:
+    """Return the flat index for an element in the left operand."""
+    if a_vector:
+        return column
+    return _flat_index(batch_coordinates + (row, column), a.shape)
 
 
-def _transpose_impl(t: Tensor) -> Tensor:
-    """Transpose a 2D tensor for matrix operations and backward passes."""
-    if t.ndim != 2:
-        raise ValueError("Transpose only supported for 2D tensors")
-    new_data = []
-    for j in range(t.shape[1]):
-        for i in range(t.shape[0]):
-            new_data.append(t._data[i * t.shape[1] + j])
-    return Tensor(new_data, dtype=t.dtype, shape=(t.shape[1], t.shape[0]))
+def _b_index(
+    b: Tensor,
+    b_vector: bool,
+    batch_coordinates: tuple[int, ...],
+    row: int,
+    column: int,
+) -> int:
+    """Return the flat index for an element in the right operand."""
+    if b_vector:
+        return row
+    return _flat_index(batch_coordinates + (row, column), b.shape)
+
+
+def _output_gradient(
+    grad: Tensor,
+    batch_coordinates: tuple[int, ...],
+    row: int,
+    column: int,
+    a_vector: bool,
+    b_vector: bool,
+) -> Any:
+    """Read an upstream gradient using the public matmul output shape."""
+    if a_vector and b_vector:
+        return grad._data[0]
+    if a_vector:
+        coordinates = batch_coordinates + (column,)
+    elif b_vector:
+        coordinates = batch_coordinates + (row,)
+    else:
+        coordinates = batch_coordinates + (row, column)
+    return grad._data[_flat_index(coordinates, grad.shape)]
+
+
+def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
+    """Return the NumPy-style matrix product of two tensors."""
+    (
+        (
+            a_vector,
+            b_vector,
+            batch_shape,
+            a_rows,
+            a_columns,
+            b_columns,
+            a_batch_shape,
+            b_batch_shape,
+        ),
+        output_shape,
+    ) = _matmul_metadata(a, b)
+
+    values = []
+    for batch_index in range(_shape_size(batch_shape)):
+        batch_coordinates = _coordinates(batch_index, batch_shape)
+        a_batch_coordinates = _batch_coordinates(batch_coordinates, a_batch_shape)
+        b_batch_coordinates = _batch_coordinates(batch_coordinates, b_batch_shape)
+        for row in range(a_rows):
+            for column in range(b_columns):
+                total = 0
+                for inner in range(a_columns):
+                    left = a._data[
+                        _a_index(a, a_vector, a_batch_coordinates, row, inner)
+                    ]
+                    right = b._data[
+                        _b_index(b, b_vector, b_batch_coordinates, inner, column)
+                    ]
+                    total += left * right
+                values.append(total)
+
+    return Tensor(values, dtype=result_dtype(a.dtype, b), shape=output_shape)
+
+
+def _transpose_impl(tensor: Tensor) -> Tensor:
+    """Transpose the final two dimensions of a tensor."""
+    if tensor.ndim < 2:
+        raise ValueError("Transpose requires a tensor with at least 2D")
+
+    shape = tensor.shape[:-2] + (tensor.shape[-1], tensor.shape[-2])
+    values = []
+    for index in range(tensor.size):
+        output_coordinates = _coordinates(index, shape)
+        input_coordinates = output_coordinates[:-2] + (
+            output_coordinates[-1],
+            output_coordinates[-2],
+        )
+        values.append(tensor._data[_flat_index(input_coordinates, tensor.shape)])
+    return Tensor(values, dtype=tensor.dtype, shape=shape)
 
 
 class Dot:
-    """2D matrix multiplication with a reverse-mode gradient rule."""
+    """General matrix multiplication with a reverse-mode gradient rule."""
 
     forward = staticmethod(_dot_impl)
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+        """Differentiate a matrix product with respect to both operands."""
         a, b = inputs
-        og = grad
-        if og.ndim == 1:
-            og = Tensor(og._data, shape=(1, og.shape[0]))
-        return [_dot_impl(og, _transpose_impl(b)), _dot_impl(_transpose_impl(a), og)]
+        (
+            (
+                a_vector,
+                b_vector,
+                batch_shape,
+                a_rows,
+                a_columns,
+                b_columns,
+                a_batch_shape,
+                b_batch_shape,
+            ),
+            output_shape,
+        ) = _matmul_metadata(a, b)
+        if grad.shape != output_shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match output shape {output_shape}"
+            )
+
+        a_values = [0.0] * a.size
+        b_values = [0.0] * b.size
+        for batch_index in range(_shape_size(batch_shape)):
+            batch_coordinates = _coordinates(batch_index, batch_shape)
+            a_batch_coordinates = _batch_coordinates(batch_coordinates, a_batch_shape)
+            b_batch_coordinates = _batch_coordinates(batch_coordinates, b_batch_shape)
+            for row in range(a_rows):
+                for column in range(b_columns):
+                    upstream = _output_gradient(
+                        grad,
+                        batch_coordinates,
+                        row,
+                        column,
+                        a_vector,
+                        b_vector,
+                    )
+                    for inner in range(a_columns):
+                        a_index = _a_index(a, a_vector, a_batch_coordinates, row, inner)
+                        b_index = _b_index(b, b_vector, b_batch_coordinates, inner, column)
+                        a_values[a_index] += upstream * b._data[b_index]
+                        b_values[b_index] += upstream * a._data[a_index]
+
+        return [
+            Tensor(a_values, dtype=grad.dtype, shape=a.shape),
+            Tensor(b_values, dtype=grad.dtype, shape=b.shape),
+        ]
 
 
 def dot(a: Any, b: Any) -> Any:
-    """Multiply two 2D Tensors or differentiable Variables."""
+    """Return the general matrix product of two Tensors or Variables."""
     from ..variable import Variable
 
     if isinstance(a, Variable) or isinstance(b, Variable):
@@ -68,7 +244,10 @@ def dot(a: Any, b: Any) -> Any:
             Dot,
             [left, right],
         )
-    return Dot.forward(a, b)
+
+    left = a if isinstance(a, Tensor) else Tensor(a)
+    right = b if isinstance(b, Tensor) else Tensor(b)
+    return Dot.forward(left, right)
 
 
 __all__ = ["Dot", "dot", "_transpose_impl"]

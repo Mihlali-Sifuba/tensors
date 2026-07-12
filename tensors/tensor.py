@@ -4,19 +4,90 @@ from typing import Iterable, Union, List, Tuple, Optional
 from . import dtype as _dtype
 
 
+def _shape_size(shape: Tuple[int, ...]) -> int:
+    """Return the number of elements described by ``shape``."""
+    size = 1
+    for dimension in shape:
+        size *= dimension
+    return size
+
+
+def _strides(shape: Tuple[int, ...]) -> Tuple[int, ...]:
+    """Return row-major strides for ``shape``."""
+    stride = 1
+    strides = []
+    for dimension in reversed(shape):
+        strides.append(stride)
+        stride *= dimension
+    return tuple(reversed(strides))
+
+
+def _coordinates(index: int, shape: Tuple[int, ...]) -> Tuple[int, ...]:
+    """Convert a row-major flat index to coordinates for ``shape``."""
+    coordinates = []
+    for dimension, stride in zip(shape, _strides(shape)):
+        coordinate = index // stride
+        coordinates.append(coordinate)
+        index %= stride
+    return tuple(coordinates)
+
+
+def _flat_index(coordinates: Tuple[int, ...], shape: Tuple[int, ...]) -> int:
+    """Convert row-major coordinates to a flat index."""
+    return sum(
+        coordinate * stride
+        for coordinate, stride in zip(coordinates, _strides(shape))
+    )
+
+
+def _broadcast_shape(a_shape: Tuple[int, ...], b_shape: Tuple[int, ...]) -> Tuple[int, ...]:
+    """Return the NumPy-style broadcast shape for two tensor shapes."""
+    dimensions = []
+    for a_dimension, b_dimension in zip(reversed(a_shape), reversed(b_shape)):
+        if a_dimension == b_dimension:
+            dimensions.append(a_dimension)
+        elif a_dimension == 1:
+            dimensions.append(b_dimension)
+        elif b_dimension == 1:
+            dimensions.append(a_dimension)
+        else:
+            raise ValueError(f"Shapes {a_shape} and {b_shape} cannot be broadcast")
+
+    longer_shape = a_shape if len(a_shape) > len(b_shape) else b_shape
+    matched_dimensions = min(len(a_shape), len(b_shape))
+    dimensions.extend(reversed(longer_shape[:len(longer_shape) - matched_dimensions]))
+    return tuple(reversed(dimensions))
+
+
+def _broadcast_to(tensor: 'Tensor', shape: Tuple[int, ...]) -> 'Tensor':
+    """Return ``tensor`` expanded to ``shape`` using singleton dimensions."""
+    if tensor.shape == shape:
+        return tensor
+    if len(tensor.shape) > len(shape):
+        raise ValueError(f"Shape {tensor.shape} cannot be broadcast to {shape}")
+
+    padded_shape = (1,) * (len(shape) - tensor.ndim) + tensor.shape
+    for source_dimension, target_dimension in zip(padded_shape, shape):
+        if source_dimension not in {1, target_dimension}:
+            raise ValueError(f"Shape {tensor.shape} cannot be broadcast to {shape}")
+
+    values = []
+    padding = len(shape) - tensor.ndim
+    for output_index in range(_shape_size(shape)):
+        output_coordinates = _coordinates(output_index, shape)
+        source_coordinates = tuple(
+            0 if source_dimension == 1 else coordinate
+            for source_dimension, coordinate in zip(padded_shape, output_coordinates)
+        )[padding:]
+        values.append(tensor._data[_flat_index(source_coordinates, tensor.shape)])
+
+    return Tensor(values, dtype=tensor.dtype, shape=shape)
+
+
 def _broadcast_tensors(a: 'Tensor', b: 'Tensor') -> Tuple['Tensor', 'Tensor']:
-    """Broadcast two tensors to a common shape (last-dim matching)."""
-    if a.shape == b.shape:
-        return a, b
-    if a.ndim < b.ndim:
-        return _broadcast_tensors(b, a)
-    if b.shape == a.shape[-b.ndim:]:
-        tile_count = a.size // b.size
-        tiled = array(b.dtype.typecode, [])
-        for _ in range(tile_count):
-            tiled.extend(b._data)
-        return a, Tensor(tiled, dtype=b.dtype, shape=a.shape)
-    raise ValueError(f"Shapes {a.shape} and {b.shape} cannot be broadcast")
+    """Broadcast two tensors to a shared NumPy-style shape."""
+    shape = _broadcast_shape(a.shape, b.shape)
+    return _broadcast_to(a, shape), _broadcast_to(b, shape)
 
 
 class Tensor:
@@ -424,3 +495,11 @@ class Tensor:
     def __neg__(self):
         from .ops import Ops
         return Ops.neg(self)
+
+    def __matmul__(self, other):
+        from .linalg import matmul
+        return matmul(self, other)
+
+    def __rmatmul__(self, other):
+        from .linalg import matmul
+        return matmul(other, self)
