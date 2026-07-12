@@ -16,6 +16,11 @@ class Transpose:
         """Transpose the upstream gradient back to the input layout."""
         return [_transpose_impl(grad)]
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for transpose."""
+        return [transpose(grad)]
+
 
 def transpose(value: Any) -> Any:
     """Transpose the final two axes of a Tensor or Variable."""

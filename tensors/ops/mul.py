@@ -45,3 +45,14 @@ class Mul:
         scalar = kwargs.get("scalar", 1.0)
         assert isinstance(scalar, (int, float))
         return [Tensor([g * scalar for g in grad._data], dtype=grad.dtype, shape=grad.shape)]
+
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for multiplication."""
+        if len(inputs) == 1:
+            scalar = kwargs.get("scalar", 1.0)
+            return [grad * scalar]
+        left, right = inputs
+        if left.shape != right.shape:
+            raise NotImplementedError("Higher-order derivatives through broadcast mul are not implemented")
+        return [grad * right, grad * left]

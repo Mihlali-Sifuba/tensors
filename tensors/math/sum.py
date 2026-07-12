@@ -74,6 +74,20 @@ class Sum:
 
         return [Tensor(result, dtype=grad.dtype, shape=a.shape)]
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for whole-tensor sums."""
+        from ..variable import Variable
+        axis = kwargs.get("axis", None)
+        if axis is not None:
+            raise NotImplementedError("Higher-order derivatives for axis sums are not implemented")
+        value = inputs[0]
+        ones = Variable(
+            Tensor([1.0] * value.size, dtype=grad.dtype, shape=value.shape),
+            requires_grad=False,
+        )
+        return [grad * ones]
+
 
 def sum(value: Any, axis: Optional[int] = None,
         keepdims: bool = False) -> Any:

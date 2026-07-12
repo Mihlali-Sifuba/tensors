@@ -25,6 +25,12 @@ class Softplus:
         values = [g * _sigmoid(float(x)) for g, x in zip(grad._data, a._data)]
         return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for softplus."""
+        from .sigmoid import sigmoid
+        return [grad * sigmoid(inputs[0])]
+
 
 def softplus(value: Any) -> Any:
     """Return the elementwise softplus as a Tensor or Variable."""

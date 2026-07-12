@@ -19,6 +19,18 @@ class ReLU:
         values = [g if x > 0 else 0 for g, x in zip(grad._data, a._data)]
         return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build an almost-everywhere differentiable VJP for ReLU."""
+        from ..variable import Variable
+        value = inputs[0]
+        mask = Tensor(
+            [1.0 if item > 0 else 0.0 for item in value.data._data],
+            dtype=grad.dtype,
+            shape=value.shape,
+        )
+        return [grad * Variable(mask, requires_grad=False)]
+
 
 def relu(value: Any) -> Any:
     """Return the elementwise rectified linear unit as a Tensor or Variable."""

@@ -33,3 +33,13 @@ class Sub:
         left, right = inputs
         neg = Tensor([-x for x in grad._data], dtype=grad.dtype.typecode, shape=grad.shape)
         return [unbroadcast(grad, left.shape), unbroadcast(neg, right.shape)]
+
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for subtraction."""
+        if len(inputs) == 1:
+            return [grad]
+        left, right = inputs
+        if left.shape != right.shape:
+            raise NotImplementedError("Higher-order derivatives through broadcast sub are not implemented")
+        return [grad, -grad]

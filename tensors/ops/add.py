@@ -32,3 +32,13 @@ class Add:
             return [grad]
         left, right = inputs
         return [unbroadcast(grad, left.shape), unbroadcast(grad, right.shape)]
+
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for addition."""
+        if len(inputs) == 1:
+            return [grad]
+        left, right = inputs
+        if left.shape != right.shape:
+            raise NotImplementedError("Higher-order derivatives through broadcast add are not implemented")
+        return [grad, grad]

@@ -27,6 +27,11 @@ class Sqrt:
         values = [g / (2.0 * y) for g, y in zip(grad._data, output._data)]
         return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for square root."""
+        return [grad / (2.0 * sqrt(inputs[0]))]
+
 
 def sqrt(value: Any) -> Any:
     """Return the elementwise square root as a Tensor or Variable."""
