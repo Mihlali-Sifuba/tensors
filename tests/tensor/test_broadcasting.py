@@ -40,11 +40,31 @@ class TensorBroadcastingTests(unittest.TestCase):
 
         self.assertIs((matrix + row).dtype, ts.float64)
 
-    def test_broadcasting_rejects_non_trailing_match(self):
+    def test_matrix_broadcasts_column_vector_over_columns(self):
         tensor = ts.Tensor([[1, 2], [3, 4]])
+        column = ts.Tensor([[10], [20]])
 
-        with self.assertRaisesRegex(ValueError, "cannot be broadcast"):
-            _ = tensor + ts.Tensor([[10], [20]])
+        result = tensor + column
+
+        self.assertEqual(result.shape, (2, 2))
+        self.assertEqual(result.tolist(), [11.0, 12.0, 23.0, 24.0])
+
+    def test_singleton_vector_broadcasts_across_the_final_axis(self):
+        matrix = ts.Tensor([[1, 2, 3], [4, 5, 6]])
+        singleton = ts.Tensor([10])
+
+        result = matrix + singleton
+
+        self.assertEqual(result.shape, (2, 3))
+        self.assertEqual(result.tolist(), [11.0, 12.0, 13.0, 14.0, 15.0, 16.0])
+
+    def test_broadcasting_preserves_subtraction_operand_order(self):
+        row = ts.Tensor([10, 20])
+        matrix = ts.Tensor([[1, 2], [3, 4]])
+
+        result = row - matrix
+
+        self.assertEqual(result.tolist(), [9.0, 18.0, 7.0, 16.0])
 
 
 if __name__ == "__main__":

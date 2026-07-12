@@ -36,9 +36,23 @@ class ShapeOpsTests(unittest.TestCase):
         self.assertEqual(result.shape, (2, 2))
         self.assertEqual(result.tolist(), [1.0, 3.0, 2.0, 4.0])
 
-    def test_transpose_rejects_variable_until_differentiable_rule_exists(self):
-        with self.assertRaises(NotImplementedError):
-            ts.transpose(ts.Variable([[1.0, 2.0]]))
+    def test_transpose_keeps_variable_history_differentiable(self):
+        variable = ts.Variable([[1.0, 2.0], [3.0, 4.0]])
+
+        transposed = ts.transpose(variable)
+        ts.backward(ts.sum(transposed))
+
+        self.assertEqual(transposed.data.tolist(), [1.0, 3.0, 2.0, 4.0])
+        self.assertEqual(transposed.shape, (2, 2))
+        self.assertEqual(variable.grad.tolist(), [1.0, 1.0, 1.0, 1.0])
+
+    def test_transpose_swaps_final_axes_for_batched_variable(self):
+        variable = ts.Variable(ts.Tensor([1.0, 2.0, 3.0, 4.0], shape=(2, 1, 2)))
+
+        transposed = ts.transpose(variable)
+
+        self.assertEqual(transposed.shape, (2, 2, 1))
+        self.assertEqual(transposed.data.tolist(), [1.0, 2.0, 3.0, 4.0])
 
 
 if __name__ == "__main__":
