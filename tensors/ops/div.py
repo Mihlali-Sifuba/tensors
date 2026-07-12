@@ -4,6 +4,7 @@ from typing import List, Union
 
 from ..tensor import Tensor, _broadcast_tensors
 from ..dtype import result_dtype
+from ._utils import unbroadcast
 
 
 Scalar = Union[int, float]
@@ -52,11 +53,25 @@ class Div:
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         if len(inputs) == 2:
             a, b = inputs
-            da = Div.forward(grad, b)
-            num = Div._mul_tensors(grad, a)
-            den = Div._mul_tensors(b, b)
-            db = Div._neg_tensor(Div.forward(num, den))
-            return [da, db]
+            expanded_a, expanded_b = _broadcast_tensors(a, b)
+            da = Tensor(
+                [g / y for g, y in zip(grad._data, expanded_b._data)],
+                dtype=grad.dtype,
+                shape=grad.shape,
+            )
+            db = Tensor(
+                [
+                    -g * x / (y * y)
+                    for g, x, y in zip(
+                        grad._data,
+                        expanded_a._data,
+                        expanded_b._data,
+                    )
+                ],
+                dtype=grad.dtype,
+                shape=grad.shape,
+            )
+            return [unbroadcast(da, a.shape), unbroadcast(db, b.shape)]
         scalar = kwargs.get("scalar", 1.0)
         assert isinstance(scalar, (int, float))
         if kwargs.get("reverse", False):

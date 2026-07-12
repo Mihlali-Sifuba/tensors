@@ -4,7 +4,7 @@ from .ops import Ops
 from .dtype import DataType, float64, float32, int64, int32, int16, int8, uint8
 from .variable import Variable
 from .graph import Graph, backward
-from .linalg import dot, transpose
+from .linalg import dot, matmul, transpose
 from .math import (
     sum, mean, min, max,
     sqrt, exp, log, relu, sigmoid, tanh, softplus,
@@ -22,7 +22,7 @@ __all__ = [
     "graph", "ops", "linalg", "math", "optim",
     "float64", "float32", "int64", "int32", "int16", "int8", "uint8",
     "add", "subtract", "multiply", "divide",
-    "dot", "transpose", "reshape", "stack",
+    "dot", "matmul", "transpose", "reshape", "stack",
     "sum", "mean", "min", "max",
     "sqrt", "exp", "log", "relu", "sigmoid", "tanh", "softplus", "std",
 ]

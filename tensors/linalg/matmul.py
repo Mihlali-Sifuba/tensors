@@ -6,7 +6,7 @@ from .dot import dot
 
 
 def matmul(a: Any, b: Any) -> Any:
-    """Matrix multiplication for the currently supported 2D inputs."""
+    """Return the general matrix product of two tensors or Variables."""
     return dot(a, b)
 
 

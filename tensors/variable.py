@@ -148,6 +148,14 @@ class Variable:
     def __neg__(self):
         return self._from_operation(Ops.neg(self.data), "neg", Neg, [self])
 
+    def __matmul__(self, other):
+        from .linalg import matmul
+        return matmul(self, other)
+
+    def __rmatmul__(self, other):
+        from .linalg import matmul
+        return matmul(other, self)
+
     def __getitem__(self, key):
         return self._from_operation(
             Slice.forward(self.data, key), "slice", Slice, [self], key=key

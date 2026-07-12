@@ -1,21 +1,34 @@
-"""Tensor transpose public API."""
+"""Differentiable tensor transpose."""
 
-from typing import Any
+from typing import Any, List
 
+from ..tensor import Tensor
 from .dot import _transpose_impl
 
 
-def transpose(value: Any) -> Any:
-    """Transpose a 2D Tensor.
+class Transpose:
+    """Transpose final matrix axes with a reverse-mode gradient rule."""
 
-    Transpose has not yet gained a differentiable operation rule, so Variables
-    are deliberately rejected instead of silently dropping their history.
-    """
+    forward = staticmethod(_transpose_impl)
+
+    @staticmethod
+    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+        """Transpose the upstream gradient back to the input layout."""
+        return [_transpose_impl(grad)]
+
+
+def transpose(value: Any) -> Any:
+    """Transpose the final two axes of a Tensor or Variable."""
     from ..variable import Variable
 
     if isinstance(value, Variable):
-        raise NotImplementedError("Differentiable transpose is not implemented")
-    return _transpose_impl(value)
+        return Variable._from_operation(
+            Transpose.forward(value.data),
+            "transpose",
+            Transpose,
+            [value],
+        )
+    return Transpose.forward(value if isinstance(value, Tensor) else Tensor(value))
 
 
-__all__ = ["transpose"]
+__all__ = ["Transpose", "transpose"]
