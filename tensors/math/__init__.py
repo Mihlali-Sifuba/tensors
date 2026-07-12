@@ -14,11 +14,12 @@ from .softplus import Softplus, softplus
 from .std import Std, std
 from .reshape import Reshape, reshape
 from .stack import Stack, stack
+from .concat import Concat, concat
 
 __all__ = [
     "Sum", "Mean", "Min", "Max", "Sqrt", "Exp", "Log",
-    "ReLU", "Sigmoid", "Tanh", "Softplus", "Std", "Reshape", "Stack",
+    "ReLU", "Sigmoid", "Tanh", "Softplus", "Std", "Reshape", "Stack", "Concat",
     "sum", "mean", "min", "max",
     "sqrt", "exp", "log", "relu", "sigmoid", "tanh", "softplus",
-    "std", "reshape", "stack",
+    "std", "reshape", "stack", "concat",
 ]

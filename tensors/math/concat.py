@@ -1,0 +1,107 @@
+"""Tensor concatenation and its differentiation rule."""
+
+from __future__ import annotations
+
+from array import array
+from collections.abc import Sequence
+from typing import Any, List
+
+from ..tensor import Tensor
+
+
+class Concat:
+    """Concatenate tensors along an existing axis."""
+
+    @staticmethod
+    def forward(
+        *tensors: Tensor | list[Any],
+        axis: int = 0,
+        keepdims: bool = False,
+    ) -> Tensor:
+        """Concatenate one or more tensors along ``axis``."""
+        if keepdims:
+            raise ValueError("concat does not support keepdims")
+        if len(tensors) == 1 and isinstance(tensors[0], list):
+            tensors = tuple(tensors[0])
+        if not tensors:
+            raise ValueError("concat requires at least one tensor")
+
+        converted = [value if isinstance(value, Tensor) else Tensor(value) for value in tensors]
+        reference = converted[0]
+        if axis < 0:
+            axis += reference.ndim
+        if not 0 <= axis < reference.ndim:
+            raise ValueError(f"Axis {axis} out of bounds for {reference.ndim}D tensor")
+
+        for tensor in converted[1:]:
+            if tensor.ndim != reference.ndim:
+                raise ValueError(
+                    f"All tensors must have the same rank; "
+                    f"got {reference.ndim} and {tensor.ndim}"
+                )
+            for dimension in range(reference.ndim):
+                if dimension != axis and tensor.shape[dimension] != reference.shape[dimension]:
+                    raise ValueError(
+                        "Tensors must match on all non-concat axes; "
+                        f"axis {dimension}: {reference.shape[dimension]} vs "
+                        f"{tensor.shape[dimension]}"
+                    )
+
+        output_shape = list(reference.shape)
+        output_shape[axis] = sum(tensor.shape[axis] for tensor in converted)
+
+        trailing_size = 1
+        for dimension in reference.shape[axis + 1:]:
+            trailing_size *= dimension
+        groups = 1
+        for dimension in reference.shape[:axis]:
+            groups *= dimension
+
+        values = array(reference.dtype.typecode, [])
+        for group in range(groups):
+            for tensor in converted:
+                count = tensor.shape[axis] * trailing_size
+                start = group * count
+                values.extend(tensor._data[start:start + count])
+
+        return Tensor(values, dtype=reference.dtype, shape=tuple(output_shape))
+
+    @staticmethod
+    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+        """Split an upstream gradient back across every concatenated input."""
+        axis = kwargs.get("axis", 0)
+        if not isinstance(axis, int):
+            raise TypeError("concat axis must be an integer")
+        if axis < 0:
+            axis += grad.ndim
+
+        offset = 0
+        gradients = []
+        for tensor in inputs:
+            key = [slice(None)] * grad.ndim
+            key[axis] = slice(offset, offset + tensor.shape[axis])
+            gradients.append(grad[tuple(key)])
+            offset += tensor.shape[axis]
+        return gradients
+
+
+def concat(tensors: Sequence[Any], axis: int = 0) -> Any:
+    """Concatenate Tensors or Variables along an existing axis."""
+    from ..variable import Variable
+
+    if any(isinstance(value, Variable) for value in tensors):
+        variables = [
+            value if isinstance(value, Variable) else Variable(value, requires_grad=False)
+            for value in tensors
+        ]
+        return Variable._from_operation(
+            Concat.forward(*(variable.data for variable in variables), axis=axis),
+            "concat",
+            Concat,
+            variables,
+            axis=axis,
+        )
+    return Concat.forward(*tensors, axis=axis)
+
+
+__all__ = ["Concat", "concat"]
