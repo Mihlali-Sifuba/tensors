@@ -3,23 +3,20 @@
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
+from .optimizer import Optimizer
+
 if TYPE_CHECKING:
     from ..variable import Variable
 
 
-class SGD:
+class SGD(Optimizer):
     """Update a sequence of trainable Variables with gradient descent."""
 
     def __init__(self, parameters: Iterable["Variable"], learning_rate: float) -> None:
         if learning_rate <= 0:
             raise ValueError("learning_rate must be positive")
-        self.parameters = tuple(parameters)
+        super().__init__(parameters)
         self.learning_rate = learning_rate
-
-    def zero_grad(self) -> None:
-        """Clear accumulated gradients from every managed parameter."""
-        for parameter in self.parameters:
-            parameter.grad = None
 
     def step(self) -> None:
         """Apply one in-place parameter update using current gradients."""
