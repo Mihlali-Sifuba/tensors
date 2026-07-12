@@ -454,6 +454,18 @@ class Tensor:
             )
         return self._data[0]
 
+    def __bool__(self) -> bool:
+        """Prevent a Tensor from being used as a Python bool.
+
+        Raises:
+            TypeError: Always — to catch ``if tensor:`` bugs early.
+        """
+        raise TypeError(
+            "Cannot convert a Tensor to a Python bool. "
+            "Use tensor.item() for scalar tensors or "
+            "tensor.size != 0 for emptiness checks."
+        )
+
     def __format__(self, format_spec: str) -> str:
         """Format a scalar tensor using normal Python numeric formatting."""
         if self.size != 1:
