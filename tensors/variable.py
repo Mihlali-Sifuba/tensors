@@ -17,7 +17,7 @@ Differentiation starts from a chosen output::
 
 from .tensor import Tensor
 from .ops import Ops
-from .ops import Add, Sub, Mul, Div, Neg, Slice
+from .ops import Add, Sub, Mul, Div, Pow, Neg, Slice
 from .graph.state import get_graph_state
 
 
@@ -140,6 +140,32 @@ class Variable:
             Div.forward_reverse(self.data, other),
             "div",
             Div,
+            [self],
+            scalar=other,
+            reverse=True,
+        )
+
+    def __pow__(self, other):
+        if isinstance(other, Variable):
+            return self._from_operation(
+                Pow.forward(self.data, other.data), "pow", Pow, [self, other]
+            )
+        if isinstance(other, Tensor):
+            exponent = Variable(other, requires_grad=False)
+            return self._from_operation(
+                Pow.forward(self.data, exponent.data), "pow", Pow, [self, exponent]
+            )
+        return self._from_operation(
+            Pow.forward(self.data, other), "pow", Pow, [self], scalar=other
+        )
+
+    def __rpow__(self, other):
+        if not isinstance(other, (int, float)):
+            return NotImplemented
+        return self._from_operation(
+            Pow.forward_reverse(self.data, other),
+            "pow",
+            Pow,
             [self],
             scalar=other,
             reverse=True,
