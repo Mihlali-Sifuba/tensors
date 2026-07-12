@@ -20,3 +20,8 @@ class Neg:
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         neg = Tensor([-x for x in grad._data], dtype=grad.dtype.typecode, shape=grad.shape)
         return [neg]
+
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for negation."""
+        return [-grad]

@@ -82,3 +82,17 @@ class Div:
             )
             return [Tensor(list(values), dtype=dtype, shape=a.shape)]
         return [Tensor([g / scalar for g in grad._data], dtype=grad.dtype.typecode, shape=grad.shape)]
+
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for division."""
+        if len(inputs) == 1:
+            scalar = kwargs.get("scalar", 1.0)
+            if kwargs.get("reverse", False):
+                value = inputs[0]
+                return [-(grad * scalar) / (value ** 2)]
+            return [grad / scalar]
+        left, right = inputs
+        if left.shape != right.shape:
+            raise NotImplementedError("Higher-order derivatives through broadcast div are not implemented")
+        return [grad / right, -(grad * left) / (right ** 2)]

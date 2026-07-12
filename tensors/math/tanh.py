@@ -23,6 +23,12 @@ class Tanh:
         values = [g * (1.0 - y * y) for g, y in zip(grad._data, output._data)]
         return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for hyperbolic tangent."""
+        output = tanh(inputs[0])
+        return [grad * (1.0 - output ** 2)]
+
 
 def tanh(value: Any) -> Any:
     """Return the elementwise hyperbolic tangent as a Tensor or Variable."""

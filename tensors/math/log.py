@@ -26,6 +26,11 @@ class Log:
         values = [g / x for g, x in zip(grad._data, a._data)]
         return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for the natural logarithm."""
+        return [grad / inputs[0]]
+
 
 def log(value: Any) -> Any:
     """Return the elementwise natural logarithm as a Tensor or differentiable Variable."""

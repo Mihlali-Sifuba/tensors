@@ -23,6 +23,12 @@ class Sigmoid:
         values = [g * y * (1.0 - y) for g, y in zip(grad._data, output._data)]
         return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for sigmoid."""
+        output = sigmoid(inputs[0])
+        return [grad * output * (1.0 - output)]
+
 
 def sigmoid(value: Any) -> Any:
     """Return the elementwise sigmoid as a Tensor or Variable."""

@@ -23,6 +23,11 @@ class Exp:
         values = [g * y for g, y in zip(grad._data, output._data)]
         return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for exponentiation."""
+        return [grad * exp(inputs[0])]
+
 
 def exp(value: Any) -> Any:
     """Return the elementwise exponential as a Tensor or differentiable Variable."""

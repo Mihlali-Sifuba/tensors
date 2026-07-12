@@ -230,6 +230,17 @@ class Dot:
             Tensor(b_values, dtype=grad.dtype, shape=b.shape),
         ]
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for non-batched matrix products."""
+        from .transpose import transpose
+        left, right = inputs
+        if left.ndim != 2 or right.ndim != 2:
+            raise NotImplementedError(
+                "Higher-order derivatives currently require two 2D matmul inputs"
+            )
+        return [grad @ transpose(right), transpose(left) @ grad]
+
 
 def dot(a: Any, b: Any) -> Any:
     """Return the general matrix product of two Tensors or Variables."""

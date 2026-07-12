@@ -4,9 +4,9 @@ from typing import Any
 
 from .node import Node
 from .edge import Edge
-from .computation import Computation, backward
+from .computation import Computation, backward, grad
 
-__all__ = ["Graph", "Computation", "Node", "Edge", "backward"]
+__all__ = ["Graph", "Computation", "Node", "Edge", "backward", "grad"]
 
 
 def __getattr__(name: str) -> Any:

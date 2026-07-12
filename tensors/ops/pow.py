@@ -130,6 +130,33 @@ class Pow:
         ]
         return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP for exponentiation."""
+        if len(inputs) == 2:
+            base, exponent = inputs
+            if base.shape != exponent.shape:
+                raise NotImplementedError("Higher-order derivatives through broadcast pow are not implemented")
+            from ..math import log
+            output = base ** exponent
+            return [
+                grad * exponent * (base ** (exponent - 1.0)),
+                grad * output * log(base),
+            ]
+
+        exponent = kwargs.get("scalar")
+        if not isinstance(exponent, (int, float)):
+            raise TypeError("power scalar exponent must be an int or float")
+        value = inputs[0]
+        if kwargs.get("reverse", False):
+            if exponent <= 0:
+                raise ValueError(
+                    "power gradients with respect to an exponent require a positive base"
+                )
+            from ..math import log
+            return [grad * (exponent ** value) * log(exponent)]
+        return [grad * exponent * (value ** (exponent - 1.0))]
+
 
 def pow(base: Any, exponent: Any) -> Any:
     """Return the element-wise power of two Tensors, Variables, or scalars."""
