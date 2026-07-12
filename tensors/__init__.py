@@ -7,7 +7,7 @@ from .graph import Graph, backward
 from .linalg import dot, matmul, transpose
 from .math import (
     sum, mean, min, max,
-    sqrt, exp, log, relu, sigmoid, tanh, softplus,
+    sqrt, exp, log, relu, sigmoid, tanh, softplus, softmax,
     std, reshape, stack, concat,
 )
 
@@ -24,5 +24,5 @@ __all__ = [
     "add", "subtract", "multiply", "divide", "pow",
     "dot", "matmul", "transpose", "reshape", "stack", "concat",
     "sum", "mean", "min", "max",
-    "sqrt", "exp", "log", "relu", "sigmoid", "tanh", "softplus", "std",
+    "sqrt", "exp", "log", "relu", "sigmoid", "tanh", "softplus", "softmax", "std",
 ]
