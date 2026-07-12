@@ -46,6 +46,31 @@ class HigherOrderDerivativeTests(unittest.TestCase):
         self.assertEqual(value.grad.data.tolist(), [12.0])
         self.assertEqual(ts.grad(value.grad, value).tolist(), [12.0])
 
+    def test_grad_returns_gradients_for_multiple_inputs(self):
+        left = ts.Variable([2.0])
+        right = ts.Variable([3.0])
+        output = left * right
+
+        left_gradient, right_gradient = ts.grad(output, (left, right))
+
+        self.assertEqual(left_gradient.tolist(), [3.0])
+        self.assertEqual(right_gradient.tolist(), [2.0])
+
+    def test_grad_outputs_weights_each_output_element(self):
+        value = ts.Variable([2.0, 3.0])
+        output = value ** 2.0
+
+        gradient = ts.grad(output, value, grad_outputs=ts.Tensor([4.0, 5.0]))
+
+        self.assertEqual(gradient.tolist(), [16.0, 30.0])
+
+    def test_grad_outputs_must_match_output_shape(self):
+        value = ts.Variable([2.0, 3.0])
+        output = value ** 2.0
+
+        with self.assertRaisesRegex(ValueError, "Gradient shape"):
+            ts.grad(output, value, grad_outputs=ts.Tensor([1.0]))
+
 
 if __name__ == "__main__":
     unittest.main()
