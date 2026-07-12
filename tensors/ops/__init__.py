@@ -19,6 +19,7 @@ from .mul import Mul
 from .div import Div
 from .neg import Neg
 from .slice import Slice
+from .pow import Pow, pow
 
 
 from ..tensor import Tensor
@@ -38,9 +39,10 @@ class Ops:
     subtract = staticmethod(Sub.forward)
     multiply = staticmethod(Mul.forward)
     divide = staticmethod(Div.forward)
+    pow = staticmethod(Pow.forward)
     neg = staticmethod(Neg.forward)
 
 __all__ = [
-    "Add", "Sub", "Mul", "Div", "Neg", "Slice",
+    "Add", "Sub", "Mul", "Div", "Pow", "Neg", "Slice", "pow",
     "Ops",
 ]

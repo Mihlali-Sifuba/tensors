@@ -492,6 +492,14 @@ class Tensor:
         numerator = Tensor([other] * self.size, shape=self.shape)
         return Ops.divide(numerator, self)
 
+    def __pow__(self, other):
+        from .ops import Pow
+        return Pow.forward(self, other)
+
+    def __rpow__(self, other):
+        from .ops import Pow
+        return Pow.forward_reverse(self, other)
+
     def __neg__(self):
         from .ops import Ops
         return Ops.neg(self)
