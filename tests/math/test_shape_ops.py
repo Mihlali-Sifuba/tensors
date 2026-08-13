@@ -30,6 +30,15 @@ class ShapeOpsTests(unittest.TestCase):
 
         self.assertEqual(original.tolist(), [1.0, 2.0, 3.0, 4.0])
 
+    def test_reshape_keeps_variable_history_differentiable(self):
+        variable = ts.Variable([1.0, 2.0, 3.0, 4.0])
+
+        reshaped = ts.reshape(variable, (2, 2))
+        ts.backward(ts.sum(reshaped))
+
+        self.assertEqual(reshaped.shape, (2, 2))
+        self.assertEqual(variable.grad.tolist(), [1.0, 1.0, 1.0, 1.0])
+
     def test_transpose_square_matrix(self):
         result = ts.transpose(ts.Tensor([[1, 2], [3, 4]]))
 
@@ -53,6 +62,21 @@ class ShapeOpsTests(unittest.TestCase):
 
         self.assertEqual(transposed.shape, (2, 2, 1))
         self.assertEqual(transposed.data.tolist(), [1.0, 2.0, 3.0, 4.0])
+
+    def test_transpose_accepts_an_axis_permutation(self):
+        variable = ts.Variable(
+            ts.Tensor(
+                [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                shape=(1, 2, 3),
+            )
+        )
+
+        transposed = ts.transpose(variable, axes=(2, 0, 1))
+        ts.backward(ts.sum(transposed))
+
+        self.assertEqual(transposed.shape, (3, 1, 2))
+        self.assertEqual(transposed.data.tolist(), [1.0, 4.0, 2.0, 5.0, 3.0, 6.0])
+        self.assertEqual(variable.grad.tolist(), [1.0] * 6)
 
 
 if __name__ == "__main__":

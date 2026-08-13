@@ -1,30 +1,71 @@
 """Maximum-value public API."""
 
 import builtins
-from typing import Any
+from typing import Any, List
 
 from ..tensor import Tensor
+from ._reduction import Axis, reduction_groups
 
 
 class Max:
     """Maximum-value operation."""
 
     @staticmethod
-    def forward(value: Tensor) -> Tensor:
-        if value.size == 0:
+    def forward(
+        value: Tensor,
+        axis: Axis = None,
+        keepdims: bool = False,
+    ) -> Tensor:
+        _, output_shape, groups = reduction_groups(
+            value, axis, keepdims, scalar_as_vector=True
+        )
+        if any(not group for group in groups):
             raise ValueError("Cannot compute max of empty tensor")
-        return Tensor([builtins.max(value._data)], dtype=value.dtype)
+        return Tensor(
+            [builtins.max(value._data[index] for index in group) for group in groups],
+            dtype=value.dtype,
+            shape=output_shape,
+        )
+
+    @staticmethod
+    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+        """Distribute each gradient equally among tied maximum values."""
+        value = inputs[0]
+        axis = kwargs.get("axis")
+        keepdims = bool(kwargs.get("keepdims", False))
+        _, output_shape, groups = reduction_groups(
+            value, axis, keepdims, scalar_as_vector=True
+        )
+        if grad.shape != output_shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match output shape {output_shape}"
+            )
+        result = [0.0] * value.size
+        for output_index, group in enumerate(groups):
+            maximum = builtins.max(value._data[index] for index in group)
+            selected = [index for index in group if value._data[index] == maximum]
+            share = grad._data[output_index] / len(selected)
+            for input_index in selected:
+                result[input_index] = share
+        return [Tensor(result, dtype=grad.dtype, shape=value.shape)]
 
 
-def max(value: Any) -> Tensor:
-    """Return the maximum as a scalar Tensor."""
+def max(value: Any, axis: Axis = None, keepdims: bool = False) -> Any:
+    """Compute maxima over one, several, or all axes."""
     from ..variable import Variable
 
     if isinstance(value, Variable):
-        raise NotImplementedError("Differentiable max is not implemented")
+        return Variable._from_operation(
+            Max.forward(value.data, axis=axis, keepdims=keepdims),
+            "max",
+            Max,
+            [value],
+            axis=axis,
+            keepdims=keepdims,
+        )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Max.forward(value)
+    return Max.forward(value, axis=axis, keepdims=keepdims)
 
 
 __all__ = ["Max", "max"]

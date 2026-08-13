@@ -159,18 +159,34 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
     return Tensor(values, dtype=result_dtype(a.dtype, b), shape=output_shape)
 
 
-def _transpose_impl(tensor: Tensor) -> Tensor:
-    """Transpose the final two dimensions of a tensor."""
+def _transpose_impl(
+    tensor: Tensor,
+    axes: tuple[int, ...] | list[int] | None = None,
+) -> Tensor:
+    """Permute tensor axes, defaulting to the final two matrix dimensions."""
     if tensor.ndim < 2:
         raise ValueError("Transpose requires a tensor with at least 2D")
+    if axes is None:
+        permutation = tuple(range(tensor.ndim - 2)) + (tensor.ndim - 1, tensor.ndim - 2)
+    else:
+        permutation = tuple(axes)
+        normalized = tuple(axis + tensor.ndim if axis < 0 else axis for axis in permutation)
+        if len(normalized) != tensor.ndim or set(normalized) != set(range(tensor.ndim)):
+            raise ValueError(
+                f"axes must be a permutation of 0..{tensor.ndim - 1}, got {permutation}"
+            )
+        permutation = normalized
 
-    shape = tensor.shape[:-2] + (tensor.shape[-1], tensor.shape[-2])
+    shape = tuple(tensor.shape[axis] for axis in permutation)
+    inverse = [0] * tensor.ndim
+    for output_axis, input_axis in enumerate(permutation):
+        inverse[input_axis] = output_axis
     values = []
     for index in range(tensor.size):
         output_coordinates = _coordinates(index, shape)
-        input_coordinates = output_coordinates[:-2] + (
-            output_coordinates[-1],
-            output_coordinates[-2],
+        input_coordinates = tuple(
+            output_coordinates[inverse[input_axis]]
+            for input_axis in range(tensor.ndim)
         )
         values.append(tensor._data[_flat_index(input_coordinates, tensor.shape)])
     return Tensor(values, dtype=tensor.dtype, shape=shape)
