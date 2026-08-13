@@ -3,7 +3,9 @@ from . import graph, linalg, math, ops, optim
 from .ops import Ops, pow
 from .dtype import DataType, float64, float32, int64, int32, int16, int8, uint8
 from .variable import Variable
-from .graph import GradcheckError, Graph, backward, grad, gradcheck
+from .graph import (
+    GradcheckError, Graph, backward, grad, gradcheck, hessian, jacobian,
+)
 from .linalg import dot, matmul, norm, outer, transpose
 from .math import (
     sum, mean, min, max,
@@ -19,7 +21,7 @@ divide = Ops.divide
 
 __all__ = [
     "Tensor", "Variable", "Graph", "GradcheckError",
-    "backward", "grad", "gradcheck", "Ops", "DataType",
+    "backward", "grad", "gradcheck", "hessian", "jacobian", "Ops", "DataType",
     "graph", "ops", "linalg", "math", "optim",
     "float64", "float32", "int64", "int32", "int16", "int8", "uint8",
     "add", "subtract", "multiply", "divide", "pow",

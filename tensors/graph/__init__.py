@@ -5,11 +5,12 @@ from typing import Any
 from .node import Node
 from .edge import Edge
 from .computation import Computation, backward, grad
+from .derivatives import hessian, jacobian
 from .gradcheck import GradcheckError, gradcheck
 
 __all__ = [
     "Graph", "Computation", "Node", "Edge",
-    "GradcheckError", "backward", "grad", "gradcheck",
+    "GradcheckError", "backward", "grad", "gradcheck", "hessian", "jacobian",
 ]
 
 
