@@ -31,4 +31,24 @@ def unbroadcast(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
     return Tensor(values, dtype=gradient.dtype, shape=shape)
 
 
-__all__ = ["unbroadcast"]
+def unbroadcast_graph(gradient, shape: tuple[int, ...]):
+    """Differentiably reduce a broadcasted Variable back to ``shape``."""
+    from ..math import reshape, sum
+
+    if gradient.shape == shape:
+        return gradient
+    if len(shape) > gradient.ndim:
+        raise ValueError(f"Cannot reduce gradient shape {gradient.shape} to {shape}")
+
+    padding = gradient.ndim - len(shape)
+    padded_shape = (1,) * padding + shape
+    axes = tuple(
+        axis
+        for axis, (source, target) in enumerate(zip(gradient.shape, padded_shape))
+        if target == 1 and source != 1
+    )
+    reduced = sum(gradient, axis=axes, keepdims=True) if axes else gradient
+    return reshape(reduced, shape) if reduced.shape != shape else reduced
+
+
+__all__ = ["unbroadcast", "unbroadcast_graph"]

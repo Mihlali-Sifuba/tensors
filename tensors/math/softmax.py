@@ -83,6 +83,16 @@ class Softmax:
 
         return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build the differentiable softmax Jacobian-vector product."""
+        from .sum import sum
+
+        axis = kwargs.get("axis", -1)
+        output = softmax(inputs[0], axis=axis)
+        projection = sum(grad * output, axis=axis, keepdims=True)
+        return [output * (grad - projection)]
+
 
 def softmax(value: Any, axis: int = -1) -> Any:
     """Return softmax probabilities for a Tensor or differentiable Variable."""

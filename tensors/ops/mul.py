@@ -53,6 +53,8 @@ class Mul:
             scalar = kwargs.get("scalar", 1.0)
             return [grad * scalar]
         left, right = inputs
-        if left.shape != right.shape:
-            raise NotImplementedError("Higher-order derivatives through broadcast mul are not implemented")
-        return [grad * right, grad * left]
+        from ._utils import unbroadcast_graph
+        return [
+            unbroadcast_graph(grad * right, left.shape),
+            unbroadcast_graph(grad * left, right.shape),
+        ]

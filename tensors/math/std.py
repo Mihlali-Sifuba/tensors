@@ -6,7 +6,7 @@ from typing import Any, List
 
 from ..dtype import float64
 from ..tensor import Tensor
-from ._reduction import Axis, reduction_groups
+from ._reduction import Axis, normalize_axes, reduction_groups
 
 
 class Std:
@@ -62,6 +62,38 @@ class Std:
             for input_index in group:
                 result[input_index] = scale * (value._data[input_index] - average)
         return [Tensor(result, dtype=grad.dtype, shape=value.shape)]
+
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable population-standard-deviation VJP."""
+        from .mean import mean
+        from .reshape import reshape
+
+        value = inputs[0]
+        axis = kwargs.get("axis")
+        keepdims = bool(kwargs.get("keepdims", False))
+        _, _, groups = reduction_groups(value.data, axis, True)
+        deviations = Std.forward(value.data, axis=axis, keepdims=True)
+        if any(
+            group and deviations._data[index] == 0
+            for index, group in enumerate(groups)
+        ):
+            raise ValueError(
+                "Higher-order derivatives of std are undefined at zero deviation"
+            )
+        center = mean(value, axis=axis, keepdims=True)
+        deviation = std(value, axis=axis, keepdims=True)
+        count = len(groups[0]) if groups else 0
+        if count == 0:
+            raise NotImplementedError(
+                "Higher-order derivatives for empty standard deviations are not implemented"
+            )
+        expanded = grad if keepdims else reshape(
+            grad,
+            tuple(1 if index in normalize_axes(value.ndim, axis) else size
+                  for index, size in enumerate(value.shape)),
+        )
+        return [expanded * (value - center) / (count * deviation)]
 
 
 def std(value: Any, axis: Axis = None, keepdims: bool = False) -> Any:

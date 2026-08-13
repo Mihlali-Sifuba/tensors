@@ -19,6 +19,37 @@ class AutogradTests(unittest.TestCase):
         self.assertEqual(result.node.label, "add")
         self.assertIs(result.node.inputs[0], x.node)
 
+    def test_node_labels_do_not_control_execution(self):
+        x = ts.Variable([2.0])
+        result = x * 3.0
+        x.node.label = "input"
+        result.node.label = "product"
+
+        replayed = Computation(result).forward()
+        ts.backward(result)
+
+        self.assertEqual(replayed.tolist(), [6.0])
+        self.assertEqual(x.grad.tolist(), [3.0])
+
+    def test_large_computation_does_not_depend_on_python_recursion(self):
+        value = ts.Variable([0.0])
+        result = value
+        for _ in range(1500):
+            result = result + 1.0
+
+        computation = Computation(result)
+
+        self.assertEqual(len(computation.nodes), 1501)
+        self.assertEqual(computation.forward().tolist(), [1500.0])
+
+    def test_grad_validates_requested_inputs(self):
+        value = ts.Variable([2.0])
+
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            ts.grad(value * 2.0, ())
+        with self.assertRaisesRegex(TypeError, "input 0 must be a Variable"):
+            ts.grad(value * 2.0, [ts.Tensor([2.0])])
+
     def test_forward_replays_scalar_and_reduction_operations(self):
         x = ts.Variable([1.0, 2.0, 3.0])
         result = ts.mean(x * 2.0 + 1.0)
@@ -48,6 +79,35 @@ class AutogradTests(unittest.TestCase):
 
         self.assertEqual(first, [2.0, 4.0])
         self.assertEqual(second, first)
+
+    def test_grad_clears_a_stale_gradient_for_a_disconnected_input(self):
+        x = ts.Variable([2.0])
+        y = ts.Variable([3.0])
+
+        self.assertEqual(ts.grad(y * 2.0, y).tolist(), [2.0])
+        self.assertIsNone(ts.grad(x * 3.0, y))
+        self.assertIsNone(y.grad)
+
+    def test_backward_rejects_an_invalid_gradient_count(self):
+        class BrokenOperation:
+            @staticmethod
+            def forward(value):
+                return value
+
+            @staticmethod
+            def backward(gradient, value):
+                return []
+
+        value = ts.Variable([2.0])
+        output = value._from_operation(
+            BrokenOperation.forward(value.data),
+            "broken",
+            BrokenOperation,
+            [value],
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "returned 0 gradients for 1 inputs"):
+            ts.backward(output)
 
     def test_forward_refreshes_intermediates_used_by_backward(self):
         x = ts.Variable([2.0])

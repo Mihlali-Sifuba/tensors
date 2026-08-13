@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import threading
+from contextlib import contextmanager
+from collections.abc import Iterator
 from typing import Any
 
 from .edge import Edge
@@ -79,4 +81,33 @@ def reset_graph_state() -> None:
     _local.graph = GraphState()
 
 
-__all__ = ["GraphState", "TraceScope", "get_graph_state", "reset_graph_state"]
+@contextmanager
+def isolated_graph_state() -> Iterator[GraphState]:
+    """Temporarily record operations in a separate thread-local graph state."""
+    previous_graph = getattr(_local, "graph", None)
+    had_graph = hasattr(_local, "graph")
+    previous_depth = getattr(_local, "trace_depth", None)
+    had_depth = hasattr(_local, "trace_depth")
+    isolated = GraphState()
+    _local.graph = isolated
+    _local.trace_depth = 0
+    try:
+        yield isolated
+    finally:
+        if had_graph:
+            _local.graph = previous_graph
+        else:
+            delattr(_local, "graph")
+        if had_depth:
+            _local.trace_depth = previous_depth
+        else:
+            delattr(_local, "trace_depth")
+
+
+__all__ = [
+    "GraphState",
+    "TraceScope",
+    "get_graph_state",
+    "isolated_graph_state",
+    "reset_graph_state",
+]

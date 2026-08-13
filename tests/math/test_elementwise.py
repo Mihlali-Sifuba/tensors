@@ -112,6 +112,12 @@ class ElementwiseMathTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-negative"):
             ts.sqrt(ts.Tensor([-1.0]))
 
+    def test_sqrt_gradient_rejects_zero_where_derivative_is_undefined(self):
+        value = ts.Variable([0.0])
+
+        with self.assertRaisesRegex(ValueError, "undefined at zero"):
+            ts.backward(ts.sqrt(value))
+
     def test_math_namespace_exposes_elementwise_operation_classes(self):
         self.assertAlmostEqual(ts.math.Sqrt.forward(ts.Tensor([4.0])).item(), 2.0)
         self.assertAlmostEqual(ts.math.Exp.forward(ts.Tensor([0.0])).item(), 1.0)

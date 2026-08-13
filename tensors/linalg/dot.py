@@ -248,14 +248,18 @@ class Dot:
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
-        """Build a differentiable VJP for non-batched matrix products."""
+        """Build a differentiable VJP for matrix and batched matrix products."""
         from .transpose import transpose
+        from ..ops._utils import unbroadcast_graph
         left, right = inputs
-        if left.ndim != 2 or right.ndim != 2:
+        if left.ndim < 2 or right.ndim < 2:
             raise NotImplementedError(
-                "Higher-order derivatives currently require two 2D matmul inputs"
+                "Higher-order derivatives currently require matrix operands"
             )
-        return [grad @ transpose(right), transpose(left) @ grad]
+        return [
+            unbroadcast_graph(grad @ transpose(right), left.shape),
+            unbroadcast_graph(transpose(left) @ grad, right.shape),
+        ]
 
 
 def dot(a: Any, b: Any) -> Any:

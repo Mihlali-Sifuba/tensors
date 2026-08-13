@@ -40,6 +40,8 @@ class Sub:
         if len(inputs) == 1:
             return [grad]
         left, right = inputs
-        if left.shape != right.shape:
-            raise NotImplementedError("Higher-order derivatives through broadcast sub are not implemented")
-        return [grad, -grad]
+        from ._utils import unbroadcast_graph
+        return [
+            unbroadcast_graph(grad, left.shape),
+            unbroadcast_graph(-grad, right.shape),
+        ]

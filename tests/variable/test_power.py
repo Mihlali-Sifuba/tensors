@@ -52,6 +52,49 @@ class VariablePowerTests(unittest.TestCase):
         self.assertAlmostEqual(exponent.grad.tolist()[0], 4.0 * math.log(2.0))
         self.assertAlmostEqual(exponent.grad.tolist()[1], 8.0 * math.log(2.0))
 
+    def test_zero_scalar_exponent_has_zero_gradient_at_zero(self):
+        base = ts.Variable([0.0])
+
+        gradient = ts.grad(base ** 0.0, base)
+
+        self.assertEqual(gradient.tolist(), [0.0])
+
+    def test_frozen_tensor_exponent_allows_a_negative_base(self):
+        base = ts.Variable([-2.0])
+        exponent = ts.Tensor([2.0])
+
+        gradient = ts.grad(base ** exponent, base)
+
+        self.assertEqual(gradient.tolist(), [-4.0])
+
+    def test_frozen_tensor_exponent_supports_second_gradient_at_negative_base(self):
+        base = ts.Variable([-2.0])
+        exponent = ts.Tensor([2.0])
+
+        first = ts.grad(base ** exponent, base, create_graph=True)
+        second = ts.grad(first, base)
+
+        self.assertEqual(first.data.tolist(), [-4.0])
+        self.assertEqual(second.tolist(), [2.0])
+
+    def test_frozen_zero_tensor_exponent_has_zero_gradient_at_zero(self):
+        base = ts.Variable([0.0])
+        exponent = ts.Tensor([0.0])
+
+        gradient = ts.grad(base ** exponent, base)
+
+        self.assertEqual(gradient.tolist(), [0.0])
+
+    def test_frozen_zero_tensor_exponent_has_zero_second_gradient_at_zero(self):
+        base = ts.Variable([0.0])
+        exponent = ts.Tensor([0.0])
+
+        first = ts.grad(base ** exponent, base, create_graph=True)
+        second = ts.grad(first, base)
+
+        self.assertEqual(first.data.tolist(), [0.0])
+        self.assertEqual(second.tolist(), [0.0])
+
 
 if __name__ == "__main__":
     unittest.main()

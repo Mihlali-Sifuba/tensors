@@ -25,23 +25,30 @@ class Computation:
         """Return reachable nodes in dependency-first order."""
         order: list[Node] = []
         visited: set[Node] = set()
-
-        def visit(node: Node) -> None:
+        stack = [(self.output.node, False)]
+        while stack:
+            node, expanded = stack.pop()
+            if expanded:
+                order.append(node)
+                continue
             if node in visited:
-                return
+                continue
             visited.add(node)
-            for edge in node._in_edges:
-                visit(edge.source)
-            order.append(node)
-
-        visit(self.output.node)
+            stack.append((node, True))
+            for edge in reversed(node._in_edges):
+                if edge.source not in visited:
+                    stack.append((edge.source, False))
         return order
 
     def forward(self) -> Tensor:
         """Recompute the output from its current leaf values."""
         values: dict[Any, Tensor] = {}
         for node in self.nodes:
-            if node.label == "var":
+            if node.op_cls is None:
+                if node.output_var is None:
+                    raise RuntimeError(
+                        f"Leaf node {node!r} has no output Variable"
+                    )
                 values[node.output_var] = node.output_var.data
                 continue
 
@@ -73,7 +80,7 @@ class Computation:
         self.output.grad = self._gradient_seed(grad)
 
         for node in reversed(self.nodes):
-            if node.label == "var" or node.op_cls is None:
+            if node.op_cls is None:
                 continue
 
             output = node.output_var
@@ -82,6 +89,7 @@ class Computation:
 
             input_data = [edge.source.output_var.data for edge in node._in_edges]
             gradients = node.op_cls.backward(output.grad, *input_data, **node.args)
+            gradients = self._validate_gradients(node, gradients, graph=False)
             for edge, gradient in zip(node._in_edges, gradients):
                 self._accumulate_gradient(edge.source.output_var, gradient)
 
@@ -124,7 +132,7 @@ class Computation:
         """Build a differentiable reverse-mode gradient computation."""
         gradients: dict[Any, Any] = {self.output: seed}
         for node in reversed(self.nodes):
-            if node.label == "var" or node.op_cls is None:
+            if node.op_cls is None:
                 continue
 
             output = node.output_var
@@ -140,6 +148,9 @@ class Computation:
                     f"Higher-order derivatives are not implemented for {node.label}"
                 )
             input_gradients = backward_graph(output_gradient, *inputs, **node.args)
+            input_gradients = self._validate_gradients(
+                node, input_gradients, graph=True
+            )
             for input_variable, input_gradient in zip(inputs, input_gradients):
                 if not input_variable.requires_grad:
                     continue
@@ -148,6 +159,41 @@ class Computation:
                     input_gradient if existing is None else existing + input_gradient
                 )
         return gradients
+
+    @staticmethod
+    def _validate_gradients(node: Node, gradients: Any, *, graph: bool) -> tuple[Any, ...]:
+        """Validate an operation's VJP result before propagating it."""
+        from ..variable import Variable
+
+        try:
+            results = tuple(gradients)
+        except TypeError as exc:
+            raise TypeError(
+                f"{node.label} backward must return one gradient per input"
+            ) from exc
+
+        expected = len(node._in_edges)
+        if len(results) != expected:
+            raise RuntimeError(
+                f"{node.label} backward returned {len(results)} gradients for "
+                f"{expected} inputs"
+            )
+
+        expected_type = Variable if graph else Tensor
+        for index, (edge, gradient) in enumerate(zip(node._in_edges, results)):
+            if not isinstance(gradient, expected_type):
+                mode = "backward_graph" if graph else "backward"
+                raise TypeError(
+                    f"{node.label} {mode} gradient {index} must be a "
+                    f"{expected_type.__name__}, got {type(gradient).__name__}"
+                )
+            expected_shape = edge.source.output_var.shape
+            if gradient.shape != expected_shape:
+                raise ValueError(
+                    f"{node.label} backward gradient {index} has shape "
+                    f"{gradient.shape}; expected {expected_shape}"
+                )
+        return results
 
     @staticmethod
     def _execute_node(node: Node, values: dict[Any, Tensor]) -> Tensor:
@@ -160,18 +206,8 @@ class Computation:
                 result = node.op_cls.forward_reverse(args[0], scalar)
             else:
                 result = node.op_cls.forward(args[0], scalar)
-        elif "key" in node.args:
-            result = node.op_cls.forward(args[0], node.args["key"])
-        elif "axis" in node.args:
-            axis = node.args.get("axis")
-            keepdims = node.args.get("keepdims", False)
-            result = node.op_cls.forward(*args, axis=axis, keepdims=keepdims)
-        elif "shape" in node.args:
-            result = node.op_cls.forward(args[0], node.args["shape"])
-        elif "axes" in node.args:
-            result = node.op_cls.forward(args[0], axes=node.args["axes"])
         else:
-            result = node.op_cls.forward(*args)
+            result = node.op_cls.forward(*args, **node.args)
 
         return result if isinstance(result, Tensor) else Tensor([result])
 
@@ -213,13 +249,28 @@ def grad(
     from ..variable import Variable
 
     single_input = isinstance(inputs, Variable)
-    requested = (inputs,) if single_input else tuple(inputs)
+    try:
+        requested = (inputs,) if single_input else tuple(inputs)
+    except TypeError as exc:
+        raise TypeError(
+            "grad inputs must be a Variable or an iterable of Variables"
+        ) from exc
+    if not requested:
+        raise ValueError("grad requires at least one input Variable")
+    for index, variable in enumerate(requested):
+        if not isinstance(variable, Variable):
+            raise TypeError(
+                f"grad input {index} must be a Variable, got "
+                f"{type(variable).__name__}"
+            )
     computation = Computation(output)
     if create_graph:
         seed = computation._gradient_seed(grad_outputs, create_graph=True)
         gradients = computation._backward_graph(seed)
         result = tuple(gradients.get(variable) for variable in requested)
     else:
+        for variable in requested:
+            variable.grad = None
         computation.backward(grad_outputs)
         result = tuple(variable.grad for variable in requested)
     return result[0] if single_input else result
