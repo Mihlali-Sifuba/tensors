@@ -24,8 +24,10 @@ print(gradient.tolist())  # [4.0, 6.0]
 so repeated calls do not accidentally accumulate stale values.
 
 `ts.grad(output, inputs)` returns only the requested gradients. It returns
-`None` for an input that is not connected to `output` and clears any old
-gradient on that input.
+`None` for an input that is not connected to `output`. It is functional:
+calling it never clears, replaces, or accumulates any `Variable.grad` value.
+This deliberately differs from `ts.backward`, whose job is to populate
+`.grad` fields for optimisation.
 
 For a non-scalar output, omitting the upstream gradient differentiates the sum
 of its elements. Pass `grad=` to `backward` or `grad_outputs=` to `grad` to
@@ -115,7 +117,9 @@ First-order gradients are implemented and numerically checked for:
 
 - broadcast arithmetic and powers;
 - `sqrt`, `exp`, `log`, `relu`, `sigmoid`, `tanh`, and `softplus`;
-- axis-aware `sum`, `mean`, `min`, `max`, `std`, `norm`, and `softmax`;
+- axis-aware `sum`, `mean`, `min`, `max`, `std`, `norm`, `softmax`,
+  `logsumexp`, and `log_softmax`;
+- stable multiclass and binary cross-entropy losses;
 - `dot`, `matmul`, `outer`, and `transpose`;
 - `reshape`, slicing, `concat`, and `stack`.
 
@@ -151,10 +155,61 @@ one.
 
 ## Mutation and recomputation
 
-An eager operation calculates its output immediately. If leaf `.data` values
-are replaced later, call `Computation(output).forward()` before differentiation
-to refresh intermediate values. Do not mutate leaves between a forward pass and
-its backward pass unless the computation is deliberately recomputed.
+An eager operation calculates its output immediately and records the state of
+its input and output tensors. Every successful item assignment increments the
+tensor's read-only `version` counter. Replacing `Variable.data` is tracked
+separately, including replacements made by optimizers.
+
+Differentiation rejects a computation if any recorded value has subsequently
+been replaced or modified:
+
+```python
+x = ts.Variable([2.0])
+y = x ** 2.0
+x.data[0] = 3.0
+
+ts.backward(y)  # RuntimeError: an input changed after the forward pass
+```
+
+This prevents a derivative from combining stale intermediate values with new
+inputs. Run the mathematical expression again to construct a fresh graph, as
+normal training loops already do. To deliberately reuse an existing topology,
+call `Computation(output).forward()` first; it recomputes every operation and
+refreshes the recorded mutation state.
+
+Shape, rank, and dtype metadata are read-only. The backing `_data` member is an
+internal implementation detail; writing it directly bypasses the public safety
+contract.
+
+## Numerically stable probability functions
+
+Use `logsumexp` and `log_softmax` instead of directly composing `log`, `sum`,
+and `exp` when inputs may have large magnitudes:
+
+```python
+logits = ts.Variable([[1000.0, -1000.0]])
+log_probabilities = ts.log_softmax(logits, axis=1)
+```
+
+`cross_entropy` accepts class indices with the class axis removed or dense
+target distributions. `binary_cross_entropy` accepts probabilities by default;
+pass `from_logits=True` for the stable raw-logit formulation. Both losses
+support `reduction="none"`, `"mean"`, and `"sum"`:
+
+```python
+labels = ts.Tensor([0], dtype=ts.int64)
+loss = ts.cross_entropy(logits, labels)
+
+binary_loss = ts.binary_cross_entropy(
+    ts.Variable([1000.0, -1000.0]),
+    ts.Tensor([1.0, 0.0]),
+    from_logits=True,
+)
+```
+
+The stable formulations subtract the reduction maximum or use the equivalent
+softplus identity, avoiding overflow for large finite logits. Targets for
+binary cross-entropy must lie in the closed interval `[0, 1]`.
 
 ## Validation guarantees
 

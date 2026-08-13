@@ -133,7 +133,7 @@ class Tensor:
 
         if not isinstance(dtype, _dtype.DataType):
             raise TypeError(f"dtype must be a DataType or typecode, got {type(dtype)}")
-        self.dtype = dtype
+        self._dtype = dtype
 
         # Handle different input types ----------------------------------
         if isinstance(data, Tensor):
@@ -161,8 +161,16 @@ class Tensor:
         else:
             raise TypeError(f"Unsupported data type: {type(data)}")
 
-        self.shape = self._validate_shape(inferred_shape if shape is None else shape)
-        self.ndim = len(self.shape)
+        self._shape = self._validate_shape(
+            inferred_shape if shape is None else shape
+        )
+        self._ndim = len(self.shape)
+
+        # Public in-place mutations increment this counter. Computation nodes
+        # remember the counter observed during their forward pass so backward
+        # can reject stale values instead of silently calculating a derivative
+        # from data that no longer matches the recorded computation.
+        self._version = 0
 
         # Verify total elements match shape
         total_elements = self._get_total_elements()
@@ -353,11 +361,13 @@ class Tensor:
                 )
             idx = self._calculate_index((key,))
             self._data[idx] = value
+            self._version += 1
             return
 
         if isinstance(key, tuple):
             idx = self._calculate_index(key)
             self._data[idx] = value
+            self._version += 1
             return
 
         raise TypeError(f"Unsupported index type: {type(key)}")
@@ -420,6 +430,26 @@ class Tensor:
     def size(self) -> int:
         """Total number of elements."""
         return len(self._data)
+
+    @property
+    def shape(self) -> Tuple[int, ...]:
+        """Immutable dimensions of this tensor."""
+        return self._shape
+
+    @property
+    def ndim(self) -> int:
+        """Number of tensor dimensions."""
+        return self._ndim
+
+    @property
+    def dtype(self) -> _dtype.DataType:
+        """Immutable element data type of this tensor."""
+        return self._dtype
+
+    @property
+    def version(self) -> int:
+        """Number of successful in-place mutations made to this tensor."""
+        return self._version
 
     @property
     def itemsize(self) -> int:

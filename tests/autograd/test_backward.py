@@ -80,13 +80,50 @@ class AutogradTests(unittest.TestCase):
         self.assertEqual(first, [2.0, 4.0])
         self.assertEqual(second, first)
 
-    def test_grad_clears_a_stale_gradient_for_a_disconnected_input(self):
+    def test_grad_preserves_a_stale_gradient_for_a_disconnected_input(self):
         x = ts.Variable([2.0])
         y = ts.Variable([3.0])
+        previous = ts.Tensor([7.0])
+        y.grad = previous
 
         self.assertEqual(ts.grad(y * 2.0, y).tolist(), [2.0])
         self.assertIsNone(ts.grad(x * 3.0, y))
-        self.assertIsNone(y.grad)
+        self.assertIs(y.grad, previous)
+
+    def test_grad_does_not_modify_reachable_grad_attributes(self):
+        x = ts.Variable([2.0])
+        y = ts.Variable([3.0])
+        product = x * y
+        output = ts.sum(product)
+        previous = {
+            x: ts.Tensor([10.0]),
+            y: ts.Tensor([20.0]),
+            product: ts.Tensor([30.0]),
+            output: ts.Tensor([40.0]),
+        }
+        for variable, gradient in previous.items():
+            variable.grad = gradient
+
+        x_gradient, y_gradient = ts.grad(output, (x, y))
+
+        self.assertEqual(x_gradient.tolist(), [3.0])
+        self.assertEqual(y_gradient.tolist(), [2.0])
+        for variable, gradient in previous.items():
+            self.assertIs(variable.grad, gradient)
+
+    def test_create_graph_grad_does_not_modify_grad_attributes(self):
+        x = ts.Variable([2.0])
+        output = x ** 3.0
+        previous_x_gradient = ts.Tensor([7.0])
+        previous_output_gradient = ts.Tensor([8.0])
+        x.grad = previous_x_gradient
+        output.grad = previous_output_gradient
+
+        result = ts.grad(output, x, create_graph=True)
+
+        self.assertEqual(result.data.tolist(), [12.0])
+        self.assertIs(x.grad, previous_x_gradient)
+        self.assertIs(output.grad, previous_output_gradient)
 
     def test_backward_rejects_an_invalid_gradient_count(self):
         class BrokenOperation:
@@ -108,6 +145,34 @@ class AutogradTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "returned 0 gradients for 1 inputs"):
             ts.backward(output)
+
+    def test_failed_backward_does_not_partially_replace_gradients(self):
+        class BrokenOperation:
+            @staticmethod
+            def forward(value):
+                return value
+
+            @staticmethod
+            def backward(gradient, value):
+                raise RuntimeError("deliberate failure")
+
+        value = ts.Variable([2.0])
+        output = value._from_operation(
+            BrokenOperation.forward(value.data),
+            "broken",
+            BrokenOperation,
+            [value],
+        )
+        previous_value_gradient = ts.Tensor([7.0])
+        previous_output_gradient = ts.Tensor([8.0])
+        value.grad = previous_value_gradient
+        output.grad = previous_output_gradient
+
+        with self.assertRaisesRegex(RuntimeError, "deliberate failure"):
+            ts.backward(output)
+
+        self.assertIs(value.grad, previous_value_gradient)
+        self.assertIs(output.grad, previous_output_gradient)
 
     def test_forward_refreshes_intermediates_used_by_backward(self):
         x = ts.Variable([2.0])

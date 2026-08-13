@@ -6,7 +6,7 @@ from typing import Any, List
 
 from ..dtype import float64
 from ..tensor import Tensor
-from ._reduction import Axis, normalize_axes, reduction_groups
+from ._reduction import Axis, immutable_axis, normalize_axes, reduction_groups
 
 
 class Std:
@@ -99,6 +99,8 @@ class Std:
 def std(value: Any, axis: Axis = None, keepdims: bool = False) -> Any:
     """Compute population standard deviation over selected axes."""
     from ..variable import Variable
+
+    axis = immutable_axis(axis)
 
     if isinstance(value, Variable):
         return Variable._from_operation(

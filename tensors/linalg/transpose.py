@@ -39,6 +39,8 @@ def transpose(
     """Permute axes, or transpose the final two matrix axes by default."""
     from ..variable import Variable
 
+    axes = tuple(axes) if isinstance(axes, list) else axes
+
     if isinstance(value, Variable):
         return Variable._from_operation(
             Transpose.forward(value.data, axes=axes),

@@ -54,8 +54,40 @@ class Computation:
 
             result = self._execute_node(node, values)
             node.output_var.data = result
+            node.capture_states()
             values[node.output_var] = result
         return values[self.output]
+
+    def _validate_recorded_states(self) -> None:
+        """Reject a backward pass whose recorded forward values changed."""
+        for node in self.nodes:
+            if node.op_cls is None:
+                continue
+            if node.output_changed():
+                operation = node.label or getattr(
+                    node.op_cls,
+                    "__name__",
+                    "operation",
+                )
+                raise RuntimeError(
+                    f"Output of operation {operation!r} was modified after its "
+                    "forward pass. Run a fresh forward pass or call "
+                    "Computation(output).forward() before differentiation."
+                )
+            changed = node.changed_input()
+            if changed is None:
+                continue
+            index, variable = changed
+            operation = node.label or getattr(node.op_cls, "__name__", "operation")
+            variable_name = getattr(variable, "name", None)
+            description = (
+                f" ({variable_name!r})" if variable_name is not None else ""
+            )
+            raise RuntimeError(
+                f"Input {index}{description} to operation {operation!r} was "
+                "modified after its forward pass. Run a fresh forward pass or "
+                "call Computation(output).forward() before differentiation."
+            )
 
     def backward(
         self,
@@ -64,34 +96,21 @@ class Computation:
         create_graph: bool = False,
     ) -> None:
         """Differentiate the output with respect to reachable Variables."""
+        self._validate_recorded_states()
         if create_graph:
             seed = self._gradient_seed(grad, create_graph=True)
             gradients = self._backward_graph(seed)
-            for node in self.nodes:
-                variable = node.output_var
-                if variable is not None:
-                    variable.grad = gradients.get(variable)
-            return
+        else:
+            seed = self._gradient_seed(grad)
+            gradients = self._backward_values(seed)
 
+        # Publish gradients only after the entire reverse pass succeeds. A
+        # malformed operation or domain error therefore cannot leave a graph
+        # with partially cleared or partially updated ``.grad`` attributes.
         for node in self.nodes:
-            if node.output_var is not None:
-                node.output_var.grad = None
-
-        self.output.grad = self._gradient_seed(grad)
-
-        for node in reversed(self.nodes):
-            if node.op_cls is None:
-                continue
-
-            output = node.output_var
-            if output.grad is None:
-                continue
-
-            input_data = [edge.source.output_var.data for edge in node._in_edges]
-            gradients = node.op_cls.backward(output.grad, *input_data, **node.args)
-            gradients = self._validate_gradients(node, gradients, graph=False)
-            for edge, gradient in zip(node._in_edges, gradients):
-                self._accumulate_gradient(edge.source.output_var, gradient)
+            variable = node.output_var
+            if variable is not None:
+                variable.grad = gradients.get(variable)
 
     def _gradient_seed(
         self,
@@ -160,6 +179,45 @@ class Computation:
                 )
         return gradients
 
+    def _backward_values(self, seed: Tensor) -> dict[Any, Tensor]:
+        """Return numerical reverse-mode gradients without mutating Variables."""
+        gradients: dict[Any, Tensor] = {self.output: seed}
+        for node in reversed(self.nodes):
+            if node.op_cls is None:
+                continue
+
+            output = node.output_var
+            output_gradient = gradients.get(output)
+            if output_gradient is None:
+                continue
+
+            input_data = [edge.source.output_var.data for edge in node._in_edges]
+            input_gradients = node.op_cls.backward(
+                output_gradient,
+                *input_data,
+                **node.args,
+            )
+            input_gradients = self._validate_gradients(
+                node,
+                input_gradients,
+                graph=False,
+            )
+            for edge, input_gradient in zip(node._in_edges, input_gradients):
+                input_variable = edge.source.output_var
+                if not input_variable.requires_grad:
+                    continue
+                existing = gradients.get(input_variable)
+                if existing is None:
+                    gradients[input_variable] = input_gradient
+                else:
+                    from ..ops import Add
+
+                    gradients[input_variable] = Add.forward(
+                        existing,
+                        input_gradient,
+                    )
+        return gradients
+
     @staticmethod
     def _validate_gradients(node: Node, gradients: Any, *, graph: bool) -> tuple[Any, ...]:
         """Validate an operation's VJP result before propagating it."""
@@ -211,19 +269,6 @@ class Computation:
 
         return result if isinstance(result, Tensor) else Tensor([result])
 
-    @staticmethod
-    def _accumulate_gradient(variable: Variable, gradient: Tensor) -> None:
-        if not variable.requires_grad:
-            return
-        if variable.grad is None:
-            variable.grad = gradient
-            return
-
-        from ..ops import Add
-
-        variable.grad = Add.forward(variable.grad, gradient)
-
-
 def backward(
     output: Any,
     grad: Tensor | array | list[Any] | int | float | None = None,
@@ -241,7 +286,7 @@ def grad(
     *,
     create_graph: bool = False,
 ) -> Any:
-    """Return gradients of ``output`` with respect to one or more inputs.
+    """Return gradients of ``output`` without modifying any ``.grad`` field.
 
     Set ``create_graph=True`` when the returned gradients will themselves be
     differentiated.
@@ -264,15 +309,15 @@ def grad(
                 f"{type(variable).__name__}"
             )
     computation = Computation(output)
+    computation._validate_recorded_states()
     if create_graph:
         seed = computation._gradient_seed(grad_outputs, create_graph=True)
         gradients = computation._backward_graph(seed)
         result = tuple(gradients.get(variable) for variable in requested)
     else:
-        for variable in requested:
-            variable.grad = None
-        computation.backward(grad_outputs)
-        result = tuple(variable.grad for variable in requested)
+        seed = computation._gradient_seed(grad_outputs)
+        gradients = computation._backward_values(seed)
+        result = tuple(gradients.get(variable) for variable in requested)
     return result[0] if single_input else result
 
 

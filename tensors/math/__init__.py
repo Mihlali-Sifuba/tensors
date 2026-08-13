@@ -12,6 +12,10 @@ from .sigmoid import Sigmoid, sigmoid
 from .tanh import Tanh, tanh
 from .softplus import Softplus, softplus
 from .softmax import Softmax, softmax
+from .logsumexp import LogSumExp, logsumexp
+from .log_softmax import LogSoftmax, log_softmax
+from .cross_entropy import CrossEntropy, cross_entropy
+from .binary_cross_entropy import BinaryCrossEntropy, binary_cross_entropy
 from .std import Std, std
 from .reshape import Reshape, reshape
 from .stack import Stack, stack
@@ -19,8 +23,11 @@ from .concat import Concat, concat
 
 __all__ = [
     "Sum", "Mean", "Min", "Max", "Sqrt", "Exp", "Log",
-    "ReLU", "Sigmoid", "Tanh", "Softplus", "Softmax", "Std", "Reshape", "Stack", "Concat",
+    "ReLU", "Sigmoid", "Tanh", "Softplus", "Softmax", "LogSumExp",
+    "LogSoftmax", "CrossEntropy", "BinaryCrossEntropy", "Std", "Reshape",
+    "Stack", "Concat",
     "sum", "mean", "min", "max",
     "sqrt", "exp", "log", "relu", "sigmoid", "tanh", "softplus", "softmax",
+    "logsumexp", "log_softmax", "cross_entropy", "binary_cross_entropy",
     "std", "reshape", "stack", "concat",
 ]
