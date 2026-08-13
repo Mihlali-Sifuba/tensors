@@ -166,6 +166,10 @@ class Computation:
             axis = node.args.get("axis")
             keepdims = node.args.get("keepdims", False)
             result = node.op_cls.forward(*args, axis=axis, keepdims=keepdims)
+        elif "shape" in node.args:
+            result = node.op_cls.forward(args[0], node.args["shape"])
+        elif "axes" in node.args:
+            result = node.op_cls.forward(args[0], axes=node.args["axes"])
         else:
             result = node.op_cls.forward(*args)
 

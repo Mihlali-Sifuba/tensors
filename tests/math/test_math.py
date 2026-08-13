@@ -45,6 +45,32 @@ class MathTests(unittest.TestCase):
 
         self.assertEqual(ts.sum(matrix, axis=-1).tolist(), [3.0, 7.0])
 
+    def test_sum_accepts_multiple_axes(self):
+        tensor = ts.Tensor(
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            shape=(2, 2, 2),
+        )
+
+        result = ts.sum(tensor, axis=(0, 2))
+
+        self.assertEqual(result.shape, (2,))
+        self.assertEqual(result.tolist(), [14.0, 22.0])
+
+    def test_mean_accepts_multiple_negative_axes_and_keepdims(self):
+        tensor = ts.Tensor(
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            shape=(2, 2, 2),
+        )
+
+        result = ts.mean(tensor, axis=(0, -1), keepdims=True)
+
+        self.assertEqual(result.shape, (1, 2, 1))
+        self.assertEqual(result.tolist(), [3.5, 5.5])
+
+    def test_reductions_reject_duplicate_axes(self):
+        with self.assertRaisesRegex(ValueError, "Duplicate axis"):
+            ts.sum(ts.Tensor([[1.0]]), axis=(0, -2))
+
     def test_sum_rejects_axis_out_of_bounds(self):
         with self.assertRaisesRegex(ValueError, "out of bounds"):
             ts.sum(ts.Tensor([[1, 2]]), axis=2)
@@ -68,6 +94,21 @@ class MathTests(unittest.TestCase):
         result = ts.std([1.0, 2.0, 3.0])
 
         self.assertAlmostEqual(result.item(), 0.816496580927726)
+
+    def test_std_is_axis_aware_and_supports_keepdims(self):
+        matrix = ts.Tensor([[1.0, 3.0], [2.0, 6.0]])
+
+        result = ts.std(matrix, axis=1, keepdims=True)
+
+        self.assertEqual(result.shape, (2, 1))
+        self.assertEqual(result.tolist(), [1.0, 2.0])
+
+    def test_axis_std_is_differentiable(self):
+        matrix = ts.Variable([[1.0, 3.0], [2.0, 6.0]])
+
+        ts.backward(ts.sum(ts.std(matrix, axis=1)))
+
+        self.assertEqual(matrix.grad.tolist(), [-0.5, 0.5, -0.5, 0.5])
 
     def test_math_namespace_exposes_std_operation_class(self):
         result = ts.math.Std.forward(ts.Tensor([1.0, 2.0, 3.0]))

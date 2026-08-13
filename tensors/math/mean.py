@@ -1,76 +1,67 @@
 """Mean and its differentiation rule."""
 
-import builtins
-from array import array
-from typing import Any, List, Optional
+from typing import Any, List
 
 from ..dtype import float64
 from ..tensor import Tensor
-from .sum import _reduce_axis, _sum_impl
+from ._reduction import Axis, keepdims_shape, normalize_axes, reduction_size
+from .sum import Sum, _sum_impl
 
 
 class Mean:
     """Mean with a reverse-mode gradient rule."""
 
     @staticmethod
-    def forward(a: Tensor, axis: Optional[int] = None,
+    def forward(a: Tensor, axis: Axis = None,
                 keepdims: bool = False) -> Tensor:
-        if a.size == 0:
-            return Tensor([0.0], dtype=a.dtype if a.dtype.typecode in {"f", "d"} else float64)
+        axes = normalize_axes(a.ndim, axis)
+        count = reduction_size(a.shape, axes)
         result = _sum_impl(a, axis=axis, keepdims=keepdims)
-        if axis is None:
-            scale = 1.0 / a.size
-            return Tensor([float(result._data[0]) * scale], dtype=result.dtype)
-        result_data = array(
-            result.dtype.typecode,
-            (float(x) / a.shape[axis] for x in result._data),
-        )
-        return Tensor(result_data, dtype=result.dtype, shape=result.shape)
+        dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
+        if count == 0:
+            values = [0.0] * result.size
+        else:
+            values = [float(item) / count for item in result._data]
+        return Tensor(values, dtype=dtype, shape=result.shape)
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         a = inputs[0]
-        axis = kwargs.get("axis", None)
-
-        if axis is None:
-            if a.size == 0:
-                return [Tensor([], dtype=grad.dtype, shape=a.shape)]
-            scale = 1.0 / a.size
-            grad_value = float(next(iter(grad._data)))
-            return [Tensor([grad_value * scale] * a.size, dtype=grad.dtype, shape=a.shape)]
-
-        _, _, axis_size = _reduce_axis(a, axis)
-        scale = 1.0 / axis_size
-
-        # Reuse sum's backward logic scaled by 1/axis_size
-        from .sum import Sum
-        sum_grads = Sum.backward(grad, a, axis=axis)
-        result_data = array(
-            sum_grads[0].dtype.typecode,
-            (float(x) * scale for x in sum_grads[0]._data),
-        )
-        return [Tensor(result_data, dtype=grad.dtype, shape=a.shape)]
+        axis = kwargs.get("axis")
+        keepdims = bool(kwargs.get("keepdims", False))
+        count = reduction_size(a.shape, normalize_axes(a.ndim, axis))
+        if count == 0:
+            return [Tensor([], dtype=grad.dtype, shape=a.shape)]
+        summed = Sum.backward(grad, a, axis=axis, keepdims=keepdims)[0]
+        return [Tensor(
+            [float(item) / count for item in summed._data],
+            dtype=grad.dtype,
+            shape=a.shape,
+        )]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
-        """Build a differentiable VJP for whole-tensor means."""
+        """Build a differentiable VJP for an axis-aware mean."""
         from ..variable import Variable
-        axis = kwargs.get("axis", None)
+        from .reshape import reshape
+
+        axis = kwargs.get("axis")
+        keepdims = bool(kwargs.get("keepdims", False))
         value = inputs[0]
-        if axis is not None:
-            raise NotImplementedError("Higher-order derivatives for axis means are not implemented")
-        if value.size == 0:
+        count = reduction_size(value.shape, normalize_axes(value.ndim, axis))
+        if count == 0:
             raise NotImplementedError("Higher-order derivatives for empty means are not implemented")
+        expanded = grad if keepdims else reshape(grad, keepdims_shape(value.shape, axis))
         ones = Variable(
             Tensor([1.0] * value.size, dtype=grad.dtype, shape=value.shape),
             requires_grad=False,
         )
-        return [(grad * ones) / value.size]
+        return [(expanded * ones) / count]
 
 
-def mean(value: Any, axis: Optional[int] = None,
+def mean(value: Any, axis: Axis = None,
          keepdims: bool = False) -> Any:
-    """Return the mean as a Tensor or differentiable Variable."""
+    """Compute the mean over one, several, or all axes."""
     from ..variable import Variable
 
     if isinstance(value, Variable):

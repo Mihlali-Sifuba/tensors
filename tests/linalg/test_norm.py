@@ -31,6 +31,29 @@ class NormTests(unittest.TestCase):
 
         self.assertEqual(ts.norm(value).item(), 5.0)
 
+    def test_norm_is_axis_aware_and_supports_keepdims(self):
+        value = ts.Tensor([[3.0, 4.0], [5.0, 12.0]])
+
+        rows = ts.norm(value, axis=1)
+        columns = ts.norm(value, axis=0, keepdims=True)
+
+        self.assertEqual(rows.shape, (2,))
+        self.assertEqual(rows.tolist(), [5.0, 13.0])
+        self.assertEqual(columns.shape, (1, 2))
+        self.assertAlmostEqual(columns.tolist()[0], 34 ** 0.5)
+        self.assertAlmostEqual(columns.tolist()[1], 160 ** 0.5)
+
+    def test_norm_accepts_multiple_axes(self):
+        value = ts.Tensor(
+            [3.0, 4.0, 0.0, 0.0, 5.0, 12.0, 0.0, 0.0],
+            shape=(2, 2, 2),
+        )
+
+        result = ts.norm(value, axis=(1, 2))
+
+        self.assertEqual(result.shape, (2,))
+        self.assertEqual(result.tolist(), [5.0, 13.0])
+
     def test_norm_records_and_backpropagates(self):
         value = ts.Variable([3.0, 4.0])
         result = ts.norm(value)
@@ -50,6 +73,28 @@ class NormTests(unittest.TestCase):
 
         self.assertEqual(value.grad.tolist(), [0.0, 0.0])
 
+    def test_axis_norm_backpropagates_per_reduction_group(self):
+        value = ts.Variable([[3.0, 4.0], [5.0, 12.0]])
+
+        ts.backward(ts.sum(ts.norm(value, axis=1)))
+
+        gradient = value.grad.tolist()
+        self.assertAlmostEqual(gradient[0], 0.6)
+        self.assertAlmostEqual(gradient[1], 0.8)
+        self.assertAlmostEqual(gradient[2], 5.0 / 13.0)
+        self.assertAlmostEqual(gradient[3], 12.0 / 13.0)
+
+    def test_axis_norm_recomputes_with_recorded_axis(self):
+        value = ts.Variable([[3.0, 4.0], [5.0, 12.0]])
+        result = ts.norm(value, axis=1, keepdims=True)
+        computation = Computation(result)
+
+        value.data = ts.Tensor([[6.0, 8.0], [8.0, 15.0]])
+
+        recomputed = computation.forward()
+        self.assertEqual(recomputed.shape, (2, 1))
+        self.assertEqual(recomputed.tolist(), [10.0, 17.0])
+
     def test_norm_recomputes_from_current_values(self):
         value = ts.Variable([3.0, 4.0])
         result = ts.norm(value)
@@ -64,6 +109,19 @@ class NormTests(unittest.TestCase):
         first = ts.grad(ts.norm(value), value, create_graph=True)
         second = ts.grad(first, value, grad_outputs=ts.Tensor([1.0, 0.0]))
 
+        self.assertAlmostEqual(second.tolist()[0], 0.128)
+        self.assertAlmostEqual(second.tolist()[1], -0.096)
+
+    def test_axis_norm_gradient_can_be_differentiated(self):
+        value = ts.Variable([[3.0, 4.0]])
+        first = ts.grad(ts.norm(value, axis=1), value, create_graph=True)
+        second = ts.grad(
+            first,
+            value,
+            grad_outputs=ts.Tensor([[1.0, 0.0]]),
+        )
+
+        self.assertEqual(first.shape, (1, 2))
         self.assertAlmostEqual(second.tolist()[0], 0.128)
         self.assertAlmostEqual(second.tolist()[1], -0.096)
 
