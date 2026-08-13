@@ -42,6 +42,54 @@ first = ts.grad(y, x, create_graph=True)
 second = ts.grad(first, x)
 ```
 
+## Jacobians and Hessians
+
+`ts.jacobian(output, inputs)` returns every first derivative rather than the
+single vector-Jacobian product returned by `ts.grad`. For each input, its result
+shape is exactly `output.shape + input.shape`:
+
+```python
+x = ts.Variable([2.0, 3.0])
+y = ts.concat([x[0] ** 2.0, x[0] * x[1]])
+
+jacobian = ts.jacobian(y, x)
+print(jacobian.tolist())  # [4.0, 0.0, 3.0, 2.0]
+print(jacobian.shape)     # (2, 2)
+```
+
+`ts.hessian(output, inputs)` returns every second derivative. The output must
+contain exactly one element. For one input, the result shape is
+`input.shape + input.shape`:
+
+```python
+x = ts.Variable([2.0, 3.0])
+y = ts.sum(x[0] ** 2.0 + x[0] * x[1])
+
+hessian = ts.hessian(y, x)
+print(hessian.tolist())  # [2.0, 1.0, 1.0, 0.0]
+print(hessian.shape)     # (2, 2)
+```
+
+Passing multiple inputs to `jacobian` returns one result per input. Passing
+multiple inputs to `hessian` returns a tuple of tuples of Hessian blocks. A
+block at `[i][j]` has shape `inputs[i].shape + inputs[j].shape`.
+
+Disconnected inputs produce explicit zero Jacobians or Hessian blocks. Both
+functions preserve existing `.grad` attributes. Set `create_graph=True` to
+keep the returned derivative matrix differentiable:
+
+```python
+x = ts.Variable([2.0])
+y = ts.sum(x ** 3.0)
+
+hessian = ts.hessian(y, x, create_graph=True)
+third = ts.grad(ts.sum(hessian), x)
+```
+
+Constructing a complete Jacobian requires one reverse pass per output element.
+Constructing a complete Hessian can therefore be expensive for large tensors;
+use `ts.grad(..., grad_outputs=vector)` when only a vector product is needed.
+
 ## Numerical verification
 
 `ts.gradcheck` compares the analytical gradient with central finite
