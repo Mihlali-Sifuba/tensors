@@ -7,7 +7,7 @@ from typing import Any, List, Union
 
 from ..dtype import float64, result_dtype
 from ..tensor import Tensor, _broadcast_tensors
-from ._utils import unbroadcast
+from ._utils import unbroadcast, unbroadcast_graph
 
 
 Scalar = Union[int, float]
@@ -46,7 +46,11 @@ class Pow:
     """Element-wise exponentiation with reverse-mode gradient rules."""
 
     @staticmethod
-    def forward(base: Tensor, exponent: Tensor | Scalar) -> Tensor:
+    def forward(
+        base: Tensor,
+        exponent: Tensor | Scalar,
+        **kwargs: object,
+    ) -> Tensor:
         """Raise every element in ``base`` to ``exponent``."""
         dtype = _power_dtype(base, exponent)
         if isinstance(exponent, (int, float)):
@@ -73,14 +77,17 @@ class Pow:
         if len(inputs) == 2:
             base, exponent = inputs
             expanded_base, expanded_exponent = _broadcast_tensors(base, exponent)
-            if any(value <= 0 for value in expanded_base._data):
+            differentiate_exponent = bool(kwargs.get("differentiate_exponent", True))
+            if differentiate_exponent and any(value <= 0 for value in expanded_base._data):
                 raise ValueError(
                     "power gradients with respect to a tensor exponent require positive bases"
                 )
             output = Pow.forward(expanded_base, expanded_exponent)
             base_grad = Tensor(
                 [
-                    upstream * power * (value ** (power - 1))
+                    0.0
+                    if power == 0
+                    else upstream * power * _power(value, power - 1)
                     for upstream, value, power in zip(
                         grad._data,
                         expanded_base._data,
@@ -90,18 +97,25 @@ class Pow:
                 dtype=grad.dtype,
                 shape=grad.shape,
             )
-            exponent_grad = Tensor(
-                [
-                    upstream * value * math.log(base_value)
-                    for upstream, value, base_value in zip(
-                        grad._data,
-                        output._data,
-                        expanded_base._data,
-                    )
-                ],
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
+            if differentiate_exponent:
+                exponent_grad = Tensor(
+                    [
+                        upstream * value * math.log(base_value)
+                        for upstream, value, base_value in zip(
+                            grad._data,
+                            output._data,
+                            expanded_base._data,
+                        )
+                    ],
+                    dtype=grad.dtype,
+                    shape=grad.shape,
+                )
+            else:
+                exponent_grad = Tensor(
+                    [0.0] * grad.size,
+                    dtype=grad.dtype,
+                    shape=grad.shape,
+                )
             return [
                 unbroadcast(base_grad, base.shape),
                 unbroadcast(exponent_grad, exponent.shape),
@@ -124,10 +138,13 @@ class Pow:
             ]
             return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
 
-        values = [
-            upstream * exponent * _power(base, exponent - 1)
-            for upstream, base in zip(grad._data, value._data)
-        ]
+        if exponent == 0:
+            values = [0.0] * value.size
+        else:
+            values = [
+                upstream * exponent * _power(base, exponent - 1)
+                for upstream, base in zip(grad._data, value._data)
+            ]
         return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
 
     @staticmethod
@@ -135,13 +152,34 @@ class Pow:
         """Build a differentiable VJP for exponentiation."""
         if len(inputs) == 2:
             base, exponent = inputs
-            if base.shape != exponent.shape:
-                raise NotImplementedError("Higher-order derivatives through broadcast pow are not implemented")
             from ..math import log
+            if not bool(kwargs.get("differentiate_exponent", True)):
+                from ..variable import Variable
+
+                safe_exponent = Variable(
+                    Tensor(
+                        [1.0 if value == 0 else value for value in exponent.data._data],
+                        dtype=exponent.dtype,
+                        shape=exponent.shape,
+                    ),
+                    requires_grad=False,
+                )
+                base_gradient = (
+                    grad * exponent * (base ** (safe_exponent - 1.0))
+                )
+                return [
+                    unbroadcast_graph(base_gradient, base.shape),
+                    exponent * 0.0,
+                ]
+            if any(value <= 0 for value in base.data._data):
+                raise ValueError(
+                    "power gradients with respect to a tensor exponent require positive bases"
+                )
             output = base ** exponent
+            base_gradient = grad * exponent * (base ** (exponent - 1.0))
             return [
-                grad * exponent * (base ** (exponent - 1.0)),
-                grad * output * log(base),
+                unbroadcast_graph(base_gradient, base.shape),
+                unbroadcast_graph(grad * output * log(base), exponent.shape),
             ]
 
         exponent = kwargs.get("scalar")
@@ -155,6 +193,8 @@ class Pow:
                 )
             from ..math import log
             return [grad * (exponent ** value) * log(exponent)]
+        if exponent == 0:
+            return [grad * (value * 0.0)]
         return [grad * exponent * (value ** (exponent - 1.0))]
 
 

@@ -148,12 +148,20 @@ class Variable:
     def __pow__(self, other):
         if isinstance(other, Variable):
             return self._from_operation(
-                Pow.forward(self.data, other.data), "pow", Pow, [self, other]
+                Pow.forward(self.data, other.data),
+                "pow",
+                Pow,
+                [self, other],
+                differentiate_exponent=other.requires_grad,
             )
         if isinstance(other, Tensor):
             exponent = Variable(other, requires_grad=False)
             return self._from_operation(
-                Pow.forward(self.data, exponent.data), "pow", Pow, [self, exponent]
+                Pow.forward(self.data, exponent.data),
+                "pow",
+                Pow,
+                [self, exponent],
+                differentiate_exponent=False,
             )
         return self._from_operation(
             Pow.forward(self.data, other), "pow", Pow, [self], scalar=other

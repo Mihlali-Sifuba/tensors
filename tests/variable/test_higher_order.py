@@ -71,6 +71,91 @@ class HigherOrderDerivativeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Gradient shape"):
             ts.grad(output, value, grad_outputs=ts.Tensor([1.0]))
 
+    def test_broadcast_gradient_can_be_differentiated(self):
+        value = ts.Variable([[1.0, 2.0], [3.0, 4.0]])
+        bias = ts.Variable([0.5, -0.5])
+        loss = ts.sum((value + bias) ** 2.0)
+
+        first = ts.grad(loss, bias, create_graph=True)
+        second = ts.grad(first, bias, grad_outputs=ts.Tensor([1.0, 1.0]))
+
+        self.assertEqual(first.data.tolist(), [10.0, 10.0])
+        self.assertEqual(second.tolist(), [4.0, 4.0])
+
+    def test_batched_matmul_gradient_can_be_differentiated(self):
+        left = ts.Variable([[[1.0, 2.0]], [[3.0, 4.0]]])
+        right = ts.Variable([[[1.0], [2.0]]])
+        loss = ts.sum((left @ right) ** 2.0)
+
+        first = ts.grad(loss, left, create_graph=True)
+        second = ts.grad(
+            first,
+            left,
+            grad_outputs=ts.Tensor([[[1.0, 1.0]], [[1.0, 1.0]]]),
+        )
+
+        self.assertEqual(second.shape, left.shape)
+        self.assertEqual(second.tolist(), [6.0, 12.0, 6.0, 12.0])
+
+    def test_softmax_gradient_can_be_differentiated(self):
+        value = ts.Variable([[0.2, -0.4, 0.7]])
+        loss = ts.sum(ts.softmax(value, axis=1) ** 2.0)
+
+        first = ts.grad(loss, value, create_graph=True)
+        second = ts.grad(
+            first,
+            value,
+            grad_outputs=ts.Tensor([[1.0, 1.0, 1.0]]),
+        )
+
+        for item in second.tolist():
+            self.assertAlmostEqual(item, 0.0, places=12)
+
+    def test_axis_std_gradient_can_be_differentiated(self):
+        value = ts.Variable([[1.0, 2.0, 4.0], [2.0, 5.0, 9.0]])
+        loss = ts.sum(ts.std(value, axis=1))
+
+        first = ts.grad(loss, value, create_graph=True)
+        second = ts.grad(
+            first,
+            value,
+            grad_outputs=ts.Tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]),
+        )
+
+        for item in second.tolist():
+            self.assertAlmostEqual(item, 0.0, places=12)
+
+    def test_concat_and_stack_gradients_can_be_differentiated(self):
+        left = ts.Variable([1.0, 2.0])
+        right = ts.Variable([3.0, 4.0])
+        concatenated = ts.concat([left, right])
+        stacked = ts.stack([left, right])
+        loss = ts.sum(concatenated ** 2.0) + ts.sum(stacked ** 2.0)
+
+        first = ts.grad(loss, left, create_graph=True)
+        second = ts.grad(
+            first,
+            left,
+            grad_outputs=ts.Tensor([1.0, 1.0]),
+        )
+
+        self.assertEqual(first.data.tolist(), [4.0, 8.0])
+        self.assertEqual(second.tolist(), [4.0, 4.0])
+
+    def test_slice_gradient_can_be_differentiated(self):
+        value = ts.Variable([1.0, 2.0, 3.0])
+        loss = ts.sum(value[1:] ** 3.0)
+
+        first = ts.grad(loss, value, create_graph=True)
+        second = ts.grad(
+            first,
+            value,
+            grad_outputs=ts.Tensor([1.0, 1.0, 1.0]),
+        )
+
+        self.assertEqual(first.data.tolist(), [0.0, 12.0, 27.0])
+        self.assertEqual(second.tolist(), [0.0, 12.0, 18.0])
+
 
 if __name__ == "__main__":
     unittest.main()

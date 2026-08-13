@@ -5,8 +5,12 @@ from typing import Any
 from .node import Node
 from .edge import Edge
 from .computation import Computation, backward, grad
+from .gradcheck import GradcheckError, gradcheck
 
-__all__ = ["Graph", "Computation", "Node", "Edge", "backward", "grad"]
+__all__ = [
+    "Graph", "Computation", "Node", "Edge",
+    "GradcheckError", "backward", "grad", "gradcheck",
+]
 
 
 def __getattr__(name: str) -> Any:

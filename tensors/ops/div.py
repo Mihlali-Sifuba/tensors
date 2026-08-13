@@ -93,6 +93,8 @@ class Div:
                 return [-(grad * scalar) / (value ** 2)]
             return [grad / scalar]
         left, right = inputs
-        if left.shape != right.shape:
-            raise NotImplementedError("Higher-order derivatives through broadcast div are not implemented")
-        return [grad / right, -(grad * left) / (right ** 2)]
+        from ._utils import unbroadcast_graph
+        return [
+            unbroadcast_graph(grad / right, left.shape),
+            unbroadcast_graph(-(grad * left) / (right ** 2), right.shape),
+        ]

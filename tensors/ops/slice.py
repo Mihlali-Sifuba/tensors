@@ -2,7 +2,7 @@
 
 from typing import List
 
-from ..tensor import Tensor
+from ..tensor import Tensor, _shape_size
 
 
 def _flat_indices(tensor: Tensor, key) -> List[int]:
@@ -62,3 +62,47 @@ class Slice:
         for flat_index, grad_value in zip(selected, grad._data):
             values[flat_index] += grad_value
         return [Tensor(values, dtype=grad.dtype, shape=source.shape)]
+
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable scatter for a slice VJP."""
+        return [_slice_scatter(grad, inputs[0].shape, kwargs["key"])]
+
+
+class SliceScatter:
+    """Scatter slice-shaped values back into a larger zero tensor."""
+
+    @staticmethod
+    def forward(grad: Tensor, source_shape: tuple[int, ...], key) -> Tensor:
+        template = Tensor([0.0] * _shape_size(source_shape), dtype=grad.dtype, shape=source_shape)
+        selected = _flat_indices(template, key)
+        if len(selected) != grad.size:
+            raise ValueError(
+                f"Slice gradient has {grad.size} values; expected {len(selected)}"
+            )
+        values = [0.0] * template.size
+        for flat_index, grad_value in zip(selected, grad._data):
+            values[flat_index] += grad_value
+        return Tensor(values, dtype=grad.dtype, shape=source_shape)
+
+    @staticmethod
+    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+        return [Slice.forward(grad, kwargs["key"])]
+
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        return [grad[kwargs["key"]]]
+
+
+def _slice_scatter(grad, source_shape: tuple[int, ...], key):
+    """Return a differentiable slice-scatter Variable."""
+    from ..variable import Variable
+
+    return Variable._from_operation(
+        SliceScatter.forward(grad.data, source_shape, key),
+        "slice_scatter",
+        SliceScatter,
+        [grad],
+        source_shape=source_shape,
+        key=key,
+    )

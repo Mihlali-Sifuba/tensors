@@ -84,6 +84,21 @@ class Concat:
             offset += tensor.shape[axis]
         return gradients
 
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Differentiably split an upstream gradient along the concat axis."""
+        axis = kwargs.get("axis", 0)
+        if axis < 0:
+            axis += grad.ndim
+        offset = 0
+        gradients = []
+        for tensor in inputs:
+            key = [slice(None)] * grad.ndim
+            key[axis] = slice(offset, offset + tensor.shape[axis])
+            gradients.append(grad[tuple(key)])
+            offset += tensor.shape[axis]
+        return gradients
+
 
 def concat(tensors: Sequence[Any], axis: int = 0) -> Any:
     """Concatenate Tensors or Variables along an existing axis."""

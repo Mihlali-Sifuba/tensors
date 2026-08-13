@@ -55,6 +55,16 @@ class StackTests(unittest.TestCase):
         self.assertEqual(result.shape, (2, 2))
         self.assertEqual(result.tolist(), [1.0, 2.0, 3.0, 4.0])
 
+    def test_stack_variables_is_differentiable(self):
+        left = ts.Variable([1.0, 2.0])
+        right = ts.Variable([3.0, 4.0])
+
+        loss = ts.sum(ts.stack([left, right], axis=1) ** 2.0)
+        ts.backward(loss)
+
+        self.assertEqual(left.grad.tolist(), [2.0, 4.0])
+        self.assertEqual(right.grad.tolist(), [6.0, 8.0])
+
 
 if __name__ == "__main__":
     unittest.main()
