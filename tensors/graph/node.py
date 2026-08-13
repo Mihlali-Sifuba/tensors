@@ -29,6 +29,46 @@ class Node:
         self.args: dict[str, Any] = kwargs
         self._in_edges: list[Edge] = []
         self._out_edges: list[Edge] = []
+        self._input_states: tuple[Any, ...] = ()
+        self._output_state: Any = None
+
+    def capture_states(self) -> None:
+        """Remember the eager input and output states of this operation."""
+        self._input_states = tuple(
+            (
+                edge.source.output_var._mutation_state()
+                if edge.source.output_var is not None
+                else None
+            )
+            for edge in self._in_edges
+        )
+        self._output_state = (
+            self.output_var._mutation_state()
+            if self.output_var is not None
+            else None
+        )
+
+    def changed_input(self) -> tuple[int, Any] | None:
+        """Return the first input whose value changed since capture, if any."""
+        if len(self._input_states) != len(self._in_edges):
+            return 0, None
+        for index, (edge, expected) in enumerate(
+            zip(self._in_edges, self._input_states)
+        ):
+            variable = edge.source.output_var
+            current = variable._mutation_state() if variable is not None else None
+            if current != expected:
+                return index, variable
+        return None
+
+    def output_changed(self) -> bool:
+        """Return whether this operation's eager output was modified."""
+        current = (
+            self.output_var._mutation_state()
+            if self.output_var is not None
+            else None
+        )
+        return current != self._output_state
 
     @property
     def inputs(self) -> list[Node]:

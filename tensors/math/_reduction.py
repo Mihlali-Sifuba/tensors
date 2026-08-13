@@ -8,6 +8,11 @@ from ..tensor import Tensor, _coordinates, _flat_index, _shape_size
 Axis: TypeAlias = Optional[int | tuple[int, ...] | list[int]]
 
 
+def immutable_axis(axis: Axis) -> int | tuple[int, ...] | None:
+    """Copy a mutable axis list into immutable graph metadata."""
+    return tuple(axis) if isinstance(axis, list) else axis
+
+
 def normalize_axes(ndim: int, axis: Axis) -> tuple[int, ...]:
     """Return validated, non-negative reduction axes in ascending order."""
     if axis is None:
@@ -95,6 +100,7 @@ def keepdims_shape(
 
 __all__ = [
     "Axis",
+    "immutable_axis",
     "keepdims_shape",
     "normalize_axes",
     "reduction_groups",

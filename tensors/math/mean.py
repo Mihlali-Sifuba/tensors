@@ -4,7 +4,9 @@ from typing import Any, List
 
 from ..dtype import float64
 from ..tensor import Tensor
-from ._reduction import Axis, keepdims_shape, normalize_axes, reduction_size
+from ._reduction import (
+    Axis, immutable_axis, keepdims_shape, normalize_axes, reduction_size,
+)
 from .sum import Sum, _sum_impl
 
 
@@ -63,6 +65,8 @@ def mean(value: Any, axis: Axis = None,
          keepdims: bool = False) -> Any:
     """Compute the mean over one, several, or all axes."""
     from ..variable import Variable
+
+    axis = immutable_axis(axis)
 
     if isinstance(value, Variable):
         return Variable._from_operation(

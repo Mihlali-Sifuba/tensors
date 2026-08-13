@@ -1,0 +1,229 @@
+"""Numerically stable binary cross-entropy."""
+
+from __future__ import annotations
+
+import math
+from typing import Any, List
+
+from ..dtype import result_dtype
+from ..ops._utils import unbroadcast, unbroadcast_graph
+from ..tensor import Tensor, _broadcast_shape, _broadcast_tensors, _shape_size
+from .cross_entropy import Reduction, _validate_reduction
+from .sigmoid import _sigmoid
+
+
+def _validate_targets(target: Tensor) -> None:
+    if any(not 0.0 <= float(value) <= 1.0 for value in target._data):
+        raise ValueError("binary cross-entropy targets must be between 0 and 1")
+
+
+def _validate_from_logits(from_logits: bool) -> None:
+    if not isinstance(from_logits, bool):
+        raise TypeError("from_logits must be a bool")
+
+
+def _probability_loss(probability: float, target: float) -> float:
+    if probability == 0.0:
+        return 0.0 if target == 0.0 else math.inf
+    if probability == 1.0:
+        return 0.0 if target == 1.0 else math.inf
+    return -target * math.log(probability) - (1.0 - target) * math.log1p(-probability)
+
+
+def _probability_gradient(probability: float, target: float) -> float:
+    if probability == 0.0:
+        return 1.0 if target == 0.0 else -math.inf
+    if probability == 1.0:
+        return -1.0 if target == 1.0 else math.inf
+    return (probability - target) / (probability * (1.0 - probability))
+
+
+def _target_gradient(probability: float) -> float:
+    if probability == 0.0:
+        return math.inf
+    if probability == 1.0:
+        return -math.inf
+    return math.log1p(-probability) - math.log(probability)
+
+
+def _reduce(values: list[float], reduction: Reduction) -> tuple[list[float], tuple[int, ...]]:
+    if reduction == "none":
+        raise RuntimeError("elementwise reduction requires the broadcast shape")
+    total = math.fsum(values)
+    if reduction == "mean":
+        total = total / len(values) if values else 0.0
+    return [total], (1,)
+
+
+class BinaryCrossEntropy:
+    """Binary cross-entropy for probabilities or raw logits."""
+
+    @staticmethod
+    def forward(
+        prediction: Tensor,
+        target: Tensor,
+        *,
+        from_logits: bool = False,
+        reduction: Reduction = "mean",
+    ) -> Tensor:
+        _validate_reduction(reduction)
+        _validate_from_logits(from_logits)
+        prediction, target = _broadcast_tensors(prediction, target)
+        _validate_targets(target)
+        dtype = result_dtype(prediction.dtype, target, division=True)
+
+        values = []
+        for raw_prediction, raw_target in zip(prediction._data, target._data):
+            value = float(raw_prediction)
+            target_value = float(raw_target)
+            if from_logits:
+                if value == math.inf:
+                    loss = 0.0 if target_value == 1.0 else math.inf
+                elif value == -math.inf:
+                    loss = 0.0 if target_value == 0.0 else math.inf
+                else:
+                    loss = (
+                        max(value, 0.0)
+                        - value * target_value
+                        + math.log1p(math.exp(-abs(value)))
+                    )
+            else:
+                if not 0.0 <= value <= 1.0:
+                    raise ValueError(
+                        "binary cross-entropy probabilities must be between 0 and 1"
+                    )
+                loss = _probability_loss(value, target_value)
+            values.append(loss)
+
+        if reduction == "none":
+            return Tensor(values, dtype=dtype, shape=prediction.shape)
+        reduced, shape = _reduce(values, reduction)
+        return Tensor(reduced, dtype=dtype, shape=shape)
+
+    @staticmethod
+    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+        prediction, target = inputs
+        from_logits = kwargs.get("from_logits", False)
+        _validate_from_logits(from_logits)
+        reduction = kwargs.get("reduction", "mean")
+        if not isinstance(reduction, str):
+            raise TypeError("reduction must be a string")
+
+        expanded_prediction, expanded_target = _broadcast_tensors(prediction, target)
+        size = expanded_prediction.size
+        if reduction == "none":
+            upstream = list(grad._data)
+        else:
+            scale = 1.0 / size if reduction == "mean" and size else 1.0
+            upstream = [grad._data[0] * scale] * size
+
+        prediction_gradients = []
+        target_gradients = []
+        for upstream_value, raw_prediction, raw_target in zip(
+            upstream, expanded_prediction._data, expanded_target._data
+        ):
+            if upstream_value == 0:
+                prediction_gradients.append(0.0)
+                target_gradients.append(0.0)
+                continue
+            value = float(raw_prediction)
+            target_value = float(raw_target)
+            if from_logits:
+                prediction_derivative = _sigmoid(value) - target_value
+                target_derivative = -value
+            else:
+                prediction_derivative = _probability_gradient(value, target_value)
+                target_derivative = _target_gradient(value)
+            prediction_gradients.append(upstream_value * prediction_derivative)
+            target_gradients.append(upstream_value * target_derivative)
+
+        expanded_shape = expanded_prediction.shape
+        prediction_gradient = Tensor(
+            prediction_gradients, dtype=grad.dtype, shape=expanded_shape
+        )
+        target_gradient = Tensor(
+            target_gradients, dtype=grad.dtype, shape=expanded_shape
+        )
+        return [
+            unbroadcast(prediction_gradient, prediction.shape),
+            unbroadcast(target_gradient, target.shape),
+        ]
+
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable binary cross-entropy VJP."""
+        from .log import log
+        from .sigmoid import sigmoid
+
+        prediction, target = inputs
+        from_logits = kwargs.get("from_logits", False)
+        _validate_from_logits(from_logits)
+        reduction = kwargs.get("reduction", "mean")
+        shape = _broadcast_shape(prediction.shape, target.shape)
+        size = _shape_size(shape)
+        upstream = grad / size if reduction == "mean" and size else grad
+
+        if from_logits:
+            prediction_derivative = sigmoid(prediction) - target
+            target_derivative = -prediction + target * 0.0
+        else:
+            prediction_derivative = (
+                (prediction - target) / (prediction * (1.0 - prediction))
+            )
+            target_derivative = (
+                log(1.0 - prediction) - log(prediction) + target * 0.0
+            )
+        return [
+            unbroadcast_graph(upstream * prediction_derivative, prediction.shape),
+            unbroadcast_graph(upstream * target_derivative, target.shape),
+        ]
+
+
+def binary_cross_entropy(
+    prediction: Any,
+    target: Any,
+    *,
+    from_logits: bool = False,
+    reduction: Reduction = "mean",
+) -> Any:
+    """Compute binary cross-entropy with optional stable logits input."""
+    from ..variable import Variable
+
+    prediction_is_variable = isinstance(prediction, Variable)
+    target_is_variable = isinstance(target, Variable)
+    prediction_tensor = prediction.data if prediction_is_variable else (
+        prediction if isinstance(prediction, Tensor) else Tensor(prediction)
+    )
+    target_tensor = target.data if target_is_variable else (
+        target if isinstance(target, Tensor) else Tensor(target)
+    )
+
+    if prediction_is_variable or target_is_variable:
+        prediction_variable = prediction if prediction_is_variable else Variable(
+            prediction_tensor, requires_grad=False
+        )
+        target_variable = target if target_is_variable else Variable(
+            target_tensor, requires_grad=False
+        )
+        return Variable._from_operation(
+            BinaryCrossEntropy.forward(
+                prediction_variable.data,
+                target_variable.data,
+                from_logits=from_logits,
+                reduction=reduction,
+            ),
+            "binary_cross_entropy",
+            BinaryCrossEntropy,
+            [prediction_variable, target_variable],
+            from_logits=from_logits,
+            reduction=reduction,
+        )
+    return BinaryCrossEntropy.forward(
+        prediction_tensor,
+        target_tensor,
+        from_logits=from_logits,
+        reduction=reduction,
+    )
+
+
+__all__ = ["BinaryCrossEntropy", "binary_cross_entropy"]

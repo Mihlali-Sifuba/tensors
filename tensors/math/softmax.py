@@ -49,6 +49,20 @@ class Softmax:
             for offset in range(trailing):
                 positions = [group_start + offset + index * trailing for index in range(axis_size)]
                 maximum = max(a._data[position] for position in positions)
+                if maximum == math.inf:
+                    maxima = [
+                        position
+                        for position in positions
+                        if a._data[position] == math.inf
+                    ]
+                    probability = 1.0 / len(maxima)
+                    for position in positions:
+                        values[position] = probability if position in maxima else 0.0
+                    continue
+                if maximum == -math.inf:
+                    raise ValueError(
+                        "softmax is undefined when every value along an axis is -inf"
+                    )
                 exponentials = [math.exp(a._data[position] - maximum) for position in positions]
                 total = sum(exponentials)
                 for position, exponential in zip(positions, exponentials):

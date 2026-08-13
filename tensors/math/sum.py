@@ -4,7 +4,7 @@ import builtins
 from typing import Any, List
 
 from ..tensor import Tensor
-from ._reduction import Axis, keepdims_shape, reduction_groups
+from ._reduction import Axis, immutable_axis, keepdims_shape, reduction_groups
 
 
 def _sum_impl(a: Tensor, axis: Axis = None,
@@ -65,6 +65,8 @@ def sum(value: Any, axis: Axis = None,
         keepdims: bool = False) -> Any:
     """Sum over one, several, or all axes."""
     from ..variable import Variable
+
+    axis = immutable_axis(axis)
 
     if isinstance(value, Variable):
         return Variable._from_operation(

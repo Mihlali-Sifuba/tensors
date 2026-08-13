@@ -5,7 +5,7 @@ from typing import Any, List
 
 from ..dtype import float64
 from ..tensor import Tensor
-from ..math._reduction import Axis, keepdims_shape, reduction_groups
+from ..math._reduction import Axis, immutable_axis, keepdims_shape, reduction_groups
 
 
 class Norm:
@@ -71,6 +71,8 @@ class Norm:
 def norm(value: Any, axis: Axis = None, keepdims: bool = False) -> Any:
     """Compute Euclidean norms over one, several, or all axes."""
     from ..variable import Variable
+
+    axis = immutable_axis(axis)
 
     if isinstance(value, Variable):
         return Variable._from_operation(

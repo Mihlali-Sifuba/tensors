@@ -4,7 +4,7 @@ import builtins
 from typing import Any, List
 
 from ..tensor import Tensor
-from ._reduction import Axis, reduction_groups
+from ._reduction import Axis, immutable_axis, reduction_groups
 
 
 class Min:
@@ -53,6 +53,8 @@ class Min:
 def min(value: Any, axis: Axis = None, keepdims: bool = False) -> Any:
     """Compute minima over one, several, or all axes."""
     from ..variable import Variable
+
+    axis = immutable_axis(axis)
 
     if isinstance(value, Variable):
         return Variable._from_operation(

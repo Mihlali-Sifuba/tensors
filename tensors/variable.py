@@ -31,19 +31,11 @@ class Variable:
     """
 
     def __init__(self, data, name=None, requires_grad=True, _register=True):
-        if isinstance(data, Tensor):
-            self.data = data
-        elif isinstance(data, Variable):
-            self.data = data.data
-        else:
-            self.data = Tensor(data)
-
+        self._data_generation = 0
+        self.requires_grad = requires_grad
+        self.data = data.data if isinstance(data, Variable) else data
         self.grad = None
         self.name = name or f"v{id(self) & 0xFFFF:04x}"
-        self.requires_grad = requires_grad
-
-        if requires_grad and self.dtype.typecode not in {"f", "d"}:
-            raise ValueError("Only floating-point Variables can require gradients")
 
         self.node = None
         if _register:
@@ -62,9 +54,54 @@ class Variable:
         out.node = node
         for index, var in enumerate(inputs):
             graph.add_edge(var.node, node, label=f"input_{index}")
+        node.capture_states()
         return out
 
     # -- properties mirroring Tensor -----------------------------------
+
+    @property
+    def requires_grad(self):
+        """Whether reverse-mode derivatives should flow into this variable."""
+        return self._requires_grad
+
+    @requires_grad.setter
+    def requires_grad(self, value):
+        if not isinstance(value, bool):
+            raise TypeError("requires_grad must be a bool")
+        if (
+            value
+            and hasattr(self, "_data")
+            and self._data.dtype.typecode not in {"f", "d"}
+        ):
+            raise ValueError("Only floating-point Variables can require gradients")
+        self._requires_grad = value
+
+    @property
+    def data(self):
+        """Tensor currently holding this variable's eager value."""
+        return self._data
+
+    @data.setter
+    def data(self, value):
+        """Replace the eager value and invalidate computations using the old one."""
+        tensor = value if isinstance(value, Tensor) else Tensor(value)
+        if getattr(self, "requires_grad", False) and tensor.dtype.typecode not in {
+            "f", "d",
+        }:
+            raise ValueError("Only floating-point Variables can require gradients")
+        self._data = tensor
+        self._data_generation += 1
+
+    def _mutation_state(self):
+        """Return the value state recorded by operation nodes."""
+        return (
+            self._data_generation,
+            self.data.version,
+            self.data.shape,
+            self.data.ndim,
+            self.data.dtype.typecode,
+            self.requires_grad,
+        )
 
     @property
     def shape(self):
@@ -91,6 +128,8 @@ class Variable:
     # -- operators (build graph implicitly) ----------------------------
 
     def __add__(self, other):
+        if isinstance(other, Tensor):
+            other = Variable(other, requires_grad=False)
         if isinstance(other, Variable):
             return self._from_operation(
                 Ops.add(self.data, other.data), "add", Add, [self, other]
@@ -103,6 +142,8 @@ class Variable:
         return self + other
 
     def __sub__(self, other):
+        if isinstance(other, Tensor):
+            other = Variable(other, requires_grad=False)
         if isinstance(other, Variable):
             return self._from_operation(
                 Ops.subtract(self.data, other.data), "sub", Sub, [self, other]
@@ -115,6 +156,8 @@ class Variable:
         return (-self) + other
 
     def __mul__(self, other):
+        if isinstance(other, Tensor):
+            other = Variable(other, requires_grad=False)
         if isinstance(other, Variable):
             return self._from_operation(
                 Ops.multiply(self.data, other.data), "mul", Mul, [self, other]
@@ -127,6 +170,8 @@ class Variable:
         return self * other
 
     def __truediv__(self, other):
+        if isinstance(other, Tensor):
+            other = Variable(other, requires_grad=False)
         if isinstance(other, Variable):
             return self._from_operation(
                 Ops.divide(self.data, other.data), "div", Div, [self, other]
