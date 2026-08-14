@@ -52,6 +52,17 @@ class Graph:
         """Execute ``forward`` and record a fresh computation."""
         return self(*args, **kwargs)
 
+    def release(self) -> None:
+        """Release this Graph's references to its latest computation.
+
+        Returned output Variables remain valid when retained by the caller.
+        The Graph can be called again to record a new computation.
+        """
+        self._outputs = None
+        self._computations = ()
+        self._nodes = ()
+        self._edges = ()
+
     @property
     def nodes(self) -> list[Any]:
         """Nodes reachable from this graph's output variables."""
@@ -178,7 +189,7 @@ class Graph:
             nodes.append(node)
 
         for computation in computations:
-            for node in computation.nodes:
+            for node in computation._nodes:
                 add(node)
         return tuple(nodes), tuple(edges)
 

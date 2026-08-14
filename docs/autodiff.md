@@ -116,7 +116,8 @@ a mismatch occurs. Pass `raise_exception=False` to receive `False` instead.
 First-order gradients are implemented and numerically checked for:
 
 - broadcast arithmetic and powers;
-- `sqrt`, `exp`, `log`, `relu`, `sigmoid`, `tanh`, and `softplus`;
+- `sqrt`, `exp`, `log`, `sin`, `cos`, `tan`, `relu`, `sigmoid`, `tanh`,
+  and `softplus`;
 - axis-aware `sum`, `mean`, `min`, `max`, `std`, `norm`, `softmax`,
   `logsumexp`, and `log_softmax`;
 - stable multiclass and binary cross-entropy losses;
@@ -134,6 +135,8 @@ the gradient.
 Production behavior includes explicit domain rules:
 
 - `log(x)` requires `x > 0`.
+- `tan(x)` is undefined at odd multiples of pi/2; its value and derivative
+  grow without bound when floating-point inputs approach those poles.
 - `sqrt(x)` accepts `x >= 0`, but its derivative raises at `x == 0` because the
   finite real derivative is undefined there.
 - A differentiable tensor exponent in `base ** exponent` requires a positive
@@ -180,6 +183,49 @@ refreshes the recorded mutation state.
 Shape, rank, and dtype metadata are read-only. The backing `_data` member is an
 internal implementation detail; writing it directly bypasses the public safety
 contract.
+
+## Graph lifetime and traversal
+
+Graph state is a non-owning, thread-local registry used for tracing and
+inspection. It stores weak references, and operation inputs store weak
+references to their outgoing edges. Consequently, a persistent leaf such as a
+model parameter does not keep every discarded forward result alive. A live
+output still owns its incoming edges and therefore retains everything required
+for recomputation and differentiation.
+
+`GraphState.clear()` forgets its current registrations without invalidating
+any live output. `Graph.release()` drops a reusable Graph object's references
+to its most recent outputs and computations; retained output Variables remain
+valid, and calling the Graph again records a fresh computation.
+
+`Computation` calculates its dependency-first node order once at construction
+and reuses the immutable cached order for forward and backward passes. Call
+`Computation.release()` when a long-lived Computation object no longer needs
+its output or traversal. A released Computation cannot be reused.
+
+## Operation protocols
+
+Custom operation classes are checked structurally through Python protocols.
+`ts.graph.Operation` requires `forward()` and `backward()`;
+`HigherOrderOperation` additionally provides `backward_graph()`, while
+`ReverseOperation` provides `forward_reverse()` for scalar-left expressions.
+The class does not need to inherit from these protocols:
+
+```python
+class Identity:
+    @staticmethod
+    def forward(value):
+        return value
+
+    @staticmethod
+    def backward(gradient, value):
+        return [gradient]
+```
+
+Supplying `Identity` as an operation class works because it implements the
+required interface. See Python's
+[`typing.Protocol`](https://docs.python.org/3.14/library/typing.html#typing.Protocol)
+documentation for structural subtyping details.
 
 ## Numerically stable probability functions
 

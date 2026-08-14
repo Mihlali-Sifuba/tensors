@@ -103,7 +103,7 @@ def _derivative_graph_scope(
             yield
     finally:
         for node, edges in zip(source_nodes, previous_outputs):
-            node._out_edges[:] = edges
+            node._replace_out_edges(edges)
 
 
 def _assemble_rows(

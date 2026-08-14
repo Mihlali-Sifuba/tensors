@@ -7,6 +7,9 @@ from .max import Max, max
 from .sqrt import Sqrt, sqrt
 from .exp import Exp, exp
 from .log import Log, log
+from .sin import Sin, sin
+from .cos import Cos, cos
+from .tan import Tan, tan
 from .relu import ReLU, relu
 from .sigmoid import Sigmoid, sigmoid
 from .tanh import Tanh, tanh
@@ -22,12 +25,13 @@ from .stack import Stack, stack
 from .concat import Concat, concat
 
 __all__ = [
-    "Sum", "Mean", "Min", "Max", "Sqrt", "Exp", "Log",
+    "Sum", "Mean", "Min", "Max", "Sqrt", "Exp", "Log", "Sin", "Cos", "Tan",
     "ReLU", "Sigmoid", "Tanh", "Softplus", "Softmax", "LogSumExp",
     "LogSoftmax", "CrossEntropy", "BinaryCrossEntropy", "Std", "Reshape",
     "Stack", "Concat",
     "sum", "mean", "min", "max",
-    "sqrt", "exp", "log", "relu", "sigmoid", "tanh", "softplus", "softmax",
+    "sqrt", "exp", "log", "sin", "cos", "tan",
+    "relu", "sigmoid", "tanh", "softplus", "softmax",
     "logsumexp", "log_softmax", "cross_entropy", "binary_cross_entropy",
     "std", "reshape", "stack", "concat",
 ]

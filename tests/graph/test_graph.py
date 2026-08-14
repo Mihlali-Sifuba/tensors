@@ -1,4 +1,6 @@
 import unittest
+import gc
+import weakref
 
 import tensors as ts
 from tensors.graph.state import reset_graph_state
@@ -138,6 +140,48 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(second.shape, (2,))
         self.assertEqual(second.data.tolist(), [2.0, 4.0])
         self.assertIs(model.computation.output, second)
+
+    def test_new_call_does_not_retain_the_previous_computation(self):
+        class Scale(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.weight = ts.Variable([2.0])
+
+            def forward(self, value):
+                return value * self.weight
+
+        model = Scale()
+        first = model(ts.Tensor([3.0]))
+        first_reference = weakref.ref(first)
+        first_node_reference = weakref.ref(first.node)
+
+        del first
+        model(ts.Tensor([4.0]))
+        gc.collect()
+
+        self.assertIsNone(first_reference())
+        self.assertIsNone(first_node_reference())
+
+    def test_release_drops_graph_references_but_not_returned_output(self):
+        class Scale(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.weight = ts.Variable([2.0])
+
+            def forward(self, value):
+                return value * self.weight
+
+        model = Scale()
+        result = model(ts.Tensor([3.0]))
+
+        model.release()
+
+        self.assertEqual(model.nodes, [])
+        self.assertEqual(model.edges, [])
+        with self.assertRaisesRegex(RuntimeError, "has not been called"):
+            _ = model.computation
+        self.assertEqual(ts.grad(result, model.weight).tolist(), [3.0])
+        self.assertEqual(model(ts.Tensor([4.0])).data.tolist(), [8.0])
 
 
 if __name__ == "__main__":

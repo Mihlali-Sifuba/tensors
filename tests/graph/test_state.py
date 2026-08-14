@@ -1,5 +1,8 @@
 import unittest
+import gc
+import weakref
 
+import tensors as ts
 from tensors.graph.state import TraceScope, get_graph_state, reset_graph_state
 
 
@@ -57,6 +60,35 @@ class GraphStateTests(unittest.TestCase):
 
         self.assertTrue(next_scope.outermost)
         next_scope.close()
+
+    def test_state_does_not_retain_a_discarded_eager_computation(self):
+        state = get_graph_state()
+        value = ts.Variable([2.0])
+        result = value * 3.0
+        result_reference = weakref.ref(result)
+        node_reference = weakref.ref(result.node)
+        edge_reference = weakref.ref(result.node._in_edges[0])
+
+        del result
+        gc.collect()
+
+        self.assertIsNone(result_reference())
+        self.assertIsNone(node_reference())
+        self.assertIsNone(edge_reference())
+        self.assertEqual(state.nodes, [value.node])
+        self.assertEqual(state.edges, [])
+        self.assertEqual(value.node.outputs, [])
+
+    def test_clear_forgets_registrations_without_invalidating_graph(self):
+        state = get_graph_state()
+        value = ts.Variable([2.0])
+        result = value * 3.0
+
+        state.clear()
+
+        self.assertEqual(state.nodes, [])
+        self.assertEqual(state.edges, [])
+        self.assertEqual(ts.grad(result, value).tolist(), [3.0])
 
 
 if __name__ == "__main__":

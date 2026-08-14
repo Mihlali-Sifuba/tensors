@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..tensor import Tensor
 from .node import Node
+from .protocols import HigherOrderOperation, ReverseOperation
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -19,13 +20,15 @@ class Computation:
         if getattr(output, "node", None) is None:
             raise TypeError("Computation output must have a graph node")
         self.output = output
+        self._nodes = self._dependency_order(output.node)
+        self._released = False
 
-    @property
-    def nodes(self) -> list[Node]:
-        """Return reachable nodes in dependency-first order."""
+    @staticmethod
+    def _dependency_order(output_node: Node) -> tuple[Node, ...]:
+        """Calculate and cache the dependency-first traversal for an output."""
         order: list[Node] = []
         visited: set[Node] = set()
-        stack = [(self.output.node, False)]
+        stack = [(output_node, False)]
         while stack:
             node, expanded = stack.pop()
             if expanded:
@@ -38,12 +41,37 @@ class Computation:
             for edge in reversed(node._in_edges):
                 if edge.source not in visited:
                     stack.append((edge.source, False))
-        return order
+        return tuple(order)
+
+    def _require_active(self) -> None:
+        """Reject work after this object has released its graph references."""
+        if self._released:
+            raise RuntimeError("Computation has been released")
+
+    @property
+    def nodes(self) -> list[Node]:
+        """Return the cached dependency-first traversal as an independent list."""
+        self._require_active()
+        return list(self._nodes)
+
+    def release(self) -> None:
+        """Release graph references owned by this Computation.
+
+        The output Variable remains usable if the caller retains it, but this
+        Computation object cannot be replayed or differentiated afterwards.
+        Calling ``release`` more than once is safe.
+        """
+        if self._released:
+            return
+        self.output = None
+        self._nodes = ()
+        self._released = True
 
     def forward(self) -> Tensor:
         """Recompute the output from its current leaf values."""
+        self._require_active()
         values: dict[Any, Tensor] = {}
-        for node in self.nodes:
+        for node in self._nodes:
             if node.op_cls is None:
                 if node.output_var is None:
                     raise RuntimeError(
@@ -60,7 +88,8 @@ class Computation:
 
     def _validate_recorded_states(self) -> None:
         """Reject a backward pass whose recorded forward values changed."""
-        for node in self.nodes:
+        self._require_active()
+        for node in self._nodes:
             if node.op_cls is None:
                 continue
             if node.output_changed():
@@ -107,7 +136,7 @@ class Computation:
         # Publish gradients only after the entire reverse pass succeeds. A
         # malformed operation or domain error therefore cannot leave a graph
         # with partially cleared or partially updated ``.grad`` attributes.
-        for node in self.nodes:
+        for node in self._nodes:
             variable = node.output_var
             if variable is not None:
                 variable.grad = gradients.get(variable)
@@ -150,7 +179,7 @@ class Computation:
     def _backward_graph(self, seed: Any) -> dict[Any, Any]:
         """Build a differentiable reverse-mode gradient computation."""
         gradients: dict[Any, Any] = {self.output: seed}
-        for node in reversed(self.nodes):
+        for node in reversed(self._nodes):
             if node.op_cls is None:
                 continue
 
@@ -158,15 +187,18 @@ class Computation:
             output_gradient = gradients.get(output)
             if output_gradient is None:
                 continue
-            backward_graph = getattr(node.op_cls, "backward_graph", None)
             inputs = [edge.source.output_var for edge in node._in_edges]
             if not any(input_variable.requires_grad for input_variable in inputs):
                 continue
-            if backward_graph is None:
+            if not isinstance(node.op_cls, HigherOrderOperation):
                 raise NotImplementedError(
                     f"Higher-order derivatives are not implemented for {node.label}"
                 )
-            input_gradients = backward_graph(output_gradient, *inputs, **node.args)
+            input_gradients = node.op_cls.backward_graph(
+                output_gradient,
+                *inputs,
+                **node.args,
+            )
             input_gradients = self._validate_gradients(
                 node, input_gradients, graph=True
             )
@@ -182,7 +214,7 @@ class Computation:
     def _backward_values(self, seed: Tensor) -> dict[Any, Tensor]:
         """Return numerical reverse-mode gradients without mutating Variables."""
         gradients: dict[Any, Tensor] = {self.output: seed}
-        for node in reversed(self.nodes):
+        for node in reversed(self._nodes):
             if node.op_cls is None:
                 continue
 
@@ -261,6 +293,10 @@ class Computation:
         if "scalar" in node.args:
             scalar = node.args["scalar"]
             if node.args.get("reverse", False):
+                if not isinstance(node.op_cls, ReverseOperation):
+                    raise TypeError(
+                        f"{node.label} does not support a scalar left operand"
+                    )
                 result = node.op_cls.forward_reverse(args[0], scalar)
             else:
                 result = node.op_cls.forward(args[0], scalar)
