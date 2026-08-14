@@ -77,6 +77,36 @@ class ComputationTests(unittest.TestCase):
         self.assertEqual(model.weight.grad.tolist(), [3.0])
         self.assertEqual(model.bias.grad.tolist(), [1.0])
 
+    def test_computation_caches_its_dependency_order(self):
+        value = ts.Variable([2.0])
+        result = (value + 1.0) * 3.0
+        computation = ts.graph.Computation(result)
+        cached_order = computation._nodes
+
+        first = computation.nodes
+        second = computation.nodes
+        first.clear()
+
+        self.assertIs(computation._nodes, cached_order)
+        self.assertEqual(second, list(cached_order))
+        self.assertEqual(computation.nodes, list(cached_order))
+        self.assertEqual(computation.forward().tolist(), [9.0])
+
+    def test_released_computation_rejects_further_work(self):
+        value = ts.Variable([2.0])
+        result = value * 3.0
+        computation = ts.graph.Computation(result)
+
+        computation.release()
+        computation.release()
+
+        with self.assertRaisesRegex(RuntimeError, "released"):
+            _ = computation.nodes
+        with self.assertRaisesRegex(RuntimeError, "released"):
+            computation.forward()
+        with self.assertRaisesRegex(RuntimeError, "released"):
+            computation.backward()
+
 
 if __name__ == "__main__":
     unittest.main()

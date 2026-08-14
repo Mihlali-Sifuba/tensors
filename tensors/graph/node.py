@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ._weak_registry import WeakRegistry
+from .protocols import Operation
+
 if TYPE_CHECKING:
     from .edge import Edge
 
@@ -17,18 +20,30 @@ class Node:
         self,
         label: str | None = None,
         output_var: Any = None,
-        op_cls: Any = None,
+        op_cls: type[Operation] | None = None,
         **kwargs: Any,
     ) -> None:
         self.id = Node._next_id
         Node._next_id += 1
+
+        if op_cls is not None and (
+            not isinstance(op_cls, Operation)
+            or not callable(getattr(op_cls, "forward", None))
+            or not callable(getattr(op_cls, "backward", None))
+        ):
+            raise TypeError(
+                "op_cls must provide callable forward() and backward() methods"
+            )
 
         self.label = label
         self.output_var = output_var
         self.op_cls = op_cls
         self.args: dict[str, Any] = kwargs
         self._in_edges: list[Edge] = []
-        self._out_edges: list[Edge] = []
+        # Incoming edges are owned strongly because an output must retain all
+        # of its dependencies. Outgoing edges are weak so a persistent leaf
+        # (for example, a model parameter) does not retain every old result.
+        self._out_edge_registry: WeakRegistry[Edge] = WeakRegistry()
         self._input_states: tuple[Any, ...] = ()
         self._output_state: Any = None
 
@@ -69,6 +84,21 @@ class Node:
             else None
         )
         return current != self._output_state
+
+    def _add_out_edge(self, edge: Edge) -> None:
+        """Register an outgoing edge without owning its target computation."""
+        self._out_edge_registry.add(edge)
+
+    def _replace_out_edges(self, edges: list[Edge] | tuple[Edge, ...]) -> None:
+        """Restore the live outgoing edges used by an isolated trace."""
+        self._out_edge_registry.clear()
+        for edge in edges:
+            self._out_edge_registry.add(edge)
+
+    @property
+    def _out_edges(self) -> list[Edge]:
+        """Return live outgoing edges while pruning collected references."""
+        return self._out_edge_registry.values()
 
     @property
     def inputs(self) -> list[Node]:

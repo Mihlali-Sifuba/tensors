@@ -18,7 +18,7 @@ class Edge:
         self.target = target
         self.label = label
 
-        source._out_edges.append(self)
+        source._add_out_edge(self)
         target._in_edges.append(self)
 
     def __repr__(self) -> str:

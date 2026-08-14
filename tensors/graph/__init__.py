@@ -7,9 +7,11 @@ from .edge import Edge
 from .computation import Computation, backward, grad
 from .derivatives import hessian, jacobian
 from .gradcheck import GradcheckError, gradcheck
+from .protocols import HigherOrderOperation, Operation, ReverseOperation
 
 __all__ = [
     "Graph", "Computation", "Node", "Edge",
+    "Operation", "HigherOrderOperation", "ReverseOperation",
     "GradcheckError", "backward", "grad", "gradcheck", "hessian", "jacobian",
 ]
 

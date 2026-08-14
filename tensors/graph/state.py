@@ -7,28 +7,45 @@ from contextlib import contextmanager
 from collections.abc import Iterator
 from typing import Any
 
+from ._weak_registry import WeakRegistry
 from .edge import Edge
 from .node import Node
+from .protocols import Operation
 
 
 class GraphState:
-    """Mutable collection of nodes and edges recorded by eager operations."""
+    """Non-owning registry of nodes and edges recorded by eager operations.
 
-    __slots__ = ("nodes", "edges")
+    The registry is intended for tracing and inspection. Weak references let
+    discarded eager computations be collected even when their thread-local
+    ``GraphState`` remains active.
+    """
+
+    __slots__ = ("_nodes", "_edges")
 
     def __init__(self) -> None:
-        self.nodes: list[Node] = []
-        self.edges: list[Edge] = []
+        self._nodes: WeakRegistry[Node] = WeakRegistry()
+        self._edges: WeakRegistry[Edge] = WeakRegistry()
+
+    @property
+    def nodes(self) -> list[Node]:
+        """Return the live nodes in registration order."""
+        return self._nodes.values()
+
+    @property
+    def edges(self) -> list[Edge]:
+        """Return the live edges in registration order."""
+        return self._edges.values()
 
     def add_node(
         self,
         label: str,
         output_var: Any = None,
-        op_cls: Any = None,
+        op_cls: type[Operation] | None = None,
         **kwargs: Any,
     ) -> Node:
         node = Node(label=label, output_var=output_var, op_cls=op_cls, **kwargs)
-        self.nodes.append(node)
+        self._nodes.add(node)
         return node
 
     def add_edge(
@@ -38,12 +55,17 @@ class GraphState:
         label: str | None = None,
     ) -> Edge:
         if source not in self.nodes:
-            self.nodes.append(source)
+            self._nodes.add(source)
         if target not in self.nodes:
-            self.nodes.append(target)
+            self._nodes.add(target)
         edge = Edge(source, target, label=label)
-        self.edges.append(edge)
+        self._edges.add(edge)
         return edge
+
+    def clear(self) -> None:
+        """Forget registrations without invalidating live computations."""
+        self._edges.clear()
+        self._nodes.clear()
 
 
 _local = threading.local()
