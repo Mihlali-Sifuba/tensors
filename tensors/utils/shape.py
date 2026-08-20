@@ -1,32 +1,45 @@
 """Pure helpers for tensor shapes and row-major indexing."""
 
-from typing import Tuple
+from typing import Iterable, Tuple
 
 
-def _validate_shape_dimensions(shape: Tuple[int, ...]) -> None:
-    """Reject shapes containing invalid dimensions."""
-    for dimension in shape:
-        if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension < 0:
+def normalize_shape(shape: Iterable[int]) -> Tuple[int, ...]:
+    """Return ``shape`` as a tuple after validating its dimensions."""
+    try:
+        normalized_shape = tuple(shape)
+    except TypeError as exc:
+        raise TypeError(
+            "shape must be an iterable of non-negative integers"
+        ) from exc
+
+    for dimension in normalized_shape:
+        if (
+            isinstance(dimension, bool)
+            or not isinstance(dimension, int)
+            or dimension < 0
+        ):
             raise ValueError(
-                f"Invalid shape {shape}: dimensions must be non-negative integers"
+                f"Invalid shape {normalized_shape}: "
+                "dimensions must be non-negative integers"
             )
+    return normalized_shape
 
 
 def shape_size(shape: Tuple[int, ...]) -> int:
     """Return the number of elements described by ``shape``."""
-    _validate_shape_dimensions(shape)
+    normalized_shape = normalize_shape(shape)
     size = 1
-    for dimension in shape:
+    for dimension in normalized_shape:
         size *= dimension
     return size
 
 
 def row_major_strides(shape: Tuple[int, ...]) -> Tuple[int, ...]:
     """Return row-major strides for ``shape``."""
-    _validate_shape_dimensions(shape)
+    normalized_shape = normalize_shape(shape)
     stride = 1
     strides = []
-    for dimension in reversed(shape):
+    for dimension in reversed(normalized_shape):
         strides.append(stride)
         stride *= dimension
     return tuple(reversed(strides))
@@ -54,27 +67,33 @@ def coordinates_to_index(
     shape: Tuple[int, ...],
 ) -> int:
     """Convert valid row-major coordinates to a flat index."""
-    _validate_shape_dimensions(shape)
-    if len(coordinates) != len(shape):
+    normalized_shape = normalize_shape(shape)
+    if len(coordinates) != len(normalized_shape):
         raise ValueError(
-            f"Coordinate rank {len(coordinates)} does not match shape rank {len(shape)}"
+            f"Coordinate rank {len(coordinates)} does not match "
+            f"shape rank {len(normalized_shape)}"
         )
 
-    for coordinate, dimension in zip(coordinates, shape):
+    for coordinate, dimension in zip(coordinates, normalized_shape):
         if isinstance(coordinate, bool) or not isinstance(coordinate, int):
             raise TypeError("coordinates must contain only integers")
         if not 0 <= coordinate < dimension:
             raise IndexError(
-                f"Coordinate {coordinates} is out of range for shape {shape}"
+                f"Coordinate {coordinates} is out of range for shape "
+                f"{normalized_shape}"
             )
 
     return sum(
         coordinate * stride
-        for coordinate, stride in zip(coordinates, row_major_strides(shape))
+        for coordinate, stride in zip(
+            coordinates,
+            row_major_strides(normalized_shape),
+        )
     )
 
 
 __all__ = [
+    "normalize_shape",
     "shape_size",
     "row_major_strides",
     "index_to_coordinates",

@@ -2,7 +2,12 @@ from array import array
 from typing import Iterable, Union, List, Tuple, Optional
 
 from . import dtype as _dtype
-from .utils.shape import coordinates_to_index, shape_size
+from .utils.shape import (
+    coordinates_to_index,
+    normalize_shape,
+    row_major_strides,
+    shape_size,
+)
 
 
 class Tensor:
@@ -53,30 +58,30 @@ class Tensor:
         # Handle different input types ----------------------------------
         if isinstance(data, Tensor):
             # Copy from another tensor
-            self._data = self._make_array(data._data)
+            self._data = self._create_storage(data._data)
             inferred_shape = data.shape
 
         elif isinstance(data, (int, float)):
             # Scalar value
-            self._data = self._make_array([data])
+            self._data = self._create_storage([data])
             inferred_shape = (1,)
 
         elif isinstance(data, list):
             # Flatten the list if it's nested
-            flat_data = self._flatten_list(data)
-            self._data = self._make_array(flat_data)
+            flat_data = self._flatten_nested_list(data)
+            self._data = self._create_storage(flat_data)
 
-            inferred_shape = self._infer_shape(data)
+            inferred_shape = self._infer_nested_list_shape(data)
 
         elif isinstance(data, array):
             # Direct array input
-            self._data = self._make_array(data)
+            self._data = self._create_storage(data)
             inferred_shape = (len(data),)
 
         else:
             raise TypeError(f"Unsupported data type: {type(data)}")
 
-        self._shape = self._validate_shape(
+        self._shape = normalize_shape(
             inferred_shape if shape is None else shape
         )
         self._ndim = len(self.shape)
@@ -88,18 +93,18 @@ class Tensor:
         self._version = 0
 
         # Verify total elements match shape
-        total_elements = self._get_total_elements()
-        if len(self._data) != total_elements:
+        expected_element_count = shape_size(self.shape)
+        if len(self._data) != expected_element_count:
             raise ValueError(
                 f"Data size {len(self._data)} does not match shape {self.shape} "
-                f"(expected {total_elements} elements)"
+                f"(expected {expected_element_count} elements)"
             )
 
-    def _make_array(self, values: Iterable) -> array:
+    def _create_storage(self, values: Iterable) -> array:
         """Create this tensor's backing storage."""
         return array(self.dtype.typecode, values)
 
-    def _flatten_list(self, nested_list: List) -> List:
+    def _flatten_nested_list(self, nested_list: List) -> List:
         """Flatten a nested list into a single list (iterative, no recursion limit)."""
         result: List = []
         stack: List = [nested_list]
@@ -113,7 +118,7 @@ class Tensor:
                 result.append(item)
         return result
 
-    def _infer_shape(self, nested_list: List) -> Tuple[int, ...]:
+    def _infer_nested_list_shape(self, nested_list: List) -> Tuple[int, ...]:
         """Infer shape and reject ragged nested lists."""
         if not isinstance(nested_list, list):
             return ()
@@ -121,9 +126,9 @@ class Tensor:
         if not nested_list:
             return (0,)
 
-        sub_shape = self._infer_shape(nested_list[0])
+        sub_shape = self._infer_nested_list_shape(nested_list[0])
         for item in nested_list[1:]:
-            item_shape = self._infer_shape(item)
+            item_shape = self._infer_nested_list_shape(item)
             if item_shape != sub_shape:
                 raise ValueError(
                     "Ragged nested lists are not valid tensor data: "
@@ -131,25 +136,7 @@ class Tensor:
                 )
         return (len(nested_list),) + sub_shape
 
-    @staticmethod
-    def _validate_shape(shape) -> Tuple[int, ...]:
-        """Return a normalized shape tuple after validating dimensions."""
-        try:
-            normalized = tuple(shape)
-        except TypeError as exc:
-            raise TypeError("shape must be an iterable of non-negative integers") from exc
-        for dim in normalized:
-            if isinstance(dim, bool) or not isinstance(dim, int) or dim < 0:
-                raise ValueError(
-                    f"Invalid shape {normalized}: dimensions must be non-negative integers"
-                )
-        return normalized
-
-    def _get_total_elements(self) -> int:
-        """Calculate total number of elements from shape."""
-        return shape_size(self.shape)
-
-    def _calculate_index(self, indices: Tuple[int, ...]) -> int:
+    def _indices_to_flat_index(self, indices: Tuple[int, ...]) -> int:
         """Convert N-dimensional indices to flat index (row-major order)."""
         if len(indices) != self.ndim:
             raise IndexError(
@@ -179,9 +166,9 @@ class Tensor:
         # A single key indexes the first dimension for N-D tensors.
         if isinstance(key, (int, slice)):
             if self.ndim != 1:
-                return self._nd_slice((key,))
+                return self._slice_from_key((key,))
             if isinstance(key, int):
-                idx = self._calculate_index((key,))
+                idx = self._indices_to_flat_index((key,))
                 return self._data[idx]
             indices = range(*key.indices(self.shape[0]))
             values = [self._data[i] for i in indices]
@@ -191,15 +178,15 @@ class Tensor:
         if isinstance(key, tuple):
             if len(key) == self.ndim and all(isinstance(k, int) for k in key):
                 # All ints — return a scalar
-                idx = self._calculate_index(key)
+                idx = self._indices_to_flat_index(key)
                 return self._data[idx]
 
             # Mixed ints and slices — return a sub-tensor
-            return self._nd_slice(key)
+            return self._slice_from_key(key)
 
         raise TypeError(f"Unsupported index type: {type(key)}")
 
-    def _nd_slice(self, key: tuple):
+    def _slice_from_key(self, key: tuple):
         """General N-dimensional slicing with mixed ints and slices."""
         if len(key) > self.ndim:
             raise IndexError(
@@ -232,29 +219,29 @@ class Tensor:
             ranges.append(dim_range)
             new_shape.append(self.shape[dim_idx])
 
-        # Precompute strides for each dimension
-        strides = []
-        for d in range(self.ndim):
-            s = 1
-            for j in range(d + 1, self.ndim):
-                s *= self.shape[j]
-            strides.append(s)
+        strides = row_major_strides(self.shape)
 
         # Extract data by iterating over all index combinations
-        result_data = self._make_array([])
-        self._extract_nd(0, 0, ranges, strides, result_data)
+        result_data = self._create_storage([])
+        self._collect_slice_values(0, 0, ranges, strides, result_data)
 
         return Tensor(result_data, dtype=self.dtype, shape=tuple(new_shape))
 
-    def _extract_nd(self, dim: int, flat_offset: int, ranges: list,
-                    strides: list, result: array):
+    def _collect_slice_values(
+        self,
+        dim: int,
+        flat_offset: int,
+        ranges: list,
+        strides: Tuple[int, ...],
+        result: array,
+    ):
         """Recursively iterate over N-dimensional index ranges."""
         if dim == len(ranges):
             result.append(self._data[flat_offset])
             return
 
         for idx in ranges[dim]:
-            self._extract_nd(
+            self._collect_slice_values(
                 dim + 1,
                 flat_offset + idx * strides[dim],
                 ranges, strides, result
@@ -267,13 +254,13 @@ class Tensor:
                 raise ValueError(
                     f"Cannot assign to {self.ndim}D tensor with single integer"
                 )
-            idx = self._calculate_index((key,))
+            idx = self._indices_to_flat_index((key,))
             self._data[idx] = value
             self._version += 1
             return
 
         if isinstance(key, tuple):
-            idx = self._calculate_index(key)
+            idx = self._indices_to_flat_index(key)
             self._data[idx] = value
             self._version += 1
             return
@@ -290,11 +277,11 @@ class Tensor:
             return f"Tensor({list(self._data)}, shape={self.shape}, dtype='{dtype_str}')"
 
         # Build recursive representation for N-dim
-        lines = self._repr_recursive(0, 0)
+        lines = self._format_nested_repr(0, 0)
         bracket_repr = "[\n" + "\n".join(lines) + "\n]"
         return f"Tensor(\n{bracket_repr},\n shape={self.shape}, dtype='{dtype_str}'\n)"
 
-    def _repr_recursive(self, dim: int, offset: int) -> list:
+    def _format_nested_repr(self, dim: int, offset: int) -> list:
         """Build repr lines recursively for N-dimensional display."""
         indent = "  " * dim
         stride = 1
@@ -311,7 +298,7 @@ class Tensor:
         # Recurse into sub-blocks
         lines = []
         for i in range(self.shape[dim]):
-            sub_lines = self._repr_recursive(dim + 1, offset + i * stride)
+            sub_lines = self._format_nested_repr(dim + 1, offset + i * stride)
             if dim == 0:
                 lines.extend(sub_lines)
             else:
