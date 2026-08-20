@@ -28,6 +28,20 @@ class ConcatTests(unittest.TestCase):
         self.assertEqual(result.shape, (1, 4))
         self.assertEqual(result.tolist(), [1.0, 2.0, 3.0, 4.0])
 
+    def test_concat_promotes_mixed_input_dtypes(self):
+        left = ts.Tensor([1], dtype=ts.int32)
+        right = ts.Tensor([2.5], dtype=ts.float64)
+
+        result = ts.concat([left, right])
+
+        self.assertIs(result.dtype, ts.float64)
+        self.assertEqual(result.tolist(), [1.0, 2.5])
+
+        reverse = ts.concat([right, left])
+
+        self.assertIs(reverse.dtype, ts.float64)
+        self.assertEqual(reverse.tolist(), [2.5, 1.0])
+
     def test_concat_validates_input_shapes(self):
         with self.assertRaisesRegex(ValueError, "non-concat"):
             ts.concat([ts.Tensor([[1, 2]]), ts.Tensor([[3], [4]])], axis=1)

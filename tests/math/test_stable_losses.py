@@ -57,6 +57,14 @@ class StableLossTests(unittest.TestCase):
         self.assertValuesAlmostEqual(first.data.tolist(), expected)
         self.assertValuesAlmostEqual(second.tolist(), [0.0, 0.0, 0.0])
 
+    def test_logsumexp_create_graph_handles_positive_infinity(self):
+        value = ts.Variable([math.inf, 1.0])
+        output = ts.logsumexp(value)
+
+        first = ts.grad(output, value, create_graph=True)
+
+        self.assertValuesAlmostEqual(first.data.tolist(), [1.0, 0.0])
+
     def test_log_softmax_is_stable_and_normalized(self):
         result = ts.log_softmax(
             ts.Tensor([[1000.0, 1001.0], [-1001.0, -1000.0]]),

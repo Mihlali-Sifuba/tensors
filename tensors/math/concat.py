@@ -6,6 +6,7 @@ from array import array
 from collections.abc import Sequence
 from typing import Any, List
 
+from ..dtype import result_dtype
 from ..tensor import Tensor
 
 
@@ -57,14 +58,22 @@ class Concat:
         for dimension in reference.shape[:axis]:
             groups *= dimension
 
-        values = array(reference.dtype.typecode, [])
+        dtype = reference.dtype
+        for tensor in converted[1:]:
+            dtype = result_dtype(dtype, tensor)
+
+        promoted = [
+            tensor if tensor.dtype == dtype else tensor.astype(dtype)
+            for tensor in converted
+        ]
+        values = array(dtype.typecode, [])
         for group in range(groups):
-            for tensor in converted:
+            for tensor in promoted:
                 count = tensor.shape[axis] * trailing_size
                 start = group * count
                 values.extend(tensor._data[start:start + count])
 
-        return Tensor(values, dtype=reference.dtype, shape=tuple(output_shape))
+        return Tensor(values, dtype=dtype, shape=tuple(output_shape))
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
