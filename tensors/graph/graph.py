@@ -230,7 +230,9 @@ class Graph:
 
     @staticmethod
     def _function_values(function: Callable[..., Any]) -> Iterator[Any]:
-        """Yield Variables and child Graphs referenced by a function body."""
+        """Yield Variables and child Graphs captured by a function."""
         closure = getclosurevars(function)
         yield from closure.nonlocals.values()
         yield from closure.globals.values()
+        yield from (function.__defaults__ or ())
+        yield from (function.__kwdefaults__ or {}).values()
