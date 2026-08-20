@@ -1,5 +1,6 @@
 import unittest
 import gc
+import threading
 import weakref
 
 import tensors as ts
@@ -182,6 +183,47 @@ class GraphTests(unittest.TestCase):
             _ = model.computation
         self.assertEqual(ts.grad(result, model.weight).tolist(), [3.0])
         self.assertEqual(model(ts.Tensor([4.0])).data.tolist(), [8.0])
+
+    def test_same_graph_keeps_latest_computation_per_thread(self):
+        class Scale(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.weight = ts.Variable([2.0])
+
+            def forward(self, value):
+                return value * self.weight
+
+        model = Scale()
+        barrier = threading.Barrier(2)
+        results = {}
+        errors = []
+        results_lock = threading.Lock()
+
+        def run(name, value):
+            try:
+                output = model(ts.Tensor([value]))
+                barrier.wait(timeout=5)
+                with results_lock:
+                    results[name] = (output, model.computation.output)
+            except BaseException as exc:
+                with results_lock:
+                    errors.append(exc)
+
+        workers = [
+            threading.Thread(target=run, args=("first", 3.0)),
+            threading.Thread(target=run, args=("second", 4.0)),
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=5)
+
+        self.assertFalse(any(worker.is_alive() for worker in workers))
+        if errors:
+            self.fail(f"threaded graph execution failed: {errors!r}")
+        self.assertEqual(set(results), {"first", "second"})
+        for output, recorded_output in results.values():
+            self.assertIs(output, recorded_output)
 
 
 if __name__ == "__main__":

@@ -196,7 +196,11 @@ for recomputation and differentiation.
 `GraphState.clear()` forgets its current registrations without invalidating
 any live output. `Graph.release()` drops a reusable Graph object's references
 to its most recent outputs and computations; retained output Variables remain
-valid, and calling the Graph again records a fresh computation.
+valid, and calling the Graph again records a fresh computation. A `Graph`
+keeps this latest execution metadata per thread, so concurrent calls on the
+same graph do not overwrite one another's `computation`, `nodes`, or `edges`.
+Parameters and other mutable attributes are still shared Python state and
+must be synchronized separately if callers modify them concurrently.
 
 `Computation` calculates its dependency-first node order once at construction
 and reuses the immutable cached order for forward and backward passes. Call
