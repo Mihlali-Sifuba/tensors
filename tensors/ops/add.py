@@ -2,9 +2,10 @@
 
 from typing import List, Union
 
-from ..tensor import Tensor, _broadcast_tensors
 from ..dtype import result_dtype
-from ._utils import unbroadcast
+from ..tensor import Tensor
+from ..utils.broadcasting import broadcast_tensors
+from ._utils import sum_to_shape
 
 
 Scalar = Union[int, float]
@@ -21,7 +22,7 @@ class Add:
             data = [x + b for x in a._data]
             return Tensor(data, dtype=dtype, shape=a.shape)
         if isinstance(b, Tensor):
-            a, b = _broadcast_tensors(a, b)
+            a, b = broadcast_tensors(a, b)
             data = [x + y for x, y in zip(a._data, b._data)]
             return Tensor(data, dtype=dtype, shape=a.shape)
         raise TypeError(f"Unsupported: {type(b)}")
@@ -31,7 +32,7 @@ class Add:
         if len(inputs) == 1:
             return [grad]
         left, right = inputs
-        return [unbroadcast(grad, left.shape), unbroadcast(grad, right.shape)]
+        return [sum_to_shape(grad, left.shape), sum_to_shape(grad, right.shape)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
@@ -39,8 +40,8 @@ class Add:
         if len(inputs) == 1:
             return [grad]
         left, right = inputs
-        from ._utils import unbroadcast_graph
+        from ._utils import sum_to_shape_graph
         return [
-            unbroadcast_graph(grad, left.shape),
-            unbroadcast_graph(grad, right.shape),
+            sum_to_shape_graph(grad, left.shape),
+            sum_to_shape_graph(grad, right.shape),
         ]

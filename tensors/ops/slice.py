@@ -2,7 +2,8 @@
 
 from typing import List
 
-from ..tensor import Tensor, _shape_size
+from ..tensor import Tensor
+from ..utils.shape import shape_size
 
 
 def _flat_indices(tensor: Tensor, key) -> List[int]:
@@ -74,7 +75,7 @@ class SliceScatter:
 
     @staticmethod
     def forward(grad: Tensor, source_shape: tuple[int, ...], key) -> Tensor:
-        template = Tensor([0.0] * _shape_size(source_shape), dtype=grad.dtype, shape=source_shape)
+        template = Tensor([0.0] * shape_size(source_shape), dtype=grad.dtype, shape=source_shape)
         selected = _flat_indices(template, key)
         if len(selected) != grad.size:
             raise ValueError(

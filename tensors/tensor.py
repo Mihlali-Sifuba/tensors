@@ -2,92 +2,7 @@ from array import array
 from typing import Iterable, Union, List, Tuple, Optional
 
 from . import dtype as _dtype
-
-
-def _shape_size(shape: Tuple[int, ...]) -> int:
-    """Return the number of elements described by ``shape``."""
-    size = 1
-    for dimension in shape:
-        size *= dimension
-    return size
-
-
-def _strides(shape: Tuple[int, ...]) -> Tuple[int, ...]:
-    """Return row-major strides for ``shape``."""
-    stride = 1
-    strides = []
-    for dimension in reversed(shape):
-        strides.append(stride)
-        stride *= dimension
-    return tuple(reversed(strides))
-
-
-def _coordinates(index: int, shape: Tuple[int, ...]) -> Tuple[int, ...]:
-    """Convert a row-major flat index to coordinates for ``shape``."""
-    coordinates = []
-    for dimension, stride in zip(shape, _strides(shape)):
-        coordinate = index // stride
-        coordinates.append(coordinate)
-        index %= stride
-    return tuple(coordinates)
-
-
-def _flat_index(coordinates: Tuple[int, ...], shape: Tuple[int, ...]) -> int:
-    """Convert row-major coordinates to a flat index."""
-    return sum(
-        coordinate * stride
-        for coordinate, stride in zip(coordinates, _strides(shape))
-    )
-
-
-def _broadcast_shape(a_shape: Tuple[int, ...], b_shape: Tuple[int, ...]) -> Tuple[int, ...]:
-    """Return the NumPy-style broadcast shape for two tensor shapes."""
-    dimensions = []
-    for a_dimension, b_dimension in zip(reversed(a_shape), reversed(b_shape)):
-        if a_dimension == b_dimension:
-            dimensions.append(a_dimension)
-        elif a_dimension == 1:
-            dimensions.append(b_dimension)
-        elif b_dimension == 1:
-            dimensions.append(a_dimension)
-        else:
-            raise ValueError(f"Shapes {a_shape} and {b_shape} cannot be broadcast")
-
-    longer_shape = a_shape if len(a_shape) > len(b_shape) else b_shape
-    matched_dimensions = min(len(a_shape), len(b_shape))
-    dimensions.extend(reversed(longer_shape[:len(longer_shape) - matched_dimensions]))
-    return tuple(reversed(dimensions))
-
-
-def _broadcast_to(tensor: 'Tensor', shape: Tuple[int, ...]) -> 'Tensor':
-    """Return ``tensor`` expanded to ``shape`` using singleton dimensions."""
-    if tensor.shape == shape:
-        return tensor
-    if len(tensor.shape) > len(shape):
-        raise ValueError(f"Shape {tensor.shape} cannot be broadcast to {shape}")
-
-    padded_shape = (1,) * (len(shape) - tensor.ndim) + tensor.shape
-    for source_dimension, target_dimension in zip(padded_shape, shape):
-        if source_dimension not in {1, target_dimension}:
-            raise ValueError(f"Shape {tensor.shape} cannot be broadcast to {shape}")
-
-    values = []
-    padding = len(shape) - tensor.ndim
-    for output_index in range(_shape_size(shape)):
-        output_coordinates = _coordinates(output_index, shape)
-        source_coordinates = tuple(
-            0 if source_dimension == 1 else coordinate
-            for source_dimension, coordinate in zip(padded_shape, output_coordinates)
-        )[padding:]
-        values.append(tensor._data[_flat_index(source_coordinates, tensor.shape)])
-
-    return Tensor(values, dtype=tensor.dtype, shape=shape)
-
-
-def _broadcast_tensors(a: 'Tensor', b: 'Tensor') -> Tuple['Tensor', 'Tensor']:
-    """Broadcast two tensors to a shared NumPy-style shape."""
-    shape = _broadcast_shape(a.shape, b.shape)
-    return _broadcast_to(a, shape), _broadcast_to(b, shape)
+from .utils.shape import coordinates_to_index, shape_size
 
 
 class Tensor:
@@ -232,10 +147,7 @@ class Tensor:
 
     def _get_total_elements(self) -> int:
         """Calculate total number of elements from shape."""
-        total = 1
-        for dim in self.shape:
-            total *= dim
-        return total
+        return shape_size(self.shape)
 
     def _calculate_index(self, indices: Tuple[int, ...]) -> int:
         """Convert N-dimensional indices to flat index (row-major order)."""
@@ -244,19 +156,15 @@ class Tensor:
                 f"Expected {self.ndim} indices, got {len(indices)}"
             )
 
-        flat_idx = 0
+        normalized_indices = []
         for i, idx in enumerate(indices):
             if idx < 0:
                 idx += self.shape[i]
             if not (0 <= idx < self.shape[i]):
                 raise IndexError("Index out of range")
-            # Stride = product of all remaining dimensions
-            stride = 1
-            for j in range(i + 1, self.ndim):
-                stride *= self.shape[j]
-            flat_idx += idx * stride
+            normalized_indices.append(idx)
 
-        return flat_idx
+        return coordinates_to_index(tuple(normalized_indices), self.shape)
 
     def __getitem__(self, key):
         """

@@ -2,9 +2,10 @@
 
 from typing import List, Union
 
-from ..tensor import Tensor, _broadcast_tensors
 from ..dtype import result_dtype
-from ._utils import unbroadcast
+from ..tensor import Tensor
+from ..utils.broadcasting import broadcast_tensors
+from ._utils import sum_to_shape
 
 
 Scalar = Union[int, float]
@@ -21,7 +22,7 @@ class Mul:
             data = [x * b for x in a._data]
             return Tensor(data, dtype=dtype, shape=a.shape)
         if isinstance(b, Tensor):
-            a, b = _broadcast_tensors(a, b)
+            a, b = broadcast_tensors(a, b)
             data = [x * y for x, y in zip(a._data, b._data)]
             return Tensor(data, dtype=dtype, shape=a.shape)
         raise TypeError(f"Unsupported: {type(b)}")
@@ -30,7 +31,7 @@ class Mul:
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         if len(inputs) == 2:
             a, b = inputs
-            expanded_a, expanded_b = _broadcast_tensors(a, b)
+            expanded_a, expanded_b = broadcast_tensors(a, b)
             da = Tensor(
                 [g * y for g, y in zip(grad._data, expanded_b._data)],
                 dtype=grad.dtype,
@@ -41,7 +42,7 @@ class Mul:
                 dtype=grad.dtype,
                 shape=grad.shape,
             )
-            return [unbroadcast(da, a.shape), unbroadcast(db, b.shape)]
+            return [sum_to_shape(da, a.shape), sum_to_shape(db, b.shape)]
         scalar = kwargs.get("scalar", 1.0)
         assert isinstance(scalar, (int, float))
         return [Tensor([g * scalar for g in grad._data], dtype=grad.dtype, shape=grad.shape)]
@@ -53,8 +54,8 @@ class Mul:
             scalar = kwargs.get("scalar", 1.0)
             return [grad * scalar]
         left, right = inputs
-        from ._utils import unbroadcast_graph
+        from ._utils import sum_to_shape_graph
         return [
-            unbroadcast_graph(grad * right, left.shape),
-            unbroadcast_graph(grad * left, right.shape),
+            sum_to_shape_graph(grad * right, left.shape),
+            sum_to_shape_graph(grad * left, right.shape),
         ]

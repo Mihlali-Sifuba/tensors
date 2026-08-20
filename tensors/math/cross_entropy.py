@@ -6,14 +6,13 @@ import math
 from typing import Any, List, Literal
 
 from ..dtype import result_dtype
-from ..ops._utils import unbroadcast, unbroadcast_graph
-from ..tensor import (
-    Tensor,
-    _broadcast_shape,
-    _broadcast_tensors,
-    _coordinates,
-    _flat_index,
-    _shape_size,
+from ..ops._utils import sum_to_shape, sum_to_shape_graph
+from ..tensor import Tensor
+from ..utils.broadcasting import broadcast_shape, broadcast_tensors
+from ..utils.shape import (
+    coordinates_to_index,
+    index_to_coordinates,
+    shape_size,
 )
 from ._reduction import keepdims_shape, reduction_groups
 from .log_softmax import LogSoftmax, log_softmax
@@ -41,7 +40,7 @@ def _tensor(value: Any) -> Tensor:
 def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:
     """Expand one class index per sample into dense target distributions."""
     sample_shape = logits.shape[:axis] + logits.shape[axis + 1:]
-    sample_count = _shape_size(sample_shape)
+    sample_count = shape_size(sample_shape)
     scalar_target = sample_shape == () and targets.size == 1
     if targets.shape != sample_shape and not scalar_target:
         raise ValueError(
@@ -60,13 +59,13 @@ def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:
             raise ValueError(
                 f"Class index {class_index} is outside [0, {class_count})"
             )
-        sample_coordinates = _coordinates(sample_index, sample_shape)
+        sample_coordinates = index_to_coordinates(sample_index, sample_shape)
         coordinates = (
             sample_coordinates[:axis]
             + (class_index,)
             + sample_coordinates[axis:]
         )
-        values[_flat_index(coordinates, logits.shape)] = 1.0
+        values[coordinates_to_index(coordinates, logits.shape)] = 1.0
     return Tensor(values, dtype=logits.dtype, shape=logits.shape)
 
 
@@ -87,7 +86,7 @@ def _targets_for_logits(logits: Any, targets: Any, axis: int) -> Any:
         prepared = _one_hot_targets(logits_tensor, target_tensor, axis)
     else:
         try:
-            broadcast_shape = _broadcast_shape(
+            target_shape = broadcast_shape(
                 target_tensor.shape,
                 logits_tensor.shape,
             )
@@ -96,7 +95,7 @@ def _targets_for_logits(logits: Any, targets: Any, axis: int) -> Any:
                 f"Target shape {target_tensor.shape} is neither class-index shaped "
                 f"nor broadcastable to logits shape {logits_tensor.shape}"
             ) from exc
-        if broadcast_shape != logits_tensor.shape:
+        if target_shape != logits_tensor.shape:
             raise ValueError(
                 f"Target shape {target_tensor.shape} cannot broadcast to "
                 f"logits shape {logits_tensor.shape}"
@@ -139,7 +138,7 @@ class CrossEntropy:
     ) -> Tensor:
         _validate_reduction(reduction)
         axis = _normalize_axis(logits, axis)
-        logits, targets = _broadcast_tensors(logits, targets)
+        logits, targets = broadcast_tensors(logits, targets)
         _validate_distributions(targets, axis)
         log_probabilities = LogSoftmax.forward(logits, axis=axis)
         _, output_shape, groups = reduction_groups(
@@ -177,7 +176,7 @@ class CrossEntropy:
         _validate_reduction(reduction)
         axis = _normalize_axis(logits, axis)
 
-        expanded_logits, expanded_targets = _broadcast_tensors(logits, targets)
+        expanded_logits, expanded_targets = broadcast_tensors(logits, targets)
         _validate_distributions(expanded_targets, axis)
         probabilities = Softmax.forward(expanded_logits, axis=axis)
         log_probabilities = LogSoftmax.forward(expanded_logits, axis=axis)
@@ -218,11 +217,11 @@ class CrossEntropy:
 
         expanded_shape = expanded_logits.shape
         return [
-            unbroadcast(
+            sum_to_shape(
                 Tensor(logits_gradient, dtype=grad.dtype, shape=expanded_shape),
                 logits.shape,
             ),
-            unbroadcast(
+            sum_to_shape(
                 Tensor(targets_gradient, dtype=grad.dtype, shape=expanded_shape),
                 targets.shape,
             ),
@@ -255,13 +254,13 @@ class CrossEntropy:
             upstream = grad
             if reduction == "mean":
                 sample_shape = logits.shape[:axis] + logits.shape[axis + 1:]
-                sample_count = _shape_size(sample_shape)
+                sample_count = shape_size(sample_shape)
                 if sample_count:
                     upstream = upstream / sample_count
 
         return [
-            unbroadcast_graph(upstream * logits_derivative, logits.shape),
-            unbroadcast_graph(upstream * targets_derivative, targets.shape),
+            sum_to_shape_graph(upstream * logits_derivative, logits.shape),
+            sum_to_shape_graph(upstream * targets_derivative, targets.shape),
         ]
 
 
