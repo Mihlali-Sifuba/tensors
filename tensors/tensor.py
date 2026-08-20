@@ -1,4 +1,5 @@
 from array import array
+from itertools import product
 from typing import Iterable, Union, List, Tuple, Optional
 
 from . import dtype as _dtype
@@ -198,8 +199,11 @@ class Tensor:
 
         raise TypeError(f"Unsupported index type: {type(key)}")
 
-    def _slice_from_key(self, key: tuple):
-        """General N-dimensional slicing with mixed ints and slices."""
+    def _slice_ranges_and_shape_from_key(
+        self,
+        key: Tuple[Union[int, slice], ...],
+    ) -> Tuple[List[range], Tuple[int, ...]]:
+        """Normalize a slice key into dimension ranges and its result shape."""
         if len(key) > self.ndim:
             raise IndexError(
                 f"Too many indices: {len(key)} for {self.ndim}D tensor"
@@ -231,22 +235,30 @@ class Tensor:
             ranges.append(dim_range)
             new_shape.append(self.shape[dim_idx])
 
+        return ranges, tuple(new_shape)
+
+    def _slice_from_key(
+        self,
+        key: Tuple[Union[int, slice], ...],
+    ) -> 'Tensor':
+        """Return an N-dimensional slice selected by mixed ints and slices."""
+        ranges, new_shape = self._slice_ranges_and_shape_from_key(key)
         strides = row_major_strides(self.shape)
 
         # Extract data by iterating over all index combinations
         result_data = self._create_storage([])
         self._collect_slice_values(0, 0, ranges, strides, result_data)
 
-        return Tensor(result_data, dtype=self.dtype, shape=tuple(new_shape))
+        return Tensor(result_data, dtype=self.dtype, shape=new_shape)
 
     def _collect_slice_values(
         self,
         dim: int,
         flat_offset: int,
-        ranges: list,
+        ranges: List[range],
         strides: Tuple[int, ...],
         result: array,
-    ):
+    ) -> None:
         """Recursively iterate over N-dimensional index ranges."""
         if dim == len(ranges):
             result.append(self._data[flat_offset])
@@ -259,8 +271,85 @@ class Tensor:
                 ranges, strides, result
             )
 
-    def __setitem__(self, key, value):
+    def _flat_indices_from_ranges(
+        self,
+        ranges: List[range],
+        strides: Tuple[int, ...],
+    ) -> List[int]:
+        """Return row-major flat indices selected by dimension ranges."""
+        return [
+            sum(
+                coordinate * stride
+                for coordinate, stride in zip(coordinates, strides)
+            )
+            for coordinates in product(*ranges)
+        ]
+
+    def _slice_assignment_values(
+        self,
+        value: Union[int, float, List, 'Tensor', array],
+        selection_shape: Tuple[int, ...],
+    ) -> array:
+        """Validate and materialize values for an in-place slice assignment."""
+        selection_size = shape_size(selection_shape)
+        if isinstance(value, (int, float)):
+            return self._create_storage([value] * selection_size)
+
+        if not isinstance(value, (Tensor, list, array)):
+            raise TypeError(
+                f"Slice assignment value must be a number, list, array or Tensor, "
+                f"got {type(value)}"
+            )
+
+        assignment = Tensor(value, dtype=self.dtype)
+        from .utils.broadcasting import broadcast_to
+
+        try:
+            assignment = broadcast_to(assignment, selection_shape)
+        except ValueError as exc:
+            raise ValueError(
+                f"Cannot assign shape {assignment.shape} "
+                f"to slice shape {selection_shape}"
+            ) from exc
+
+        return self._create_storage(assignment._data)
+
+    def _assign_slice_from_key(
+        self,
+        key: Tuple[Union[int, slice], ...],
+        value: Union[int, float, List, 'Tensor', array],
+    ) -> None:
+        """Assign a scalar or broadcast-compatible values to a tensor slice."""
+        ranges, selection_shape = self._slice_ranges_and_shape_from_key(key)
+        flat_indices = self._flat_indices_from_ranges(
+            ranges,
+            row_major_strides(self.shape),
+        )
+        assignment_values = self._slice_assignment_values(
+            value,
+            selection_shape,
+        )
+
+        if len(assignment_values) != len(flat_indices):
+            raise ValueError(
+                f"Slice assignment has {len(assignment_values)} values; "
+                f"expected {len(flat_indices)}"
+            )
+
+        for flat_index, assignment_value in zip(flat_indices, assignment_values):
+            self._data[flat_index] = assignment_value
+        self._version += 1
+
+    def __setitem__(
+        self,
+        key: Union[int, slice, Tuple[Union[int, slice], ...]],
+        value: Union[int, float, List, 'Tensor', array],
+    ) -> None:
         """Support item assignment for N-dimensional tensors."""
+        if isinstance(key, slice):
+            self._assign_slice_from_key((key,), value)
+            return
+
         if isinstance(key, int):
             if self.ndim != 1:
                 raise ValueError(
@@ -272,6 +361,10 @@ class Tensor:
             return
 
         if isinstance(key, tuple):
+            if any(isinstance(part, slice) for part in key):
+                self._assign_slice_from_key(key, value)
+                return
+
             idx = self._indices_to_flat_index(key)
             self._data[idx] = value
             self._version += 1

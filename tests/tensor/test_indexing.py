@@ -114,6 +114,56 @@ class TensorIndexingTests(unittest.TestCase):
 
         self.assertEqual(tensor.tolist(), [1.0, 2.0, 3.0, 40.0])
 
+    def test_setitem_assigns_values_to_1d_slice(self):
+        tensor = ts.Tensor([1, 2, 3, 4], dtype=ts.float32)
+
+        tensor[1:3] = [8, 9]
+
+        self.assertEqual(tensor.tolist(), [1.0, 8.0, 9.0, 4.0])
+        self.assertIs(tensor.dtype, ts.float32)
+
+    def test_setitem_broadcasts_scalar_to_nd_slice(self):
+        tensor = ts.Tensor([[1, 2, 3], [4, 5, 6]])
+
+        tensor[:, 0] = 9
+
+        self.assertEqual(tensor.tolist(), [9.0, 2.0, 3.0, 9.0, 5.0, 6.0])
+
+    def test_setitem_assigns_values_to_mixed_nd_slice(self):
+        tensor = ts.Tensor([[1, 2, 3], [4, 5, 6]])
+
+        tensor[0, 1:3] = [7, 8]
+
+        self.assertEqual(tensor.tolist(), [1.0, 7.0, 8.0, 4.0, 5.0, 6.0])
+
+    def test_setitem_supports_strided_and_negative_slices(self):
+        tensor = ts.Tensor([1, 2, 3, 4])
+
+        tensor[-4::2] = [10, 30]
+
+        self.assertEqual(tensor.tolist(), [10.0, 2.0, 30.0, 4.0])
+
+    def test_setitem_broadcasts_compatible_value_shape(self):
+        tensor = ts.Tensor([[1, 2, 3], [4, 5, 6]])
+
+        tensor[:, 1:] = [8, 9]
+
+        self.assertEqual(tensor.tolist(), [1.0, 8.0, 9.0, 4.0, 8.0, 9.0])
+
+    def test_setitem_rejects_incompatible_slice_value_shape(self):
+        tensor = ts.Tensor([1, 2, 3, 4])
+
+        with self.assertRaisesRegex(ValueError, "Cannot assign shape"):
+            tensor[1:3] = [7, 8, 9]
+
+        self.assertEqual(tensor.tolist(), [1.0, 2.0, 3.0, 4.0])
+
+    def test_setitem_rejects_out_of_range_integer_in_slice_key(self):
+        tensor = ts.Tensor([[1, 2], [3, 4]])
+
+        with self.assertRaisesRegex(IndexError, "Index out of range"):
+            tensor[2, :] = 0
+
     def test_setitem_rejects_single_index_for_nd_tensor(self):
         with self.assertRaisesRegex(ValueError, "Cannot assign"):
             ts.Tensor([[1, 2]])[0] = 99
