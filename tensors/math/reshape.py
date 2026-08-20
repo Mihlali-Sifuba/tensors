@@ -3,6 +3,7 @@
 from typing import Any, List, Tuple
 
 from ..tensor import Tensor
+from ..utils.shape import shape_size
 
 
 class Reshape:
@@ -10,13 +11,12 @@ class Reshape:
 
     @staticmethod
     def forward(tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
-        total = tensor._get_total_elements()
-        new_total = 1
-        for dim in shape:
-            new_total *= dim
-        if total != new_total:
+        current_element_count = shape_size(tensor.shape)
+        requested_element_count = shape_size(shape)
+        if current_element_count != requested_element_count:
             raise ValueError(
-                f"Cannot reshape tensor of size {total} to shape {shape}"
+                f"Cannot reshape tensor of size {current_element_count} "
+                f"to shape {shape}"
             )
         return Tensor(tensor._data, dtype=tensor.dtype, shape=shape)
 

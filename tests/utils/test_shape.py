@@ -3,12 +3,20 @@ import unittest
 from tensors.utils.shape import (
     coordinates_to_index,
     index_to_coordinates,
+    normalize_shape,
     row_major_strides,
     shape_size,
 )
 
 
 class ShapeUtilityTests(unittest.TestCase):
+    def test_normalize_shape_returns_an_immutable_tuple(self):
+        self.assertEqual(normalize_shape([2, 3]), (2, 3))
+
+    def test_normalize_shape_rejects_non_iterable_input(self):
+        with self.assertRaisesRegex(TypeError, "shape must be an iterable"):
+            normalize_shape(2)
+
     def test_shape_size_multiplies_dimensions(self):
         self.assertEqual(shape_size((2, 3, 4)), 24)
 
