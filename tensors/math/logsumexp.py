@@ -84,10 +84,34 @@ class LogSumExp:
         """Build a differentiable log-sum-exp VJP."""
         from .exp import exp
         from .reshape import reshape
+        from ..variable import Variable
 
         axis = kwargs.get("axis")
         keepdims = bool(kwargs.get("keepdims", False))
         value = inputs[0]
+
+        # ``inf - inf`` becomes NaN in the smooth expression below.  The
+        # first-order implementation already defines a stable subgradient at
+        # positive infinity, so preserve that convention here as a constant
+        # subgradient rather than manufacturing NaNs in a gradient graph.
+        _, _, groups = reduction_groups(
+            value.data,
+            axis,
+            keepdims=False,
+            scalar_as_vector=True,
+        )
+        if any(
+            group and max(float(value.data._data[index]) for index in group) == math.inf
+            for group in groups
+        ):
+            numerical_gradient = LogSumExp.backward(
+                grad.data,
+                value.data,
+                axis=axis,
+                keepdims=keepdims,
+            )[0]
+            return [Variable(numerical_gradient, requires_grad=False)]
+
         normalizer = logsumexp(value, axis=axis, keepdims=True)
         expanded_grad = (
             grad
