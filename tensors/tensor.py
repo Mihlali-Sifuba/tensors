@@ -2,6 +2,7 @@ from array import array
 from typing import Iterable, Union, List, Tuple, Optional
 
 from . import dtype as _dtype
+from .casting import cast_values
 from .utils.shape import (
     coordinates_to_index,
     normalize_shape,
@@ -374,12 +375,17 @@ class Tensor:
         """Return a copy converted to a new dtype."""
         if isinstance(dtype, str):
             dtype = _dtype.from_typecode(dtype)
-        if dtype.typecode in {"b", "B", "h", "i", "q"}:
-            values = [int(x) for x in self._data]
-        elif dtype.typecode in {"f", "d"}:
-            values = [float(x) for x in self._data]
-        else:
-            values = list(self._data)
+
+        if not isinstance(dtype, _dtype.DataType):
+            raise TypeError(
+                f"dtype must be a DataType, typecode or dtype string, got {type(dtype)}"
+            )
+
+        values = cast_values(
+            self._data,
+            source_dtype=self.dtype,
+            target_dtype=dtype,
+        )
         return Tensor(values, dtype=dtype, shape=self.shape)
 
     def item(self) -> Union[int, float]:

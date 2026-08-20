@@ -101,6 +101,12 @@ class TensorConstructionTests(unittest.TestCase):
 
         self.assertIs(tensor.astype("float32").dtype, ts.float32)
 
+    def test_astype_rejects_non_dtype_object(self):
+        tensor = ts.Tensor([1, 2, 3])
+
+        with self.assertRaisesRegex(TypeError, "dtype must be"):
+            tensor.astype(object())
+
     def test_astype_truncates_float_values_for_integer_dtype(self):
         tensor = ts.Tensor([1.9, -2.1])
 

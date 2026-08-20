@@ -53,6 +53,15 @@ class TensorDtypeTests(unittest.TestCase):
         self.assertEqual(ts.float32, "f")
         self.assertNotEqual(ts.float32, "d")
 
+    def test_dtype_reports_its_numeric_category(self):
+        for dtype in (ts.float64, ts.float32):
+            with self.subTest(dtype=dtype):
+                self.assertEqual(dtype.kind, "floating")
+
+        for dtype in (ts.int64, ts.int32, ts.int16, ts.int8, ts.uint8):
+            with self.subTest(dtype=dtype):
+                self.assertEqual(dtype.kind, "integer")
+
 
 if __name__ == "__main__":
     unittest.main()

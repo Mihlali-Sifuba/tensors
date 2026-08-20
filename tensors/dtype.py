@@ -49,6 +49,15 @@ class DataType:
         """Number of bytes per element."""
         return self._byte_size
 
+    @property
+    def kind(self) -> str:
+        """General numeric category: ``integer`` or ``floating``."""
+        if self.typecode in _INTEGER_CODES:
+            return "integer"
+        if self.typecode in _FLOAT_CODES:
+            return "floating"
+        raise TypeError(f"Unsupported dtype: {self.name}")
+
     # -- dunder methods --------------------------------------------------------
 
     def __repr__(self) -> str:
