@@ -28,6 +28,22 @@ class MutationSafetyTests(unittest.TestCase):
 
         self.assertEqual(value.version, 0)
 
+    def test_slice_assignment_increments_version_once(self):
+        value = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
+
+        value[:, 0] = 5.0
+
+        self.assertEqual(value.version, 1)
+
+    def test_failed_slice_assignment_is_atomic(self):
+        value = ts.Tensor([1, 2, 3], dtype=ts.int32)
+
+        with self.assertRaises(TypeError):
+            value[0:2] = [4, 5.5]
+
+        self.assertEqual(value.tolist(), [1, 2, 3])
+        self.assertEqual(value.version, 0)
+
     def test_clone_has_independent_storage_and_version(self):
         original = ts.Tensor([1.0])
         clone = original.clone()
