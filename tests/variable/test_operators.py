@@ -1,3 +1,4 @@
+import math
 import unittest
 
 import tensors as ts
@@ -63,6 +64,26 @@ class VariableOperatorTests(unittest.TestCase):
 
         self.assertFalse(frozen_only.requires_grad)
         self.assertTrue(mixed.requires_grad)
+
+    def test_tensor_left_operations_build_variable_graphs(self):
+        constant = ts.Tensor([3.0])
+        variable = ts.Variable([2.0])
+        cases = [
+            ("add", lambda: constant + variable, 5.0, 1.0),
+            ("subtract", lambda: constant - variable, 1.0, -1.0),
+            ("multiply", lambda: constant * variable, 6.0, 3.0),
+            ("divide", lambda: constant / variable, 1.5, -0.75),
+            ("power", lambda: constant ** variable, 9.0, 9.0 * math.log(3.0)),
+        ]
+
+        for name, operation, expected_value, expected_gradient in cases:
+            with self.subTest(operation=name):
+                result = operation()
+
+                self.assertIsInstance(result, ts.Variable)
+                self.assertAlmostEqual(result.data.item(), expected_value)
+                gradient = ts.grad(ts.sum(result), variable)
+                self.assertAlmostEqual(gradient.item(), expected_gradient)
 
 
 if __name__ == "__main__":

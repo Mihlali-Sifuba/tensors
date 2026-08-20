@@ -181,6 +181,9 @@ class Variable:
         )
 
     def __rtruediv__(self, other):
+        if isinstance(other, Tensor):
+            numerator = Variable(other, requires_grad=False)
+            return numerator / self
         return self._from_operation(
             Div.forward_reverse(self.data, other),
             "div",
@@ -213,6 +216,9 @@ class Variable:
         )
 
     def __rpow__(self, other):
+        if isinstance(other, Tensor):
+            base = Variable(other, requires_grad=False)
+            return base ** self
         if not isinstance(other, (int, float)):
             return NotImplemented
         return self._from_operation(

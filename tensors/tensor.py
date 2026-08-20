@@ -509,6 +509,9 @@ class Tensor:
 
     # ---------- Operator Overloads (delegate to ops) ----------
     def __add__(self, other):
+        from .variable import Variable
+        if isinstance(other, Variable):
+            return other.__radd__(self)
         from .ops import Ops
         return Ops.add(self, other)
 
@@ -516,6 +519,9 @@ class Tensor:
         return self + other
 
     def __sub__(self, other):
+        from .variable import Variable
+        if isinstance(other, Variable):
+            return other.__rsub__(self)
         from .ops import Ops
         return Ops.subtract(self, other)
 
@@ -523,6 +529,9 @@ class Tensor:
         return (-self) + other
 
     def __mul__(self, other):
+        from .variable import Variable
+        if isinstance(other, Variable):
+            return other.__rmul__(self)
         from .ops import Ops
         return Ops.multiply(self, other)
 
@@ -531,6 +540,9 @@ class Tensor:
         return Ops.multiply(self, other)
 
     def __truediv__(self, other):
+        from .variable import Variable
+        if isinstance(other, Variable):
+            return other.__rtruediv__(self)
         from .ops import Ops
         return Ops.divide(self, other)
 
@@ -540,6 +552,9 @@ class Tensor:
         return Ops.divide(numerator, self)
 
     def __pow__(self, other):
+        from .variable import Variable
+        if isinstance(other, Variable):
+            return other.__rpow__(self)
         from .ops import Pow
         return Pow.forward(self, other)
 
