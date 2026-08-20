@@ -47,6 +47,15 @@ class TensorOpsTests(unittest.TestCase):
 
         self.assertIs((left + right).dtype, ts.int64)
 
+    def test_mixed_uint8_and_int8_promotes_to_int16_in_both_orders(self):
+        unsigned = ts.Tensor([255], dtype=ts.uint8)
+        signed = ts.Tensor([1], dtype=ts.int8)
+
+        self.assertIs((unsigned + signed).dtype, ts.int16)
+        self.assertEqual((unsigned + signed).tolist(), [256])
+        self.assertIs((signed + unsigned).dtype, ts.int16)
+        self.assertEqual((signed + unsigned).tolist(), [256])
+
     def test_integer_tensor_plus_float_scalar_promotes_to_float64(self):
         result = ts.Tensor([1, 2], dtype=ts.int32) + 0.5
 

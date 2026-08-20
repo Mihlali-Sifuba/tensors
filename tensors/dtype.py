@@ -137,7 +137,12 @@ _FLOAT_CODES = {"f", "d"}
 _INTEGER_CODES = {"b", "B", "h", "i", "q"}
 
 
-def result_dtype(a_dtype, b=None, *, division=False):
+def result_dtype(
+    a_dtype: DataType,
+    b: Any = None,
+    *,
+    division: bool = False,
+) -> DataType:
     """Choose a predictable result dtype for the supported numeric types."""
     b_dtype = getattr(b, "dtype", None)
 
@@ -158,6 +163,9 @@ def result_dtype(a_dtype, b=None, *, division=False):
             return float64
         if "f" in codes:
             return float32
+        if "B" in codes:
+            signed_dtype = b_dtype if a_dtype.typecode == "B" else a_dtype
+            return int16 if signed_dtype.typecode == "b" else signed_dtype
         return a_dtype if a_dtype.size >= b_dtype.size else b_dtype
 
     if isinstance(b, float) and a_dtype.typecode in _INTEGER_CODES:
