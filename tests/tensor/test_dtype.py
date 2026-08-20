@@ -15,6 +15,23 @@ class TensorDtypeTests(unittest.TestCase):
         self.assertIs(tensor.dtype, ts.int32)
         self.assertEqual(tensor.tolist(), [1, 2, 3])
 
+    def test_dtype_can_be_requested_with_human_readable_name(self):
+        dtype_names = {
+            "float64": ts.float64,
+            "float32": ts.float32,
+            "int64": ts.int64,
+            "int32": ts.int32,
+            "int16": ts.int16,
+            "int8": ts.int8,
+            "uint8": ts.uint8,
+        }
+
+        for name, expected_dtype in dtype_names.items():
+            with self.subTest(name=name):
+                tensor = ts.Tensor([1, 2, 3], dtype=name)
+
+                self.assertIs(tensor.dtype, expected_dtype)
+
     def test_copy_can_convert_tensor_dtype(self):
         tensor = ts.Tensor([1, 2, 3], dtype=ts.int32)
 
