@@ -8,6 +8,8 @@ allows ``@Graph`` decorator use.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
+import threading
 from typing import Any
 from inspect import getclosurevars
 
@@ -16,12 +18,36 @@ from .computation import Computation
 from .state import TraceScope
 
 
+@dataclass
+class GraphExecutionState:
+    """Latest execution metadata for one Graph on one thread."""
+
+    outputs: Any = None
+    computations: tuple[Computation, ...] = ()
+    nodes: tuple[Any, ...] = ()
+    edges: tuple[Any, ...] = ()
+
+
+class GraphThreadState(threading.local):
+    """Thread-local storage with a typed Graph execution state."""
+
+    execution: GraphExecutionState | None
+
+    def __init__(self) -> None:
+        self.execution = None
+
+
 class Graph:
     """A callable differentiable model that records its latest computation.
 
     Every call executes ``forward`` eagerly and captures the Variables
     reachable from that call's output.  A subclass implements ``forward``;
     ``Graph(function)`` and ``@Graph`` provide the functional form.
+
+    Execution metadata is kept per thread, so concurrent callers do not
+    overwrite one another's latest computation.  Model parameters and other
+    user-owned mutable attributes remain shared by the normal Python object
+    rules and are not synchronized by this class.
     """
 
     def __init__(self, function: Callable[..., Any] | None = None) -> None:
@@ -29,10 +55,15 @@ class Graph:
             raise TypeError("Graph expects a callable function or no argument")
 
         self._function = function
-        self._outputs = None
-        self._computations: tuple[Computation, ...] = ()
-        self._nodes = ()
-        self._edges = ()
+        self._thread_state = GraphThreadState()
+
+    def _state(self) -> GraphExecutionState:
+        """Return this thread's latest execution metadata container."""
+        state = self._thread_state.execution
+        if state is None:
+            state = GraphExecutionState()
+            self._thread_state.execution = state
+        return state
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
         """Define a subclass model's eager computation."""
@@ -56,36 +87,39 @@ class Graph:
         """Release this Graph's references to its latest computation.
 
         Returned output Variables remain valid when retained by the caller.
-        The Graph can be called again to record a new computation.
+        The Graph can be called again to record a new computation.  Release
+        applies to the calling thread's latest execution.
         """
-        self._outputs = None
-        self._computations = ()
-        self._nodes = ()
-        self._edges = ()
+        state = self._state()
+        state.outputs = None
+        state.computations = ()
+        state.nodes = ()
+        state.edges = ()
 
     @property
     def nodes(self) -> list[Any]:
         """Nodes reachable from this graph's output variables."""
-        return list(self._nodes)
+        return list(self._state().nodes)
 
     @property
     def edges(self) -> list[Any]:
         """Edges reachable from this graph's output variables."""
-        return list(self._edges)
+        return list(self._state().edges)
 
     @property
     def computation(self) -> Computation:
         """Return the single computation produced by this graph."""
-        if not self._computations:
+        computations = self._state().computations
+        if not computations:
             raise RuntimeError("Graph has not been called yet")
-        if len(self._computations) != 1:
+        if len(computations) != 1:
             raise RuntimeError("Graph has multiple outputs; use computations")
-        return self._computations[0]
+        return computations[0]
 
     @property
     def computations(self) -> tuple[Computation, ...]:
         """Return computations for every flattened graph output."""
-        return self._computations
+        return self._state().computations
 
     def parameters(self) -> list[Variable]:
         """Return persistent trainable Variables owned by this graph.
@@ -145,9 +179,10 @@ class Graph:
                 "Graph.forward() must return a Variable or a tuple/list of Variables"
             )
 
-        self._outputs = outputs
-        self._computations = tuple(Computation(output) for output in output_vars)
-        self._nodes, self._edges = self._capture(self._computations)
+        state = self._state()
+        state.outputs = outputs
+        state.computations = tuple(Computation(output) for output in output_vars)
+        state.nodes, state.edges = self._capture(state.computations)
         return outputs
 
     @staticmethod
