@@ -139,21 +139,27 @@ class Tensor:
         return array(self.dtype.typecode, values)
 
     def _indices_to_flat_index(self, indices: Tuple[int, ...]) -> int:
-        """Convert N-dimensional indices to flat index (row-major order)."""
+        """Normalize tensor indices and convert them to a row-major flat index."""
         if len(indices) != self.ndim:
             raise IndexError(
                 f"Expected {self.ndim} indices, got {len(indices)}"
             )
 
         normalized_indices = []
-        for i, idx in enumerate(indices):
-            if idx < 0:
-                idx += self.shape[i]
-            if not (0 <= idx < self.shape[i]):
+        for index, dimension_size in zip(indices, self.shape):
+            normalized_index = (
+                index + dimension_size
+                if index < 0
+                else index
+            )
+            if not 0 <= normalized_index < dimension_size:
                 raise IndexError("Index out of range")
-            normalized_indices.append(idx)
+            normalized_indices.append(normalized_index)
 
-        return coordinates_to_index(tuple(normalized_indices), self.shape)
+        return coordinates_to_index(
+            tuple(normalized_indices),
+            self.shape,
+        )
 
     def __getitem__(self, key):
         """
