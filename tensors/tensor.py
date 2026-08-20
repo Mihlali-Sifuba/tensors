@@ -69,7 +69,8 @@ class Tensor:
         Args:
             data: The data to store (list, array, number, or another Tensor)
             dtype: Data type (e.g. ``float64``, ``float32``, ``int32``).
-                   Accepts a ``DataType`` or a raw array typecode string.
+                   Accepts a ``DataType``, a raw array typecode string, or a
+                   human-readable dtype name such as ``"float32"``.
                    Defaults to ``float64``.
             shape: Shape of the tensor. If None, inferred from data.
         """
@@ -86,7 +87,9 @@ class Tensor:
             dtype = _dtype.from_typecode(dtype)
 
         if not isinstance(dtype, _dtype.DataType):
-            raise TypeError(f"dtype must be a DataType or typecode, got {type(dtype)}")
+            raise TypeError(
+                f"dtype must be a DataType, typecode or dtype string, got {type(dtype)}"
+            )
         self._dtype = dtype
 
         # Handle different input types ----------------------------------

@@ -96,6 +96,11 @@ class TensorConstructionTests(unittest.TestCase):
 
         self.assertIs(tensor.astype("f").dtype, ts.float32)
 
+    def test_astype_with_human_readable_dtype_name(self):
+        tensor = ts.Tensor([1, 2, 3])
+
+        self.assertIs(tensor.astype("float32").dtype, ts.float32)
+
     def test_astype_truncates_float_values_for_integer_dtype(self):
         tensor = ts.Tensor([1.9, -2.1])
 

@@ -98,12 +98,25 @@ _TYPE_CODE_MAP = {
     "B": uint8,
 }
 
+_NAME_MAP = {
+    "float64": float64,
+    "float32": float32,
+    "int64": int64,
+    "int32": int32,
+    "int16": int16,
+    "int8": int8,
+    "uint8": uint8,
+}
+
 
 def from_typecode(code: str) -> DataType:
-    """Look up a :class:`DataType` by its ``array`` typecode string."""
+    """Look up a :class:`DataType` by its typecode or human-readable name."""
     dt = _TYPE_CODE_MAP.get(code)
     if dt is None:
-        raise ValueError(f"Unknown typecode: {code!r}")
+        dt = _NAME_MAP.get(code)
+    if dt is None:
+        raise ValueError(f"Unknown typecode or dtype name: {code!r}")
+
     return dt
 
 
