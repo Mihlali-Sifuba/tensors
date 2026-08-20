@@ -48,9 +48,13 @@ should not need to import internal operation or graph-node classes.
 ```text
 tensors/
 ├── __init__.py            # root public facade
-├── tensor.py              # Tensor storage, shapes, dtypes, indexing
+├── tensor.py              # Tensor storage, construction, dtypes, indexing
 ├── variable.py            # differentiable value type
 ├── dtype.py
+├── utils/                 # internal shape and broadcasting helpers
+│   ├── __init__.py
+│   ├── shape.py
+│   └── broadcasting.py
 ├── ops/                   # basic algebra only
 │   ├── __init__.py
 │   ├── add.py
@@ -110,6 +114,8 @@ The folders have deliberately narrow responsibilities:
 
 - `ops` contains basic algebra only: addition, subtraction, multiplication,
   division, and negation.
+- `utils` contains internal shape, row-major indexing, and broadcasting helpers.
+  It is not re-exported from the root package.
 - `linalg` contains linear-algebra operations such as dot products and matrix
   multiplication.
 - `math` contains all mathematical functions, including reductions and

@@ -2,7 +2,8 @@
 
 from typing import Optional, TypeAlias
 
-from ..tensor import Tensor, _coordinates, _flat_index, _shape_size
+from ..tensor import Tensor
+from ..utils.shape import coordinates_to_index, index_to_coordinates, shape_size
 
 
 Axis: TypeAlias = Optional[int | tuple[int, ...] | list[int]]
@@ -54,7 +55,7 @@ def reduction_shape(
 
 def reduction_size(shape: tuple[int, ...], axes: tuple[int, ...]) -> int:
     """Return the number of input values contributing to each output value."""
-    return _shape_size(tuple(shape[axis] for axis in axes))
+    return shape_size(tuple(shape[axis] for axis in axes))
 
 
 def reduction_groups(
@@ -67,13 +68,14 @@ def reduction_groups(
     """Group flat input indices by their corresponding reduction output."""
     axes = normalize_axes(value.ndim, axis)
     output_shape = reduction_shape(value.shape, axes, keepdims)
-    if scalar_as_vector and axis is None and not keepdims:
+    scalar_output_as_vector = scalar_as_vector and axis is None and not keepdims
+    if scalar_output_as_vector:
         output_shape = (1,)
-    groups = [[] for _ in range(_shape_size(output_shape))]
+    groups = [[] for _ in range(shape_size(output_shape))]
     axes_set = set(axes)
 
     for input_index in range(value.size):
-        input_coordinates = _coordinates(input_index, value.shape)
+        input_coordinates = index_to_coordinates(input_index, value.shape)
         if keepdims:
             output_coordinates = tuple(
                 0 if dimension in axes_set else coordinate
@@ -85,7 +87,9 @@ def reduction_groups(
                 for dimension, coordinate in enumerate(input_coordinates)
                 if dimension not in axes_set
             )
-        groups[_flat_index(output_coordinates, output_shape)].append(input_index)
+            if scalar_output_as_vector:
+                output_coordinates = (0,)
+        groups[coordinates_to_index(output_coordinates, output_shape)].append(input_index)
 
     return axes, output_shape, groups
 

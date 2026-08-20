@@ -1,11 +1,12 @@
-"""Shared shape helpers for differentiable algebra operations."""
+"""Shared gradient-shape helpers for differentiable operations."""
 
 from __future__ import annotations
 
-from ..tensor import Tensor, _coordinates, _flat_index, _shape_size
+from ..tensor import Tensor
+from ..utils.shape import coordinates_to_index, index_to_coordinates, shape_size
 
 
-def unbroadcast(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
+def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
     """Reduce a broadcasted ``gradient`` back to an input ``shape``.
 
     During a forward broadcast, a value can participate in several output
@@ -18,20 +19,20 @@ def unbroadcast(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
         raise ValueError(f"Cannot reduce gradient shape {gradient.shape} to {shape}")
 
     padded_shape = (1,) * (gradient.ndim - len(shape)) + shape
-    values = [0.0] * _shape_size(shape)
+    values = [0.0] * shape_size(shape)
     padding = gradient.ndim - len(shape)
     for index, value in enumerate(gradient._data):
-        gradient_coordinates = _coordinates(index, gradient.shape)
+        gradient_coordinates = index_to_coordinates(index, gradient.shape)
         source_coordinates = tuple(
             0 if source_dimension == 1 else coordinate
             for source_dimension, coordinate in zip(padded_shape, gradient_coordinates)
         )[padding:]
-        values[_flat_index(source_coordinates, shape)] += value
+        values[coordinates_to_index(source_coordinates, shape)] += value
 
     return Tensor(values, dtype=gradient.dtype, shape=shape)
 
 
-def unbroadcast_graph(gradient, shape: tuple[int, ...]):
+def sum_to_shape_graph(gradient, shape: tuple[int, ...]):
     """Differentiably reduce a broadcasted Variable back to ``shape``."""
     from ..math import reshape, sum
 
@@ -51,4 +52,4 @@ def unbroadcast_graph(gradient, shape: tuple[int, ...]):
     return reshape(reduced, shape) if reduced.shape != shape else reduced
 
 
-__all__ = ["unbroadcast", "unbroadcast_graph"]
+__all__ = ["sum_to_shape", "sum_to_shape_graph"]

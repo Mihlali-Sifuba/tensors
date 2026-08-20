@@ -6,8 +6,9 @@ import math
 from typing import Any, List, Union
 
 from ..dtype import float64, result_dtype
-from ..tensor import Tensor, _broadcast_tensors
-from ._utils import unbroadcast, unbroadcast_graph
+from ..tensor import Tensor
+from ..utils.broadcasting import broadcast_tensors
+from ._utils import sum_to_shape, sum_to_shape_graph
 
 
 Scalar = Union[int, float]
@@ -57,7 +58,7 @@ class Pow:
             values = [_power(value, exponent) for value in base._data]
             return Tensor(values, dtype=dtype, shape=base.shape)
         if isinstance(exponent, Tensor):
-            expanded_base, expanded_exponent = _broadcast_tensors(base, exponent)
+            expanded_base, expanded_exponent = broadcast_tensors(base, exponent)
             values = [
                 _power(value, power)
                 for value, power in zip(expanded_base._data, expanded_exponent._data)
@@ -76,7 +77,7 @@ class Pow:
         """Return gradients for a power operation's differentiable inputs."""
         if len(inputs) == 2:
             base, exponent = inputs
-            expanded_base, expanded_exponent = _broadcast_tensors(base, exponent)
+            expanded_base, expanded_exponent = broadcast_tensors(base, exponent)
             differentiate_exponent = bool(kwargs.get("differentiate_exponent", True))
             if differentiate_exponent and any(value <= 0 for value in expanded_base._data):
                 raise ValueError(
@@ -117,8 +118,8 @@ class Pow:
                     shape=grad.shape,
                 )
             return [
-                unbroadcast(base_grad, base.shape),
-                unbroadcast(exponent_grad, exponent.shape),
+                sum_to_shape(base_grad, base.shape),
+                sum_to_shape(exponent_grad, exponent.shape),
             ]
 
         exponent = kwargs.get("scalar")
@@ -168,7 +169,7 @@ class Pow:
                     grad * exponent * (base ** (safe_exponent - 1.0))
                 )
                 return [
-                    unbroadcast_graph(base_gradient, base.shape),
+                    sum_to_shape_graph(base_gradient, base.shape),
                     exponent * 0.0,
                 ]
             if any(value <= 0 for value in base.data._data):
@@ -178,8 +179,8 @@ class Pow:
             output = base ** exponent
             base_gradient = grad * exponent * (base ** (exponent - 1.0))
             return [
-                unbroadcast_graph(base_gradient, base.shape),
-                unbroadcast_graph(grad * output * log(base), exponent.shape),
+                sum_to_shape_graph(base_gradient, base.shape),
+                sum_to_shape_graph(grad * output * log(base), exponent.shape),
             ]
 
         exponent = kwargs.get("scalar")

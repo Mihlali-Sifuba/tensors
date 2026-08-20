@@ -6,8 +6,10 @@ import math
 from typing import Any, List
 
 from ..dtype import result_dtype
-from ..ops._utils import unbroadcast, unbroadcast_graph
-from ..tensor import Tensor, _broadcast_shape, _broadcast_tensors, _shape_size
+from ..ops._utils import sum_to_shape, sum_to_shape_graph
+from ..tensor import Tensor
+from ..utils.broadcasting import broadcast_shape, broadcast_tensors
+from ..utils.shape import shape_size
 from .cross_entropy import Reduction, _validate_reduction
 from .sigmoid import _sigmoid
 
@@ -68,7 +70,7 @@ class BinaryCrossEntropy:
     ) -> Tensor:
         _validate_reduction(reduction)
         _validate_from_logits(from_logits)
-        prediction, target = _broadcast_tensors(prediction, target)
+        prediction, target = broadcast_tensors(prediction, target)
         _validate_targets(target)
         dtype = result_dtype(prediction.dtype, target, division=True)
 
@@ -109,7 +111,7 @@ class BinaryCrossEntropy:
         if not isinstance(reduction, str):
             raise TypeError("reduction must be a string")
 
-        expanded_prediction, expanded_target = _broadcast_tensors(prediction, target)
+        expanded_prediction, expanded_target = broadcast_tensors(prediction, target)
         size = expanded_prediction.size
         if reduction == "none":
             upstream = list(grad._data)
@@ -145,8 +147,8 @@ class BinaryCrossEntropy:
             target_gradients, dtype=grad.dtype, shape=expanded_shape
         )
         return [
-            unbroadcast(prediction_gradient, prediction.shape),
-            unbroadcast(target_gradient, target.shape),
+            sum_to_shape(prediction_gradient, prediction.shape),
+            sum_to_shape(target_gradient, target.shape),
         ]
 
     @staticmethod
@@ -159,8 +161,8 @@ class BinaryCrossEntropy:
         from_logits = kwargs.get("from_logits", False)
         _validate_from_logits(from_logits)
         reduction = kwargs.get("reduction", "mean")
-        shape = _broadcast_shape(prediction.shape, target.shape)
-        size = _shape_size(shape)
+        shape = broadcast_shape(prediction.shape, target.shape)
+        size = shape_size(shape)
         upstream = grad / size if reduction == "mean" and size else grad
 
         if from_logits:
@@ -174,8 +176,8 @@ class BinaryCrossEntropy:
                 log(1.0 - prediction) - log(prediction) + target * 0.0
             )
         return [
-            unbroadcast_graph(upstream * prediction_derivative, prediction.shape),
-            unbroadcast_graph(upstream * target_derivative, target.shape),
+            sum_to_shape_graph(upstream * prediction_derivative, prediction.shape),
+            sum_to_shape_graph(upstream * target_derivative, target.shape),
         ]
 
 

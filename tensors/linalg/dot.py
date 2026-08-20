@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any, List
 
 from ..dtype import result_dtype
-from ..tensor import Tensor, _broadcast_shape, _coordinates, _flat_index, _shape_size
+from ..tensor import Tensor
+from ..utils.broadcasting import broadcast_shape
+from ..utils.shape import coordinates_to_index, index_to_coordinates, shape_size
 
 
 MatmulMetadata = tuple[
@@ -54,7 +56,7 @@ def _matmul_metadata(
             f"Cannot multiply {a.shape} with {b.shape}: inner dimensions must match"
         )
 
-    batch_shape = _broadcast_shape(a_batch_shape, b_batch_shape)
+    batch_shape = broadcast_shape(a_batch_shape, b_batch_shape)
     if a_vector and b_vector:
         output_shape = ()
     elif a_vector:
@@ -86,7 +88,7 @@ def _a_index(
     """Return the flat index for an element in the left operand."""
     if a_vector:
         return column
-    return _flat_index(batch_coordinates + (row, column), a.shape)
+    return coordinates_to_index(batch_coordinates + (row, column), a.shape)
 
 
 def _b_index(
@@ -99,7 +101,7 @@ def _b_index(
     """Return the flat index for an element in the right operand."""
     if b_vector:
         return row
-    return _flat_index(batch_coordinates + (row, column), b.shape)
+    return coordinates_to_index(batch_coordinates + (row, column), b.shape)
 
 
 def _output_gradient(
@@ -119,7 +121,7 @@ def _output_gradient(
         coordinates = batch_coordinates + (row,)
     else:
         coordinates = batch_coordinates + (row, column)
-    return grad._data[_flat_index(coordinates, grad.shape)]
+    return grad._data[coordinates_to_index(coordinates, grad.shape)]
 
 
 def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
@@ -139,8 +141,8 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
     ) = _matmul_metadata(a, b)
 
     values = []
-    for batch_index in range(_shape_size(batch_shape)):
-        batch_coordinates = _coordinates(batch_index, batch_shape)
+    for batch_index in range(shape_size(batch_shape)):
+        batch_coordinates = index_to_coordinates(batch_index, batch_shape)
         a_batch_coordinates = _batch_coordinates(batch_coordinates, a_batch_shape)
         b_batch_coordinates = _batch_coordinates(batch_coordinates, b_batch_shape)
         for row in range(a_rows):
@@ -183,12 +185,14 @@ def _transpose_impl(
         inverse[input_axis] = output_axis
     values = []
     for index in range(tensor.size):
-        output_coordinates = _coordinates(index, shape)
+        output_coordinates = index_to_coordinates(index, shape)
         input_coordinates = tuple(
             output_coordinates[inverse[input_axis]]
             for input_axis in range(tensor.ndim)
         )
-        values.append(tensor._data[_flat_index(input_coordinates, tensor.shape)])
+        values.append(
+            tensor._data[coordinates_to_index(input_coordinates, tensor.shape)]
+        )
     return Tensor(values, dtype=tensor.dtype, shape=shape)
 
 
@@ -221,8 +225,8 @@ class Dot:
 
         a_values = [0.0] * a.size
         b_values = [0.0] * b.size
-        for batch_index in range(_shape_size(batch_shape)):
-            batch_coordinates = _coordinates(batch_index, batch_shape)
+        for batch_index in range(shape_size(batch_shape)):
+            batch_coordinates = index_to_coordinates(batch_index, batch_shape)
             a_batch_coordinates = _batch_coordinates(batch_coordinates, a_batch_shape)
             b_batch_coordinates = _batch_coordinates(batch_coordinates, b_batch_shape)
             for row in range(a_rows):
@@ -250,15 +254,15 @@ class Dot:
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build a differentiable VJP for matrix and batched matrix products."""
         from .transpose import transpose
-        from ..ops._utils import unbroadcast_graph
+        from ..ops._utils import sum_to_shape_graph
         left, right = inputs
         if left.ndim < 2 or right.ndim < 2:
             raise NotImplementedError(
                 "Higher-order derivatives currently require matrix operands"
             )
         return [
-            unbroadcast_graph(grad @ transpose(right), left.shape),
-            unbroadcast_graph(transpose(left) @ grad, right.shape),
+            sum_to_shape_graph(grad @ transpose(right), left.shape),
+            sum_to_shape_graph(transpose(left) @ grad, right.shape),
         ]
 
 
