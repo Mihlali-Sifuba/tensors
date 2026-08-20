@@ -10,6 +10,40 @@ from .utils.shape import (
 )
 
 
+def _flatten_nested_list(nested_list: List) -> List:
+    """Flatten a nested list into a single list (iterative, no recursion limit)."""
+    result: List = []
+    stack: List = [nested_list]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            # Reverse so original order is preserved when popping
+            for sub in reversed(item):
+                stack.append(sub)
+        else:
+            result.append(item)
+    return result
+
+
+def _infer_nested_list_shape(nested_list: List) -> Tuple[int, ...]:
+    """Infer shape and reject ragged nested lists."""
+    if not isinstance(nested_list, list):
+        return ()
+
+    if not nested_list:
+        return (0,)
+
+    sub_shape = _infer_nested_list_shape(nested_list[0])
+    for item in nested_list[1:]:
+        item_shape = _infer_nested_list_shape(item)
+        if item_shape != sub_shape:
+            raise ValueError(
+                "Ragged nested lists are not valid tensor data: "
+                f"expected child shape {sub_shape}, got {item_shape}"
+            )
+    return (len(nested_list),) + sub_shape
+
+
 class Tensor:
     """
     A simple tensor implementation using Python's array module.
@@ -68,10 +102,10 @@ class Tensor:
 
         elif isinstance(data, list):
             # Flatten the list if it's nested
-            flat_data = self._flatten_nested_list(data)
+            flat_data = _flatten_nested_list(data)
             self._data = self._create_storage(flat_data)
 
-            inferred_shape = self._infer_nested_list_shape(data)
+            inferred_shape = _infer_nested_list_shape(data)
 
         elif isinstance(data, array):
             # Direct array input
@@ -103,38 +137,6 @@ class Tensor:
     def _create_storage(self, values: Iterable) -> array:
         """Create this tensor's backing storage."""
         return array(self.dtype.typecode, values)
-
-    def _flatten_nested_list(self, nested_list: List) -> List:
-        """Flatten a nested list into a single list (iterative, no recursion limit)."""
-        result: List = []
-        stack: List = [nested_list]
-        while stack:
-            item = stack.pop()
-            if isinstance(item, list):
-                # Reverse so original order is preserved when popping
-                for sub in reversed(item):
-                    stack.append(sub)
-            else:
-                result.append(item)
-        return result
-
-    def _infer_nested_list_shape(self, nested_list: List) -> Tuple[int, ...]:
-        """Infer shape and reject ragged nested lists."""
-        if not isinstance(nested_list, list):
-            return ()
-
-        if not nested_list:
-            return (0,)
-
-        sub_shape = self._infer_nested_list_shape(nested_list[0])
-        for item in nested_list[1:]:
-            item_shape = self._infer_nested_list_shape(item)
-            if item_shape != sub_shape:
-                raise ValueError(
-                    "Ragged nested lists are not valid tensor data: "
-                    f"expected child shape {sub_shape}, got {item_shape}"
-                )
-        return (len(nested_list),) + sub_shape
 
     def _indices_to_flat_index(self, indices: Tuple[int, ...]) -> int:
         """Convert N-dimensional indices to flat index (row-major order)."""
