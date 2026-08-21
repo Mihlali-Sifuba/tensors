@@ -8,15 +8,19 @@ from ..tensor import Tensor
 from ._reduction import Axis, immutable_axis, keepdims_shape, reduction_groups
 
 
-def _sum_exact_ratios(ratios: list[tuple[int, int]]) -> float:
-    """Convert an exact sum of binary ratios back to a float."""
+def _sum_exact_ratios(
+    ratios: list[tuple[int, int]],
+    *,
+    divisor: int = 1,
+) -> float:
+    """Convert an exact sum of binary ratios, optionally divided, to a float."""
     denominator = max((item[1] for item in ratios), default=1)
     numerator = builtins.sum(
         item_numerator * (denominator // item_denominator)
         for item_numerator, item_denominator in ratios
     )
     try:
-        return numerator / denominator
+        return numerator / (denominator * divisor)
     except OverflowError:
         return math.inf if numerator > 0 else -math.inf
 

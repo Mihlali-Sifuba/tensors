@@ -62,6 +62,13 @@ class MathTests(unittest.TestCase):
         self.assertEqual(result.shape, (2, 1))
         self.assertEqual(result.tolist(), [1.0e308, 0.0])
 
+    def test_mean_does_not_underflow_individual_terms(self):
+        smallest = math.ulp(0.0)
+
+        result = ts.mean([smallest, smallest])
+
+        self.assertEqual(result.item(), smallest)
+
     def test_mean_of_opposite_infinities_is_nan(self):
         result = ts.mean([math.inf, -math.inf])
 

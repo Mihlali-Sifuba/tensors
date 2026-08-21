@@ -19,7 +19,9 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
         raise ValueError(f"Cannot reduce gradient shape {gradient.shape} to {shape}")
 
     padded_shape = (1,) * (gradient.ndim - len(shape)) + shape
-    values = [0.0] * shape_size(shape)
+    groups: list[list[int | float]] = [
+        [] for _ in range(shape_size(shape))
+    ]
     padding = gradient.ndim - len(shape)
     for index, value in enumerate(gradient._data):
         gradient_coordinates = index_to_coordinates(index, gradient.shape)
@@ -27,7 +29,17 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
             0 if source_dimension == 1 else coordinate
             for source_dimension, coordinate in zip(padded_shape, gradient_coordinates)
         )[padding:]
-        values[coordinates_to_index(source_coordinates, shape)] += value
+        groups[coordinates_to_index(source_coordinates, shape)].append(value)
+
+    if gradient.dtype.kind == "floating":
+        from ..math.sum import _stable_float_sum
+
+        values = [
+            _stable_float_sum([float(value) for value in group])
+            for group in groups
+        ]
+    else:
+        values = [sum(group) for group in groups]
 
     return Tensor(values, dtype=gradient.dtype, shape=shape)
 

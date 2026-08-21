@@ -74,7 +74,10 @@ class RMSpropTests(unittest.TestCase):
             {"learning_rate": 0.0},
             {"rho": -0.1},
             {"rho": 1.0},
+            {"rho": math.nan},
             {"eps": 0.0},
+            {"eps": math.nan},
+            {"eps": math.inf},
         ]
 
         for arguments in cases:

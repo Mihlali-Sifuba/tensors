@@ -68,6 +68,24 @@ class AutogradTests(unittest.TestCase):
         self.assertEqual(x.grad.tolist(), [9.0, 12.0])
         self.assertEqual(w.grad.tolist(), [3.0, 6.0])
 
+    def test_broadcast_gradient_accumulation_avoids_temporary_overflow(self):
+        value = ts.Variable([1.0])
+        output = value + ts.Tensor([0.0, 0.0, 0.0, 0.0])
+        seed = ts.Tensor([1.0e308, 1.0e308, -1.0e308, -1.0e308])
+
+        ts.backward(output, seed)
+
+        self.assertEqual(value.grad.tolist(), [0.0])
+
+    def test_shared_branch_accumulation_avoids_temporary_overflow(self):
+        value = ts.Variable([1.0])
+        output = ts.concat([value, value, value, value])
+        seed = ts.Tensor([1.0e308, 1.0e308, -1.0e308, -1.0e308])
+
+        ts.backward(output, seed)
+
+        self.assertEqual(value.grad.tolist(), [0.0])
+
     def test_repeated_backward_does_not_reuse_intermediate_gradients(self):
         x = ts.Variable([1.0, 2.0])
         loss = ts.sum(x * x)

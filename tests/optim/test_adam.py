@@ -1,3 +1,4 @@
+import math
 import unittest
 
 import tensors as ts
@@ -71,7 +72,10 @@ class AdamTests(unittest.TestCase):
             {"learning_rate": 0.0},
             {"betas": (-0.1, 0.999)},
             {"betas": (0.9, 1.0)},
+            {"betas": (math.nan, 0.999)},
             {"eps": 0.0},
+            {"eps": math.nan},
+            {"eps": math.inf},
         ]
 
         for arguments in cases:

@@ -193,6 +193,22 @@ class HigherOrderDerivativeTests(unittest.TestCase):
         self.assertEqual(first.data.tolist(), [4.0, 8.0])
         self.assertEqual(second.tolist(), [4.0, 4.0])
 
+    def test_shared_gradient_terms_are_stable_and_differentiable(self):
+        value = ts.Variable([1.0])
+        seed = ts.Variable([1.0e308, 1.0e308, -1.0e308, -1.0e308])
+        output = ts.concat([value, value, value, value])
+
+        gradient = ts.grad(
+            output,
+            value,
+            grad_outputs=seed,
+            create_graph=True,
+        )
+        seed_gradient = ts.grad(gradient, seed)
+
+        self.assertEqual(gradient.data.tolist(), [0.0])
+        self.assertEqual(seed_gradient.tolist(), [1.0, 1.0, 1.0, 1.0])
+
     def test_slice_gradient_can_be_differentiated(self):
         value = ts.Variable([1.0, 2.0, 3.0])
         loss = ts.sum(value[1:] ** 3.0)
