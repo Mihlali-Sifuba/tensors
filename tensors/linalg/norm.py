@@ -8,6 +8,25 @@ from ..tensor import Tensor
 from ..math._reduction import Axis, immutable_axis, keepdims_shape, reduction_groups
 
 
+def _scaled_norm(
+    value: Tensor,
+    group: list[int],
+) -> tuple[float, list[float], float]:
+    """Return a safe scale, scaled values, and their Euclidean norm."""
+    values = [float(value._data[index]) for index in group]
+    if any(math.isinf(item) for item in values):
+        return 1.0, [math.nan] * len(values), math.inf
+    if any(math.isnan(item) for item in values):
+        return 1.0, [math.nan] * len(values), math.nan
+
+    scale = max((abs(item) for item in values), default=0.0)
+    if scale == 0.0:
+        return 0.0, [0.0] * len(values), 0.0
+    normalized = [item / scale for item in values]
+    normalized_magnitude = math.sqrt(math.fsum(item * item for item in normalized))
+    return scale, normalized, normalized_magnitude
+
+
 class Norm:
     """Whole-tensor Euclidean norm with reverse-mode gradient rules."""
 
@@ -20,10 +39,10 @@ class Norm:
         """Return Euclidean norms over one, several, or all axes."""
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         _, output_shape, groups = reduction_groups(value, axis, keepdims)
-        results = [
-            math.sqrt(sum(float(value._data[index]) ** 2 for index in group))
-            for group in groups
-        ]
+        results = []
+        for group in groups:
+            scale, _, normalized_magnitude = _scaled_norm(value, group)
+            results.append(scale * normalized_magnitude)
         return Tensor(results, dtype=dtype, shape=output_shape)
 
     @staticmethod
@@ -39,33 +58,51 @@ class Norm:
             )
         values = [0.0] * value.size
         for output_index, group in enumerate(groups):
-            magnitude = math.sqrt(
-                sum(float(value._data[index]) ** 2 for index in group)
-            )
-            if magnitude == 0:
+            _, normalized, normalized_magnitude = _scaled_norm(value, group)
+            if normalized_magnitude == 0:
                 continue
-            scale = grad._data[output_index] / magnitude
-            for input_index in group:
-                values[input_index] = scale * value._data[input_index]
+            upstream = grad._data[output_index]
+            for input_index, normalized_value in zip(group, normalized):
+                values[input_index] = (
+                    upstream * (normalized_value / normalized_magnitude)
+                )
         return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build a differentiable VJP for nonzero axis-aware norms."""
         from ..math.reshape import reshape
+        from ..variable import Variable
 
         value = inputs[0]
         axis = kwargs.get("axis")
         keepdims = bool(kwargs.get("keepdims", False))
-        magnitudes = Norm.forward(value.data, axis=axis, keepdims=True)
-        if any(item == 0 for item in magnitudes._data):
+        _, scale_shape, groups = reduction_groups(value.data, axis, True)
+        statistics = [_scaled_norm(value.data, group) for group in groups]
+        if any(item[2] == 0 for item in statistics):
             raise ValueError(
                 "Higher-order derivatives of norm are undefined at zero"
             )
+        scales = Variable(
+            Tensor(
+                [
+                    scale if math.isfinite(scale) and scale > 0.0 else 1.0
+                    for scale, _, _ in statistics
+                ],
+                dtype=value.dtype,
+                shape=scale_shape,
+            ),
+            requires_grad=False,
+        )
+        normalized = value / scales
         expanded_grad = grad if keepdims else reshape(
             grad, keepdims_shape(value.shape, axis)
         )
-        return [expanded_grad * (value / norm(value, axis=axis, keepdims=True))]
+        return [
+            expanded_grad * (
+                normalized / norm(normalized, axis=axis, keepdims=True)
+            )
+        ]
 
 
 def norm(value: Any, axis: Axis = None, keepdims: bool = False) -> Any:

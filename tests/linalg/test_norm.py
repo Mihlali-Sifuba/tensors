@@ -43,6 +43,14 @@ class NormTests(unittest.TestCase):
         self.assertAlmostEqual(columns.tolist()[0], 34 ** 0.5)
         self.assertAlmostEqual(columns.tolist()[1], 160 ** 0.5)
 
+    def test_norm_avoids_overflow_and_underflow(self):
+        value = ts.Tensor([[1.0e308, 0.0], [1.0e-300, 0.0]])
+
+        result = ts.norm(value, axis=1, keepdims=True)
+
+        self.assertEqual(result.shape, (2, 1))
+        self.assertEqual(result.tolist(), [1.0e308, 1.0e-300])
+
     def test_norm_accepts_multiple_axes(self):
         value = ts.Tensor(
             [3.0, 4.0, 0.0, 0.0, 5.0, 12.0, 0.0, 0.0],
@@ -84,6 +92,13 @@ class NormTests(unittest.TestCase):
         self.assertAlmostEqual(gradient[2], 5.0 / 13.0)
         self.assertAlmostEqual(gradient[3], 12.0 / 13.0)
 
+    def test_extreme_norm_values_have_finite_gradients(self):
+        value = ts.Variable([[1.0e308, 0.0], [1.0e-300, 0.0]])
+
+        ts.backward(ts.sum(ts.norm(value, axis=1)))
+
+        self.assertEqual(value.grad.tolist(), [1.0, 0.0, 1.0, 0.0])
+
     def test_axis_norm_recomputes_with_recorded_axis(self):
         value = ts.Variable([[3.0, 4.0], [5.0, 12.0]])
         result = ts.norm(value, axis=1, keepdims=True)
@@ -111,6 +126,18 @@ class NormTests(unittest.TestCase):
 
         self.assertAlmostEqual(second.tolist()[0], 0.128)
         self.assertAlmostEqual(second.tolist()[1], -0.096)
+
+    def test_large_norm_gradient_can_be_differentiated(self):
+        value = ts.Variable([1.0e308, 0.0])
+        first = ts.grad(ts.norm(value), value, create_graph=True)
+        second = ts.grad(
+            first,
+            value,
+            grad_outputs=ts.Tensor([0.0, 1.0]),
+        )
+
+        self.assertEqual(first.data.tolist(), [1.0, 0.0])
+        self.assertEqual(second.tolist(), [0.0, 1.0e-308])
 
     def test_axis_norm_gradient_can_be_differentiated(self):
         value = ts.Variable([[3.0, 4.0]])
