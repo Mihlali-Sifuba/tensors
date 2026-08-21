@@ -52,6 +52,42 @@ class VariablePowerTests(unittest.TestCase):
         self.assertAlmostEqual(exponent.grad.tolist()[0], 4.0 * math.log(2.0))
         self.assertAlmostEqual(exponent.grad.tolist()[1], 8.0 * math.log(2.0))
 
+    def test_zero_base_has_zero_gradient_for_positive_exponents(self):
+        exponent = ts.Variable([0.5, 1.0, 2.0])
+
+        result = 0.0 ** exponent
+        gradient = ts.grad(result, exponent)
+
+        self.assertEqual(result.data.tolist(), [0.0, 0.0, 0.0])
+        self.assertEqual(gradient.tolist(), [0.0, 0.0, 0.0])
+
+    def test_zero_base_exponent_gradient_can_be_differentiated(self):
+        exponent = ts.Variable([0.5, 1.0, 2.0])
+
+        first = ts.grad(0.0 ** exponent, exponent, create_graph=True)
+        second = ts.grad(
+            first,
+            exponent,
+            grad_outputs=ts.Tensor([1.0, 1.0, 1.0]),
+        )
+
+        self.assertEqual(first.data.tolist(), [0.0, 0.0, 0.0])
+        self.assertEqual(second.tolist(), [0.0, 0.0, 0.0])
+
+    def test_zero_tensor_base_has_zero_gradient_for_positive_exponents(self):
+        base = ts.Tensor([0.0, 0.0])
+        exponent = ts.Variable([0.5, 2.0])
+
+        gradient = ts.grad(base ** exponent, exponent)
+
+        self.assertEqual(gradient.tolist(), [0.0, 0.0])
+
+    def test_zero_base_rejects_a_trainable_zero_exponent(self):
+        exponent = ts.Variable([0.0])
+
+        with self.assertRaisesRegex(ValueError, "strictly positive"):
+            ts.grad(0.0 ** exponent, exponent)
+
     def test_zero_scalar_exponent_has_zero_gradient_at_zero(self):
         base = ts.Variable([0.0])
 
