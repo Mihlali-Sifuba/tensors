@@ -53,7 +53,7 @@ class Slice:
         result = a[key]
         if isinstance(result, Tensor):
             return result
-        return Tensor(result, dtype=a.dtype)
+        return Tensor(result, dtype=a.dtype, shape=())
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:

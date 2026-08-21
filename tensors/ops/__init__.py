@@ -20,6 +20,7 @@ from .div import Div
 from .neg import Neg
 from .slice import Slice
 from .pow import Pow, pow
+from .cast import Cast
 
 
 from ..tensor import Tensor
@@ -43,6 +44,14 @@ class Ops:
     neg = staticmethod(Neg.forward)
 
 __all__ = [
-    "Add", "Sub", "Mul", "Div", "Pow", "Neg", "Slice", "pow",
+    "Add",
+    "Sub",
+    "Mul",
+    "Div",
+    "Pow",
+    "Neg",
+    "Slice",
+    "Cast",
+    "pow",
     "Ops",
 ]

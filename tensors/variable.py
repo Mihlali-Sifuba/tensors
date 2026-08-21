@@ -15,9 +15,10 @@ Differentiation starts from a chosen output::
     print(w.grad)   # Tensor([1.0, 2.0])
 """
 
+from .dtype import DataType
 from .tensor import Tensor
 from .ops import Ops
-from .ops import Add, Sub, Mul, Div, Pow, Neg, Slice
+from .ops import Add, Sub, Mul, Div, Pow, Neg, Slice, Cast
 from .graph.state import get_graph_state
 
 
@@ -246,4 +247,15 @@ class Variable:
     def __getitem__(self, key):
         return self._from_operation(
             Slice.forward(self.data, key), "slice", Slice, [self], key=key
+        )
+
+    def astype(self, dtype: str | DataType) -> "Variable":
+        """Return a differentiable copy converted to ``dtype``."""
+        result = self.data.astype(dtype)
+        return self._from_operation(
+            result,
+            "astype",
+            Cast,
+            [self],
+            dtype=result.dtype,
         )
