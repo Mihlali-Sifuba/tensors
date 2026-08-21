@@ -79,14 +79,35 @@ class Pow:
         if len(inputs) == 2:
             base, exponent = inputs
             expanded_base, expanded_exponent = broadcast_tensors(base, exponent)
+            differentiate_base = bool(kwargs.get("differentiate_base", True))
             differentiate_exponent = bool(kwargs.get("differentiate_exponent", True))
-            if differentiate_exponent and any(value <= 0 for value in expanded_base._data):
-                raise ValueError(
-                    "power gradients with respect to a tensor exponent require positive bases"
-                )
+            if differentiate_exponent:
+                if any(value < 0 for value in expanded_base._data):
+                    raise ValueError(
+                        "power gradients with respect to a tensor exponent "
+                        "require non-negative bases"
+                    )
+                if any(
+                    value == 0 and not power > 0
+                    for value, power in zip(
+                        expanded_base._data,
+                        expanded_exponent._data,
+                    )
+                ):
+                    raise ValueError(
+                        "power gradients for a zero base require strictly "
+                        "positive exponents"
+                    )
+                if differentiate_base and any(
+                    value == 0 for value in expanded_base._data
+                ):
+                    raise ValueError(
+                        "A zero base must be constant when differentiating "
+                        "with respect to a tensor exponent"
+                    )
             output = Pow.forward(expanded_base, expanded_exponent)
-            base_grad = Tensor(
-                [
+            if differentiate_base:
+                base_gradients = [
                     0.0
                     if power == 0
                     else upstream * power * _power(value, power - 1)
@@ -95,14 +116,20 @@ class Pow:
                         expanded_base._data,
                         expanded_exponent._data,
                     )
-                ],
+                ]
+            else:
+                base_gradients = [0.0] * grad.size
+            base_grad = Tensor(
+                base_gradients,
                 dtype=grad.dtype,
                 shape=grad.shape,
             )
             if differentiate_exponent:
                 exponent_grad = Tensor(
                     [
-                        upstream * value * math.log(base_value)
+                        0.0
+                        if base_value == 0
+                        else upstream * value * math.log(base_value)
                         for upstream, value, base_value in zip(
                             grad._data,
                             output._data,
@@ -129,10 +156,23 @@ class Pow:
 
         value = inputs[0]
         if kwargs.get("reverse", False):
-            if exponent <= 0:
+            if exponent < 0:
                 raise ValueError(
                     "power gradients with respect to an exponent require a positive base"
                 )
+            if exponent == 0:
+                if any(not power > 0 for power in value._data):
+                    raise ValueError(
+                        "power gradients for a zero base require strictly "
+                        "positive exponents"
+                    )
+                return [
+                    Tensor(
+                        [0.0] * value.size,
+                        dtype=grad.dtype,
+                        shape=value.shape,
+                    )
+                ]
             output = Pow.forward_reverse(value, exponent)
             values = [
                 upstream * result * math.log(exponent)
@@ -155,6 +195,7 @@ class Pow:
         if len(inputs) == 2:
             base, exponent = inputs
             from ..math import log
+            differentiate_base = bool(kwargs.get("differentiate_base", True))
             if not bool(kwargs.get("differentiate_exponent", True)):
                 from ..variable import Variable
 
@@ -168,20 +209,54 @@ class Pow:
                 )
                 base_gradient = (
                     grad * exponent * (base ** (safe_exponent - 1.0))
+                    if differentiate_base
+                    else base * 0.0
                 )
                 return [
                     sum_to_shape_graph(base_gradient, base.shape),
                     exponent * 0.0,
                 ]
-            if any(value <= 0 for value in base.data._data):
+            expanded_base, expanded_exponent = broadcast_tensors(
+                base.data,
+                exponent.data,
+            )
+            if any(value < 0 for value in expanded_base._data):
                 raise ValueError(
-                    "power gradients with respect to a tensor exponent require positive bases"
+                    "power gradients with respect to a tensor exponent "
+                    "require non-negative bases"
+                )
+            if any(
+                value == 0 and not power > 0
+                for value, power in zip(
+                    expanded_base._data,
+                    expanded_exponent._data,
+                )
+            ):
+                raise ValueError(
+                    "power gradients for a zero base require strictly "
+                    "positive exponents"
+                )
+            if differentiate_base and any(
+                value == 0 for value in expanded_base._data
+            ):
+                raise ValueError(
+                    "A zero base must be constant when differentiating with "
+                    "respect to a tensor exponent"
                 )
             output = base ** exponent
-            base_gradient = grad * exponent * (base ** (exponent - 1.0))
+            if differentiate_base:
+                base_gradient = grad * exponent * (base ** (exponent - 1.0))
+            else:
+                base_gradient = base * 0.0
+            zero_mask = Tensor(
+                [1.0 if value == 0 else 0.0 for value in base.data._data],
+                dtype=base.dtype,
+                shape=base.shape,
+            )
+            exponent_gradient = grad * output * log(base + zero_mask)
             return [
                 sum_to_shape_graph(base_gradient, base.shape),
-                sum_to_shape_graph(grad * output * log(base), exponent.shape),
+                sum_to_shape_graph(exponent_gradient, exponent.shape),
             ]
 
         exponent = kwargs.get("scalar")
@@ -189,10 +264,17 @@ class Pow:
             raise TypeError("power scalar exponent must be an int or float")
         value = inputs[0]
         if kwargs.get("reverse", False):
-            if exponent <= 0:
+            if exponent < 0:
                 raise ValueError(
                     "power gradients with respect to an exponent require a positive base"
                 )
+            if exponent == 0:
+                if any(not power > 0 for power in value.data._data):
+                    raise ValueError(
+                        "power gradients for a zero base require strictly "
+                        "positive exponents"
+                    )
+                return [grad * (value * 0.0)]
             from ..math import log
             return [grad * (exponent ** value) * log(exponent)]
         if exponent == 0:

@@ -200,6 +200,7 @@ class Variable:
                 "pow",
                 Pow,
                 [self, other],
+                differentiate_base=self.requires_grad,
                 differentiate_exponent=other.requires_grad,
             )
         if isinstance(other, Tensor):
@@ -209,6 +210,7 @@ class Variable:
                 "pow",
                 Pow,
                 [self, exponent],
+                differentiate_base=self.requires_grad,
                 differentiate_exponent=False,
             )
         return self._from_operation(
