@@ -35,6 +35,17 @@ class MathTests(unittest.TestCase):
         self.assertEqual(ts.mean(matrix, axis=0).tolist(), [2.5, 3.5, 4.5])
         self.assertEqual(ts.mean(matrix, axis=1).tolist(), [2.0, 5.0])
 
+    def test_mean_avoids_intermediate_overflow(self):
+        matrix = ts.Tensor(
+            [1.0e308, 1.0e308, 1.0e308, -1.0e308],
+            shape=(2, 2),
+        )
+
+        result = ts.mean(matrix, axis=1, keepdims=True)
+
+        self.assertEqual(result.shape, (2, 1))
+        self.assertEqual(result.tolist(), [1.0e308, 0.0])
+
     def test_sum_keepdims(self):
         matrix = ts.Tensor([[1, 2, 3], [4, 5, 6]])
 
