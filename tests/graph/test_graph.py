@@ -66,6 +66,39 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(second.data.tolist(), [20.0])
         self.assertIs(model.computation.output, second)
 
+    def test_graph_preserves_boolean_configuration_arguments(self):
+        @ts.Graph
+        def model(value, *, add_bias=False):
+            return value + 1.0 if add_bias else value * 1.0
+
+        without_bias = model(ts.Tensor([2.0]), add_bias=False)
+        with_bias = model(ts.Tensor([2.0]), add_bias=True)
+
+        self.assertEqual(without_bias.data.tolist(), [2.0])
+        self.assertEqual(with_bias.data.tolist(), [3.0])
+
+    def test_graph_preserves_axis_configuration_arguments(self):
+        @ts.Graph
+        def model(value, *, axis=-1):
+            return ts.softmax(value, axis=axis)
+
+        value = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
+
+        result = model(value, axis=0)
+        expected = ts.softmax(value, axis=0)
+
+        self.assertEqual(result.data.tolist(), expected.tolist())
+
+    def test_graph_preserves_scalar_configuration_arguments(self):
+        @ts.Graph
+        def model(value, *, scale=1.0):
+            return value * scale
+
+        result = model(ts.Tensor([2.0]), scale=3.0)
+
+        self.assertEqual(result.data.tolist(), [6.0])
+        self.assertEqual(result.node.args["scalar"], 3.0)
+
     def test_graph_uses_python_keyword_errors_on_fresh_trace(self):
         @ts.Graph
         def model(x, scale):
