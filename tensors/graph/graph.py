@@ -13,6 +13,7 @@ import threading
 from typing import Any
 from inspect import getclosurevars, isfunction, ismethod
 
+from ..tensor import Tensor
 from ..variable import Variable
 from .computation import Computation
 from .state import TraceScope
@@ -186,10 +187,13 @@ class Graph:
         return outputs
 
     @staticmethod
-    def _as_input(value: Any) -> Variable:
+    def _as_input(value: Any) -> Any:
+        """Wrap Tensor inputs while preserving ordinary Python arguments."""
         if isinstance(value, Variable):
             return value
-        return Variable(value, requires_grad=False)
+        if isinstance(value, Tensor):
+            return Variable(value, requires_grad=False)
+        return value
 
     @staticmethod
     def _iter_output_variables(outputs: Any) -> Iterator[Variable]:
