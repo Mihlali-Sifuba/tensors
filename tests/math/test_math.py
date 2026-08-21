@@ -130,11 +130,11 @@ class MathTests(unittest.TestCase):
 
         self.assertEqual(ts.mean(matrix, axis=0, keepdims=True).shape, (1, 3))
 
-    def test_empty_mean_returns_zero_scalar(self):
+    def test_empty_mean_returns_nan_scalar(self):
         result = ts.mean(ts.Tensor([]))
 
         self.assertEqual(result.shape, (1,))
-        self.assertEqual(result.tolist(), [0.0])
+        self.assertTrue(math.isnan(result.item()))
 
     def test_std_accepts_plain_lists(self):
         result = ts.std([1.0, 2.0, 3.0])

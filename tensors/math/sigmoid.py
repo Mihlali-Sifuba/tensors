@@ -19,15 +19,33 @@ class Sigmoid:
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         a = inputs[0]
-        output = Sigmoid.forward(a)
-        values = [g * y * (1.0 - y) for g, y in zip(grad._data, output._data)]
+        values = [
+            g * _sigmoid_derivative(float(value))
+            for g, value in zip(grad._data, a._data)
+        ]
         return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build a differentiable VJP for sigmoid."""
-        output = sigmoid(inputs[0])
-        return [grad * output * (1.0 - output)]
+        from .exp import exp
+
+        value = inputs[0]
+        positive_mask = Tensor(
+            [1.0 if item >= 0.0 else 0.0 for item in value.data._data],
+            dtype=value.dtype,
+            shape=value.shape,
+        )
+        negative_mask = Tensor(
+            [1.0 - item for item in positive_mask._data],
+            dtype=value.dtype,
+            shape=value.shape,
+        )
+        positive_z = exp(-(value * positive_mask))
+        negative_z = exp(value * negative_mask)
+        positive = positive_z / ((1.0 + positive_z) ** 2) * positive_mask
+        negative = negative_z / ((1.0 + negative_z) ** 2) * negative_mask
+        return [grad * (positive + negative)]
 
 
 def sigmoid(value: Any) -> Any:
@@ -55,3 +73,10 @@ def _sigmoid(value: float) -> float:
         return 1.0 / (1.0 + z)
     z = _math.exp(value)
     return z / (1.0 + z)
+
+
+def _sigmoid_derivative(value: float) -> float:
+    """Return the sigmoid derivative without subtracting from rounded one."""
+    z = _math.exp(-value) if value >= 0.0 else _math.exp(value)
+    denominator = 1.0 + z
+    return z / (denominator * denominator)

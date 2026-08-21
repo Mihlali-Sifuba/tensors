@@ -15,7 +15,7 @@ from .sum import Sum, _stable_float_sum, _sum_exact_ratios
 def _stable_float_mean(values: list[float]) -> float:
     """Return a mean without overflowing its sum or underflowing its terms."""
     if not values:
-        return 0.0
+        return math.nan
     if any(not math.isfinite(value) for value in values):
         return _stable_float_sum(values) / len(values)
     return _sum_exact_ratios(
@@ -41,7 +41,6 @@ class Mean:
             _stable_float_mean([
                 float(a._data[index]) for index in group
             ])
-            if group else 0.0
             for group in groups
         ]
         return Tensor(values, dtype=dtype, shape=output_shape)
@@ -50,7 +49,7 @@ class Mean:
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         a = inputs[0]
         axis = kwargs.get("axis")
-        keepdims = bool(kwargs.get("keepdims", False))
+        keepdims = kwargs.get("keepdims", False)
         count = reduction_size(a.shape, normalize_axes(a.ndim, axis))
         if count == 0:
             return [Tensor([], dtype=grad.dtype, shape=a.shape)]
@@ -68,7 +67,7 @@ class Mean:
         from .reshape import reshape
 
         axis = kwargs.get("axis")
-        keepdims = bool(kwargs.get("keepdims", False))
+        keepdims = kwargs.get("keepdims", False)
         value = inputs[0]
         count = reduction_size(value.shape, normalize_axes(value.ndim, axis))
         if count == 0:

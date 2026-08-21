@@ -19,15 +19,33 @@ class Tanh:
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         a = inputs[0]
-        output = Tanh.forward(a)
-        values = [g * (1.0 - y * y) for g, y in zip(grad._data, output._data)]
+        values = [
+            g * _tanh_derivative(float(value))
+            for g, value in zip(grad._data, a._data)
+        ]
         return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build a differentiable VJP for hyperbolic tangent."""
-        output = tanh(inputs[0])
-        return [grad * (1.0 - output ** 2)]
+        from .exp import exp
+
+        value = inputs[0]
+        positive_mask = Tensor(
+            [1.0 if item >= 0.0 else 0.0 for item in value.data._data],
+            dtype=value.dtype,
+            shape=value.shape,
+        )
+        negative_mask = Tensor(
+            [1.0 - item for item in positive_mask._data],
+            dtype=value.dtype,
+            shape=value.shape,
+        )
+        positive_z = exp(-2.0 * value * positive_mask)
+        negative_z = exp(2.0 * value * negative_mask)
+        positive = 4.0 * positive_z / ((1.0 + positive_z) ** 2) * positive_mask
+        negative = 4.0 * negative_z / ((1.0 + negative_z) ** 2) * negative_mask
+        return [grad * (positive + negative)]
 
 
 def tanh(value: Any) -> Any:
@@ -47,3 +65,10 @@ def tanh(value: Any) -> Any:
 
 
 __all__ = ["Tanh", "tanh"]
+
+
+def _tanh_derivative(value: float) -> float:
+    """Return the tanh derivative without subtracting rounded values."""
+    z = _math.exp(-2.0 * abs(value))
+    denominator = 1.0 + z
+    return 4.0 * z / (denominator * denominator)

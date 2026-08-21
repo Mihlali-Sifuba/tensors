@@ -20,6 +20,8 @@ class Concat:
         keepdims: bool = False,
     ) -> Tensor:
         """Concatenate one or more tensors along ``axis``."""
+        if not isinstance(keepdims, bool):
+            raise TypeError("keepdims must be a bool")
         if keepdims:
             raise ValueError("concat does not support keepdims")
         if isinstance(axis, bool) or not isinstance(axis, int):

@@ -86,12 +86,13 @@ class BinaryCrossEntropy:
                     loss = 0.0 if target_value == 1.0 else math.inf
                 elif value == -math.inf:
                     loss = 0.0 if target_value == 0.0 else math.inf
-                else:
+                elif value >= 0.0:
                     loss = (
-                        max(value, 0.0)
-                        - value * target_value
-                        + math.log1p(math.exp(-abs(value)))
+                        (1.0 - target_value) * value
+                        + math.log1p(math.exp(-value))
                     )
+                else:
+                    loss = -target_value * value + math.log1p(math.exp(value))
             else:
                 if not 0.0 <= value <= 1.0:
                     raise ValueError(
@@ -134,7 +135,11 @@ class BinaryCrossEntropy:
             value = float(raw_prediction)
             target_value = float(raw_target)
             if from_logits:
-                prediction_derivative = _sigmoid(value) - target_value
+                prediction_derivative = (
+                    (1.0 - target_value) - _sigmoid(-value)
+                    if value >= 0.0
+                    else _sigmoid(value) - target_value
+                )
                 target_derivative = -value
             else:
                 prediction_derivative = _probability_gradient(value, target_value)
@@ -169,7 +174,23 @@ class BinaryCrossEntropy:
         upstream = grad / size if reduction == "mean" and size else grad
 
         if from_logits:
-            prediction_derivative = sigmoid(prediction) - target
+            positive_mask = Tensor(
+                [
+                    1.0 if float(value) >= 0.0 else 0.0
+                    for value in prediction.data._data
+                ],
+                dtype=prediction.dtype,
+                shape=prediction.shape,
+            )
+            negative_mask = Tensor(
+                [1.0 - value for value in positive_mask._data],
+                dtype=prediction.dtype,
+                shape=prediction.shape,
+            )
+            prediction_derivative = (
+                positive_mask * ((1.0 - target) - sigmoid(-prediction))
+                + negative_mask * (sigmoid(prediction) - target)
+            )
             target_derivative = -prediction + target * 0.0
         else:
             expanded_prediction, expanded_target = broadcast_tensors(

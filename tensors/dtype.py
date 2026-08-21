@@ -11,7 +11,13 @@ Usage::
     t.dtype.size     # 8
 """
 
+from array import array
 from typing import Any
+
+
+_SUPPORTED_TYPECODES = {"d", "f", "q", "i", "h", "b", "B"}
+_FLOAT_CODES = {"f", "d"}
+_INTEGER_CODES = {"b", "B", "h", "i", "q"}
 
 
 class DataType:
@@ -28,6 +34,17 @@ class DataType:
             typecode: Corresponding ``array`` typecode (e.g. ``'d'``).
             byte_size: Number of bytes per element.
         """
+        if not isinstance(name, str) or not name:
+            raise ValueError("dtype name must be a non-empty string")
+        if not isinstance(typecode, str) or typecode not in _SUPPORTED_TYPECODES:
+            raise ValueError(f"Unsupported array typecode: {typecode!r}")
+        if isinstance(byte_size, bool) or not isinstance(byte_size, int):
+            raise TypeError("dtype byte_size must be an integer")
+        actual_size = array(typecode).itemsize
+        if byte_size != actual_size:
+            raise ValueError(
+                f"dtype {typecode!r} has byte size {actual_size}, not {byte_size}"
+            )
         self._name = name
         self._typecode = typecode
         self._byte_size = byte_size
@@ -132,10 +149,6 @@ def from_typecode(code: str) -> DataType:
 # ======================================================================
 #  Dtype promotion helpers
 # ======================================================================
-
-_FLOAT_CODES = {"f", "d"}
-_INTEGER_CODES = {"b", "B", "h", "i", "q"}
-
 
 def result_dtype(
     a_dtype: DataType,

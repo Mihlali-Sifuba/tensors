@@ -8,6 +8,7 @@ from typing import Any, List
 from ..dtype import float64
 from ..tensor import Tensor
 from ._reduction import Axis, keepdims_shape, reduction_groups
+from ._normalization import shifted_normalization
 
 
 def _group_value(a: Tensor, indices: list[int]) -> float:
@@ -17,14 +18,14 @@ def _group_value(a: Tensor, indices: list[int]) -> float:
 
     if any(math.isnan(float(a._data[index])) for index in indices):
         return math.nan
-    maximum = max(float(a._data[index]) for index in indices)
+    group = [float(a._data[index]) for index in indices]
+    maximum = max(group)
     if maximum == math.inf:
         return math.inf
     if maximum == -math.inf:
         return -math.inf
-    return maximum + math.log(math.fsum(
-        math.exp(float(a._data[index]) - maximum) for index in indices
-    ))
+    _, correction, _, _ = shifted_normalization(group)
+    return maximum + correction
 
 
 class LogSumExp:
@@ -47,7 +48,7 @@ class LogSumExp:
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         a = inputs[0]
         axis = kwargs.get("axis")
-        keepdims = bool(kwargs.get("keepdims", False))
+        keepdims = kwargs.get("keepdims", False)
         _, output_shape, groups = reduction_groups(
             a, axis, keepdims, scalar_as_vector=True
         )
@@ -74,13 +75,12 @@ class LogSumExp:
                     "logsumexp gradient is undefined when every reduced value is -inf"
                 )
 
-            exponentials = [
-                math.exp(float(a._data[index]) - maximum) for index in group
-            ]
-            total = math.fsum(exponentials)
-            for input_index, exponential in zip(group, exponentials):
+            _, _, probabilities, _ = shifted_normalization(
+                [float(a._data[index]) for index in group]
+            )
+            for input_index, probability in zip(group, probabilities):
                 values[input_index] = (
-                    grad._data[output_index] * exponential / total
+                    grad._data[output_index] * probability
                 )
 
         return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
@@ -88,47 +88,149 @@ class LogSumExp:
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build a differentiable log-sum-exp VJP."""
-        from .exp import exp
-        from .reshape import reshape
         from ..variable import Variable
 
         axis = kwargs.get("axis")
-        keepdims = bool(kwargs.get("keepdims", False))
+        keepdims = kwargs.get("keepdims", False)
         value = inputs[0]
-
-        # ``inf - inf`` becomes NaN in the smooth expression below.  The
-        # first-order implementation already defines a stable subgradient at
-        # positive infinity, so preserve that convention here as a constant
-        # subgradient rather than manufacturing NaNs in a gradient graph.
-        _, _, groups = reduction_groups(
+        result = LogSumExpGradient.forward(
+            grad.data,
             value.data,
+            axis=axis,
+            keepdims=keepdims,
+        )
+        return [Variable._from_operation(
+            result,
+            "logsumexp_gradient",
+            LogSumExpGradient,
+            [grad, value],
+            axis=axis,
+            keepdims=keepdims,
+        )]
+
+
+class LogSumExpGradient:
+    """Differentiable, infinity-safe VJP used by :class:`LogSumExp`."""
+
+    @staticmethod
+    def forward(
+        grad: Tensor,
+        value: Tensor,
+        *,
+        axis: Axis = None,
+        keepdims: bool = False,
+    ) -> Tensor:
+        return LogSumExp.backward(
+            grad,
+            value,
+            axis=axis,
+            keepdims=keepdims,
+        )[0]
+
+    @staticmethod
+    def backward(
+        outer_grad: Tensor,
+        *inputs: Tensor,
+        **kwargs: object,
+    ) -> List[Tensor]:
+        from .sum import _stable_product_sum
+
+        grad, value = inputs
+        axis = kwargs.get("axis")
+        keepdims = kwargs.get("keepdims", False)
+        _, output_shape, groups = reduction_groups(
+            value,
             axis,
-            keepdims=False,
+            keepdims,
             scalar_as_vector=True,
         )
+        grad_values = [0.0] * grad.size
+        value_values = [0.0] * value.size
+
+        for output_index, group in enumerate(groups):
+            group_values = [float(value._data[index]) for index in group]
+            maximum = max(group_values)
+            at_positive_infinity = maximum == math.inf
+            if any(math.isnan(item) for item in group_values):
+                weights = [math.nan] * len(group)
+            elif at_positive_infinity:
+                count = sum(item == math.inf for item in group_values)
+                weights = [
+                    1.0 / count if item == math.inf else 0.0
+                    for item in group_values
+                ]
+            elif maximum == -math.inf:
+                raise ValueError(
+                    "logsumexp gradient is undefined when every reduced value is -inf"
+                )
+            else:
+                _, _, weights, _ = shifted_normalization(group_values)
+
+            projection = _stable_product_sum([
+                (float(outer_grad._data[index]), weight)
+                for index, weight in zip(group, weights)
+            ])
+            grad_values[output_index] = projection
+            if at_positive_infinity:
+                continue
+            group_grad = float(grad._data[output_index])
+            for index, weight in zip(group, weights):
+                value_values[index] = (
+                    group_grad
+                    * weight
+                    * (float(outer_grad._data[index]) - projection)
+                )
+
+        return [
+            Tensor(grad_values, dtype=outer_grad.dtype, shape=output_shape),
+            Tensor(value_values, dtype=outer_grad.dtype, shape=value.shape),
+        ]
+
+    @staticmethod
+    def backward_graph(outer_grad, *inputs, **kwargs: object):
+        """Build a smooth third-order rule away from infinite inputs."""
+        from ..variable import Variable
+        from .exp import exp
+        from .reshape import reshape
+        from .sum import sum
+
+        grad, value = inputs
+        axis = kwargs.get("axis")
+        keepdims = kwargs.get("keepdims", False)
+        _, _, groups = reduction_groups(
+            value.data, axis, keepdims, scalar_as_vector=True
+        )
         if any(
-            group
-            and not any(
-                math.isnan(float(value.data._data[index])) for index in group
-            )
-            and max(float(value.data._data[index]) for index in group) == math.inf
+            any(math.isinf(float(value.data._data[index])) for index in group)
             for group in groups
         ):
-            numerical_gradient = LogSumExp.backward(
+            numerical = LogSumExpGradient.backward(
+                outer_grad.data,
                 grad.data,
                 value.data,
                 axis=axis,
                 keepdims=keepdims,
-            )[0]
-            return [Variable(numerical_gradient, requires_grad=False)]
+            )
+            return [
+                Variable(numerical[0], requires_grad=False),
+                Variable(numerical[1], requires_grad=False),
+            ]
 
         normalizer = logsumexp(value, axis=axis, keepdims=True)
+        weights = exp(value - normalizer)
+        projection = sum(outer_grad * weights, axis=axis, keepdims=True)
+        grad_gradient = sum(
+            outer_grad * weights,
+            axis=axis,
+            keepdims=keepdims,
+        )
         expanded_grad = (
             grad
             if keepdims
             else reshape(grad, keepdims_shape(value.shape, axis))
         )
-        return [expanded_grad * exp(value - normalizer)]
+        value_gradient = expanded_grad * weights * (outer_grad - projection)
+        return [grad_gradient, value_gradient]
 
 
 def logsumexp(

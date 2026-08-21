@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from functools import partial
 import threading
 from typing import Any
 from inspect import getclosurevars, isfunction, ismethod
@@ -143,7 +144,7 @@ class Graph:
                 return
 
             if isinstance(value, Graph):
-                for name, child in vars(value).items():
+                for name, child in self._object_items(value):
                     if name not in {"_function", "_thread_state"}:
                         visit(child)
                 if value._function is not None:
@@ -157,8 +158,16 @@ class Graph:
             elif isinstance(value, (list, tuple, set)):
                 for item in value:
                     visit(item)
+            elif (
+                isfunction(value)
+                or ismethod(value)
+                or isinstance(value, partial)
+                or (callable(value) and not isinstance(value, type))
+            ):
+                for captured in self._function_values(value):
+                    visit(captured)
 
-        for name, value in vars(self).items():
+        for name, value in self._object_items(self):
             if name not in {"_function", "_thread_state"}:
                 visit(value)
         if self._function is not None:
@@ -235,12 +244,20 @@ class Graph:
     @staticmethod
     def _function_values(function: Callable[..., Any]) -> Iterator[Any]:
         """Yield Values captured by a function or stored on a callable object."""
+        if isinstance(function, partial):
+            yield function.func
+            yield from function.args
+            yield from (function.keywords or {}).values()
+            return
+
         if ismethod(function):
-            yield from vars(function.__self__).values()
+            yield from (
+                value for _, value in Graph._object_items(function.__self__)
+            )
             function = function.__func__
 
         if not isfunction(function):
-            yield from getattr(function, "__dict__", {}).values()
+            yield from (value for _, value in Graph._object_items(function))
             return
 
         closure = getclosurevars(function)
@@ -248,3 +265,28 @@ class Graph:
         yield from closure.globals.values()
         yield from (function.__defaults__ or ())
         yield from (function.__kwdefaults__ or {}).values()
+
+    @staticmethod
+    def _object_items(value: Any) -> Iterator[tuple[str, Any]]:
+        """Yield stored attributes from dictionaries and ``__slots__``."""
+        seen_names: set[str] = set()
+        try:
+            dictionary = vars(value)
+        except TypeError:
+            dictionary = {}
+        for name, item in dictionary.items():
+            seen_names.add(name)
+            yield name, item
+
+        for cls in type(value).__mro__:
+            slots = cls.__dict__.get("__slots__", ())
+            if isinstance(slots, str):
+                slots = (slots,)
+            for name in slots:
+                if name in {"__dict__", "__weakref__"} or name in seen_names:
+                    continue
+                seen_names.add(name)
+                try:
+                    yield name, getattr(value, name)
+                except AttributeError:
+                    continue

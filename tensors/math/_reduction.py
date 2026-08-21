@@ -48,6 +48,8 @@ def reduction_shape(
     keepdims: bool,
 ) -> tuple[int, ...]:
     """Return the output shape produced by reducing ``axes``."""
+    if not isinstance(keepdims, bool):
+        raise TypeError("keepdims must be a bool")
     if keepdims:
         return tuple(1 if index in axes else size for index, size in enumerate(shape))
     return tuple(size for index, size in enumerate(shape) if index not in axes)
@@ -66,6 +68,8 @@ def reduction_groups(
     scalar_as_vector: bool = False,
 ) -> tuple[tuple[int, ...], tuple[int, ...], list[list[int]]]:
     """Group flat input indices by their corresponding reduction output."""
+    if not isinstance(keepdims, bool):
+        raise TypeError("keepdims must be a bool")
     axes = normalize_axes(value.ndim, axis)
     output_shape = reduction_shape(value.shape, axes, keepdims)
     scalar_output_as_vector = scalar_as_vector and axis is None and not keepdims

@@ -50,7 +50,7 @@ class Norm:
         """Differentiate the Euclidean norm with respect to its input."""
         value = inputs[0]
         axis = kwargs.get("axis")
-        keepdims = bool(kwargs.get("keepdims", False))
+        keepdims = kwargs.get("keepdims", False)
         _, output_shape, groups = reduction_groups(value, axis, keepdims)
         if grad.shape != output_shape:
             raise ValueError(
@@ -76,7 +76,7 @@ class Norm:
 
         value = inputs[0]
         axis = kwargs.get("axis")
-        keepdims = bool(kwargs.get("keepdims", False))
+        keepdims = kwargs.get("keepdims", False)
         _, scale_shape, groups = reduction_groups(value.data, axis, True)
         statistics = [_scaled_norm(value.data, group) for group in groups]
         if any(item[2] == 0 for item in statistics):

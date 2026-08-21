@@ -7,6 +7,7 @@ from typing import Any, List
 
 from ..dtype import float64
 from ..tensor import Tensor
+from ._normalization import shifted_normalization
 
 
 def _normalize_axis(tensor: Tensor, axis: int) -> int:
@@ -39,6 +40,8 @@ class Softmax:
     @staticmethod
     def forward(a: Tensor, axis: int = -1, keepdims: bool = False) -> Tensor:
         """Compute numerically stable softmax values along ``axis``."""
+        if not isinstance(keepdims, bool):
+            raise TypeError("keepdims must be a bool")
         if keepdims:
             raise ValueError("softmax does not support keepdims")
         axis = _normalize_axis(a, axis)
@@ -72,10 +75,11 @@ class Softmax:
                     raise ValueError(
                         "softmax is undefined when every value along an axis is -inf"
                     )
-                exponentials = [math.exp(a._data[position] - maximum) for position in positions]
-                total = sum(exponentials)
-                for position, exponential in zip(positions, exponentials):
-                    values[position] = exponential / total
+                _, _, probabilities, _ = shifted_normalization(
+                    [float(a._data[position]) for position in positions]
+                )
+                for position, probability in zip(positions, probabilities):
+                    values[position] = probability
 
         return Tensor(values, dtype=dtype, shape=a.shape)
 
