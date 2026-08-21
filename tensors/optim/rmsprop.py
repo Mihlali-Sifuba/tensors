@@ -56,12 +56,16 @@ class RMSprop(Optimizer):
                 continue
 
             sid = id(param)
-            if sid not in self._state:
-                self._state[sid] = Tensor(
+            v = self._state.get(sid)
+            if (
+                v is None
+                or v.shape != grad.shape
+                or v.dtype != grad.dtype
+            ):
+                v = Tensor(
                     [0.0] * grad.size, dtype=grad.dtype, shape=grad.shape,
                 )
-
-            v = self._state[sid]
+                self._state[sid] = v
 
             # v = rho * v + (1 - rho) * grad^2
             v_new = self.rho * v + (1.0 - self.rho) * (grad * grad)

@@ -33,6 +33,42 @@ class RMSpropTests(unittest.TestCase):
         second_update = 0.2 / (math.sqrt(3.0) + 1e-8)
         self.assertAlmostEqual(parameter.data.item(), 1.0 - first_update - second_update)
 
+    def test_state_resets_when_parameter_metadata_changes(self):
+        replacements = (
+            ts.Tensor([5.0]),
+            ts.Tensor([5.0, 6.0], dtype=ts.float32),
+        )
+        for replacement in replacements:
+            with self.subTest(
+                shape=replacement.shape,
+                dtype=replacement.dtype.name,
+            ):
+                parameter = ts.Variable([1.0, 2.0])
+                optimizer = ts.optim.RMSprop([parameter], learning_rate=0.1)
+                parameter.grad = ts.Tensor([1.0, 1.0])
+                optimizer.step()
+
+                initial_values = replacement.tolist()
+                parameter.data = replacement
+                parameter.grad = ts.Tensor(
+                    [1.0] * replacement.size,
+                    dtype=replacement.dtype,
+                    shape=replacement.shape,
+                )
+                optimizer.step()
+
+                state = optimizer._state[id(parameter)]
+                self.assertEqual(state.shape, replacement.shape)
+                self.assertIs(state.dtype, replacement.dtype)
+                for value in state.tolist():
+                    self.assertAlmostEqual(value, 0.01)
+                update = 0.1 / (math.sqrt(0.01) + 1e-8)
+                for actual, initial in zip(
+                    parameter.data.tolist(),
+                    initial_values,
+                ):
+                    self.assertAlmostEqual(actual, initial - update, places=6)
+
     def test_invalid_hyperparameters_are_rejected(self):
         cases = [
             {"learning_rate": 0.0},
