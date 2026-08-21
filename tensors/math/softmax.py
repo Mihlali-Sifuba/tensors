@@ -11,6 +11,8 @@ from ..tensor import Tensor
 
 def _normalize_axis(tensor: Tensor, axis: int) -> int:
     """Return a valid non-negative axis for ``tensor``."""
+    if isinstance(axis, bool) or not isinstance(axis, int):
+        raise TypeError("softmax axis must be an integer")
     if axis < 0:
         axis += tensor.ndim
     if not 0 <= axis < tensor.ndim:
@@ -48,6 +50,13 @@ class Softmax:
             group_start = group * axis_size * trailing
             for offset in range(trailing):
                 positions = [group_start + offset + index * trailing for index in range(axis_size)]
+                if any(
+                    math.isnan(float(a._data[position]))
+                    for position in positions
+                ):
+                    for position in positions:
+                        values[position] = math.nan
+                    continue
                 maximum = max(a._data[position] for position in positions)
                 if maximum == math.inf:
                     maxima = [

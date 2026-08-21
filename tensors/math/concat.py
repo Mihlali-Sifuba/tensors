@@ -22,6 +22,8 @@ class Concat:
         """Concatenate one or more tensors along ``axis``."""
         if keepdims:
             raise ValueError("concat does not support keepdims")
+        if isinstance(axis, bool) or not isinstance(axis, int):
+            raise TypeError("concat axis must be an integer")
         if len(tensors) == 1 and isinstance(tensors[0], list):
             tensors = tuple(tensors[0])
         if not tensors:
@@ -79,7 +81,7 @@ class Concat:
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         """Split an upstream gradient back across every concatenated input."""
         axis = kwargs.get("axis", 0)
-        if not isinstance(axis, int):
+        if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("concat axis must be an integer")
         if axis < 0:
             axis += grad.ndim
@@ -97,6 +99,8 @@ class Concat:
     def backward_graph(grad, *inputs, **kwargs: object):
         """Differentiably split an upstream gradient along the concat axis."""
         axis = kwargs.get("axis", 0)
+        if isinstance(axis, bool) or not isinstance(axis, int):
+            raise TypeError("concat axis must be an integer")
         if axis < 0:
             axis += grad.ndim
         offset = 0

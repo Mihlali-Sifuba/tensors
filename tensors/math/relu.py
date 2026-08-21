@@ -1,5 +1,6 @@
 """Elementwise rectified linear unit and its differentiation rule."""
 
+import math
 from typing import Any, List
 
 from ..tensor import Tensor
@@ -10,13 +11,21 @@ class ReLU:
 
     @staticmethod
     def forward(a: Tensor) -> Tensor:
-        values = [value if value > 0 else 0 for value in a._data]
+        values = [
+            math.nan if isinstance(value, float) and math.isnan(value)
+            else value if value > 0 else 0
+            for value in a._data
+        ]
         return Tensor(values, dtype=a.dtype, shape=a.shape)
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         a = inputs[0]
-        values = [g if x > 0 else 0 for g, x in zip(grad._data, a._data)]
+        values = [
+            math.nan if isinstance(x, float) and math.isnan(x)
+            else g if x > 0 else 0
+            for g, x in zip(grad._data, a._data)
+        ]
         return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
 
     @staticmethod
@@ -25,7 +34,11 @@ class ReLU:
         from ..variable import Variable
         value = inputs[0]
         mask = Tensor(
-            [1.0 if item > 0 else 0.0 for item in value.data._data],
+            [
+                math.nan if isinstance(item, float) and math.isnan(item)
+                else 1.0 if item > 0 else 0.0
+                for item in value.data._data
+            ],
             dtype=grad.dtype,
             shape=value.shape,
         )

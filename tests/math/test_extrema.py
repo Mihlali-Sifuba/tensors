@@ -1,3 +1,4 @@
+import math
 import unittest
 
 import tensors as ts
@@ -49,6 +50,15 @@ class ExtremaTests(unittest.TestCase):
         self.assertEqual(maximum.shape, (3,))
         self.assertEqual(maximum.tolist(), [4.0, 6.0, 5.0])
 
+    def test_min_and_max_propagate_nan_regardless_of_position(self):
+        matrix = ts.Tensor([[math.nan, 1.0], [1.0, math.nan]])
+
+        minimum = ts.min(matrix, axis=1)
+        maximum = ts.max(matrix, axis=1)
+
+        self.assertTrue(all(math.isnan(item) for item in minimum._data))
+        self.assertTrue(all(math.isnan(item) for item in maximum._data))
+
     def test_axis_extrema_are_differentiable(self):
         minimum_input = ts.Variable([[1.0, 1.0], [2.0, 3.0]])
         maximum_input = ts.Variable([[1.0, 4.0], [3.0, 4.0]])
@@ -58,6 +68,22 @@ class ExtremaTests(unittest.TestCase):
 
         self.assertEqual(minimum_input.grad.tolist(), [0.5, 0.5, 1.0, 0.0])
         self.assertEqual(maximum_input.grad.tolist(), [0.0, 0.5, 1.0, 0.5])
+
+    def test_nan_extrema_propagate_nan_gradients_without_crashing(self):
+        minimum_input = ts.Variable([[math.nan, 1.0], [2.0, 3.0]])
+        maximum_input = ts.Variable([[1.0, math.nan], [2.0, 3.0]])
+
+        ts.backward(ts.sum(ts.min(minimum_input, axis=1)))
+        ts.backward(ts.sum(ts.max(maximum_input, axis=1)))
+
+        minimum_gradient = minimum_input.grad.tolist()
+        maximum_gradient = maximum_input.grad.tolist()
+        self.assertTrue(math.isnan(minimum_gradient[0]))
+        self.assertTrue(math.isnan(minimum_gradient[1]))
+        self.assertEqual(minimum_gradient[2:], [1.0, 0.0])
+        self.assertTrue(math.isnan(maximum_gradient[0]))
+        self.assertTrue(math.isnan(maximum_gradient[1]))
+        self.assertEqual(maximum_gradient[2:], [0.0, 1.0])
 
 
 if __name__ == "__main__":

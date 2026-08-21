@@ -62,6 +62,11 @@ class MathTests(unittest.TestCase):
         self.assertEqual(result.shape, (2, 1))
         self.assertEqual(result.tolist(), [1.0e308, 0.0])
 
+    def test_mean_of_opposite_infinities_is_nan(self):
+        result = ts.mean([math.inf, -math.inf])
+
+        self.assertTrue(math.isnan(result.item()))
+
     def test_sum_keepdims(self):
         matrix = ts.Tensor([[1, 2, 3], [4, 5, 6]])
 

@@ -13,7 +13,12 @@ class Exp:
     @staticmethod
     def forward(a: Tensor) -> Tensor:
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
-        values = [_math.exp(float(value)) for value in a._data]
+        values = []
+        for value in a._data:
+            try:
+                values.append(_math.exp(float(value)))
+            except OverflowError:
+                values.append(_math.inf)
         return Tensor(values, dtype=dtype, shape=a.shape)
 
     @staticmethod

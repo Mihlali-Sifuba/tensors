@@ -13,6 +13,8 @@ class Stack:
 
     @staticmethod
     def forward(*tensors: Tensor | list[Any], axis: int = 0) -> Tensor:
+        if isinstance(axis, bool) or not isinstance(axis, int):
+            raise TypeError("stack axis must be an integer")
         if len(tensors) == 1 and isinstance(tensors[0], list):
             tensors = tuple(tensors[0])
         if not tensors:
@@ -67,7 +69,7 @@ class Stack:
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         """Select each slice along the inserted axis."""
         axis = kwargs.get("axis", 0)
-        if not isinstance(axis, int):
+        if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("stack axis must be an integer")
         if axis < 0:
             axis += grad.ndim
@@ -82,6 +84,8 @@ class Stack:
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build differentiable selections for a stack VJP."""
         axis = kwargs.get("axis", 0)
+        if isinstance(axis, bool) or not isinstance(axis, int):
+            raise TypeError("stack axis must be an integer")
         if axis < 0:
             axis += grad.ndim
         gradients = []

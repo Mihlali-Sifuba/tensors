@@ -1,6 +1,5 @@
 """Mean and its differentiation rule."""
 
-import math
 from typing import Any, List
 
 from ..dtype import float64
@@ -9,7 +8,7 @@ from ._reduction import (
     Axis, immutable_axis, keepdims_shape, normalize_axes, reduction_groups,
     reduction_size,
 )
-from .sum import Sum
+from .sum import Sum, _stable_float_sum
 
 
 class Mean:
@@ -26,7 +25,9 @@ class Mean:
         )
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         values = [
-            math.fsum(float(a._data[index]) / len(group) for index in group)
+            _stable_float_sum([
+                float(a._data[index]) / len(group) for index in group
+            ])
             if group else 0.0
             for group in groups
         ]

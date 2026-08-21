@@ -41,6 +41,14 @@ class StackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "out of bounds"):
             ts.stack([ts.Tensor([1, 2])], axis=3)
 
+    def test_stack_rejects_non_integer_axes(self):
+        tensors = [ts.Tensor([1]), ts.Tensor([2])]
+
+        with self.assertRaisesRegex(TypeError, "integer"):
+            ts.stack(tensors, axis=False)
+        with self.assertRaisesRegex(TypeError, "integer"):
+            ts.stack(tensors, axis=0.0)
+
     def test_stack_preserves_first_tensor_dtype(self):
         left = ts.Tensor([1, 2], dtype=ts.float32)
         right = ts.Tensor([3, 4], dtype=ts.float32)
