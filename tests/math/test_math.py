@@ -30,6 +30,21 @@ class MathTests(unittest.TestCase):
         self.assertEqual(ts.sum(matrix, axis=0).tolist(), [5.0, 7.0, 9.0])
         self.assertEqual(ts.sum(matrix, axis=1).tolist(), [6.0, 15.0])
 
+    def test_sum_recovers_from_temporary_overflow(self):
+        tensor = ts.Tensor(
+            [
+                1.0e308, 1.0e308, -1.0e308, -1.0e308, 1.0e-300,
+                1.0e308, 1.0e308, 0.0, 0.0, 0.0,
+            ],
+            shape=(2, 5),
+        )
+
+        result = ts.sum(tensor, axis=1, keepdims=True)
+
+        self.assertEqual(result.shape, (2, 1))
+        self.assertEqual(result._data[0], 1.0e-300)
+        self.assertEqual(result._data[1], math.inf)
+
     def test_mean_axis(self):
         matrix = ts.Tensor([[1, 2, 3], [4, 5, 6]])
 
