@@ -142,6 +142,8 @@ def jacobian(
     one Tensor or Variable; multiple inputs return a tuple in the supplied order.
     Disconnected inputs produce zero Jacobians.
     """
+    if not isinstance(create_graph, bool):
+        raise TypeError("create_graph must be a bool")
     output = _validate_output(output, "jacobian")
     requested, single_input = _normalize_inputs(inputs, "jacobian")
     rows: list[list[Tensor | Variable]] = [[] for _ in requested]
@@ -198,6 +200,8 @@ def hessian(
     multiple inputs, the result is a tuple of tuples of Hessian blocks where
     block ``[i][j]`` has shape ``inputs[i].shape + inputs[j].shape``.
     """
+    if not isinstance(create_graph, bool):
+        raise TypeError("create_graph must be a bool")
     output = _validate_output(output, "hessian")
     if output.size != 1:
         raise ValueError(

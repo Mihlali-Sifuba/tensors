@@ -5,7 +5,7 @@ from typing import List, Union
 from ..dtype import result_dtype
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_tensors
-from ._utils import sum_to_shape
+from ._utils import sum_products_to_shape
 
 
 Scalar = Union[int, float]
@@ -32,17 +32,10 @@ class Mul:
         if len(inputs) == 2:
             a, b = inputs
             expanded_a, expanded_b = broadcast_tensors(a, b)
-            da = Tensor(
-                [g * y for g, y in zip(grad._data, expanded_b._data)],
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
-            db = Tensor(
-                [g * x for g, x in zip(grad._data, expanded_a._data)],
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
-            return [sum_to_shape(da, a.shape), sum_to_shape(db, b.shape)]
+            return [
+                sum_products_to_shape(grad, expanded_b, a.shape),
+                sum_products_to_shape(grad, expanded_a, b.shape),
+            ]
         scalar = kwargs.get("scalar", 1.0)
         assert isinstance(scalar, (int, float))
         return [Tensor([g * scalar for g in grad._data], dtype=grad.dtype, shape=grad.shape)]
@@ -54,8 +47,8 @@ class Mul:
             scalar = kwargs.get("scalar", 1.0)
             return [grad * scalar]
         left, right = inputs
-        from ._utils import sum_to_shape_graph
+        from ._utils import sum_products_to_shape_graph
         return [
-            sum_to_shape_graph(grad * right, left.shape),
-            sum_to_shape_graph(grad * left, right.shape),
+            sum_products_to_shape_graph(grad, right, left.shape),
+            sum_products_to_shape_graph(grad, left, right.shape),
         ]

@@ -44,6 +44,8 @@ class Optimizer(ABC):
 
     @learning_rate.setter
     def learning_rate(self, value: float) -> None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError("learning_rate must be numeric, not bool")
         if not math.isfinite(value) or value <= 0:
             raise ValueError("learning_rate must be positive and finite")
         self._learning_rate = value
@@ -69,6 +71,15 @@ class Optimizer(ABC):
         if gradient.dtype != parameter.dtype:
             return gradient.astype(parameter.dtype)
         return gradient
+
+    def _prepared_gradients(self) -> tuple[tuple[Variable, Tensor], ...]:
+        """Validate every gradient before any parameter is mutated."""
+        prepared: list[tuple[Variable, Tensor]] = []
+        for parameter in self.parameters:
+            gradient = self._gradient_for(parameter)
+            if gradient is not None:
+                prepared.append((parameter, gradient))
+        return tuple(prepared)
 
     @abstractmethod
     def step(self) -> None:

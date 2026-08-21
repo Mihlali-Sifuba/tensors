@@ -15,7 +15,7 @@ class TensorShapeTests(unittest.TestCase):
     def test_len_rejects_scalar_shape(self):
         tensor = ts.Tensor([7.0], shape=())
 
-        with self.assertRaises(IndexError):
+        with self.assertRaisesRegex(TypeError, "0-dimensional"):
             len(tensor)
 
     def test_zero_sized_matrix_has_expected_size_and_rank(self):

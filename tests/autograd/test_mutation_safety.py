@@ -39,7 +39,7 @@ class MutationSafetyTests(unittest.TestCase):
         value = ts.Tensor([1, 2, 3], dtype=ts.int32)
 
         with self.assertRaises(TypeError):
-            value[0:2] = [4, 5.5]
+            value[0:2] = [4, object()]
 
         self.assertEqual(value.tolist(), [1, 2, 3])
         self.assertEqual(value.version, 0)

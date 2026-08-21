@@ -11,6 +11,44 @@ from ._utils import sum_to_shape
 Scalar = Union[int, float]
 
 
+def _negative_product_over_square(
+    left: float,
+    right: float,
+    denominator: float,
+) -> float:
+    """Evaluate ``-left * right / denominator**2`` without range loss."""
+    import math
+
+    left = float(left)
+    right = float(right)
+    denominator = float(denominator)
+    if all(math.isfinite(value) for value in (left, right, denominator)):
+        if denominator == 0.0:
+            raise ZeroDivisionError("Division by zero")
+        left_numerator, left_denominator = left.as_integer_ratio()
+        right_numerator, right_denominator = right.as_integer_ratio()
+        denominator_numerator, denominator_denominator = (
+            denominator.as_integer_ratio()
+        )
+        numerator = (
+            -left_numerator
+            * right_numerator
+            * denominator_denominator
+            * denominator_denominator
+        )
+        divisor = (
+            left_denominator
+            * right_denominator
+            * denominator_numerator
+            * denominator_numerator
+        )
+        try:
+            return numerator / divisor
+        except OverflowError:
+            return math.inf if numerator > 0 else -math.inf
+    return -(left / denominator) * (right / denominator)
+
+
 class Div:
     """Element-wise division — forward and backward."""
 
@@ -67,7 +105,7 @@ class Div:
             )
             db = Tensor(
                 [
-                    -g * x / (y * y)
+                    _negative_product_over_square(g, x, y)
                     for g, x, y in zip(
                         grad._data,
                         expanded_a._data,
@@ -84,7 +122,8 @@ class Div:
             a = inputs[0]
             dtype = result_dtype(grad.dtype, a, division=True)
             values = (
-                -g * scalar / (x * x) for g, x in zip(grad._data, a._data)
+                _negative_product_over_square(g, scalar, x)
+                for g, x in zip(grad._data, a._data)
             )
             return [Tensor(list(values), dtype=dtype, shape=a.shape)]
         return [Tensor([g / scalar for g in grad._data], dtype=grad.dtype.typecode, shape=grad.shape)]
@@ -96,11 +135,11 @@ class Div:
             scalar = kwargs.get("scalar", 1.0)
             if kwargs.get("reverse", False):
                 value = inputs[0]
-                return [-(grad * scalar) / (value ** 2)]
+                return [-(grad / value) * (scalar / value)]
             return [grad / scalar]
         left, right = inputs
         from ._utils import sum_to_shape_graph
         return [
             sum_to_shape_graph(grad / right, left.shape),
-            sum_to_shape_graph(-(grad * left) / (right ** 2), right.shape),
+            sum_to_shape_graph(-(grad / right) * (left / right), right.shape),
         ]

@@ -16,6 +16,8 @@ from ..utils.shape import (
 )
 from ._reduction import keepdims_shape, reduction_groups
 from .log_softmax import LogSoftmax, log_softmax
+from .mean import _stable_float_mean
+from ._normalization import shifted_normalization
 from .softmax import Softmax, _normalize_axis, softmax
 from .sum import _stable_float_sum
 
@@ -190,15 +192,13 @@ class CrossEntropy:
                 for index in group
                 if targets._data[index] != 0
             ]
-            losses.append(math.fsum(contributions))
+            losses.append(_stable_float_sum(contributions))
 
         dtype = result_dtype(logits.dtype, targets, division=True)
         if reduction == "none":
             return Tensor(losses, dtype=dtype, shape=output_shape)
         if reduction == "mean":
-            total = _stable_float_sum([
-                loss / len(losses) for loss in losses
-            ]) if losses else 0.0
+            total = _stable_float_mean(losses)
         else:
             total = _stable_float_sum(losses)
         return Tensor([total], dtype=dtype, shape=(1,))
@@ -243,11 +243,26 @@ class CrossEntropy:
             target_mass = math.fsum(
                 float(expanded_targets._data[index]) for index in group
             )
-            for index in group:
-                logits_gradient[index] = upstream * (
-                    target_mass * probabilities._data[index]
-                    - expanded_targets._data[index]
-                )
+            group_values = [
+                float(expanded_logits._data[index]) for index in group
+            ]
+            if group_values and all(math.isfinite(value) for value in group_values):
+                _, _, _, complements = shifted_normalization(group_values)
+            else:
+                complements = [
+                    1.0 - float(probabilities._data[index]) for index in group
+                ]
+            for index, complement in zip(group, complements):
+                probability = float(probabilities._data[index])
+                target_value = float(expanded_targets._data[index])
+                if probability > 0.5:
+                    derivative = _stable_float_sum([
+                        target_mass - target_value,
+                        -target_mass * complement,
+                    ])
+                else:
+                    derivative = target_mass * probability - target_value
+                logits_gradient[index] = upstream * derivative
                 targets_gradient[index] = (
                     -upstream * log_probabilities._data[index]
                 )

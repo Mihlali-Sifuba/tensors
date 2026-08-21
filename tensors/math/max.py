@@ -43,7 +43,7 @@ class Max:
         """Distribute each gradient equally among tied maximum values."""
         value = inputs[0]
         axis = kwargs.get("axis")
-        keepdims = bool(kwargs.get("keepdims", False))
+        keepdims = kwargs.get("keepdims", False)
         _, output_shape, groups = reduction_groups(
             value, axis, keepdims, scalar_as_vector=True
         )
@@ -76,7 +76,7 @@ class Max:
 
         value = inputs[0]
         axis = kwargs.get("axis")
-        keepdims = bool(kwargs.get("keepdims", False))
+        keepdims = kwargs.get("keepdims", False)
         _, _, groups = reduction_groups(
             value.data,
             axis,

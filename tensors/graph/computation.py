@@ -125,6 +125,8 @@ class Computation:
         create_graph: bool = False,
     ) -> None:
         """Differentiate the output with respect to reachable Variables."""
+        if not isinstance(create_graph, bool):
+            raise TypeError("create_graph must be a bool")
         self._validate_recorded_states()
         if create_graph:
             seed = self._gradient_seed(grad, create_graph=True)
@@ -163,6 +165,8 @@ class Computation:
             )
         elif isinstance(grad, Variable):
             seed = grad
+        elif isinstance(grad, (int, float)) and self.output.data.shape == ():
+            seed = Tensor([grad], shape=())
         else:
             seed = grad if isinstance(grad, Tensor) else Tensor(grad)
 
@@ -198,6 +202,8 @@ class Computation:
 
     def _backward_graph(self, seed: Any) -> dict[Any, Any]:
         """Build a differentiable reverse-mode gradient computation."""
+        if not self.output.requires_grad:
+            return {}
         gradient_terms: dict[Any, list[Any]] = {self.output: [seed]}
         gradients: dict[Any, Any] = {}
         for node in reversed(self._nodes):
@@ -237,6 +243,8 @@ class Computation:
 
     def _backward_values(self, seed: Tensor) -> dict[Any, Tensor]:
         """Return numerical reverse-mode gradients without mutating Variables."""
+        if not self.output.requires_grad:
+            return {}
         gradient_terms: dict[Any, list[Tensor]] = {self.output: [seed]}
         gradients: dict[Any, Tensor] = {}
         for node in reversed(self._nodes):
@@ -346,7 +354,7 @@ class Computation:
         inputs = [edge.source.output_var for edge in node._in_edges]
         args = [values[value] for value in inputs]
 
-        if "scalar" in node.args:
+        if node._scalar_operand:
             scalar = node.args["scalar"]
             if node.args.get("reverse", False):
                 if not isinstance(node.op_cls, ReverseOperation):
@@ -368,6 +376,8 @@ def backward(
     create_graph: bool = False,
 ) -> None:
     """Differentiate an output through its recorded Computation."""
+    if not isinstance(create_graph, bool):
+        raise TypeError("create_graph must be a bool")
     Computation(output).backward(grad, create_graph=create_graph)
 
 
@@ -384,6 +394,9 @@ def grad(
     differentiated.
     """
     from ..variable import Variable
+
+    if not isinstance(create_graph, bool):
+        raise TypeError("create_graph must be a bool")
 
     single_input = isinstance(inputs, Variable)
     try:

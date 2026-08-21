@@ -104,7 +104,7 @@ class Sum:
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         a = inputs[0]
         axis = kwargs.get("axis")
-        keepdims = bool(kwargs.get("keepdims", False))
+        keepdims = kwargs.get("keepdims", False)
         _, output_shape, groups = reduction_groups(
             a, axis, keepdims, scalar_as_vector=True
         )
@@ -126,7 +126,7 @@ class Sum:
         from .reshape import reshape
 
         axis = kwargs.get("axis")
-        keepdims = bool(kwargs.get("keepdims", False))
+        keepdims = kwargs.get("keepdims", False)
         value = inputs[0]
         expanded = grad if keepdims else reshape(grad, keepdims_shape(value.shape, axis))
         ones = Variable(

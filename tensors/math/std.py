@@ -53,7 +53,7 @@ class Std:
         values = []
         for group in groups:
             if not group:
-                values.append(0.0)
+                values.append(_math.nan)
                 continue
             scale, _, normalized_deviation = _scaled_deviations(value, group)
             values.append(scale * normalized_deviation)
@@ -65,7 +65,7 @@ class Std:
         """Differentiate the population standard deviation by reduction group."""
         value = inputs[0]
         axis = kwargs.get("axis")
-        keepdims = bool(kwargs.get("keepdims", False))
+        keepdims = kwargs.get("keepdims", False)
         _, output_shape, groups = reduction_groups(
             value, axis, keepdims, scalar_as_vector=True
         )
@@ -95,7 +95,7 @@ class Std:
 
         value = inputs[0]
         axis = kwargs.get("axis")
-        keepdims = bool(kwargs.get("keepdims", False))
+        keepdims = kwargs.get("keepdims", False)
         _, scale_shape, groups = reduction_groups(value.data, axis, True)
         statistics = [_scaled_deviations(value.data, group) for group in groups]
         count = len(groups[0]) if groups else 0

@@ -1,5 +1,6 @@
 """Differentiable tensor indexing and slicing."""
 
+from itertools import product
 from typing import List
 
 from ..tensor import Tensor
@@ -15,6 +16,8 @@ def _flat_indices(tensor: Tensor, key) -> List[int]:
 
     ranges = []
     for dim, part in enumerate(keys):
+        if isinstance(part, bool):
+            raise TypeError("Boolean tensor indices are not supported")
         if isinstance(part, int):
             index = part if part >= 0 else part + tensor.shape[dim]
             if not 0 <= index < tensor.shape[dim]:
@@ -32,17 +35,10 @@ def _flat_indices(tensor: Tensor, key) -> List[int]:
             stride *= trailing
         strides.append(stride)
 
-    selected = []
-
-    def collect(dim, offset):
-        if dim == tensor.ndim:
-            selected.append(offset)
-            return
-        for index in ranges[dim]:
-            collect(dim + 1, offset + index * strides[dim])
-
-    collect(0, 0)
-    return selected
+    return [
+        sum(index * stride for index, stride in zip(indices, strides))
+        for indices in product(*ranges)
+    ]
 
 
 class Slice:

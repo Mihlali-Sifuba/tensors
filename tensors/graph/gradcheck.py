@@ -28,6 +28,8 @@ def _input_tensors(inputs: Any) -> tuple[Tensor, ...]:
             raise TypeError(f"gradcheck input {index} must be a Tensor or Variable")
         if tensor.dtype.typecode not in {"f", "d"}:
             raise TypeError(f"gradcheck input {index} must have a floating-point dtype")
+        if any(not math.isfinite(float(item)) for item in tensor._data):
+            raise ValueError(f"gradcheck input {index} must contain only finite values")
         tensors.append(tensor.clone())
     return tuple(tensors)
 
@@ -57,6 +59,10 @@ def gradcheck(
     """
     if not callable(function):
         raise TypeError("gradcheck function must be callable")
+    if not isinstance(raise_exception, bool):
+        raise TypeError("raise_exception must be a bool")
+    if any(isinstance(value, bool) for value in (eps, atol, rtol)):
+        raise TypeError("gradcheck tolerances must be numeric, not bools")
     if not math.isfinite(eps) or eps <= 0:
         raise ValueError("eps must be positive and finite")
     if (

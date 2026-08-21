@@ -42,9 +42,16 @@ class GraphState:
         label: str,
         output_var: Any = None,
         op_cls: type[Operation] | None = None,
+        _scalar_operand: bool = False,
         **kwargs: Any,
     ) -> Node:
-        node = Node(label=label, output_var=output_var, op_cls=op_cls, **kwargs)
+        node = Node(
+            label=label,
+            output_var=output_var,
+            op_cls=op_cls,
+            _scalar_operand=_scalar_operand,
+            **kwargs,
+        )
         self._nodes.add(node)
         return node
 

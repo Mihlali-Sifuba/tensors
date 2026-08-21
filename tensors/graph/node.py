@@ -21,6 +21,7 @@ class Node:
         label: str | None = None,
         output_var: Any = None,
         op_cls: type[Operation] | None = None,
+        _scalar_operand: bool = False,
         **kwargs: Any,
     ) -> None:
         self.id = Node._next_id
@@ -38,6 +39,7 @@ class Node:
         self.label = label
         self.output_var = output_var
         self.op_cls = op_cls
+        self._scalar_operand = _scalar_operand
         self.args: dict[str, Any] = kwargs
         self._in_edges: list[Edge] = []
         # Incoming edges are owned strongly because an output must retain all

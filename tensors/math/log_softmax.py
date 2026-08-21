@@ -8,6 +8,7 @@ import math
 
 from ..dtype import float64
 from ..tensor import Tensor
+from ._normalization import shifted_normalization
 from .softmax import Softmax, _axis_layout, _normalize_axis
 
 
@@ -55,13 +56,13 @@ class LogSoftmax:
                         "log_softmax is undefined when every value along an "
                         "axis is -inf"
                     )
-                total = math.fsum(
-                    math.exp(float(a._data[position]) - maximum)
-                    for position in positions
+                _, correction, _, _ = shifted_normalization(
+                    [float(a._data[position]) for position in positions]
                 )
-                normalizer = maximum + math.log(total)
                 for position in positions:
-                    values[position] = float(a._data[position]) - normalizer
+                    values[position] = (
+                        float(a._data[position]) - maximum - correction
+                    )
 
         return Tensor(values, dtype=dtype, shape=a.shape)
 

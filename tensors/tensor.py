@@ -15,13 +15,21 @@ from .utils.shape import (
 def _flatten_nested_list(nested_list: List) -> List:
     """Flatten a nested list into a single list (iterative, no recursion limit)."""
     result: List = []
-    stack: List = [nested_list]
+    stack: List = [(nested_list, False)]
+    active: set[int] = set()
     while stack:
-        item = stack.pop()
+        item, leaving = stack.pop()
         if isinstance(item, list):
-            # Reverse so original order is preserved when popping
+            identity = id(item)
+            if leaving:
+                active.remove(identity)
+                continue
+            if identity in active:
+                raise ValueError("Cyclic nested lists are not valid tensor data")
+            active.add(identity)
+            stack.append((item, True))
             for sub in reversed(item):
-                stack.append(sub)
+                stack.append((sub, False))
         else:
             result.append(item)
     return result
@@ -32,18 +40,44 @@ def _infer_nested_list_shape(nested_list: List) -> Tuple[int, ...]:
     if not isinstance(nested_list, list):
         return ()
 
-    if not nested_list:
-        return (0,)
+    stack: list[list] = [[nested_list, 0, None]]
+    active = {id(nested_list)}
+    while stack:
+        current, child_index, expected = stack[-1]
+        if child_index == len(current):
+            child_shape = () if expected is None else expected
+            completed_shape = (len(current),) + child_shape
+            active.remove(id(current))
+            stack.pop()
+            if not stack:
+                return completed_shape
+            parent = stack[-1]
+            if parent[2] is None:
+                parent[2] = completed_shape
+            elif parent[2] != completed_shape:
+                raise ValueError(
+                    "Ragged nested lists are not valid tensor data: "
+                    f"expected child shape {parent[2]}, got {completed_shape}"
+                )
+            continue
 
-    sub_shape = _infer_nested_list_shape(nested_list[0])
-    for item in nested_list[1:]:
-        item_shape = _infer_nested_list_shape(item)
-        if item_shape != sub_shape:
-            raise ValueError(
-                "Ragged nested lists are not valid tensor data: "
-                f"expected child shape {sub_shape}, got {item_shape}"
-            )
-    return (len(nested_list),) + sub_shape
+        child = current[child_index]
+        stack[-1][1] += 1
+        if isinstance(child, list):
+            if id(child) in active:
+                raise ValueError("Cyclic nested lists are not valid tensor data")
+            active.add(id(child))
+            stack.append([child, 0, None])
+        else:
+            if expected is None:
+                stack[-1][2] = ()
+            elif expected != ():
+                raise ValueError(
+                    "Ragged nested lists are not valid tensor data: "
+                    f"expected child shape {expected}, got ()"
+                )
+
+    raise RuntimeError("nested-list shape inference did not complete")
 
 
 class Tensor:
@@ -141,7 +175,11 @@ class Tensor:
 
     def _create_storage(self, values: Iterable) -> array:
         """Create this tensor's backing storage."""
-        return array(self.dtype.typecode, values)
+        if self.dtype.kind == "integer":
+            converted = (int(value) for value in values)
+        else:
+            converted = (float(value) for value in values)
+        return array(self.dtype.typecode, converted)
 
     def _indices_to_flat_index(self, indices: Tuple[int, ...]) -> int:
         """Normalize tensor indices and convert them to a row-major flat index."""
@@ -152,6 +190,8 @@ class Tensor:
 
         normalized_indices = []
         for index, dimension_size in zip(indices, self.shape):
+            if isinstance(index, bool) or not isinstance(index, int):
+                raise TypeError("Tensor indices must be integers, not bools")
             normalized_index = (
                 index + dimension_size
                 if index < 0
@@ -177,6 +217,8 @@ class Tensor:
             tensor[0, :, 1:3]      # Mixed int/slice (3D)
         """
         # A single key indexes the first dimension for N-D tensors.
+        if isinstance(key, bool):
+            raise TypeError("Boolean tensor indices are not supported")
         if isinstance(key, (int, slice)):
             if self.ndim != 1:
                 return self._slice_from_key((key,))
@@ -213,6 +255,8 @@ class Tensor:
         ranges = []
         new_shape = []
         for dim_idx, k in enumerate(key):
+            if isinstance(k, bool):
+                raise TypeError("Boolean tensor indices are not supported")
             if isinstance(k, int):
                 idx = k if k >= 0 else k + self.shape[dim_idx]
                 if not (0 <= idx < self.shape[dim_idx]):
@@ -245,31 +289,15 @@ class Tensor:
         ranges, new_shape = self._slice_ranges_and_shape_from_key(key)
         strides = row_major_strides(self.shape)
 
-        # Extract data by iterating over all index combinations
-        result_data = self._create_storage([])
-        self._collect_slice_values(0, 0, ranges, strides, result_data)
+        result_data = self._create_storage(
+            self._data[sum(
+                coordinate * stride
+                for coordinate, stride in zip(coordinates, strides)
+            )]
+            for coordinates in product(*ranges)
+        )
 
         return Tensor(result_data, dtype=self.dtype, shape=new_shape)
-
-    def _collect_slice_values(
-        self,
-        dim: int,
-        flat_offset: int,
-        ranges: List[range],
-        strides: Tuple[int, ...],
-        result: array,
-    ) -> None:
-        """Recursively iterate over N-dimensional index ranges."""
-        if dim == len(ranges):
-            result.append(self._data[flat_offset])
-            return
-
-        for idx in ranges[dim]:
-            self._collect_slice_values(
-                dim + 1,
-                flat_offset + idx * strides[dim],
-                ranges, strides, result
-            )
 
     def _flat_indices_from_ranges(
         self,
@@ -346,6 +374,8 @@ class Tensor:
         value: Union[int, float, List, 'Tensor', array],
     ) -> None:
         """Support item assignment for N-dimensional tensors."""
+        if isinstance(key, bool):
+            raise TypeError("Boolean tensor indices are not supported")
         if isinstance(key, slice):
             self._assign_slice_from_key((key,), value)
             return
@@ -356,21 +386,37 @@ class Tensor:
                     f"Cannot assign to {self.ndim}D tensor with single integer"
                 )
             idx = self._indices_to_flat_index((key,))
-            self._data[idx] = value
+            self._data[idx] = self._assignment_scalar(value)
             self._version += 1
             return
 
         if isinstance(key, tuple):
+            if any(isinstance(part, bool) for part in key):
+                raise TypeError("Boolean tensor indices are not supported")
             if any(isinstance(part, slice) for part in key):
                 self._assign_slice_from_key(key, value)
                 return
 
             idx = self._indices_to_flat_index(key)
-            self._data[idx] = value
+            self._data[idx] = self._assignment_scalar(value)
             self._version += 1
             return
 
         raise TypeError(f"Unsupported index type: {type(key)}")
+
+    def _assignment_scalar(
+        self,
+        value: Union[int, float, List, 'Tensor', array],
+    ) -> Union[int, float]:
+        """Convert one value using the same rules as tensor construction."""
+        if isinstance(value, (Tensor, list, array)):
+            converted = Tensor(value, dtype=self.dtype)
+            if converted.size != 1:
+                raise ValueError("Item assignment requires exactly one value")
+            return converted.item()
+        if not isinstance(value, (int, float)):
+            raise TypeError("Item assignment value must be numeric")
+        return self._create_storage([value])[0]
 
     def __repr__(self) -> str:
         """String representation of the tensor."""
@@ -380,6 +426,11 @@ class Tensor:
             return str(self._data[0])
         if self.ndim == 1:
             return f"Tensor({list(self._data)}, shape={self.shape}, dtype='{dtype_str}')"
+        if self.ndim > 32:
+            return (
+                f"Tensor({list(self._data)}, shape={self.shape}, "
+                f"dtype='{dtype_str}')"
+            )
 
         # Build recursive representation for N-dim
         lines = self._format_nested_repr(0, 0)
@@ -424,6 +475,8 @@ class Tensor:
 
     def __len__(self) -> int:
         """Return the size of the first dimension."""
+        if self.ndim == 0:
+            raise TypeError("len() of a 0-dimensional tensor")
         return self.shape[0]
 
     @property

@@ -43,7 +43,16 @@ class Variable:
             self.node = get_graph_state().add_node(label="var", output_var=self)
 
     @classmethod
-    def _from_operation(cls, data, label, op_cls, inputs, **kwargs):
+    def _from_operation(
+        cls,
+        data,
+        label,
+        op_cls,
+        inputs,
+        *,
+        _scalar_operand=False,
+        **kwargs,
+    ):
         """Create a result Variable owned by its operation node."""
         graph = get_graph_state()
         out = cls(
@@ -51,7 +60,13 @@ class Variable:
             requires_grad=any(var.requires_grad for var in inputs),
             _register=False,
         )
-        node = graph.add_node(label=label, output_var=out, op_cls=op_cls, **kwargs)
+        node = graph.add_node(
+            label=label,
+            output_var=out,
+            op_cls=op_cls,
+            _scalar_operand=_scalar_operand,
+            **kwargs,
+        )
         out.node = node
         for index, var in enumerate(inputs):
             graph.add_edge(var.node, node, label=f"input_{index}")
@@ -146,7 +161,8 @@ class Variable:
                 Ops.add(self.data, other.data), "add", Add, [self, other]
             )
         return self._from_operation(
-            Ops.add(self.data, other), "add", Add, [self], scalar=other
+            Ops.add(self.data, other), "add", Add, [self],
+            _scalar_operand=True, scalar=other
         )
 
     def __radd__(self, other):
@@ -160,7 +176,8 @@ class Variable:
                 Ops.subtract(self.data, other.data), "sub", Sub, [self, other]
             )
         return self._from_operation(
-            Ops.subtract(self.data, other), "sub", Sub, [self], scalar=other
+            Ops.subtract(self.data, other), "sub", Sub, [self],
+            _scalar_operand=True, scalar=other
         )
 
     def __rsub__(self, other):
@@ -174,7 +191,8 @@ class Variable:
                 Ops.multiply(self.data, other.data), "mul", Mul, [self, other]
             )
         return self._from_operation(
-            Ops.multiply(self.data, other), "mul", Mul, [self], scalar=other
+            Ops.multiply(self.data, other), "mul", Mul, [self],
+            _scalar_operand=True, scalar=other
         )
 
     def __rmul__(self, other):
@@ -188,7 +206,8 @@ class Variable:
                 Ops.divide(self.data, other.data), "div", Div, [self, other]
             )
         return self._from_operation(
-            Ops.divide(self.data, other), "div", Div, [self], scalar=other
+            Ops.divide(self.data, other), "div", Div, [self],
+            _scalar_operand=True, scalar=other
         )
 
     def __rtruediv__(self, other):
@@ -200,6 +219,7 @@ class Variable:
             "div",
             Div,
             [self],
+            _scalar_operand=True,
             scalar=other,
             reverse=True,
         )
@@ -225,7 +245,8 @@ class Variable:
                 differentiate_exponent=False,
             )
         return self._from_operation(
-            Pow.forward(self.data, other), "pow", Pow, [self], scalar=other
+            Pow.forward(self.data, other), "pow", Pow, [self],
+            _scalar_operand=True, scalar=other
         )
 
     def __rpow__(self, other):
@@ -239,6 +260,7 @@ class Variable:
             "pow",
             Pow,
             [self],
+            _scalar_operand=True,
             scalar=other,
             reverse=True,
         )
