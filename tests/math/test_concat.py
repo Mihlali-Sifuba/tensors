@@ -28,6 +28,15 @@ class ConcatTests(unittest.TestCase):
         self.assertEqual(result.shape, (1, 4))
         self.assertEqual(result.tolist(), [1.0, 2.0, 3.0, 4.0])
 
+    def test_concat_combines_scalar_tensors_into_vector(self):
+        left = ts.Tensor([1.0], shape=())
+        right = ts.Tensor([2.0], shape=())
+
+        result = ts.concat([left, right])
+
+        self.assertEqual(result.shape, (2,))
+        self.assertEqual(result.tolist(), [1.0, 2.0])
+
     def test_concat_promotes_mixed_input_dtypes(self):
         left = ts.Tensor([1], dtype=ts.int32)
         right = ts.Tensor([2.5], dtype=ts.float64)
@@ -41,6 +50,17 @@ class ConcatTests(unittest.TestCase):
 
         self.assertIs(reverse.dtype, ts.float64)
         self.assertEqual(reverse.tolist(), [2.5, 1.0])
+
+    def test_concat_restores_each_input_gradient_dtype(self):
+        left = ts.Variable(ts.Tensor([1.0], dtype=ts.float32))
+        right = ts.Variable(ts.Tensor([2.0], dtype=ts.float64))
+
+        ts.backward(ts.sum(ts.concat([left, right])))
+
+        self.assertIs(left.grad.dtype, ts.float32)
+        self.assertIs(right.grad.dtype, ts.float64)
+        self.assertEqual(left.grad.tolist(), [1.0])
+        self.assertEqual(right.grad.tolist(), [1.0])
 
     def test_concat_validates_input_shapes(self):
         with self.assertRaisesRegex(ValueError, "non-concat"):

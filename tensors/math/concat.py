@@ -31,6 +31,23 @@ class Concat:
 
         converted = [value if isinstance(value, Tensor) else Tensor(value) for value in tensors]
         reference = converted[0]
+        if reference.ndim == 0:
+            if axis < 0:
+                axis += 1
+            if axis != 0:
+                raise ValueError("Axis out of bounds for scalar tensor concat")
+            if any(tensor.ndim != 0 for tensor in converted[1:]):
+                raise ValueError("All tensors must have the same rank")
+
+            dtype = reference.dtype
+            for tensor in converted[1:]:
+                dtype = result_dtype(dtype, tensor)
+            values = array(
+                dtype.typecode,
+                [tensor._data[0] for tensor in converted],
+            )
+            return Tensor(values, dtype=dtype, shape=(len(converted),))
+
         if axis < 0:
             axis += reference.ndim
         if not 0 <= axis < reference.ndim:
@@ -86,6 +103,12 @@ class Concat:
         if axis < 0:
             axis += grad.ndim
 
+        if inputs[0].ndim == 0:
+            return [
+                Tensor([grad._data[index]], dtype=grad.dtype, shape=())
+                for index in range(len(inputs))
+            ]
+
         offset = 0
         gradients = []
         for tensor in inputs:
@@ -103,6 +126,8 @@ class Concat:
             raise TypeError("concat axis must be an integer")
         if axis < 0:
             axis += grad.ndim
+        if inputs[0].ndim == 0:
+            return [grad[index] for index in range(len(inputs))]
         offset = 0
         gradients = []
         for tensor in inputs:

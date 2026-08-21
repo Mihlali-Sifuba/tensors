@@ -42,6 +42,42 @@ class ComputationTests(unittest.TestCase):
         self.assertIs(value.grad.dtype, ts.float32)
         self.assertEqual(value.grad.tolist(), [12.0])
 
+    def test_computation_restores_input_gradient_dtypes_with_create_graph(self):
+        left = ts.Variable(ts.Tensor([2.0], dtype=ts.float32))
+        right = ts.Variable(ts.Tensor([3.0], dtype=ts.float64))
+        output = ts.sum(left * right)
+
+        left_gradient, right_gradient = ts.grad(
+            output,
+            (left, right),
+            create_graph=True,
+        )
+        cross_gradient = ts.grad(ts.sum(left_gradient), right)
+
+        self.assertIs(left_gradient.dtype, ts.float32)
+        self.assertIs(right_gradient.dtype, ts.float64)
+        self.assertEqual(left_gradient.data.tolist(), [3.0])
+        self.assertEqual(right_gradient.data.tolist(), [2.0])
+        self.assertEqual(cross_gradient.tolist(), [1.0])
+
+    def test_computation_restores_input_gradient_dtypes_with_create_graph(self):
+        left = ts.Variable(ts.Tensor([2.0], dtype=ts.float32))
+        right = ts.Variable(ts.Tensor([3.0], dtype=ts.float64))
+        output = ts.sum(left * right)
+
+        left_gradient, right_gradient = ts.grad(
+            output,
+            (left, right),
+            create_graph=True,
+        )
+        cross_gradient = ts.grad(ts.sum(left_gradient), right)
+
+        self.assertIs(left_gradient.dtype, ts.float32)
+        self.assertIs(right_gradient.dtype, ts.float64)
+        self.assertEqual(left_gradient.data.tolist(), [3.0])
+        self.assertEqual(right_gradient.data.tolist(), [2.0])
+        self.assertEqual(cross_gradient.tolist(), [1.0])
+
     def test_computation_rejects_gradient_shape_mismatch(self):
         value = ts.Variable([2.0, 3.0])
         result = value * value

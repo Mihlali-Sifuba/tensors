@@ -290,6 +290,7 @@ class Computation:
             )
 
         expected_type = Variable if graph else Tensor
+        validated = list(results)
         for index, (edge, gradient) in enumerate(zip(node._in_edges, results)):
             if not isinstance(gradient, expected_type):
                 mode = "backward_graph" if graph else "backward"
@@ -303,7 +304,13 @@ class Computation:
                     f"{node.label} backward gradient {index} has shape "
                     f"{gradient.shape}; expected {expected_shape}"
                 )
-        return results
+            input_variable = edge.source.output_var
+            if (
+                input_variable.requires_grad
+                and gradient.dtype != input_variable.dtype
+            ):
+                validated[index] = gradient.astype(input_variable.dtype)
+        return tuple(validated)
 
     @staticmethod
     def _execute_node(node: Node, values: dict[Any, Tensor]) -> Tensor:

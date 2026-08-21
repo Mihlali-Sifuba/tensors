@@ -194,6 +194,15 @@ class AutogradTests(unittest.TestCase):
 
         self.assertEqual(x.grad.tolist(), [2.0, 2.0, 2.0])
 
+    def test_integer_indexing_returns_scalar_variable(self):
+        x = ts.Variable([[1.0, 2.0], [3.0, 4.0]])
+
+        selected = x[1, 0]
+        ts.backward(selected)
+
+        self.assertEqual(selected.shape, ())
+        self.assertEqual(x.grad.tolist(), [0.0, 0.0, 1.0, 0.0])
+
     def test_dot_backward_for_2d_tensors(self):
         x = ts.Variable([[1.0, 2.0]])
         w = ts.Variable([[3.0], [4.0]])

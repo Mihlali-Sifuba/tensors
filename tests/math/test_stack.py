@@ -57,6 +57,17 @@ class StackTests(unittest.TestCase):
 
         self.assertIs(result.dtype, ts.float32)
 
+    def test_stack_restores_each_input_gradient_dtype(self):
+        left = ts.Variable(ts.Tensor([1.0], dtype=ts.float32))
+        right = ts.Variable(ts.Tensor([2.0], dtype=ts.float64))
+
+        ts.backward(ts.sum(ts.stack([left, right])))
+
+        self.assertIs(left.grad.dtype, ts.float32)
+        self.assertIs(right.grad.dtype, ts.float64)
+        self.assertEqual(left.grad.tolist(), [1.0])
+        self.assertEqual(right.grad.tolist(), [1.0])
+
     def test_math_namespace_exposes_stack_operation_class(self):
         result = ts.math.Stack.forward([ts.Tensor([1, 2]), ts.Tensor([3, 4])])
 
