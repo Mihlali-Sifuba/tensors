@@ -151,6 +151,14 @@ class Variable:
 
     __hash__ = object.__hash__
 
+    def __bool__(self) -> bool:
+        """Prevent Variables from silently behaving like truthy objects."""
+        raise TypeError(
+            "Cannot convert a Variable to a Python bool. "
+            "Use variable.data.item() for scalar Variables or "
+            "variable.size != 0 for emptiness checks."
+        )
+
     # -- operators (build graph implicitly) ----------------------------
 
     def __add__(self, other):

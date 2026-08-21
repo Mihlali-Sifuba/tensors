@@ -28,6 +28,7 @@ class Tanh:
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build a differentiable VJP for hyperbolic tangent."""
+        from ..ops._utils import masked_value_graph
         from .exp import exp
 
         value = inputs[0]
@@ -41,8 +42,8 @@ class Tanh:
             dtype=value.dtype,
             shape=value.shape,
         )
-        positive_z = exp(-2.0 * value * positive_mask)
-        negative_z = exp(2.0 * value * negative_mask)
+        positive_z = exp(-2.0 * masked_value_graph(value, positive_mask))
+        negative_z = exp(2.0 * masked_value_graph(value, negative_mask))
         positive = 4.0 * positive_z / ((1.0 + positive_z) ** 2) * positive_mask
         negative = 4.0 * negative_z / ((1.0 + negative_z) ** 2) * negative_mask
         return [grad * (positive + negative)]

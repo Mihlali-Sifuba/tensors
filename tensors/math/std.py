@@ -89,9 +89,10 @@ class Std:
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build a differentiable population-standard-deviation VJP."""
+        from ..ops._utils import zero_like_graph
+        from ..variable import Variable
         from .mean import mean
         from .reshape import reshape
-        from ..variable import Variable
 
         value = inputs[0]
         axis = kwargs.get("axis")
@@ -99,6 +100,8 @@ class Std:
         _, scale_shape, groups = reduction_groups(value.data, axis, True)
         statistics = [_scaled_deviations(value.data, group) for group in groups]
         count = len(groups[0]) if groups else 0
+        if count == 0:
+            return [zero_like_graph(value)]
         if count == 1:
             return [value * 0.0]
         if any(
@@ -107,10 +110,6 @@ class Std:
         ):
             raise ValueError(
                 "Higher-order derivatives of std are undefined at zero deviation"
-            )
-        if count == 0:
-            raise NotImplementedError(
-                "Higher-order derivatives for empty standard deviations are not implemented"
             )
         scales = Variable(
             Tensor(

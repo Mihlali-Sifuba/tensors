@@ -58,11 +58,15 @@ class Optimizer(ABC):
     @staticmethod
     def _gradient_for(parameter: Variable) -> Tensor | None:
         """Return a parameter-shaped gradient in the parameter's dtype."""
+        from ..variable import Variable
+
         gradient = parameter.grad
         if gradient is None:
             return None
+        if isinstance(gradient, Variable):
+            gradient = gradient.data
         if not isinstance(gradient, Tensor):
-            raise TypeError("Optimizer gradients must be Tensors")
+            raise TypeError("Optimizer gradients must be Tensors or Variables")
         if gradient.shape != parameter.shape:
             raise ValueError(
                 f"Gradient shape {gradient.shape} does not match parameter "

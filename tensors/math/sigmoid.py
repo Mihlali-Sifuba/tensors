@@ -28,6 +28,7 @@ class Sigmoid:
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build a differentiable VJP for sigmoid."""
+        from ..ops._utils import masked_value_graph
         from .exp import exp
 
         value = inputs[0]
@@ -41,8 +42,8 @@ class Sigmoid:
             dtype=value.dtype,
             shape=value.shape,
         )
-        positive_z = exp(-(value * positive_mask))
-        negative_z = exp(value * negative_mask)
+        positive_z = exp(-masked_value_graph(value, positive_mask))
+        negative_z = exp(masked_value_graph(value, negative_mask))
         positive = positive_z / ((1.0 + positive_z) ** 2) * positive_mask
         negative = negative_z / ((1.0 + negative_z) ** 2) * negative_mask
         return [grad * (positive + negative)]

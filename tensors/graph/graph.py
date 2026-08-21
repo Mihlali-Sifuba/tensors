@@ -129,50 +129,53 @@ class Graph:
         Child Graph instances are traversed recursively.  Function graphs also
         inspect their closure so ``@Graph`` can capture simple parameters.
         """
-        found = []
-        visited = set()
+        found: list[Variable] = []
+        visited: set[int] = set()
+        roots = [
+            value
+            for name, value in self._object_items(self)
+            if name not in {"_function", "_thread_state"}
+        ]
+        if self._function is not None:
+            roots.extend(self._function_values(self._function))
 
-        def visit(value: Any) -> None:
+        # Use an explicit stack so deeply nested model containers do not
+        # depend on Python's recursion limit. Reversing children preserves the
+        # same depth-first discovery order as the former recursive traversal.
+        pending = list(reversed(roots))
+        while pending:
+            value = pending.pop()
             identity = id(value)
             if identity in visited:
-                return
+                continue
             visited.add(identity)
 
             if isinstance(value, Variable):
                 if value.requires_grad:
                     found.append(value)
-                return
+                continue
 
+            children: list[Any] = []
             if isinstance(value, Graph):
-                for name, child in self._object_items(value):
-                    if name not in {"_function", "_thread_state"}:
-                        visit(child)
+                children.extend(
+                    child
+                    for name, child in self._object_items(value)
+                    if name not in {"_function", "_thread_state"}
+                )
                 if value._function is not None:
-                    for captured in self._function_values(value._function):
-                        visit(captured)
-                return
-
-            if isinstance(value, dict):
-                for item in value.values():
-                    visit(item)
+                    children.extend(self._function_values(value._function))
+            elif isinstance(value, dict):
+                children.extend(value.values())
             elif isinstance(value, (list, tuple, set)):
-                for item in value:
-                    visit(item)
+                children.extend(value)
             elif (
                 isfunction(value)
                 or ismethod(value)
                 or isinstance(value, partial)
                 or (callable(value) and not isinstance(value, type))
             ):
-                for captured in self._function_values(value):
-                    visit(captured)
-
-        for name, value in self._object_items(self):
-            if name not in {"_function", "_thread_state"}:
-                visit(value)
-        if self._function is not None:
-            for captured in self._function_values(self._function):
-                visit(captured)
+                children.extend(self._function_values(value))
+            pending.extend(reversed(children))
         return found
 
     def _trace(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
@@ -206,16 +209,28 @@ class Graph:
 
     @staticmethod
     def _iter_output_variables(outputs: Any) -> Iterator[Variable]:
-        if isinstance(outputs, Variable):
-            yield outputs
-            return
-        if isinstance(outputs, (tuple, list)):
-            for output in outputs:
-                yield from Graph._iter_output_variables(output)
-            return
-        raise TypeError(
-            "Graph.forward() must return a Variable or a tuple/list of Variables"
-        )
+        pending = [(outputs, False)]
+        active_containers: set[int] = set()
+        while pending:
+            output, leaving = pending.pop()
+            if leaving:
+                active_containers.remove(id(output))
+                continue
+            if isinstance(output, Variable):
+                yield output
+                continue
+            if not isinstance(output, (tuple, list)):
+                raise TypeError(
+                    "Graph.forward() must return a Variable or a tuple/list "
+                    "of Variables"
+                )
+
+            identity = id(output)
+            if identity in active_containers:
+                raise ValueError("Graph outputs cannot contain cyclic containers")
+            active_containers.add(identity)
+            pending.append((output, True))
+            pending.extend((item, False) for item in reversed(output))
 
     @staticmethod
     def _capture(
@@ -260,6 +275,7 @@ class Graph:
             yield from (value for _, value in Graph._object_items(function))
             return
 
+        yield from vars(function).values()
         closure = getclosurevars(function)
         yield from closure.nonlocals.values()
         yield from closure.globals.values()
@@ -283,10 +299,16 @@ class Graph:
             if isinstance(slots, str):
                 slots = (slots,)
             for name in slots:
-                if name in {"__dict__", "__weakref__"} or name in seen_names:
+                if name in {"__dict__", "__weakref__"}:
                     continue
-                seen_names.add(name)
+                storage_name = name
+                if name.startswith("__") and not name.endswith("__"):
+                    class_name = cls.__name__.lstrip("_")
+                    storage_name = f"_{class_name}{name}"
+                if storage_name in seen_names:
+                    continue
+                seen_names.add(storage_name)
                 try:
-                    yield name, getattr(value, name)
+                    yield storage_name, getattr(value, storage_name)
                 except AttributeError:
                     continue

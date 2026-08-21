@@ -103,6 +103,240 @@ class AutogradRegressionTests(unittest.TestCase):
 
         self.assertEqual(replayed.tolist(), [6.0])
 
+    def test_normalization_vjps_preserve_saturated_tail_terms(self):
+        expected = math.exp(-40.0)
+        cases = (
+            (ts.softmax, [expected, -expected]),
+            (ts.log_softmax, [expected, -expected]),
+        )
+        for operation, expected_values in cases:
+            for create_graph in (False, True):
+                with self.subTest(
+                    operation=operation.__name__,
+                    create_graph=create_graph,
+                ):
+                    value = ts.Variable([0.0, -40.0])
+                    derivative = ts.grad(
+                        operation(value),
+                        value,
+                        grad_outputs=ts.Tensor([1.0, 0.0]),
+                        create_graph=create_graph,
+                    )
+                    values = (
+                        derivative.data.tolist()
+                        if isinstance(derivative, ts.Variable)
+                        else derivative.tolist()
+                    )
+                    for actual, expected_value in zip(values, expected_values):
+                        self.assertTrue(math.isclose(
+                            actual,
+                            expected_value,
+                            rel_tol=1.0e-15,
+                            abs_tol=0.0,
+                        ))
+
+    def test_cross_entropy_vjp_is_stable_at_saturation_and_infinity(self):
+        expected = math.exp(-40.0)
+        for create_graph in (False, True):
+            with self.subTest(create_graph=create_graph):
+                logits = ts.Variable([0.0, -40.0])
+                derivative = ts.grad(
+                    ts.cross_entropy(
+                        logits,
+                        ts.Tensor([0], dtype=ts.int64),
+                    ),
+                    logits,
+                    create_graph=create_graph,
+                )
+                values = (
+                    derivative.data.tolist()
+                    if isinstance(derivative, ts.Variable)
+                    else derivative.tolist()
+                )
+                self.assertTrue(math.isclose(
+                    values[0], -expected, rel_tol=1.0e-15, abs_tol=0.0
+                ))
+                self.assertTrue(math.isclose(
+                    values[1], expected, rel_tol=1.0e-15, abs_tol=0.0
+                ))
+
+                infinite_logits = ts.Variable([math.inf, 0.0])
+                infinite_derivative = ts.grad(
+                    ts.cross_entropy(
+                        infinite_logits,
+                        ts.Tensor([0], dtype=ts.int64),
+                    ),
+                    infinite_logits,
+                    create_graph=create_graph,
+                )
+                infinite_values = (
+                    infinite_derivative.data.tolist()
+                    if isinstance(infinite_derivative, ts.Variable)
+                    else infinite_derivative.tolist()
+                )
+                self.assertEqual(infinite_values, [0.0, 0.0])
+
+    def test_power_vjps_avoid_intermediate_overflow_and_underflow(self):
+        for create_graph in (False, True):
+            with self.subTest(case="small base", create_graph=create_graph):
+                base = ts.Variable([1.0e-308])
+                derivative = ts.grad(
+                    base ** 2.0,
+                    base,
+                    grad_outputs=ts.Tensor([1.0e308]),
+                    create_graph=create_graph,
+                )
+                actual = (
+                    derivative.data.item()
+                    if isinstance(derivative, ts.Variable)
+                    else derivative.item()
+                )
+                self.assertTrue(math.isclose(
+                    actual, 2.0, rel_tol=1.0e-15, abs_tol=0.0
+                ))
+
+            with self.subTest(case="large base", create_graph=create_graph):
+                base = ts.Variable([1.0e308])
+                derivative = ts.grad(
+                    base ** -1.0,
+                    base,
+                    grad_outputs=ts.Tensor([1.0e308]),
+                    create_graph=create_graph,
+                )
+                actual = (
+                    derivative.data.item()
+                    if isinstance(derivative, ts.Variable)
+                    else derivative.item()
+                )
+                self.assertTrue(math.isclose(
+                    actual, -1.0e-308, rel_tol=1.0e-15, abs_tol=0.0
+                ))
+
+            with self.subTest(
+                case="underflowed output",
+                create_graph=create_graph,
+            ):
+                base = ts.Variable([1.0e-200])
+                exponent = ts.Variable([3.0])
+                base_gradient, exponent_gradient = ts.grad(
+                    base ** exponent,
+                    (base, exponent),
+                    grad_outputs=ts.Tensor([1.0e308]),
+                    create_graph=create_graph,
+                )
+                base_value = (
+                    base_gradient.data.item()
+                    if isinstance(base_gradient, ts.Variable)
+                    else base_gradient.item()
+                )
+                exponent_value = (
+                    exponent_gradient.data.item()
+                    if isinstance(exponent_gradient, ts.Variable)
+                    else exponent_gradient.item()
+                )
+                self.assertTrue(math.isclose(
+                    base_value, 3.0e-92, rel_tol=1.0e-12, abs_tol=0.0
+                ))
+                self.assertTrue(math.isclose(
+                    exponent_value,
+                    -4.605170185987183e-290,
+                    rel_tol=1.0e-12,
+                    abs_tol=0.0,
+                ))
+
+    def test_zero_base_tensor_power_allows_defined_partials(self):
+        for create_graph in (False, True):
+            with self.subTest(create_graph=create_graph):
+                base = ts.Variable([0.0])
+                exponent = ts.Variable([2.0])
+                base_gradient, exponent_gradient = ts.grad(
+                    base ** exponent,
+                    (base, exponent),
+                    create_graph=create_graph,
+                )
+                base_values = (
+                    base_gradient.data.tolist()
+                    if isinstance(base_gradient, ts.Variable)
+                    else base_gradient.tolist()
+                )
+                exponent_values = (
+                    exponent_gradient.data.tolist()
+                    if isinstance(exponent_gradient, ts.Variable)
+                    else exponent_gradient.tolist()
+                )
+                self.assertEqual(base_values, [0.0])
+                self.assertEqual(exponent_values, [0.0])
+
+    def test_division_denominator_vjp_avoids_indeterminate_intermediates(self):
+        for create_graph in (False, True):
+            with self.subTest(create_graph=create_graph):
+                numerator = ts.Variable([0.0])
+                denominator = ts.Variable([1.0e-308])
+                numerator_gradient, denominator_gradient = ts.grad(
+                    numerator / denominator,
+                    (numerator, denominator),
+                    grad_outputs=ts.Tensor([1.0e308]),
+                    create_graph=create_graph,
+                )
+                numerator_value = (
+                    numerator_gradient.data.item()
+                    if isinstance(numerator_gradient, ts.Variable)
+                    else numerator_gradient.item()
+                )
+                denominator_value = (
+                    denominator_gradient.data.item()
+                    if isinstance(denominator_gradient, ts.Variable)
+                    else denominator_gradient.item()
+                )
+                self.assertEqual(numerator_value, math.inf)
+                self.assertEqual(denominator_value, 0.0)
+
+    def test_boundary_gradients_remain_defined_with_create_graph(self):
+        for operation in (ts.sigmoid, ts.tanh):
+            for input_value in (1.0e308, -1.0e308, math.inf, -math.inf):
+                with self.subTest(
+                    operation=operation.__name__,
+                    input_value=input_value,
+                ):
+                    value = ts.Variable([input_value])
+                    first = ts.grad(
+                        operation(value), value, create_graph=True
+                    )
+                    second = ts.grad(first, value)
+                    self.assertEqual(first.data.tolist(), [0.0])
+                    self.assertEqual(second.tolist(), [0.0])
+
+        for operation, expected in (
+            (ts.max, [1.0, 0.0]),
+            (ts.min, [0.0, 1.0]),
+        ):
+            with self.subTest(operation=operation.__name__):
+                value = ts.Variable([math.inf, 0.0])
+                first = ts.grad(operation(value), value, create_graph=True)
+                second = ts.grad(
+                    first,
+                    value,
+                    grad_outputs=ts.Tensor([1.0, 1.0]),
+                )
+                self.assertEqual(first.data.tolist(), expected)
+                self.assertEqual(second.tolist(), [0.0, 0.0])
+
+    def test_empty_mean_and_std_have_empty_higher_order_gradients(self):
+        for operation in (ts.mean, ts.std):
+            with self.subTest(operation=operation.__name__):
+                value = ts.Variable(ts.Tensor([]))
+                first = ts.grad(operation(value), value, create_graph=True)
+                second = ts.grad(
+                    first,
+                    value,
+                    grad_outputs=ts.Tensor([]),
+                )
+
+                self.assertIsInstance(first, ts.Variable)
+                self.assertEqual(first.shape, (0,))
+                self.assertEqual(first.data.tolist(), [])
+                self.assertEqual(second.tolist(), [])
+
 
 class NumericalRegressionTests(unittest.TestCase):
     def test_softmax_family_preserves_small_normalization_tails(self):
@@ -237,6 +471,23 @@ class OptimizerRegressionTests(unittest.TestCase):
                 self.assertEqual(first.data.tolist(), [1.0])
                 self.assertEqual(second.data.tolist(), [2.0])
 
+    def test_optimizers_accept_gradients_created_as_graphs(self):
+        for optimizer_type in (
+            ts.optim.SGD,
+            ts.optim.Adam,
+            ts.optim.RMSprop,
+        ):
+            with self.subTest(optimizer=optimizer_type.__name__):
+                parameter = ts.Variable([2.0])
+                ts.backward(parameter ** 2.0, create_graph=True)
+                self.assertIsInstance(parameter.grad, ts.Variable)
+                optimizer = optimizer_type([parameter], learning_rate=0.1)
+
+                optimizer.step()
+
+                self.assertLess(parameter.data.item(), 2.0)
+                self.assertTrue(math.isfinite(parameter.data.item()))
+
 
 class DiscoveryAndTensorRegressionTests(unittest.TestCase):
     def test_parameter_discovery_traverses_partial_decorated_and_slotted_callables(self):
@@ -316,6 +567,74 @@ class DiscoveryAndTensorRegressionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Cyclic"):
             ts.Tensor(data)
+
+    def test_variable_truthiness_is_rejected(self):
+        with self.assertRaisesRegex(TypeError, "Variable"):
+            bool(ts.Variable([1.0]))
+
+    def test_parameter_discovery_sees_function_attributes_and_private_slots(self):
+        function_weight = ts.Variable([2.0])
+
+        def function(value):
+            return value * function.weight
+
+        function.weight = function_weight
+        self.assertEqual(ts.Graph(function).parameters(), [function_weight])
+
+        slot_weight = ts.Variable([3.0])
+
+        class PrivateSlottedCallable:
+            __slots__ = ("__weight",)
+
+            def __init__(self, weight):
+                self.__weight = weight
+
+            def __call__(self, value):
+                return value * self.__weight
+
+        self.assertEqual(
+            ts.Graph(PrivateSlottedCallable(slot_weight)).parameters(),
+            [slot_weight],
+        )
+
+    def test_graph_traversal_handles_deep_and_cyclic_containers(self):
+        parameter = ts.Variable([2.0])
+        parameters = parameter
+        for _ in range(1_100):
+            parameters = [parameters]
+
+        class DeepGraph(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.parameters_container = parameters
+
+            def forward(self, value):
+                result = value * parameter
+                for _ in range(1_100):
+                    result = [result]
+                return result
+
+        graph = DeepGraph()
+        graph(ts.Tensor([3.0]))
+
+        self.assertEqual(graph.parameters(), [parameter])
+        self.assertEqual(len(graph.computations), 1)
+
+        cycle = []
+        cycle.append(cycle)
+        cycle.append(parameter)
+        graph.parameters_container = cycle
+        self.assertEqual(graph.parameters(), [parameter])
+
+    def test_graph_rejects_cyclic_output_containers(self):
+        class CyclicOutput(ts.Graph):
+            def forward(self, value):
+                output = [value * 2.0]
+                output.append(output)
+                return output
+
+        with self.assertRaisesRegex(ValueError, "cyclic"):
+            CyclicOutput()(ts.Tensor([1.0]))
 
 
 class ValidationRegressionTests(unittest.TestCase):
