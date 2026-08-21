@@ -36,18 +36,31 @@ class RMSprop(Optimizer):
         rho: float = 0.99,
         eps: float = 1e-8,
     ) -> None:
-        if not math.isfinite(learning_rate) or learning_rate <= 0:
-            raise ValueError("learning_rate must be positive and finite")
-        if not math.isfinite(rho) or not 0 <= rho < 1:
-            raise ValueError("rho must be finite and in the interval [0, 1)")
-        if not math.isfinite(eps) or eps <= 0:
-            raise ValueError("eps must be positive and finite")
-
-        super().__init__(parameters)
         self.learning_rate = learning_rate
         self.rho = rho
         self.eps = eps
+        super().__init__(parameters)
         self._state: dict[int, Tensor] = {}
+
+    @property
+    def rho(self) -> float:
+        return self._rho
+
+    @rho.setter
+    def rho(self, value: float) -> None:
+        if not math.isfinite(value) or not 0 <= value < 1:
+            raise ValueError("rho must be finite and in the interval [0, 1)")
+        self._rho = value
+
+    @property
+    def eps(self) -> float:
+        return self._eps
+
+    @eps.setter
+    def eps(self, value: float) -> None:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("eps must be positive and finite")
+        self._eps = value
 
     def step(self) -> None:
         """Apply one RMSprop update to every managed parameter."""

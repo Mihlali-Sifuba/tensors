@@ -24,6 +24,13 @@ class MathTests(unittest.TestCase):
         self.assertIs(result.dtype, ts.float32)
         self.assertEqual(result.tolist(), [1.0, 4.0, 2.0, 5.0, 3.0, 6.0])
 
+    def test_transpose_rejects_boolean_axes(self):
+        with self.assertRaisesRegex(TypeError, "only integers"):
+            ts.transpose(
+                ts.Tensor([[1.0, 2.0], [3.0, 4.0]]),
+                axes=(True, False),
+            )
+
     def test_sum_axis(self):
         matrix = ts.Tensor([[1, 2, 3], [4, 5, 6]])
 
@@ -152,6 +159,16 @@ class MathTests(unittest.TestCase):
 
         self.assertEqual(result.shape, (2, 1))
         self.assertEqual(result.tolist(), [0.0, 1.0e308])
+
+    def test_std_of_identical_subnormal_values_is_zero(self):
+        smallest = math.ulp(0.0)
+        value = ts.Variable([smallest, smallest])
+
+        result = ts.std(value)
+        ts.backward(result)
+
+        self.assertEqual(result.data.item(), 0.0)
+        self.assertEqual(value.grad.tolist(), [0.0, 0.0])
 
     def test_large_std_has_finite_gradient(self):
         value = ts.Variable([1.0e308, -1.0e308])

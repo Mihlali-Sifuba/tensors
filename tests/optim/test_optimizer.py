@@ -53,6 +53,25 @@ class OptimizerTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         optimizer_type([], learning_rate=learning_rate)
 
+    def test_learning_rate_assignments_remain_validated(self):
+        for optimizer_type in (
+            ts.optim.SGD,
+            ts.optim.Adam,
+            ts.optim.RMSprop,
+        ):
+            optimizer = optimizer_type([], learning_rate=0.1)
+            optimizer.learning_rate = 0.2
+            self.assertEqual(optimizer.learning_rate, 0.2)
+
+            for learning_rate in (0.0, math.nan, math.inf, -math.inf):
+                with self.subTest(
+                    optimizer=optimizer_type.__name__,
+                    learning_rate=learning_rate,
+                ):
+                    with self.assertRaises(ValueError):
+                        optimizer.learning_rate = learning_rate
+                    self.assertEqual(optimizer.learning_rate, 0.2)
+
     def test_optimizers_preserve_parameter_dtype(self):
         optimizer_types = (
             ts.optim.SGD,

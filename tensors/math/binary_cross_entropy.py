@@ -11,6 +11,7 @@ from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_shape, broadcast_tensors
 from ..utils.shape import shape_size
 from .cross_entropy import Reduction, _validate_reduction
+from .mean import _stable_float_mean
 from .sigmoid import _sigmoid
 from .sum import _stable_float_sum
 
@@ -53,9 +54,7 @@ def _reduce(values: list[float], reduction: Reduction) -> tuple[list[float], tup
     if reduction == "none":
         raise RuntimeError("elementwise reduction requires the broadcast shape")
     if reduction == "mean":
-        total = _stable_float_sum([
-            value / len(values) for value in values
-        ]) if values else 0.0
+        total = _stable_float_mean(values)
     else:
         total = _stable_float_sum(values)
     return [total], (1,)

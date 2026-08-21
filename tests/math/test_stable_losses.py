@@ -244,6 +244,24 @@ class StableLossTests(unittest.TestCase):
         self.assertValuesAlmostEqual(losses.data.tolist()[2:], [1000.0, 1000.0])
         self.assertValuesAlmostEqual(gradient.tolist(), [0.0, 0.0, 1.0, -1.0])
 
+    def test_binary_cross_entropy_mean_preserves_subnormal_losses(self):
+        smallest = math.ulp(0.0)
+
+        individual = ts.binary_cross_entropy(
+            [745.0, 745.0],
+            [1.0, 1.0],
+            from_logits=True,
+            reduction="none",
+        )
+        average = ts.binary_cross_entropy(
+            [745.0, 745.0],
+            [1.0, 1.0],
+            from_logits=True,
+        )
+
+        self.assertEqual(individual.tolist(), [smallest, smallest])
+        self.assertEqual(average.item(), smallest)
+
     def test_loss_means_avoid_intermediate_overflow(self):
         logits = ts.Variable([[0.0, -1.0e308], [0.0, -1.0e308]])
         binary_logits = ts.Variable([1.0e308, 1.0e308])

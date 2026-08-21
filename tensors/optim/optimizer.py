@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
@@ -35,6 +36,17 @@ class Optimizer(ABC):
                 seen.add(identity)
                 unique_parameters.append(parameter)
         self.parameters = tuple(unique_parameters)
+
+    @property
+    def learning_rate(self) -> float:
+        """Return the current validated step size."""
+        return self._learning_rate
+
+    @learning_rate.setter
+    def learning_rate(self, value: float) -> None:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("learning_rate must be positive and finite")
+        self._learning_rate = value
 
     def zero_grad(self) -> None:
         """Clear gradients from every parameter managed by this optimizer."""

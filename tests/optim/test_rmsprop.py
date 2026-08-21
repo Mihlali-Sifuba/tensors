@@ -85,6 +85,24 @@ class RMSpropTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     ts.optim.RMSprop([], **arguments)
 
+    def test_hyperparameter_assignments_remain_validated(self):
+        optimizer = ts.optim.RMSprop([])
+        cases = (
+            ("rho", math.nan),
+            ("rho", math.inf),
+            ("rho", 1.0),
+            ("eps", math.nan),
+            ("eps", math.inf),
+            ("eps", 0.0),
+        )
+
+        for attribute, value in cases:
+            with self.subTest(attribute=attribute, value=value):
+                previous = getattr(optimizer, attribute)
+                with self.assertRaises(ValueError):
+                    setattr(optimizer, attribute, value)
+                self.assertEqual(getattr(optimizer, attribute), previous)
+
 
 if __name__ == "__main__":
     unittest.main()

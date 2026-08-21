@@ -181,6 +181,11 @@ def _transpose_impl(
         permutation = tuple(range(tensor.ndim - 2)) + (tensor.ndim - 1, tensor.ndim - 2)
     else:
         permutation = tuple(axes)
+        if any(
+            isinstance(axis, bool) or not isinstance(axis, int)
+            for axis in permutation
+        ):
+            raise TypeError("axes must contain only integers")
         normalized = tuple(axis + tensor.ndim if axis < 0 else axis for axis in permutation)
         if len(normalized) != tensor.ndim or set(normalized) != set(range(tensor.ndim)):
             raise ValueError(
