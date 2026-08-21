@@ -97,6 +97,9 @@ class Std:
         keepdims = bool(kwargs.get("keepdims", False))
         _, scale_shape, groups = reduction_groups(value.data, axis, True)
         statistics = [_scaled_deviations(value.data, group) for group in groups]
+        count = len(groups[0]) if groups else 0
+        if count == 1:
+            return [value * 0.0]
         if any(
             group and normalized_deviation == 0
             for group, (_, _, normalized_deviation) in zip(groups, statistics)
@@ -104,7 +107,6 @@ class Std:
             raise ValueError(
                 "Higher-order derivatives of std are undefined at zero deviation"
             )
-        count = len(groups[0]) if groups else 0
         if count == 0:
             raise NotImplementedError(
                 "Higher-order derivatives for empty standard deviations are not implemented"

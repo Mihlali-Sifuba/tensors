@@ -161,6 +161,19 @@ class GraphTests(unittest.TestCase):
 
         self.assertEqual(model.parameters(), [model.child.weight, model.extra[0]])
 
+    def test_graph_collects_private_trainable_attributes(self):
+        class Scale(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self._weight = ts.Variable([2.0])
+
+            def forward(self, value):
+                return value * self._weight
+
+        model = Scale()
+
+        self.assertEqual(model.parameters(), [model._weight])
+
     def test_graph_allows_input_shape_changes_on_fresh_trace(self):
         @ts.Graph
         def model(x):

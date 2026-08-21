@@ -3,6 +3,7 @@
 from typing import Any, List
 
 from ..dtype import result_dtype
+from ..math.sum import _stable_product_sum
 from ..tensor import Tensor
 
 
@@ -31,16 +32,26 @@ class Outer:
             )
 
         left_gradient = [
-            sum(
-                grad._data[row * right.size + column] * right._data[column]
-                for column in range(right.size)
+            _stable_product_sum(
+                [
+                    (
+                        float(grad._data[row * right.size + column]),
+                        float(right._data[column]),
+                    )
+                    for column in range(right.size)
+                ]
             )
             for row in range(left.size)
         ]
         right_gradient = [
-            sum(
-                grad._data[row * right.size + column] * left._data[row]
-                for row in range(left.size)
+            _stable_product_sum(
+                [
+                    (
+                        float(grad._data[row * right.size + column]),
+                        float(left._data[row]),
+                    )
+                    for row in range(left.size)
+                ]
             )
             for column in range(right.size)
         ]

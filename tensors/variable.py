@@ -126,6 +126,16 @@ class Variable:
         grad_str = f", grad={self.grad}" if self.grad is not None else ""
         return f"Variable({self.data}{grad_str})"
 
+    def __eq__(self, other: object) -> bool:
+        """Variables compare by graph identity, not by their current values."""
+        return self is other
+
+    def __ne__(self, other: object) -> bool:
+        """Return whether two references identify different Variables."""
+        return not self.__eq__(other)
+
+    __hash__ = object.__hash__
+
     # -- operators (build graph implicitly) ----------------------------
 
     def __add__(self, other):

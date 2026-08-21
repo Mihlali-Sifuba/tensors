@@ -44,12 +44,12 @@ def _validate_output(output: Any, operation: str) -> Variable:
     return output
 
 
-def _zero_tensor(output: Variable, shape: tuple[int, ...]) -> Tensor:
-    """Return a floating zero Tensor with a derivative result shape."""
+def _zero_tensor(reference: Variable, shape: tuple[int, ...]) -> Tensor:
+    """Return zeros shaped as a derivative and typed like its input."""
     size = 1
     for dimension in shape:
         size *= dimension
-    return Tensor([0.0] * size, dtype=output.dtype, shape=shape)
+    return Tensor([0.0] * size, dtype=reference.dtype, shape=shape)
 
 
 def _basis(output: Variable, index: int) -> Tensor:
@@ -116,7 +116,7 @@ def _assemble_rows(
     """Assemble flattened VJP rows into output-shape-plus-input-shape form."""
     shape = output.shape + input_variable.shape
     if not rows:
-        zero = _zero_tensor(output, shape)
+        zero = _zero_tensor(input_variable, shape)
         return Variable(zero, requires_grad=False) if create_graph else zero
 
     if create_graph:
@@ -159,7 +159,7 @@ def jacobian(
                 zip(requested, derivatives)
             ):
                 if derivative is None:
-                    zero = _zero_tensor(output, input_variable.shape)
+                    zero = _zero_tensor(input_variable, input_variable.shape)
                     derivative = (
                         Variable(zero, requires_grad=False)
                         if create_graph
@@ -218,14 +218,14 @@ def hessian(
                     (
                         Variable(
                             _zero_tensor(
-                                output,
+                                column_input,
                                 row_input.shape + column_input.shape,
                             ),
                             requires_grad=False,
                         )
                         if create_graph
                         else _zero_tensor(
-                            output,
+                            column_input,
                             row_input.shape + column_input.shape,
                         )
                     )

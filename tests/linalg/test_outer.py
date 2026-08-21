@@ -46,6 +46,19 @@ class OuterTests(unittest.TestCase):
         self.assertEqual(left.grad.tolist(), [12.0, 12.0])
         self.assertEqual(right.grad.tolist(), [3.0, 3.0, 3.0])
 
+    def test_outer_gradient_recovers_from_temporary_overflow(self):
+        left = ts.Variable([1.0])
+        right = ts.Variable([1.0, 1.0, 1.0])
+        result = ts.outer(left, right)
+        gradient = ts.Tensor(
+            [1.0e308, 1.0e308, -1.0e308],
+            shape=(1, 3),
+        )
+
+        ts.backward(result, gradient)
+
+        self.assertEqual(left.grad.tolist(), [1.0e308])
+
     def test_outer_recomputes_from_current_vector_values(self):
         left = ts.Variable([1.0, 2.0])
         right = ts.Variable([3.0, 4.0])

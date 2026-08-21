@@ -55,13 +55,16 @@ class DerivativeMatrixTests(unittest.TestCase):
         self.assertEqual(right_result.tolist(), [2.0, 1.0])
 
     def test_jacobian_uses_zero_for_a_disconnected_input(self):
-        connected = ts.Variable([2.0])
-        disconnected = ts.Variable([3.0, 4.0])
+        connected = ts.Variable(ts.Tensor([2.0], dtype=ts.float64))
+        disconnected = ts.Variable(
+            ts.Tensor([3.0, 4.0], dtype=ts.float32)
+        )
         output = connected ** 2.0
 
         result = ts.jacobian(output, disconnected)
 
         self.assertEqual(result.shape, (1, 2))
+        self.assertIs(result.dtype, ts.float32)
         self.assertEqual(result.tolist(), [0.0, 0.0])
 
     def test_jacobian_preserves_existing_grad_attributes(self):
@@ -131,8 +134,10 @@ class DerivativeMatrixTests(unittest.TestCase):
                 self.assertEqual(block.shape, (1, 1))
 
     def test_hessian_uses_zero_blocks_for_disconnected_inputs(self):
-        connected = ts.Variable([2.0])
-        disconnected = ts.Variable([3.0, 4.0])
+        connected = ts.Variable(ts.Tensor([2.0], dtype=ts.float64))
+        disconnected = ts.Variable(
+            ts.Tensor([3.0, 4.0], dtype=ts.float32)
+        )
         output = ts.sum(connected ** 2.0)
 
         result = ts.hessian(output, (connected, disconnected))
@@ -141,6 +146,9 @@ class DerivativeMatrixTests(unittest.TestCase):
         self.assertEqual(result[0][1].tolist(), [0.0, 0.0])
         self.assertEqual(result[1][0].tolist(), [0.0, 0.0])
         self.assertEqual(result[1][1].tolist(), [0.0, 0.0, 0.0, 0.0])
+        self.assertIs(result[0][1].dtype, ts.float32)
+        self.assertIs(result[1][0].dtype, ts.float64)
+        self.assertIs(result[1][1].dtype, ts.float32)
 
     def test_create_graph_keeps_hessian_differentiable(self):
         value = ts.Variable([2.0])

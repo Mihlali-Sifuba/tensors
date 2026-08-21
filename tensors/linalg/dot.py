@@ -270,18 +270,46 @@ class Dot:
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
-        """Build a differentiable VJP for matrix and batched matrix products."""
+        """Build a differentiable VJP for vector and matrix products."""
         from .transpose import transpose
+        from ..math.reshape import reshape
         from ..ops._utils import sum_to_shape_graph
+
         left, right = inputs
-        if left.ndim < 2 or right.ndim < 2:
-            raise NotImplementedError(
-                "Higher-order derivatives currently require matrix operands"
+        left_vector = left.ndim == 1
+        right_vector = right.ndim == 1
+        left_matrix = (
+            reshape(left, (1, left.shape[0])) if left_vector else left
+        )
+        right_matrix = (
+            reshape(right, (right.shape[0], 1)) if right_vector else right
+        )
+
+        if left_vector and right_vector:
+            matrix_grad = reshape(grad, (1, 1))
+        elif left_vector:
+            matrix_grad = reshape(
+                grad,
+                grad.shape[:-1] + (1, grad.shape[-1]),
             )
-        return [
-            sum_to_shape_graph(grad @ transpose(right), left.shape),
-            sum_to_shape_graph(transpose(left) @ grad, right.shape),
-        ]
+        elif right_vector:
+            matrix_grad = reshape(grad, grad.shape + (1,))
+        else:
+            matrix_grad = grad
+
+        left_gradient = sum_to_shape_graph(
+            matrix_grad @ transpose(right_matrix),
+            left_matrix.shape,
+        )
+        right_gradient = sum_to_shape_graph(
+            transpose(left_matrix) @ matrix_grad,
+            right_matrix.shape,
+        )
+        if left_vector:
+            left_gradient = reshape(left_gradient, left.shape)
+        if right_vector:
+            right_gradient = reshape(right_gradient, right.shape)
+        return [left_gradient, right_gradient]
 
 
 def dot(a: Any, b: Any) -> Any:

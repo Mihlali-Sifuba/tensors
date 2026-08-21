@@ -144,7 +144,7 @@ class Graph:
 
             if isinstance(value, Graph):
                 for name, child in vars(value).items():
-                    if not name.startswith("_"):
+                    if name not in {"_function", "_thread_state"}:
                         visit(child)
                 if value._function is not None:
                     for captured in self._function_values(value._function):
@@ -159,7 +159,7 @@ class Graph:
                     visit(item)
 
         for name, value in vars(self).items():
-            if not name.startswith("_"):
+            if name not in {"_function", "_thread_state"}:
                 visit(value)
         if self._function is not None:
             for captured in self._function_values(self._function):
