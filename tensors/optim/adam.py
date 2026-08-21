@@ -66,14 +66,28 @@ class Adam(Optimizer):
                 continue
 
             sid = id(param)
-            if sid not in self._state:
-                self._state[sid] = {
+            state = self._state.get(sid)
+            if state is not None:
+                current_m = state["m"]
+                current_v = state["v"]
+                assert isinstance(current_m, Tensor)
+                assert isinstance(current_v, Tensor)
+                if (
+                    current_m.shape != grad.shape
+                    or current_m.dtype != grad.dtype
+                    or current_v.shape != grad.shape
+                    or current_v.dtype != grad.dtype
+                ):
+                    state = None
+
+            if state is None:
+                state = {
                     "step": 0,
                     "m": Tensor([0.0] * grad.size, dtype=grad.dtype, shape=grad.shape),
                     "v": Tensor([0.0] * grad.size, dtype=grad.dtype, shape=grad.shape),
                 }
+                self._state[sid] = state
 
-            state = self._state[sid]
             state["step"] = int(state["step"]) + 1
             step_count = int(state["step"])
             m = state["m"]
