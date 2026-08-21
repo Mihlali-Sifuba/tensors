@@ -33,11 +33,25 @@ class SoftmaxTests(unittest.TestCase):
         self.assertAlmostEqual(result.tolist()[0], 1.0 / (1.0 + math.e))
         self.assertAlmostEqual(result.tolist()[1], math.e / (1.0 + math.e))
 
+    def test_softmax_propagates_nan_even_with_positive_infinity(self):
+        values = ts.Tensor([
+            [math.inf, math.nan],
+            [math.nan, math.inf],
+        ])
+
+        result = ts.softmax(values, axis=1)
+
+        self.assertTrue(all(math.isnan(item) for item in result._data))
+
     def test_softmax_validates_axis_and_empty_axis(self):
         with self.assertRaisesRegex(ValueError, "out of bounds"):
             ts.softmax(ts.Tensor([1.0]), axis=1)
         with self.assertRaisesRegex(ValueError, "empty axis"):
             ts.softmax(ts.Tensor([]))
+        with self.assertRaisesRegex(TypeError, "integer"):
+            ts.softmax(ts.Tensor([1.0]), axis=False)
+        with self.assertRaisesRegex(TypeError, "integer"):
+            ts.softmax(ts.Tensor([1.0]), axis=0.0)
 
 
 if __name__ == "__main__":

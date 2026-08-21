@@ -145,6 +145,34 @@ class StableLossTests(unittest.TestCase):
         )
         self.assertEqual(log_probabilities.tolist()[1], -math.inf)
 
+    def test_probability_normalizers_propagate_nan_with_infinity(self):
+        values = ts.Variable([
+            [math.inf, math.nan],
+            [math.nan, math.inf],
+        ])
+
+        probabilities = ts.softmax(values, axis=1)
+        log_probabilities = ts.log_softmax(values, axis=1)
+        normalizers = ts.logsumexp(values, axis=1)
+        normalizer_gradient = ts.grad(
+            normalizers,
+            values,
+            grad_outputs=ts.Tensor([1.0, 1.0]),
+        )
+
+        self.assertTrue(
+            all(math.isnan(item) for item in probabilities.data._data)
+        )
+        self.assertTrue(
+            all(math.isnan(item) for item in log_probabilities.data._data)
+        )
+        self.assertTrue(
+            all(math.isnan(item) for item in normalizers.data._data)
+        )
+        self.assertTrue(
+            all(math.isnan(item) for item in normalizer_gradient._data)
+        )
+
     def test_probability_normalizers_reject_an_all_negative_infinity_axis(self):
         logits = ts.Tensor([[-math.inf, -math.inf]])
 
@@ -215,6 +243,44 @@ class StableLossTests(unittest.TestCase):
         self.assertValuesAlmostEqual(losses.data.tolist()[:2], [0.0, 0.0])
         self.assertValuesAlmostEqual(losses.data.tolist()[2:], [1000.0, 1000.0])
         self.assertValuesAlmostEqual(gradient.tolist(), [0.0, 0.0, 1.0, -1.0])
+
+    def test_loss_means_avoid_intermediate_overflow(self):
+        logits = ts.Variable([[0.0, -1.0e308], [0.0, -1.0e308]])
+        binary_logits = ts.Variable([1.0e308, 1.0e308])
+
+        multiclass_loss = ts.cross_entropy(logits, [1, 1])
+        binary_loss = ts.binary_cross_entropy(
+            binary_logits,
+            [0.0, 0.0],
+            from_logits=True,
+        )
+
+        self.assertEqual(multiclass_loss.data.item(), 1.0e308)
+        self.assertEqual(binary_loss.data.item(), 1.0e308)
+        self.assertValuesAlmostEqual(
+            ts.grad(multiclass_loss, logits).tolist(),
+            [0.5, -0.5, 0.5, -0.5],
+        )
+        self.assertValuesAlmostEqual(
+            ts.grad(binary_loss, binary_logits).tolist(),
+            [0.5, 0.5],
+        )
+
+    def test_loss_sums_return_infinity_instead_of_raising(self):
+        multiclass_loss = ts.cross_entropy(
+            [[0.0, -1.0e308], [0.0, -1.0e308]],
+            [1, 1],
+            reduction="sum",
+        )
+        binary_loss = ts.binary_cross_entropy(
+            [1.0e308, 1.0e308],
+            [0.0, 0.0],
+            from_logits=True,
+            reduction="sum",
+        )
+
+        self.assertEqual(multiclass_loss.item(), math.inf)
+        self.assertEqual(binary_loss.item(), math.inf)
 
     def test_binary_cross_entropy_from_logits_handles_exact_infinities(self):
         logits = ts.Variable([math.inf, -math.inf])

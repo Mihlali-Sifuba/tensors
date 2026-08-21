@@ -15,6 +15,8 @@ def _group_value(a: Tensor, indices: list[int]) -> float:
     if not indices:
         raise ValueError("logsumexp is not defined over an empty reduction")
 
+    if any(math.isnan(float(a._data[index])) for index in indices):
+        return math.nan
     maximum = max(float(a._data[index]) for index in indices)
     if maximum == math.inf:
         return math.inf
@@ -56,6 +58,10 @@ class LogSumExp:
 
         values = [0.0] * a.size
         for output_index, group in enumerate(groups):
+            if any(math.isnan(float(a._data[index])) for index in group):
+                for input_index in group:
+                    values[input_index] = math.nan
+                continue
             maximum = max(float(a._data[index]) for index in group)
             if maximum == math.inf:
                 maxima = [index for index in group if a._data[index] == math.inf]
@@ -101,7 +107,11 @@ class LogSumExp:
             scalar_as_vector=True,
         )
         if any(
-            group and max(float(value.data._data[index]) for index in group) == math.inf
+            group
+            and not any(
+                math.isnan(float(value.data._data[index])) for index in group
+            )
+            and max(float(value.data._data[index]) for index in group) == math.inf
             for group in groups
         ):
             numerical_gradient = LogSumExp.backward(

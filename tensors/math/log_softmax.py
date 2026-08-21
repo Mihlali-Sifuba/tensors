@@ -30,6 +30,13 @@ class LogSoftmax:
                     group_start + offset + index * trailing
                     for index in range(axis_size)
                 ]
+                if any(
+                    math.isnan(float(a._data[position]))
+                    for position in positions
+                ):
+                    for position in positions:
+                        values[position] = math.nan
+                    continue
                 maximum = max(float(a._data[position]) for position in positions)
                 if maximum == math.inf:
                     maxima = [

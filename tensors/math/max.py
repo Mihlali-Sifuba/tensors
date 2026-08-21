@@ -1,6 +1,7 @@
 """Maximum-value public API."""
 
 import builtins
+import math
 from typing import Any, List
 
 from ..tensor import Tensor
@@ -21,8 +22,18 @@ class Max:
         )
         if any(not group for group in groups):
             raise ValueError("Cannot compute max of empty tensor")
+        values = []
+        for group in groups:
+            group_values = [value._data[index] for index in group]
+            if any(
+                isinstance(item, float) and math.isnan(item)
+                for item in group_values
+            ):
+                values.append(math.nan)
+            else:
+                values.append(builtins.max(group_values))
         return Tensor(
-            [builtins.max(value._data[index] for index in group) for group in groups],
+            values,
             dtype=value.dtype,
             shape=output_shape,
         )
@@ -42,6 +53,14 @@ class Max:
             )
         result = [0.0] * value.size
         for output_index, group in enumerate(groups):
+            if any(
+                isinstance(value._data[index], float)
+                and math.isnan(value._data[index])
+                for index in group
+            ):
+                for input_index in group:
+                    result[input_index] = math.nan
+                continue
             maximum = builtins.max(value._data[index] for index in group)
             selected = [index for index in group if value._data[index] == maximum]
             share = grad._data[output_index] / len(selected)

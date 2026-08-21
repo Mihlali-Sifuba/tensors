@@ -46,6 +46,14 @@ class ConcatTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-concat"):
             ts.concat([ts.Tensor([[1, 2]]), ts.Tensor([[3], [4]])], axis=1)
 
+    def test_concat_rejects_non_integer_axes(self):
+        tensors = [ts.Tensor([1]), ts.Tensor([2])]
+
+        with self.assertRaisesRegex(TypeError, "integer"):
+            ts.concat(tensors, axis=False)
+        with self.assertRaisesRegex(TypeError, "integer"):
+            ts.concat(tensors, axis=0.0)
+
     def test_math_namespace_exposes_concat_operation_class(self):
         result = ts.math.Concat.forward(ts.Tensor([1]), ts.Tensor([2]))
 

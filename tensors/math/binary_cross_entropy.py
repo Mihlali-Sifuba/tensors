@@ -12,6 +12,7 @@ from ..utils.broadcasting import broadcast_shape, broadcast_tensors
 from ..utils.shape import shape_size
 from .cross_entropy import Reduction, _validate_reduction
 from .sigmoid import _sigmoid
+from .sum import _stable_float_sum
 
 
 def _validate_targets(target: Tensor) -> None:
@@ -51,9 +52,12 @@ def _target_gradient(probability: float) -> float:
 def _reduce(values: list[float], reduction: Reduction) -> tuple[list[float], tuple[int, ...]]:
     if reduction == "none":
         raise RuntimeError("elementwise reduction requires the broadcast shape")
-    total = math.fsum(values)
     if reduction == "mean":
-        total = total / len(values) if values else 0.0
+        total = _stable_float_sum([
+            value / len(values) for value in values
+        ]) if values else 0.0
+    else:
+        total = _stable_float_sum(values)
     return [total], (1,)
 
 

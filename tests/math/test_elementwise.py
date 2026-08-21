@@ -21,6 +21,15 @@ class ElementwiseMathTests(unittest.TestCase):
         self.assertAlmostEqual(result.tolist()[0], 1.0)
         self.assertAlmostEqual(result.tolist()[1], math.e)
 
+    def test_exp_returns_infinity_when_the_result_overflows(self):
+        value = ts.Variable([1000.0])
+
+        result = ts.exp(value)
+        gradient = ts.grad(result, value)
+
+        self.assertEqual(result.data.tolist(), [math.inf])
+        self.assertEqual(gradient.tolist(), [math.inf])
+
     def test_log_returns_elementwise_tensor_values(self):
         tensor = ts.Tensor([1.0, math.e])
 
@@ -45,6 +54,15 @@ class ElementwiseMathTests(unittest.TestCase):
 
         self.assertEqual(result.shape, (3,))
         self.assertEqual(result.tolist(), [0.0, 0.0, 3.0])
+
+    def test_relu_propagates_nan_in_values_and_gradients(self):
+        value = ts.Variable([math.nan])
+
+        result = ts.relu(value)
+        gradient = ts.grad(result, value)
+
+        self.assertTrue(math.isnan(result.data.item()))
+        self.assertTrue(math.isnan(gradient.item()))
 
     def test_sigmoid_returns_elementwise_tensor_values(self):
         tensor = ts.Tensor([0.0, 2.0])

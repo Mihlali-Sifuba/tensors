@@ -17,6 +17,7 @@ from ..utils.shape import (
 from ._reduction import keepdims_shape, reduction_groups
 from .log_softmax import LogSoftmax, log_softmax
 from .softmax import Softmax, _normalize_axis, softmax
+from .sum import _stable_float_sum
 
 
 Reduction = Literal["none", "mean", "sum"]
@@ -194,9 +195,12 @@ class CrossEntropy:
         dtype = result_dtype(logits.dtype, targets, division=True)
         if reduction == "none":
             return Tensor(losses, dtype=dtype, shape=output_shape)
-        total = math.fsum(losses)
         if reduction == "mean":
-            total = total / len(losses) if losses else 0.0
+            total = _stable_float_sum([
+                loss / len(losses) for loss in losses
+            ]) if losses else 0.0
+        else:
+            total = _stable_float_sum(losses)
         return Tensor([total], dtype=dtype, shape=(1,))
 
     @staticmethod
