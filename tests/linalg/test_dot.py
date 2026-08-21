@@ -24,6 +24,22 @@ class LinalgTests(unittest.TestCase):
         self.assertEqual(result.shape, ())
         self.assertEqual(result.item(), 11.0)
 
+    def test_dot_recovers_from_temporary_overflow(self):
+        left = ts.Tensor([1.0e308, 1.0e308, -1.0e308, -1.0e308])
+        right = ts.Tensor([1.0, 1.0, 1.0, 1.0])
+
+        result = ts.dot(left, right)
+
+        self.assertEqual(result.item(), 0.0)
+
+    def test_dot_recovers_when_individual_products_overflow(self):
+        left = ts.Tensor([1.0e308, 1.0e308, 1.0e-300])
+        right = ts.Tensor([2.0, -2.0, 1.0])
+
+        result = ts.dot(left, right)
+
+        self.assertEqual(result.item(), 1.0e-300)
+
     def test_dot_supports_matrix_vector_and_vector_matrix_products(self):
         matrix = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
         vector = ts.Tensor([5.0, 6.0])
@@ -54,6 +70,17 @@ class LinalgTests(unittest.TestCase):
         self.assertEqual(left.grad.tolist(), [8.0, 10.0])
         self.assertEqual(right.grad.shape, (2, 2, 1))
         self.assertEqual(right.grad.tolist(), [1.0, 2.0, 1.0, 2.0])
+
+    def test_matmul_gradient_recovers_from_temporary_overflow(self):
+        left = ts.Tensor(
+            [1.0e308, 1.0e308, -1.0e308, -1.0e308],
+            shape=(4, 1),
+        )
+        right = ts.Variable([1.0])
+
+        ts.backward(ts.sum(left @ right))
+
+        self.assertEqual(right.grad.tolist(), [0.0])
 
     def test_dot_rejects_scalar_inputs(self):
         scalar = ts.Tensor([1.0], shape=())

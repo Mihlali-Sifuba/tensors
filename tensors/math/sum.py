@@ -8,6 +8,19 @@ from ..tensor import Tensor
 from ._reduction import Axis, immutable_axis, keepdims_shape, reduction_groups
 
 
+def _sum_exact_ratios(ratios: list[tuple[int, int]]) -> float:
+    """Convert an exact sum of binary ratios back to a float."""
+    denominator = max((item[1] for item in ratios), default=1)
+    numerator = builtins.sum(
+        item_numerator * (denominator // item_denominator)
+        for item_numerator, item_denominator in ratios
+    )
+    try:
+        return numerator / denominator
+    except OverflowError:
+        return math.inf if numerator > 0 else -math.inf
+
+
 def _stable_float_sum(values: list[float]) -> float:
     """Sum floats accurately even when a temporary partial sum overflows."""
     if any(math.isnan(value) for value in values):
@@ -24,16 +37,36 @@ def _stable_float_sum(values: list[float]) -> float:
     try:
         return math.fsum(values)
     except OverflowError:
-        ratios = [value.as_integer_ratio() for value in values]
-        denominator = max((item[1] for item in ratios), default=1)
-        numerator = builtins.sum(
-            item_numerator * (denominator // item_denominator)
-            for item_numerator, item_denominator in ratios
+        return _sum_exact_ratios(
+            [value.as_integer_ratio() for value in values]
         )
-        try:
-            return numerator / denominator
-        except OverflowError:
-            return math.inf if numerator > 0 else -math.inf
+
+
+def _stable_product_sum(factors: list[tuple[float, float]]) -> float:
+    """Accurately sum products, including products outside float range."""
+    products = [left * right for left, right in factors]
+    finite_factors = all(
+        math.isfinite(left) and math.isfinite(right)
+        for left, right in factors
+    )
+    product_lost_range = any(
+        (math.isinf(product) or (
+            product == 0.0 and left != 0.0 and right != 0.0
+        ))
+        for (left, right), product in zip(factors, products)
+    )
+    if not finite_factors or not product_lost_range:
+        return _stable_float_sum(products)
+
+    ratios = []
+    for left, right in factors:
+        left_numerator, left_denominator = left.as_integer_ratio()
+        right_numerator, right_denominator = right.as_integer_ratio()
+        ratios.append((
+            left_numerator * right_numerator,
+            left_denominator * right_denominator,
+        ))
+    return _sum_exact_ratios(ratios)
 
 
 def _sum_impl(a: Tensor, axis: Axis = None,

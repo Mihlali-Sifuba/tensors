@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, List
 
 from ..dtype import result_dtype
+from ..math.sum import _stable_product_sum
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_shape
 from ..utils.shape import coordinates_to_index, index_to_coordinates, shape_size
@@ -140,6 +141,7 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
         output_shape,
     ) = _matmul_metadata(a, b)
 
+    dtype = result_dtype(a.dtype, b)
     values = []
     for batch_index in range(shape_size(batch_shape)):
         batch_coordinates = index_to_coordinates(batch_index, batch_shape)
@@ -147,7 +149,7 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
         b_batch_coordinates = _batch_coordinates(batch_coordinates, b_batch_shape)
         for row in range(a_rows):
             for column in range(b_columns):
-                total = 0
+                factors: list[tuple[int | float, int | float]] = []
                 for inner in range(a_columns):
                     left = a._data[
                         _a_index(a, a_vector, a_batch_coordinates, row, inner)
@@ -155,10 +157,17 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
                     right = b._data[
                         _b_index(b, b_vector, b_batch_coordinates, inner, column)
                     ]
-                    total += left * right
+                    factors.append((left, right))
+                if dtype.kind == "floating":
+                    total = _stable_product_sum([
+                        (float(left), float(right))
+                        for left, right in factors
+                    ])
+                else:
+                    total = sum(left * right for left, right in factors)
                 values.append(total)
 
-    return Tensor(values, dtype=result_dtype(a.dtype, b), shape=output_shape)
+    return Tensor(values, dtype=dtype, shape=output_shape)
 
 
 def _transpose_impl(
@@ -223,8 +232,8 @@ class Dot:
                 f"Gradient shape {grad.shape} does not match output shape {output_shape}"
             )
 
-        a_values = [0.0] * a.size
-        b_values = [0.0] * b.size
+        a_terms: list[list[tuple[float, float]]] = [[] for _ in range(a.size)]
+        b_terms: list[list[tuple[float, float]]] = [[] for _ in range(b.size)]
         for batch_index in range(shape_size(batch_shape)):
             batch_coordinates = index_to_coordinates(batch_index, batch_shape)
             a_batch_coordinates = _batch_coordinates(batch_coordinates, a_batch_shape)
@@ -242,8 +251,17 @@ class Dot:
                     for inner in range(a_columns):
                         a_index = _a_index(a, a_vector, a_batch_coordinates, row, inner)
                         b_index = _b_index(b, b_vector, b_batch_coordinates, inner, column)
-                        a_values[a_index] += upstream * b._data[b_index]
-                        b_values[b_index] += upstream * a._data[a_index]
+                        a_terms[a_index].append((
+                            float(upstream),
+                            float(b._data[b_index]),
+                        ))
+                        b_terms[b_index].append((
+                            float(upstream),
+                            float(a._data[a_index]),
+                        ))
+
+        a_values = [_stable_product_sum(terms) for terms in a_terms]
+        b_values = [_stable_product_sum(terms) for terms in b_terms]
 
         return [
             Tensor(a_values, dtype=grad.dtype, shape=a.shape),
