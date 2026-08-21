@@ -21,6 +21,7 @@ class SGD(Optimizer):
     def step(self) -> None:
         """Apply one in-place parameter update using current gradients."""
         for parameter in self.parameters:
-            if parameter.grad is None:
+            gradient = self._gradient_for(parameter)
+            if gradient is None:
                 continue
-            parameter.data = parameter.data - self.learning_rate * parameter.grad
+            parameter.data = parameter.data - self.learning_rate * gradient

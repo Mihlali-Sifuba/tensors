@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
+from ..tensor import Tensor
+
 if TYPE_CHECKING:
     from ..variable import Variable
 
@@ -31,6 +33,23 @@ class Optimizer(ABC):
         """Clear gradients from every parameter managed by this optimizer."""
         for parameter in self.parameters:
             parameter.grad = None
+
+    @staticmethod
+    def _gradient_for(parameter: Variable) -> Tensor | None:
+        """Return a parameter-shaped gradient in the parameter's dtype."""
+        gradient = parameter.grad
+        if gradient is None:
+            return None
+        if not isinstance(gradient, Tensor):
+            raise TypeError("Optimizer gradients must be Tensors")
+        if gradient.shape != parameter.shape:
+            raise ValueError(
+                f"Gradient shape {gradient.shape} does not match parameter "
+                f"shape {parameter.shape}"
+            )
+        if gradient.dtype != parameter.dtype:
+            return gradient.astype(parameter.dtype)
+        return gradient
 
     @abstractmethod
     def step(self) -> None:

@@ -81,9 +81,42 @@ def _targets_for_logits(logits: Any, targets: Any, axis: int) -> Any:
     if target_tensor.shape == logits_tensor.shape:
         prepared = targets
     elif target_tensor.shape == sample_shape or scalar_target:
-        if isinstance(targets, Variable):
-            raise TypeError("Class-index targets cannot be differentiable Variables")
-        prepared = _one_hot_targets(logits_tensor, target_tensor, axis)
+        dense_target = False
+        if target_tensor.dtype.kind == "floating":
+            try:
+                target_shape = broadcast_shape(
+                    target_tensor.shape,
+                    logits_tensor.shape,
+                )
+            except ValueError:
+                target_shape = None
+
+            if target_shape == logits_tensor.shape:
+                values = [float(value) for value in target_tensor._data]
+                dense_target = any(
+                    not math.isfinite(value) or not value.is_integer()
+                    for value in values
+                )
+                if not dense_target:
+                    _, expanded_targets = broadcast_tensors(
+                        logits_tensor,
+                        target_tensor,
+                    )
+                    try:
+                        _validate_distributions(expanded_targets, axis)
+                    except ValueError:
+                        pass
+                    else:
+                        dense_target = True
+
+        if dense_target:
+            prepared = targets
+        else:
+            if isinstance(targets, Variable):
+                raise TypeError(
+                    "Class-index targets cannot be differentiable Variables"
+                )
+            prepared = _one_hot_targets(logits_tensor, target_tensor, axis)
     else:
         try:
             target_shape = broadcast_shape(
@@ -275,6 +308,8 @@ def cross_entropy(
 
     ``targets`` may contain class indices with the class axis removed, or
     dense probability distributions broadcastable to the logits shape.
+    In an otherwise ambiguous shape, an integer dtype selects class indices
+    while a floating probability distribution selects dense targets.
     """
     _validate_reduction(reduction)
     from ..variable import Variable

@@ -162,6 +162,9 @@ def result_dtype(
         if "d" in codes:
             return float64
         if "f" in codes:
+            integer_dtype = b_dtype if a_dtype.typecode == "f" else a_dtype
+            if integer_dtype.typecode in {"i", "q"}:
+                return float64
             return float32
         if "B" in codes:
             signed_dtype = b_dtype if a_dtype.typecode == "B" else a_dtype

@@ -172,6 +172,26 @@ class Computation:
                 f"Gradient shape {seed_shape} does not match output shape "
                 f"{self.output.data.shape}"
             )
+
+        output_dtype = (
+            self.output.dtype
+            if self.output.dtype.typecode in {"f", "d"}
+            else None
+        )
+        if output_dtype is not None and seed.dtype != output_dtype:
+            if isinstance(seed, Variable):
+                if create_graph and seed.requires_grad:
+                    raise TypeError(
+                        "A differentiable gradient seed must have the same "
+                        "dtype as the output"
+                    )
+                seed = Variable(
+                    seed.data.astype(output_dtype),
+                    requires_grad=False,
+                )
+            else:
+                seed = seed.astype(output_dtype)
+
         if create_graph:
             return seed if isinstance(seed, Variable) else Variable(seed, requires_grad=False)
         return seed.data if isinstance(seed, Variable) else seed

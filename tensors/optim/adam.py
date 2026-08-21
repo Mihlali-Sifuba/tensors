@@ -61,10 +61,10 @@ class Adam(Optimizer):
         eps = self.eps
 
         for param in self.parameters:
-            if param.grad is None:
+            grad = self._gradient_for(param)
+            if grad is None:
                 continue
 
-            grad = param.grad
             sid = id(param)
             if sid not in self._state:
                 self._state[sid] = {
