@@ -39,20 +39,44 @@ class Adam(Optimizer):
         betas: tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
     ) -> None:
-        if not math.isfinite(learning_rate) or learning_rate <= 0:
-            raise ValueError("learning_rate must be positive and finite")
         if len(betas) != 2:
             raise ValueError("betas must contain exactly two coefficients")
-        if not all(math.isfinite(beta) and 0 <= beta < 1 for beta in betas):
-            raise ValueError("betas must be finite and in the interval [0, 1)")
-        if not math.isfinite(eps) or eps <= 0:
-            raise ValueError("eps must be positive and finite")
 
-        super().__init__(parameters)
         self.learning_rate = learning_rate
         self.beta1, self.beta2 = betas
         self.eps = eps
+        super().__init__(parameters)
         self._state: dict[int, dict[str, Tensor | int]] = {}
+
+    @property
+    def beta1(self) -> float:
+        return self._beta1
+
+    @beta1.setter
+    def beta1(self, value: float) -> None:
+        if not math.isfinite(value) or not 0 <= value < 1:
+            raise ValueError("beta1 must be finite and in the interval [0, 1)")
+        self._beta1 = value
+
+    @property
+    def beta2(self) -> float:
+        return self._beta2
+
+    @beta2.setter
+    def beta2(self, value: float) -> None:
+        if not math.isfinite(value) or not 0 <= value < 1:
+            raise ValueError("beta2 must be finite and in the interval [0, 1)")
+        self._beta2 = value
+
+    @property
+    def eps(self) -> float:
+        return self._eps
+
+    @eps.setter
+    def eps(self, value: float) -> None:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("eps must be positive and finite")
+        self._eps = value
 
     def step(self) -> None:
         """Apply one Adam update to every managed parameter."""

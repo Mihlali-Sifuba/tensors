@@ -83,6 +83,25 @@ class AdamTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     ts.optim.Adam([], **arguments)
 
+    def test_hyperparameter_assignments_remain_validated(self):
+        optimizer = ts.optim.Adam([])
+        cases = (
+            ("beta1", math.nan),
+            ("beta1", 1.0),
+            ("beta2", math.inf),
+            ("beta2", -0.1),
+            ("eps", math.nan),
+            ("eps", math.inf),
+            ("eps", 0.0),
+        )
+
+        for attribute, value in cases:
+            with self.subTest(attribute=attribute, value=value):
+                previous = getattr(optimizer, attribute)
+                with self.assertRaises(ValueError):
+                    setattr(optimizer, attribute, value)
+                self.assertEqual(getattr(optimizer, attribute), previous)
+
 
 if __name__ == "__main__":
     unittest.main()

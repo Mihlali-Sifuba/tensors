@@ -6,6 +6,7 @@ from typing import Any, List
 from ..dtype import float64
 from ..tensor import Tensor
 from ._reduction import Axis, immutable_axis, normalize_axes, reduction_groups
+from .mean import _stable_float_mean
 
 
 def _scaled_deviations(
@@ -18,7 +19,7 @@ def _scaled_deviations(
         return _math.nan, [_math.nan] * len(values), _math.nan
 
     count = len(values)
-    average = _math.fsum(item / count for item in values)
+    average = _stable_float_mean(values)
     centered = [item - average for item in values]
     if all(_math.isfinite(item) for item in centered):
         scale = max((abs(item) for item in centered), default=0.0)
@@ -28,7 +29,7 @@ def _scaled_deviations(
     else:
         scale = max((abs(item) for item in values), default=0.0)
         normalized = [item / scale for item in values]
-        normalized_average = _math.fsum(item / count for item in normalized)
+        normalized_average = _stable_float_mean(normalized)
         normalized_centered = [item - normalized_average for item in normalized]
 
     variance = _math.fsum(

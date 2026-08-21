@@ -1,6 +1,5 @@
 """Stochastic gradient descent."""
 
-import math
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
@@ -14,10 +13,8 @@ class SGD(Optimizer):
     """Update a sequence of trainable Variables with gradient descent."""
 
     def __init__(self, parameters: Iterable["Variable"], learning_rate: float) -> None:
-        if not math.isfinite(learning_rate) or learning_rate <= 0:
-            raise ValueError("learning_rate must be positive and finite")
-        super().__init__(parameters)
         self.learning_rate = learning_rate
+        super().__init__(parameters)
 
     def step(self) -> None:
         """Apply one in-place parameter update using current gradients."""

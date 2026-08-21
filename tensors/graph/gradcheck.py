@@ -57,8 +57,15 @@ def gradcheck(
     """
     if not callable(function):
         raise TypeError("gradcheck function must be callable")
-    if eps <= 0 or atol < 0 or rtol < 0:
-        raise ValueError("eps must be positive and tolerances must be non-negative")
+    if not math.isfinite(eps) or eps <= 0:
+        raise ValueError("eps must be positive and finite")
+    if (
+        not math.isfinite(atol)
+        or not math.isfinite(rtol)
+        or atol < 0
+        or rtol < 0
+    ):
+        raise ValueError("tolerances must be non-negative and finite")
 
     originals = _input_tensors(inputs)
     with isolated_graph_state():

@@ -1,3 +1,4 @@
+import math
 import unittest
 
 import tensors as ts
@@ -51,6 +52,25 @@ class GradcheckTests(unittest.TestCase):
             return value * 0.0 + detached_square
 
         self.assertFalse(ts.gradcheck(incorrect, value, raise_exception=False))
+
+    def test_gradcheck_rejects_nonfinite_settings(self):
+        cases = (
+            {"eps": math.nan},
+            {"eps": math.inf},
+            {"atol": math.nan},
+            {"atol": math.inf},
+            {"rtol": math.nan},
+            {"rtol": math.inf},
+        )
+
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(ValueError):
+                    ts.gradcheck(
+                        lambda value: value * value,
+                        ts.Tensor([1.0]),
+                        **arguments,
+                    )
 
 
 if __name__ == "__main__":
