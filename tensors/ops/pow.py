@@ -69,7 +69,8 @@ class Pow:
     @staticmethod
     def forward_reverse(exponent: Tensor, base: Scalar) -> Tensor:
         """Return ``base`` raised element-wise to ``exponent``."""
-        base_tensor = Tensor([base] * exponent.size, dtype=float64, shape=exponent.shape)
+        dtype = result_dtype(exponent.dtype, base)
+        base_tensor = Tensor([base] * exponent.size, dtype=dtype, shape=exponent.shape)
         return Pow.forward(base_tensor, exponent)
 
     @staticmethod

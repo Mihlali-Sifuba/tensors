@@ -28,6 +28,14 @@ class TensorPowerTests(unittest.TestCase):
 
         self.assertEqual(result.tolist(), [2.0, 4.0, 8.0])
 
+    def test_reverse_power_preserves_float32_exponent_dtype(self):
+        exponent = ts.Tensor([1.0, 2.0, 3.0], dtype=ts.float32)
+
+        result = 2.0 ** exponent
+
+        self.assertIs(result.dtype, ts.float32)
+        self.assertEqual(result.tolist(), [2.0, 4.0, 8.0])
+
     def test_package_power_function_delegates_to_operator(self):
         result = ts.pow(ts.Tensor([2.0, 3.0]), 2.0)
 

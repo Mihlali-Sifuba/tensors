@@ -68,6 +68,21 @@ class TensorOpsTests(unittest.TestCase):
         self.assertIs(result.dtype, ts.float32)
         self.assertEqual(result.tolist(), [1.0, 2.0])
 
+    def test_scalar_division_by_float32_tensor_preserves_float32(self):
+        result = 2 / ts.Tensor([2, 4], dtype=ts.float32)
+
+        self.assertIs(result.dtype, ts.float32)
+        self.assertEqual(result.tolist(), [1.0, 0.5])
+
+    def test_float32_and_wide_integer_promote_to_float64(self):
+        floating = ts.Tensor([0.0], dtype=ts.float32)
+        integer = ts.Tensor([16_777_217], dtype=ts.int64)
+
+        self.assertIs((floating + integer).dtype, ts.float64)
+        self.assertEqual((floating + integer).tolist(), [16_777_217.0])
+        self.assertIs((integer + floating).dtype, ts.float64)
+        self.assertEqual((integer + floating).tolist(), [16_777_217.0])
+
     def test_negating_uint8_promotes_to_signed_dtype(self):
         result = -ts.Tensor([1, 2], dtype=ts.uint8)
 

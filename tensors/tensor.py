@@ -547,9 +547,8 @@ class Tensor:
         return Ops.divide(self, other)
 
     def __rtruediv__(self, other):
-        from .ops import Ops
-        numerator = Tensor([other] * self.size, shape=self.shape)
-        return Ops.divide(numerator, self)
+        from .ops import Div
+        return Div.forward_reverse(self, other)
 
     def __pow__(self, other):
         from .variable import Variable

@@ -182,6 +182,27 @@ class StableLossTests(unittest.TestCase):
 
         self.assertAlmostEqual(class_index_loss.item(), dense_loss.item())
 
+    def test_cross_entropy_distinguishes_broadcast_dense_targets(self):
+        logits = ts.Tensor([[2.0, 0.0], [0.0, 2.0]])
+        shared_targets = ts.Tensor([0.25, 0.75])
+        expanded_targets = ts.Tensor([[0.25, 0.75], [0.25, 0.75]])
+
+        shared_loss = ts.cross_entropy(
+            logits,
+            shared_targets,
+            reduction="none",
+        )
+        expanded_loss = ts.cross_entropy(
+            logits,
+            expanded_targets,
+            reduction="none",
+        )
+
+        self.assertValuesAlmostEqual(
+            shared_loss.tolist(),
+            expanded_loss.tolist(),
+        )
+
     def test_binary_cross_entropy_from_logits_is_stable(self):
         logits = ts.Variable([1000.0, -1000.0, 1000.0, -1000.0])
         targets = ts.Tensor([1.0, 0.0, 0.0, 1.0])
@@ -248,6 +269,24 @@ class StableLossTests(unittest.TestCase):
 
         self.assertAlmostEqual(first.data.item(), -0.5)
         self.assertAlmostEqual(second.item(), 0.25)
+
+    def test_binary_cross_entropy_boundary_gradients_are_differentiable(self):
+        probabilities = ts.Variable([0.0, 1.0])
+        loss = ts.binary_cross_entropy(
+            probabilities,
+            ts.Tensor([0.0, 1.0]),
+            reduction="sum",
+        )
+
+        first = ts.grad(loss, probabilities, create_graph=True)
+        second = ts.grad(
+            first,
+            probabilities,
+            grad_outputs=ts.Tensor([1.0, 1.0]),
+        )
+
+        self.assertValuesAlmostEqual(first.data.tolist(), [1.0, -1.0])
+        self.assertValuesAlmostEqual(second.tolist(), [1.0, 1.0])
 
     def test_binary_cross_entropy_broadcast_target_gradient_is_differentiable(self):
         logits = ts.Variable([[0.2], [-0.4]])

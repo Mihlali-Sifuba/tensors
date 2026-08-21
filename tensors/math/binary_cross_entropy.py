@@ -169,12 +169,59 @@ class BinaryCrossEntropy:
             prediction_derivative = sigmoid(prediction) - target
             target_derivative = -prediction + target * 0.0
         else:
-            prediction_derivative = (
-                (prediction - target) / (prediction * (1.0 - prediction))
+            expanded_prediction, expanded_target = broadcast_tensors(
+                prediction.data,
+                target.data,
             )
-            target_derivative = (
-                log(1.0 - prediction) - log(prediction) + target * 0.0
+            boundary_values = list(
+                zip(expanded_prediction._data, expanded_target._data)
             )
+
+            if prediction.requires_grad:
+                if any(
+                    (value == 0.0 and target_value != 0.0)
+                    or (value == 1.0 and target_value != 1.0)
+                    for value, target_value in boundary_values
+                ):
+                    raise ValueError(
+                        "Higher-order binary cross-entropy gradients require "
+                        "a finite first derivative"
+                    )
+                zero_mask = Tensor(
+                    [
+                        1.0 if value == 0.0 and target_value == 0.0 else 0.0
+                        for value, target_value in boundary_values
+                    ],
+                    dtype=prediction.dtype,
+                    shape=expanded_prediction.shape,
+                )
+                one_mask = Tensor(
+                    [
+                        1.0 if value == 1.0 and target_value == 1.0 else 0.0
+                        for value, target_value in boundary_values
+                    ],
+                    dtype=prediction.dtype,
+                    shape=expanded_prediction.shape,
+                )
+                prediction_derivative = (
+                    -target / (prediction + zero_mask)
+                    + (1.0 - target) / (1.0 - prediction + one_mask)
+                )
+            else:
+                prediction_derivative = prediction * 0.0
+
+            if target.requires_grad:
+                if any(value in {0.0, 1.0} for value, _ in boundary_values):
+                    raise ValueError(
+                        "Higher-order gradients with respect to binary "
+                        "cross-entropy targets require probabilities strictly "
+                        "between 0 and 1"
+                    )
+                target_derivative = (
+                    log(1.0 - prediction) - log(prediction) + target * 0.0
+                )
+            else:
+                target_derivative = target * 0.0
         return [
             sum_to_shape_graph(upstream * prediction_derivative, prediction.shape),
             sum_to_shape_graph(upstream * target_derivative, target.shape),

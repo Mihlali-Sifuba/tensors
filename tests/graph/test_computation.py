@@ -31,6 +31,17 @@ class ComputationTests(unittest.TestCase):
 
         self.assertEqual(value.grad.tolist(), [40.0, 120.0])
 
+    def test_computation_casts_gradient_seed_to_output_dtype(self):
+        value = ts.Variable(ts.Tensor([2.0], dtype=ts.float32))
+        result = value * value
+
+        ts.graph.Computation(result).backward(
+            ts.Tensor([3.0], dtype=ts.float64)
+        )
+
+        self.assertIs(value.grad.dtype, ts.float32)
+        self.assertEqual(value.grad.tolist(), [12.0])
+
     def test_computation_rejects_gradient_shape_mismatch(self):
         value = ts.Variable([2.0, 3.0])
         result = value * value

@@ -60,6 +60,22 @@ class FunctionGraphTests(unittest.TestCase):
         self.assertEqual(result.data.tolist(), [6.0])
         self.assertEqual(model.parameters(), [implementation.weight])
 
+    def test_bound_method_graph_collects_instance_parameters(self):
+        class Scale:
+            def __init__(self):
+                self.weight = ts.Variable([2.0])
+
+            def forward(self, value):
+                return value * self.weight
+
+        implementation = Scale()
+        model = ts.Graph(implementation.forward)
+
+        result = model(ts.Tensor([3.0]))
+
+        self.assertEqual(result.data.tolist(), [6.0])
+        self.assertEqual(model.parameters(), [implementation.weight])
+
     def test_variable_input_is_used_as_the_original_variable(self):
         @ts.Graph
         def model(x):

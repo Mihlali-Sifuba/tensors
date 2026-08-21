@@ -47,8 +47,13 @@ class Div:
     @staticmethod
     def forward_reverse(a: Tensor, scalar: Scalar) -> Tensor:
         """Forward for scalar / tensor (reverse division)."""
-        numerator = Tensor([scalar] * a.size, shape=a.shape)
-        return Div.forward(numerator, a)
+        dtype = result_dtype(a.dtype, scalar, division=True)
+        values = []
+        for denominator in a._data:
+            if denominator == 0:
+                raise ZeroDivisionError("Division by zero")
+            values.append(scalar / denominator)
+        return Tensor(values, dtype=dtype, shape=a.shape)
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:

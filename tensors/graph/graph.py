@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 import threading
 from typing import Any
-from inspect import getclosurevars, isfunction
+from inspect import getclosurevars, isfunction, ismethod
 
 from ..variable import Variable
 from .computation import Computation
@@ -231,6 +231,10 @@ class Graph:
     @staticmethod
     def _function_values(function: Callable[..., Any]) -> Iterator[Any]:
         """Yield Values captured by a function or stored on a callable object."""
+        if ismethod(function):
+            yield from vars(function.__self__).values()
+            function = function.__func__
+
         if not isfunction(function):
             yield from getattr(function, "__dict__", {}).values()
             return
