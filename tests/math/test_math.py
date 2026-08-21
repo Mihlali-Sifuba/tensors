@@ -1,3 +1,4 @@
+import math
 import unittest
 
 import tensors as ts
@@ -113,6 +114,33 @@ class MathTests(unittest.TestCase):
 
         self.assertEqual(result.shape, (2, 1))
         self.assertEqual(result.tolist(), [1.0, 2.0])
+
+    def test_std_avoids_intermediate_overflow(self):
+        matrix = ts.Tensor(
+            [1.0e308, 1.0e308, 1.0e308, -1.0e308],
+            shape=(2, 2),
+        )
+
+        result = ts.std(matrix, axis=1, keepdims=True)
+
+        self.assertEqual(result.shape, (2, 1))
+        self.assertEqual(result.tolist(), [0.0, 1.0e308])
+
+    def test_large_std_has_finite_gradient(self):
+        value = ts.Variable([1.0e308, -1.0e308])
+
+        ts.backward(ts.std(value))
+
+        self.assertEqual(value.grad.tolist(), [0.5, -0.5])
+
+    def test_std_handles_an_overflowing_centering_difference(self):
+        count = 1001
+        value = ts.Tensor([-1.0e308] * (count - 1) + [1.0e308])
+
+        result = ts.std(value).item()
+        expected = 1.0e308 * (2.0 * math.sqrt(count - 1) / count)
+
+        self.assertAlmostEqual(result / expected, 1.0, places=14)
 
     def test_axis_std_is_differentiable(self):
         matrix = ts.Variable([[1.0, 3.0], [2.0, 6.0]])

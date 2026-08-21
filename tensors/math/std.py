@@ -1,12 +1,40 @@
 """Standard-deviation public API."""
 
-import builtins
 import math as _math
 from typing import Any, List
 
 from ..dtype import float64
 from ..tensor import Tensor
 from ._reduction import Axis, immutable_axis, normalize_axes, reduction_groups
+
+
+def _scaled_deviations(
+    value: Tensor,
+    group: list[int],
+) -> tuple[float, list[float], float]:
+    """Return a safe scale, centered scaled values, and their deviation."""
+    values = [float(value._data[index]) for index in group]
+    if any(not _math.isfinite(item) for item in values):
+        return _math.nan, [_math.nan] * len(values), _math.nan
+
+    count = len(values)
+    average = _math.fsum(item / count for item in values)
+    centered = [item - average for item in values]
+    if all(_math.isfinite(item) for item in centered):
+        scale = max((abs(item) for item in centered), default=0.0)
+        if scale == 0.0:
+            return 0.0, [0.0] * count, 0.0
+        normalized_centered = [item / scale for item in centered]
+    else:
+        scale = max((abs(item) for item in values), default=0.0)
+        normalized = [item / scale for item in values]
+        normalized_average = _math.fsum(item / count for item in normalized)
+        normalized_centered = [item - normalized_average for item in normalized]
+
+    variance = _math.fsum(
+        item * item / count for item in normalized_centered
+    )
+    return scale, normalized_centered, _math.sqrt(variance)
 
 
 class Std:
@@ -26,11 +54,8 @@ class Std:
             if not group:
                 values.append(0.0)
                 continue
-            average = builtins.sum(value._data[index] for index in group) / len(group)
-            variance = builtins.sum(
-                (value._data[index] - average) ** 2 for index in group
-            ) / len(group)
-            values.append(_math.sqrt(variance))
+            scale, _, normalized_deviation = _scaled_deviations(value, group)
+            values.append(scale * normalized_deviation)
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         return Tensor(values, dtype=dtype, shape=output_shape)
 
@@ -51,16 +76,13 @@ class Std:
         for output_index, group in enumerate(groups):
             if not group:
                 continue
-            average = builtins.sum(value._data[index] for index in group) / len(group)
-            variance = builtins.sum(
-                (value._data[index] - average) ** 2 for index in group
-            ) / len(group)
-            deviation = _math.sqrt(variance)
-            if deviation == 0:
+            _, centered, normalized_deviation = _scaled_deviations(value, group)
+            if normalized_deviation == 0:
                 continue
-            scale = grad._data[output_index] / (len(group) * deviation)
-            for input_index in group:
-                result[input_index] = scale * (value._data[input_index] - average)
+            normalizer = len(group) * normalized_deviation
+            upstream = grad._data[output_index]
+            for input_index, centered_value in zip(group, centered):
+                result[input_index] = upstream * (centered_value / normalizer)
         return [Tensor(result, dtype=grad.dtype, shape=value.shape)]
 
     @staticmethod
@@ -68,32 +90,45 @@ class Std:
         """Build a differentiable population-standard-deviation VJP."""
         from .mean import mean
         from .reshape import reshape
+        from ..variable import Variable
 
         value = inputs[0]
         axis = kwargs.get("axis")
         keepdims = bool(kwargs.get("keepdims", False))
-        _, _, groups = reduction_groups(value.data, axis, True)
-        deviations = Std.forward(value.data, axis=axis, keepdims=True)
+        _, scale_shape, groups = reduction_groups(value.data, axis, True)
+        statistics = [_scaled_deviations(value.data, group) for group in groups]
         if any(
-            group and deviations._data[index] == 0
-            for index, group in enumerate(groups)
+            group and normalized_deviation == 0
+            for group, (_, _, normalized_deviation) in zip(groups, statistics)
         ):
             raise ValueError(
                 "Higher-order derivatives of std are undefined at zero deviation"
             )
-        center = mean(value, axis=axis, keepdims=True)
-        deviation = std(value, axis=axis, keepdims=True)
         count = len(groups[0]) if groups else 0
         if count == 0:
             raise NotImplementedError(
                 "Higher-order derivatives for empty standard deviations are not implemented"
             )
+        scales = Variable(
+            Tensor(
+                [
+                    scale if _math.isfinite(scale) and scale > 0.0 else 1.0
+                    for scale, _, _ in statistics
+                ],
+                dtype=value.dtype,
+                shape=scale_shape,
+            ),
+            requires_grad=False,
+        )
+        normalized = value / scales
+        center = mean(normalized, axis=axis, keepdims=True)
+        deviation = std(normalized, axis=axis, keepdims=True)
         expanded = grad if keepdims else reshape(
             grad,
             tuple(1 if index in normalize_axes(value.ndim, axis) else size
                   for index, size in enumerate(value.shape)),
         )
-        return [expanded * (value - center) / (count * deviation)]
+        return [expanded * (normalized - center) / (count * deviation)]
 
 
 def std(value: Any, axis: Axis = None, keepdims: bool = False) -> Any:
