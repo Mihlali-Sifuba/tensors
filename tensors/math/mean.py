@@ -1,13 +1,15 @@
 """Mean and its differentiation rule."""
 
+import math
 from typing import Any, List
 
 from ..dtype import float64
 from ..tensor import Tensor
 from ._reduction import (
-    Axis, immutable_axis, keepdims_shape, normalize_axes, reduction_size,
+    Axis, immutable_axis, keepdims_shape, normalize_axes, reduction_groups,
+    reduction_size,
 )
-from .sum import Sum, _sum_impl
+from .sum import Sum
 
 
 class Mean:
@@ -16,15 +18,19 @@ class Mean:
     @staticmethod
     def forward(a: Tensor, axis: Axis = None,
                 keepdims: bool = False) -> Tensor:
-        axes = normalize_axes(a.ndim, axis)
-        count = reduction_size(a.shape, axes)
-        result = _sum_impl(a, axis=axis, keepdims=keepdims)
+        _, output_shape, groups = reduction_groups(
+            a,
+            axis,
+            keepdims,
+            scalar_as_vector=True,
+        )
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
-        if count == 0:
-            values = [0.0] * result.size
-        else:
-            values = [float(item) / count for item in result._data]
-        return Tensor(values, dtype=dtype, shape=result.shape)
+        values = [
+            math.fsum(float(a._data[index]) / len(group) for index in group)
+            if group else 0.0
+            for group in groups
+        ]
+        return Tensor(values, dtype=dtype, shape=output_shape)
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
