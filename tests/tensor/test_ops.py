@@ -4,6 +4,15 @@ import tensors as ts
 
 
 class TensorOpsTests(unittest.TestCase):
+    def test_tensor_equality_compares_shape_and_values(self):
+        left = ts.Tensor([1.0, 2.0], dtype=ts.float32)
+        same_values = ts.Tensor([1.0, 2.0], dtype=ts.float64)
+        different_shape = ts.Tensor([1.0, 2.0], shape=(1, 2))
+
+        self.assertEqual(left, same_values)
+        self.assertNotEqual(left, different_shape)
+        self.assertNotEqual(left, ts.Tensor([1.0, 3.0]))
+
     def test_operations_preserve_float32(self):
         tensor = ts.Tensor([1, 2, 3, 4], dtype=ts.float32)
 

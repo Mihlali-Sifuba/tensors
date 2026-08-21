@@ -85,6 +85,34 @@ class ExtremaTests(unittest.TestCase):
         self.assertTrue(math.isnan(maximum_gradient[1]))
         self.assertEqual(maximum_gradient[2:], [0.0, 1.0])
 
+    def test_unique_extrema_have_zero_higher_derivatives(self):
+        value = ts.Variable([1.0, 3.0, 2.0])
+
+        maximum_gradient = ts.grad(
+            ts.max(value),
+            value,
+            create_graph=True,
+        )
+        minimum_gradient = ts.grad(
+            ts.min(value),
+            value,
+            create_graph=True,
+        )
+        maximum_second = ts.grad(ts.sum(maximum_gradient), value)
+        minimum_second = ts.grad(ts.sum(minimum_gradient), value)
+
+        self.assertEqual(maximum_gradient.data.tolist(), [0.0, 1.0, 0.0])
+        self.assertEqual(minimum_gradient.data.tolist(), [1.0, 0.0, 0.0])
+        self.assertEqual(maximum_second.tolist(), [0.0, 0.0, 0.0])
+        self.assertEqual(minimum_second.tolist(), [0.0, 0.0, 0.0])
+
+    def test_higher_order_extrema_reject_ties(self):
+        for name, operation in (("max", ts.max), ("min", ts.min)):
+            with self.subTest(operation=name):
+                value = ts.Variable([1.0, 1.0])
+                with self.assertRaisesRegex(ValueError, "undefined at ties"):
+                    ts.grad(operation(value), value, create_graph=True)
+
 
 if __name__ == "__main__":
     unittest.main()

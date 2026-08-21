@@ -2,6 +2,7 @@ import unittest
 
 import tensors as ts
 from tensors.math.max import Max
+from tensors.math.min import Min
 from tensors.ops import Add, Div
 
 
@@ -10,7 +11,8 @@ class OperationProtocolTests(unittest.TestCase):
         self.assertIsInstance(Add, ts.graph.Operation)
         self.assertIsInstance(Add, ts.graph.HigherOrderOperation)
         self.assertIsInstance(Div, ts.graph.ReverseOperation)
-        self.assertNotIsInstance(Max, ts.graph.HigherOrderOperation)
+        self.assertIsInstance(Max, ts.graph.HigherOrderOperation)
+        self.assertIsInstance(Min, ts.graph.HigherOrderOperation)
 
     def test_node_rejects_an_incomplete_operation_interface(self):
         class ForwardOnly:

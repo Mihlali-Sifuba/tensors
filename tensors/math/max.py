@@ -5,7 +5,7 @@ import math
 from typing import Any, List
 
 from ..tensor import Tensor
-from ._reduction import Axis, immutable_axis, reduction_groups
+from ._reduction import Axis, immutable_axis, keepdims_shape, reduction_groups
 
 
 class Max:
@@ -67,6 +67,52 @@ class Max:
             for input_index in selected:
                 result[input_index] = share
         return [Tensor(result, dtype=grad.dtype, shape=value.shape)]
+
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        """Build a differentiable VJP where every maximum is unique."""
+        from ..variable import Variable
+        from .reshape import reshape
+
+        value = inputs[0]
+        axis = kwargs.get("axis")
+        keepdims = bool(kwargs.get("keepdims", False))
+        _, _, groups = reduction_groups(
+            value.data,
+            axis,
+            keepdims,
+            scalar_as_vector=True,
+        )
+        weights = [0.0] * value.size
+        for group in groups:
+            group_values = [value.data._data[index] for index in group]
+            if any(
+                isinstance(item, float) and math.isnan(item)
+                for item in group_values
+            ):
+                raise ValueError(
+                    "Higher-order derivatives of max are undefined at NaN"
+                )
+            maximum = builtins.max(group_values)
+            selected = [
+                index for index in group
+                if value.data._data[index] == maximum
+            ]
+            if len(selected) != 1:
+                raise ValueError(
+                    "Higher-order derivatives of max are undefined at ties"
+                )
+            weights[selected[0]] = 1.0
+
+        expanded = grad if keepdims else reshape(
+            grad,
+            keepdims_shape(value.shape, axis),
+        )
+        mask = Variable(
+            Tensor(weights, dtype=grad.dtype, shape=value.shape),
+            requires_grad=False,
+        )
+        return [expanded * mask + value * 0.0]
 
 
 def max(value: Any, axis: Axis = None, keepdims: bool = False) -> Any:

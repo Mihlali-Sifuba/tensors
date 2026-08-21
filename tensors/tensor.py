@@ -501,6 +501,17 @@ class Tensor:
             "tensor.size != 0 for emptiness checks."
         )
 
+    def __eq__(self, other: object) -> bool:
+        """Return whether another Tensor has the same shape and values."""
+        if not isinstance(other, Tensor):
+            return NotImplemented
+        return self.shape == other.shape and self.tolist() == other.tolist()
+
+    def __ne__(self, other: object) -> bool:
+        """Return whether another Tensor differs in shape or values."""
+        result = self.__eq__(other)
+        return NotImplemented if result is NotImplemented else not result
+
     def __format__(self, format_spec: str) -> str:
         """Format a scalar tensor using normal Python numeric formatting."""
         if self.size != 1:

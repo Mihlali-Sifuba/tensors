@@ -11,6 +11,12 @@ class VariableTests(unittest.TestCase):
     def tearDown(self):
         reset_graph_state()
 
+    def test_variables_compare_by_graph_identity(self):
+        variable = ts.Variable([1.0])
+
+        self.assertEqual(variable, variable)
+        self.assertNotEqual(variable, ts.Variable([1.0]))
+
     def test_variable_wraps_tensor_without_copying_data(self):
         tensor = ts.Tensor([1.0, 2.0])
 

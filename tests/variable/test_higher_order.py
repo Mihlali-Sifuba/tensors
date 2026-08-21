@@ -97,6 +97,57 @@ class HigherOrderDerivativeTests(unittest.TestCase):
         self.assertEqual(second.shape, left.shape)
         self.assertEqual(second.tolist(), [6.0, 12.0, 6.0, 12.0])
 
+    def test_vector_dot_gradient_can_be_differentiated(self):
+        left = ts.Variable([1.0, 2.0])
+        right = ts.Variable([3.0, 4.0])
+
+        left_gradient = ts.grad(
+            ts.dot(left, right),
+            left,
+            create_graph=True,
+        )
+        mixed_gradient = ts.grad(ts.sum(left_gradient), right)
+
+        self.assertEqual(left_gradient.data.tolist(), [3.0, 4.0])
+        self.assertEqual(mixed_gradient.tolist(), [1.0, 1.0])
+
+    def test_matrix_vector_gradients_can_be_differentiated(self):
+        matrix = ts.Variable([[1.0, 2.0], [3.0, 4.0]])
+        vector = ts.Variable([5.0, 6.0])
+
+        matrix_gradient = ts.grad(
+            ts.sum(matrix @ vector),
+            matrix,
+            create_graph=True,
+        )
+        mixed_gradient = ts.grad(ts.sum(matrix_gradient), vector)
+
+        self.assertEqual(matrix_gradient.data.tolist(), [5.0, 6.0, 5.0, 6.0])
+        self.assertEqual(mixed_gradient.tolist(), [2.0, 2.0])
+
+    def test_vector_matrix_gradients_can_be_differentiated(self):
+        vector = ts.Variable([1.0, 2.0])
+        matrix = ts.Variable([[3.0, 4.0], [5.0, 6.0]])
+
+        vector_gradient = ts.grad(
+            ts.sum(vector @ matrix),
+            vector,
+            create_graph=True,
+        )
+        mixed_gradient = ts.grad(ts.sum(vector_gradient), matrix)
+
+        self.assertEqual(vector_gradient.data.tolist(), [7.0, 11.0])
+        self.assertEqual(mixed_gradient.tolist(), [1.0, 1.0, 1.0, 1.0])
+
+    def test_singleton_standard_deviation_has_zero_higher_derivatives(self):
+        value = ts.Variable([4.0])
+
+        first = ts.grad(ts.std(value), value, create_graph=True)
+        second = ts.grad(ts.sum(first), value)
+
+        self.assertEqual(first.data.tolist(), [0.0])
+        self.assertEqual(second.tolist(), [0.0])
+
     def test_softmax_gradient_can_be_differentiated(self):
         value = ts.Variable([[0.2, -0.4, 0.7]])
         loss = ts.sum(ts.softmax(value, axis=1) ** 2.0)
