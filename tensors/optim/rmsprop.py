@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
@@ -35,12 +36,12 @@ class RMSprop(Optimizer):
         rho: float = 0.99,
         eps: float = 1e-8,
     ) -> None:
-        if learning_rate <= 0:
-            raise ValueError("learning_rate must be positive")
-        if not 0 <= rho < 1:
-            raise ValueError("rho must be in the interval [0, 1)")
-        if eps <= 0:
-            raise ValueError("eps must be positive")
+        if not math.isfinite(learning_rate) or learning_rate <= 0:
+            raise ValueError("learning_rate must be positive and finite")
+        if not math.isfinite(rho) or not 0 <= rho < 1:
+            raise ValueError("rho must be finite and in the interval [0, 1)")
+        if not math.isfinite(eps) or eps <= 0:
+            raise ValueError("eps must be positive and finite")
 
         super().__init__(parameters)
         self.learning_rate = learning_rate

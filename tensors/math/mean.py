@@ -1,5 +1,6 @@
 """Mean and its differentiation rule."""
 
+import math
 from typing import Any, List
 
 from ..dtype import float64
@@ -8,7 +9,19 @@ from ._reduction import (
     Axis, immutable_axis, keepdims_shape, normalize_axes, reduction_groups,
     reduction_size,
 )
-from .sum import Sum, _stable_float_sum
+from .sum import Sum, _stable_float_sum, _sum_exact_ratios
+
+
+def _stable_float_mean(values: list[float]) -> float:
+    """Return a mean without overflowing its sum or underflowing its terms."""
+    if not values:
+        return 0.0
+    if any(not math.isfinite(value) for value in values):
+        return _stable_float_sum(values) / len(values)
+    return _sum_exact_ratios(
+        [value.as_integer_ratio() for value in values],
+        divisor=len(values),
+    )
 
 
 class Mean:
@@ -25,8 +38,8 @@ class Mean:
         )
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         values = [
-            _stable_float_sum([
-                float(a._data[index]) / len(group) for index in group
+            _stable_float_mean([
+                float(a._data[index]) for index in group
             ])
             if group else 0.0
             for group in groups

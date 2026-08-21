@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
@@ -38,14 +39,14 @@ class Adam(Optimizer):
         betas: tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
     ) -> None:
-        if learning_rate <= 0:
-            raise ValueError("learning_rate must be positive")
+        if not math.isfinite(learning_rate) or learning_rate <= 0:
+            raise ValueError("learning_rate must be positive and finite")
         if len(betas) != 2:
             raise ValueError("betas must contain exactly two coefficients")
-        if not all(0 <= beta < 1 for beta in betas):
-            raise ValueError("betas must be in the interval [0, 1)")
-        if eps <= 0:
-            raise ValueError("eps must be positive")
+        if not all(math.isfinite(beta) and 0 <= beta < 1 for beta in betas):
+            raise ValueError("betas must be finite and in the interval [0, 1)")
+        if not math.isfinite(eps) or eps <= 0:
+            raise ValueError("eps must be positive and finite")
 
         super().__init__(parameters)
         self.learning_rate = learning_rate

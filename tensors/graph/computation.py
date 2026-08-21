@@ -198,15 +198,18 @@ class Computation:
 
     def _backward_graph(self, seed: Any) -> dict[Any, Any]:
         """Build a differentiable reverse-mode gradient computation."""
-        gradients: dict[Any, Any] = {self.output: seed}
+        gradient_terms: dict[Any, list[Any]] = {self.output: [seed]}
+        gradients: dict[Any, Any] = {}
         for node in reversed(self._nodes):
             if node.op_cls is None:
                 continue
 
             output = node.output_var
-            output_gradient = gradients.get(output)
-            if output_gradient is None:
+            output_terms = gradient_terms.get(output)
+            if output_terms is None:
                 continue
+            output_gradient = self._sum_gradient_graph(output_terms)
+            gradients[output] = output_gradient
             inputs = [edge.source.output_var for edge in node._in_edges]
             if not any(input_variable.requires_grad for input_variable in inputs):
                 continue
@@ -225,23 +228,27 @@ class Computation:
             for input_variable, input_gradient in zip(inputs, input_gradients):
                 if not input_variable.requires_grad:
                     continue
-                existing = gradients.get(input_variable)
-                gradients[input_variable] = (
-                    input_gradient if existing is None else existing + input_gradient
-                )
+                gradient_terms.setdefault(input_variable, []).append(input_gradient)
+
+        for variable, terms in gradient_terms.items():
+            if variable not in gradients:
+                gradients[variable] = self._sum_gradient_graph(terms)
         return gradients
 
     def _backward_values(self, seed: Tensor) -> dict[Any, Tensor]:
         """Return numerical reverse-mode gradients without mutating Variables."""
-        gradients: dict[Any, Tensor] = {self.output: seed}
+        gradient_terms: dict[Any, list[Tensor]] = {self.output: [seed]}
+        gradients: dict[Any, Tensor] = {}
         for node in reversed(self._nodes):
             if node.op_cls is None:
                 continue
 
             output = node.output_var
-            output_gradient = gradients.get(output)
-            if output_gradient is None:
+            output_terms = gradient_terms.get(output)
+            if output_terms is None:
                 continue
+            output_gradient = self._sum_gradient_values(output_terms)
+            gradients[output] = output_gradient
 
             input_data = [edge.source.output_var.data for edge in node._in_edges]
             input_gradients = node.op_cls.backward(
@@ -258,17 +265,39 @@ class Computation:
                 input_variable = edge.source.output_var
                 if not input_variable.requires_grad:
                     continue
-                existing = gradients.get(input_variable)
-                if existing is None:
-                    gradients[input_variable] = input_gradient
-                else:
-                    from ..ops import Add
+                gradient_terms.setdefault(input_variable, []).append(input_gradient)
 
-                    gradients[input_variable] = Add.forward(
-                        existing,
-                        input_gradient,
-                    )
+        for variable, terms in gradient_terms.items():
+            if variable not in gradients:
+                gradients[variable] = self._sum_gradient_values(terms)
         return gradients
+
+    @staticmethod
+    def _sum_gradient_values(gradients: list[Tensor]) -> Tensor:
+        """Combine gradient contributions without order-dependent overflow."""
+        if len(gradients) == 1:
+            return gradients[0]
+
+        from ..math.sum import _stable_float_sum
+
+        first = gradients[0]
+        values = [
+            _stable_float_sum([
+                float(gradient._data[index]) for gradient in gradients
+            ])
+            for index in range(first.size)
+        ]
+        return Tensor(values, dtype=first.dtype, shape=first.shape)
+
+    @staticmethod
+    def _sum_gradient_graph(gradients: list[Any]) -> Any:
+        """Differentiably combine gradient contributions with stable summation."""
+        if len(gradients) == 1:
+            return gradients[0]
+
+        from ..math import stack, sum
+
+        return sum(stack(gradients, axis=0), axis=0)
 
     @staticmethod
     def _validate_gradients(node: Node, gradients: Any, *, graph: bool) -> tuple[Any, ...]:

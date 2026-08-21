@@ -20,9 +20,16 @@ class Optimizer(ABC):
     """
 
     def __init__(self, parameters: Iterable[Variable]) -> None:
+        from ..variable import Variable
+
         unique_parameters: list[Variable] = []
         seen: set[int] = set()
-        for parameter in parameters:
+        for index, parameter in enumerate(parameters):
+            if not isinstance(parameter, Variable):
+                raise TypeError(
+                    f"optimizer parameter {index} must be a Variable, got "
+                    f"{type(parameter).__name__}"
+                )
             identity = id(parameter)
             if identity not in seen:
                 seen.add(identity)
