@@ -63,6 +63,7 @@ class Mean:
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build a differentiable VJP for an axis-aware mean."""
+        from ..ops._utils import zero_like_graph
         from ..variable import Variable
         from .reshape import reshape
 
@@ -71,7 +72,7 @@ class Mean:
         value = inputs[0]
         count = reduction_size(value.shape, normalize_axes(value.ndim, axis))
         if count == 0:
-            raise NotImplementedError("Higher-order derivatives for empty means are not implemented")
+            return [zero_like_graph(value)]
         expanded = grad if keepdims else reshape(grad, keepdims_shape(value.shape, axis))
         ones = Variable(
             Tensor([1.0] * value.size, dtype=grad.dtype, shape=value.shape),

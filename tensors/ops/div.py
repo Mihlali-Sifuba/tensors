@@ -4,7 +4,7 @@ from typing import List, Union
 
 from ..dtype import result_dtype
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_tensors
+from ..utils.broadcasting import broadcast_shape, broadcast_to, broadcast_tensors
 from ._utils import sum_to_shape
 
 
@@ -17,36 +17,48 @@ def _negative_product_over_square(
     denominator: float,
 ) -> float:
     """Evaluate ``-left * right / denominator**2`` without range loss."""
+    return _product_over_denominator_power(
+        [-float(left), float(right)],
+        float(denominator),
+        2,
+    )
+
+
+def _product_over_denominator_power(
+    factors: list[float],
+    denominator: float,
+    power: int,
+) -> float:
+    """Evaluate a product divided by a denominator power exactly when finite."""
     import math
 
-    left = float(left)
-    right = float(right)
     denominator = float(denominator)
-    if all(math.isfinite(value) for value in (left, right, denominator)):
-        if denominator == 0.0:
-            raise ZeroDivisionError("Division by zero")
-        left_numerator, left_denominator = left.as_integer_ratio()
-        right_numerator, right_denominator = right.as_integer_ratio()
+    if denominator == 0.0:
+        raise ZeroDivisionError("Division by zero")
+    if any(value == 0.0 for value in factors):
+        return 0.0
+    if all(math.isfinite(value) for value in factors + [denominator]):
+        numerator = 1
+        divisor = 1
+        for factor in factors:
+            factor_numerator, factor_denominator = factor.as_integer_ratio()
+            numerator *= factor_numerator
+            divisor *= factor_denominator
         denominator_numerator, denominator_denominator = (
             denominator.as_integer_ratio()
         )
-        numerator = (
-            -left_numerator
-            * right_numerator
-            * denominator_denominator
-            * denominator_denominator
-        )
-        divisor = (
-            left_denominator
-            * right_denominator
-            * denominator_numerator
-            * denominator_numerator
-        )
+        numerator *= denominator_denominator ** power
+        divisor *= denominator_numerator ** power
         try:
             return numerator / divisor
         except OverflowError:
-            return math.inf if numerator > 0 else -math.inf
-    return -(left / denominator) * (right / denominator)
+            return math.inf if numerator * divisor > 0 else -math.inf
+    result = 1.0
+    for factor in factors:
+        result *= factor
+    for _ in range(power):
+        result /= denominator
+    return result
 
 
 class Div:
@@ -135,11 +147,165 @@ class Div:
             scalar = kwargs.get("scalar", 1.0)
             if kwargs.get("reverse", False):
                 value = inputs[0]
-                return [-(grad / value) * (scalar / value)]
+                numerator = _constant_like(value, float(scalar))
+                return [_division_denominator_vjp(grad, numerator, value)]
             return [grad / scalar]
         left, right = inputs
         from ._utils import sum_to_shape_graph
         return [
             sum_to_shape_graph(grad / right, left.shape),
-            sum_to_shape_graph(-(grad / right) * (left / right), right.shape),
+            sum_to_shape_graph(
+                _division_denominator_vjp(grad, left, right),
+                right.shape,
+            ),
         ]
+
+
+def _expanded_division_inputs(
+    grad: Tensor,
+    numerator: Tensor,
+    denominator: Tensor,
+) -> tuple[Tensor, Tensor, Tensor]:
+    shape = broadcast_shape(
+        broadcast_shape(grad.shape, numerator.shape),
+        denominator.shape,
+    )
+    return (
+        broadcast_to(grad, shape),
+        broadcast_to(numerator, shape),
+        broadcast_to(denominator, shape),
+    )
+
+
+class DivisionDenominatorGradient:
+    """Differentiable range-safe VJP for a division denominator."""
+
+    @staticmethod
+    def forward(
+        grad: Tensor,
+        numerator: Tensor,
+        denominator: Tensor,
+    ) -> Tensor:
+        grad, numerator, denominator = _expanded_division_inputs(
+            grad,
+            numerator,
+            denominator,
+        )
+        values = [
+            _negative_product_over_square(upstream, value, divisor)
+            for upstream, value, divisor in zip(
+                grad._data,
+                numerator._data,
+                denominator._data,
+            )
+        ]
+        return Tensor(values, dtype=grad.dtype, shape=grad.shape)
+
+    @staticmethod
+    def backward(
+        outer_grad: Tensor,
+        *inputs: Tensor,
+        **kwargs: object,
+    ) -> List[Tensor]:
+        grad, numerator, denominator = inputs
+        expanded_grad, expanded_numerator, expanded_denominator = (
+            _expanded_division_inputs(grad, numerator, denominator)
+        )
+        expanded_outer = broadcast_to(outer_grad, expanded_grad.shape)
+        grad_values = []
+        numerator_values = []
+        denominator_values = []
+        for outer, upstream, value, divisor in zip(
+            expanded_outer._data,
+            expanded_grad._data,
+            expanded_numerator._data,
+            expanded_denominator._data,
+        ):
+            grad_values.append(
+                _negative_product_over_square(outer, value, divisor)
+            )
+            numerator_values.append(
+                _negative_product_over_square(outer, upstream, divisor)
+            )
+            denominator_values.append(
+                _product_over_denominator_power(
+                    [2.0, float(outer), float(upstream), float(value)],
+                    float(divisor),
+                    3,
+                )
+            )
+        shape = expanded_grad.shape
+        return [
+            sum_to_shape(
+                Tensor(grad_values, dtype=outer_grad.dtype, shape=shape),
+                grad.shape,
+            ),
+            sum_to_shape(
+                Tensor(numerator_values, dtype=outer_grad.dtype, shape=shape),
+                numerator.shape,
+            ),
+            sum_to_shape(
+                Tensor(denominator_values, dtype=outer_grad.dtype, shape=shape),
+                denominator.shape,
+            ),
+        ]
+
+    @staticmethod
+    def backward_graph(outer_grad, *inputs, **kwargs: object):
+        from ._utils import sum_to_shape_graph
+
+        grad, numerator, denominator = inputs
+        return [
+            sum_to_shape_graph(
+                _division_denominator_vjp(
+                    outer_grad,
+                    numerator,
+                    denominator,
+                ),
+                grad.shape,
+            ),
+            sum_to_shape_graph(
+                _division_denominator_vjp(
+                    outer_grad,
+                    grad,
+                    denominator,
+                ),
+                numerator.shape,
+            ),
+            sum_to_shape_graph(
+                2.0
+                * outer_grad
+                * grad
+                * numerator
+                / (denominator ** 3.0),
+                denominator.shape,
+            ),
+        ]
+
+
+def _constant_like(reference, value: float):
+    from ..variable import Variable
+
+    return Variable(
+        Tensor(
+            [value] * reference.size,
+            dtype=reference.dtype,
+            shape=reference.shape,
+        ),
+        requires_grad=False,
+    )
+
+
+def _division_denominator_vjp(grad, numerator, denominator):
+    from ..variable import Variable
+
+    return Variable._from_operation(
+        DivisionDenominatorGradient.forward(
+            grad.data,
+            numerator.data,
+            denominator.data,
+        ),
+        "division_denominator_gradient",
+        DivisionDenominatorGradient,
+        [grad, numerator, denominator],
+    )

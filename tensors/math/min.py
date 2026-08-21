@@ -71,7 +71,7 @@ class Min:
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build a differentiable VJP where every minimum is unique."""
-        from ..variable import Variable
+        from ..ops._utils import masked_value_graph, zero_like_graph
         from .reshape import reshape
 
         value = inputs[0]
@@ -108,11 +108,10 @@ class Min:
             grad,
             keepdims_shape(value.shape, axis),
         )
-        mask = Variable(
-            Tensor(weights, dtype=grad.dtype, shape=value.shape),
-            requires_grad=False,
-        )
-        return [expanded * mask + value * 0.0]
+        mask = Tensor(weights, dtype=grad.dtype, shape=value.shape)
+        return [
+            masked_value_graph(expanded, mask) + zero_like_graph(value)
+        ]
 
 
 def min(value: Any, axis: Axis = None, keepdims: bool = False) -> Any:

@@ -18,7 +18,7 @@ from ._reduction import keepdims_shape, reduction_groups
 from .log_softmax import LogSoftmax, log_softmax
 from .mean import _stable_float_mean
 from ._normalization import shifted_normalization
-from .softmax import Softmax, _normalize_axis, softmax
+from .softmax import Softmax, _normalize_axis
 from .sum import _stable_float_sum
 
 
@@ -282,8 +282,8 @@ class CrossEntropy:
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build a differentiable cross-entropy VJP."""
+        from .log_softmax import _log_softmax_vjp
         from .reshape import reshape
-        from .sum import sum
 
         logits, targets = inputs
         axis = kwargs.get("axis", -1)
@@ -293,11 +293,22 @@ class CrossEntropy:
         _validate_reduction(reduction)
         axis = _normalize_axis(logits.data, axis)
 
-        # This arithmetic expansion is differentiable and retains both input
-        # paths while giving target formulas the full logits shape.
-        expanded_targets = targets + logits * 0.0
-        target_mass = sum(expanded_targets, axis=axis, keepdims=True)
-        logits_derivative = softmax(logits, axis=axis) * target_mass - expanded_targets
+        # Multiplying by finite ones expands targets without evaluating the
+        # indeterminate expression ``infinite_logits * 0``. The logits VJP is
+        # the log-softmax VJP seeded by ``-targets``; its dedicated operation
+        # retains tiny dominant-class derivatives that ordinary subtraction
+        # would round away.
+        ones = Tensor(
+            [1.0] * logits.size,
+            dtype=targets.dtype,
+            shape=logits.shape,
+        )
+        expanded_targets = targets * ones
+        logits_derivative = _log_softmax_vjp(
+            -expanded_targets,
+            logits,
+            axis,
+        )
         targets_derivative = -log_softmax(logits, axis=axis) + expanded_targets * 0.0
 
         if reduction == "none":

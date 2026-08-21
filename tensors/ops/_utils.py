@@ -163,10 +163,124 @@ def sum_products_to_shape_graph(left, right, shape: tuple[int, ...]):
     )
 
 
+class ZeroLike:
+    """A graph-connected zero that is safe for infinite input values."""
+
+    @staticmethod
+    def forward(value: Tensor) -> Tensor:
+        return Tensor(
+            [0.0] * value.size,
+            dtype=value.dtype,
+            shape=value.shape,
+        )
+
+    @staticmethod
+    def backward(
+        grad: Tensor,
+        *inputs: Tensor,
+        **kwargs: object,
+    ) -> list[Tensor]:
+        return [
+            Tensor(
+                [0.0] * inputs[0].size,
+                dtype=grad.dtype,
+                shape=inputs[0].shape,
+            )
+        ]
+
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        return [zero_like_graph(inputs[0])]
+
+
+def zero_like_graph(value):
+    """Return graph-connected zeros without evaluating ``value * 0``."""
+    from ..variable import Variable
+
+    return Variable._from_operation(
+        ZeroLike.forward(value.data),
+        "zero_like",
+        ZeroLike,
+        [value],
+    )
+
+
+class MaskedValue:
+    """Select values with a constant mask without evaluating ``infinity * 0``."""
+
+    @staticmethod
+    def forward(value: Tensor, *, mask: Tensor) -> Tensor:
+        from ..utils.broadcasting import broadcast_to
+
+        expanded = broadcast_to(value, mask.shape)
+        return Tensor(
+            [
+                item if selected != 0.0 else 0.0
+                for item, selected in zip(expanded._data, mask._data)
+            ],
+            dtype=value.dtype,
+            shape=mask.shape,
+        )
+
+    @staticmethod
+    def backward(
+        grad: Tensor,
+        *inputs: Tensor,
+        **kwargs: object,
+    ) -> list[Tensor]:
+        mask = kwargs["mask"]
+        if not isinstance(mask, Tensor):
+            raise TypeError("masked-value mask must be a Tensor")
+        selected = Tensor(
+            [
+                gradient if selected != 0.0 else 0.0
+                for gradient, selected in zip(grad._data, mask._data)
+            ],
+            dtype=grad.dtype,
+            shape=mask.shape,
+        )
+        return [sum_to_shape(selected, inputs[0].shape)]
+
+    @staticmethod
+    def backward_graph(grad, *inputs, **kwargs: object):
+        mask = kwargs["mask"]
+        if not isinstance(mask, Tensor):
+            raise TypeError("masked-value mask must be a Tensor")
+        return [
+            sum_to_shape_graph(
+                masked_value_graph(grad, mask),
+                inputs[0].shape,
+            )
+        ]
+
+
+def masked_value_graph(value, mask: Tensor):
+    """Select graph values using a constant zero-one mask."""
+    from ..utils.broadcasting import broadcast_shape
+    from ..variable import Variable
+
+    if broadcast_shape(value.shape, mask.shape) != mask.shape:
+        raise ValueError(
+            f"Value shape {value.shape} cannot broadcast to mask shape "
+            f"{mask.shape}"
+        )
+    return Variable._from_operation(
+        MaskedValue.forward(value.data, mask=mask),
+        "masked_value",
+        MaskedValue,
+        [value],
+        mask=mask,
+    )
+
+
 __all__ = [
+    "MaskedValue",
     "ProductSumToShape",
+    "masked_value_graph",
     "sum_products_to_shape",
     "sum_products_to_shape_graph",
     "sum_to_shape",
     "sum_to_shape_graph",
+    "ZeroLike",
+    "zero_like_graph",
 ]

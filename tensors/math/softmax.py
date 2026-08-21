@@ -91,34 +91,266 @@ class Softmax:
         if not isinstance(axis, int):
             raise TypeError("softmax axis must be an integer")
         axis = _normalize_axis(a, axis)
-        before, axis_size, trailing = _axis_layout(a, axis)
-        output = Softmax.forward(a, axis=axis)
-        values = [0.0] * a.size
-
-        for group in range(before):
-            group_start = group * axis_size * trailing
-            for offset in range(trailing):
-                positions = [group_start + offset + index * trailing for index in range(axis_size)]
-                weighted_sum = sum(
-                    grad._data[position] * output._data[position]
-                    for position in positions
-                )
-                for position in positions:
-                    values[position] = output._data[position] * (
-                        grad._data[position] - weighted_sum
-                    )
-
-        return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
+        return [_softmax_vjp_tensor(grad, a, axis)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build the differentiable softmax Jacobian-vector product."""
+        axis = kwargs.get("axis", -1)
+        if isinstance(axis, bool) or not isinstance(axis, int):
+            raise TypeError("softmax axis must be an integer")
+        axis = _normalize_axis(inputs[0].data, axis)
+        return [_softmax_vjp(grad, inputs[0], axis)]
+
+
+def _normalization_components(
+    value: Tensor,
+    axis: int,
+) -> tuple[Tensor, list[float]]:
+    """Return probabilities and accurately represented complements."""
+    probabilities = Softmax.forward(value, axis=axis)
+    before, axis_size, trailing = _axis_layout(value, axis)
+    complements = [0.0] * value.size
+    for group in range(before):
+        group_start = group * axis_size * trailing
+        for offset in range(trailing):
+            positions = [
+                group_start + offset + index * trailing
+                for index in range(axis_size)
+            ]
+            group_values = [float(value._data[position]) for position in positions]
+            if all(math.isfinite(item) for item in group_values):
+                _, _, _, group_complements = shifted_normalization(group_values)
+            else:
+                group_complements = [
+                    1.0 - float(probabilities._data[position])
+                    for position in positions
+                ]
+            for position, complement in zip(positions, group_complements):
+                complements[position] = complement
+    return probabilities, complements
+
+
+def _centered_softmax_tensor(
+    grad: Tensor,
+    value: Tensor,
+    axis: int,
+) -> Tensor:
+    """Return ``grad - E_softmax(grad)`` without dominant cancellation."""
+    from .sum import _stable_product_sum
+
+    probabilities, complements = _normalization_components(value, axis)
+    before, axis_size, trailing = _axis_layout(value, axis)
+    values = [0.0] * value.size
+    for group in range(before):
+        group_start = group * axis_size * trailing
+        for offset in range(trailing):
+            positions = [
+                group_start + offset + index * trailing
+                for index in range(axis_size)
+            ]
+            for position in positions:
+                terms = [
+                    (float(grad._data[position]), complements[position])
+                ]
+                terms.extend(
+                    (
+                        -float(grad._data[other]),
+                        float(probabilities._data[other]),
+                    )
+                    for other in positions
+                    if other != position
+                )
+                values[position] = _stable_product_sum(terms)
+    return Tensor(values, dtype=grad.dtype, shape=value.shape)
+
+
+def _softmax_vjp_tensor(grad: Tensor, value: Tensor, axis: int) -> Tensor:
+    """Return a cancellation-resistant softmax Jacobian-vector product."""
+    probabilities = Softmax.forward(value, axis=axis)
+    centered = _centered_softmax_tensor(grad, value, axis)
+    return Tensor(
+        [
+            probability * difference
+            for probability, difference in zip(
+                probabilities._data,
+                centered._data,
+            )
+        ],
+        dtype=grad.dtype,
+        shape=value.shape,
+    )
+
+
+def _softmax_expectation_tensor(
+    grad: Tensor,
+    value: Tensor,
+    axis: int,
+) -> Tensor:
+    """Broadcast the softmax-weighted expectation of ``grad`` per group."""
+    from .sum import _stable_product_sum
+
+    probabilities = Softmax.forward(value, axis=axis)
+    before, axis_size, trailing = _axis_layout(value, axis)
+    values = [0.0] * value.size
+    for group in range(before):
+        group_start = group * axis_size * trailing
+        for offset in range(trailing):
+            positions = [
+                group_start + offset + index * trailing
+                for index in range(axis_size)
+            ]
+            expectation = _stable_product_sum([
+                (
+                    float(grad._data[position]),
+                    float(probabilities._data[position]),
+                )
+                for position in positions
+            ])
+            for position in positions:
+                values[position] = expectation
+    return Tensor(values, dtype=grad.dtype, shape=value.shape)
+
+
+class SoftmaxCentered:
+    """Differentiable softmax-expectation centering operation."""
+
+    @staticmethod
+    def forward(grad: Tensor, value: Tensor, *, axis: int) -> Tensor:
+        return _centered_softmax_tensor(grad, value, axis)
+
+    @staticmethod
+    def backward(
+        outer_grad: Tensor,
+        *inputs: Tensor,
+        **kwargs: object,
+    ) -> List[Tensor]:
+        from .log_softmax import _log_softmax_vjp_tensor
+        from .sum import Sum
+
+        grad, value = inputs
+        axis = kwargs["axis"]
+        assert isinstance(axis, int)
+        total = Sum.forward(outer_grad, axis=axis, keepdims=True)
+        expanded_total = _broadcast_reduction(total, value)
+        value_vjp = _softmax_vjp_tensor(grad, value, axis)
+        return [
+            _log_softmax_vjp_tensor(outer_grad, value, axis),
+            Tensor(
+                [
+                    -scale * derivative
+                    for scale, derivative in zip(
+                        expanded_total._data,
+                        value_vjp._data,
+                    )
+                ],
+                dtype=outer_grad.dtype,
+                shape=value.shape,
+            ),
+        ]
+
+    @staticmethod
+    def backward_graph(outer_grad, *inputs, **kwargs: object):
+        from .log_softmax import _log_softmax_vjp
         from .sum import sum
 
-        axis = kwargs.get("axis", -1)
-        output = softmax(inputs[0], axis=axis)
-        projection = sum(grad * output, axis=axis, keepdims=True)
-        return [output * (grad - projection)]
+        grad, value = inputs
+        axis = kwargs["axis"]
+        return [
+            _log_softmax_vjp(outer_grad, value, axis),
+            -sum(outer_grad, axis=axis, keepdims=True)
+            * _softmax_vjp(grad, value, axis),
+        ]
+
+
+class SoftmaxGradient:
+    """Differentiable, cancellation-resistant softmax VJP."""
+
+    @staticmethod
+    def forward(grad: Tensor, value: Tensor, *, axis: int) -> Tensor:
+        return _softmax_vjp_tensor(grad, value, axis)
+
+    @staticmethod
+    def backward(
+        outer_grad: Tensor,
+        *inputs: Tensor,
+        **kwargs: object,
+    ) -> List[Tensor]:
+        from .sum import _stable_product_sum
+
+        grad, value = inputs
+        axis = kwargs["axis"]
+        assert isinstance(axis, int)
+        centered = _centered_softmax_tensor(grad, value, axis)
+        projections = _softmax_expectation_tensor(outer_grad, value, axis)
+        vector = Tensor(
+            [
+                _stable_product_sum([
+                    (float(outer), float(difference)),
+                    (-float(item), projection),
+                ])
+                for outer, difference, item, projection in zip(
+                    outer_grad._data,
+                    centered._data,
+                    grad._data,
+                    projections._data,
+                )
+            ],
+            dtype=outer_grad.dtype,
+            shape=value.shape,
+        )
+        return [
+            _softmax_vjp_tensor(outer_grad, value, axis),
+            _softmax_vjp_tensor(vector, value, axis),
+        ]
+
+    @staticmethod
+    def backward_graph(outer_grad, *inputs, **kwargs: object):
+        from .sum import sum
+
+        grad, value = inputs
+        axis = kwargs["axis"]
+        centered = _softmax_centered(grad, value, axis)
+        projection = sum(
+            outer_grad * softmax(value, axis=axis),
+            axis=axis,
+            keepdims=True,
+        )
+        vector = outer_grad * centered - grad * projection
+        return [
+            _softmax_vjp(outer_grad, value, axis),
+            _softmax_vjp(vector, value, axis),
+        ]
+
+
+def _broadcast_reduction(reduced: Tensor, value: Tensor) -> Tensor:
+    from ..utils.broadcasting import broadcast_to
+
+    return broadcast_to(reduced, value.shape)
+
+
+def _softmax_centered(grad, value, axis: int):
+    from ..variable import Variable
+
+    return Variable._from_operation(
+        SoftmaxCentered.forward(grad.data, value.data, axis=axis),
+        "softmax_centered",
+        SoftmaxCentered,
+        [grad, value],
+        axis=axis,
+    )
+
+
+def _softmax_vjp(grad, value, axis: int):
+    from ..variable import Variable
+
+    return Variable._from_operation(
+        SoftmaxGradient.forward(grad.data, value.data, axis=axis),
+        "softmax_gradient",
+        SoftmaxGradient,
+        [grad, value],
+        axis=axis,
+    )
 
 
 def softmax(value: Any, axis: int = -1) -> Any:
