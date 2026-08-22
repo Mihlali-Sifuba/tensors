@@ -132,7 +132,8 @@ for _ in range(100):
 | Autograd | `backward`, `grad`, `gradcheck`, `jacobian`, `hessian` |
 | Graphs | `Graph`, nested models, function decorators, parameter discovery |
 | Linear algebra | `dot`, `matmul`, `outer`, `transpose`, `norm` |
-| Reductions | `sum`, `mean`, `min`, `max`, `std`, `logsumexp` |
+| Reductions | `sum`, `prod`, `mean`, `min`, `max`, `argmin`, `argmax`, `std`, `logsumexp` |
+| Elementwise | `abs`, `clip`, `minimum`, `maximum`, comparisons, `where` |
 | Activations | `relu`, `sigmoid`, `tanh`, `softplus`, `softmax`, `log_softmax` |
 | Shape operations | `reshape`, `stack`, `concat` |
 | Losses | `cross_entropy`, `binary_cross_entropy` |

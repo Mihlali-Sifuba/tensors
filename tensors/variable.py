@@ -276,6 +276,10 @@ class Variable:
     def __neg__(self):
         return self._from_operation(Ops.neg(self.data), "neg", Neg, [self])
 
+    def __abs__(self):
+        from .math import abs
+        return abs(self)
+
     def __matmul__(self, other):
         from .linalg import matmul
         return matmul(self, other)
