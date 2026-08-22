@@ -1,5 +1,6 @@
 """Utilities for normalizing tensor slice selections."""
 
+from itertools import product
 from typing import List, Tuple, Union
 
 
@@ -38,4 +39,18 @@ def slice_ranges_and_shape_from_key(
     return ranges, tuple(new_shape)
 
 
-__all__ = ["slice_ranges_and_shape_from_key"]
+def flat_indices_from_ranges(
+    ranges: List[range],
+    strides: Tuple[int, ...],
+) -> List[int]:
+    """Return row-major flat indices selected by dimension ranges."""
+    return [
+        sum(
+            coordinate * stride
+            for coordinate, stride in zip(coordinates, strides)
+        )
+        for coordinates in product(*ranges)
+    ]
+
+
+__all__ = ["flat_indices_from_ranges", "slice_ranges_and_shape_from_key"]

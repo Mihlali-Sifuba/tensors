@@ -10,7 +10,7 @@ from .utils.shape import (
     row_major_strides,
     shape_size,
 )
-from .utils.slicing import slice_ranges_and_shape_from_key
+from .utils.slicing import flat_indices_from_ranges, slice_ranges_and_shape_from_key
 from .utils.indexing import indices_to_flat_index
 
 
@@ -168,20 +168,6 @@ class Tensor:
 
         return Tensor(result_data, dtype=self.dtype, shape=new_shape)
 
-    def _flat_indices_from_ranges(
-        self,
-        ranges: List[range],
-        strides: Tuple[int, ...],
-    ) -> List[int]:
-        """Return row-major flat indices selected by dimension ranges."""
-        return [
-            sum(
-                coordinate * stride
-                for coordinate, stride in zip(coordinates, strides)
-            )
-            for coordinates in product(*ranges)
-        ]
-
     def _slice_assignment_values(
         self,
         value: Union[int, float, List, 'Tensor', array],
@@ -218,7 +204,7 @@ class Tensor:
     ) -> None:
         """Assign a scalar or broadcast-compatible values to a tensor slice."""
         ranges, selection_shape = slice_ranges_and_shape_from_key(key, self.shape)
-        flat_indices = self._flat_indices_from_ranges(
+        flat_indices = flat_indices_from_ranges(
             ranges,
             row_major_strides(self.shape),
         )
