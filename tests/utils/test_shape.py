@@ -13,6 +13,9 @@ class ShapeUtilityTests(unittest.TestCase):
     def test_normalize_shape_returns_an_immutable_tuple(self):
         self.assertEqual(normalize_shape([2, 3]), (2, 3))
 
+    def test_normalize_shape_accepts_a_generator(self):
+        self.assertEqual(normalize_shape(value for value in [2, 3]), (2, 3))
+
     def test_normalize_shape_rejects_non_iterable_input(self):
         with self.assertRaisesRegex(TypeError, "shape must be an iterable"):
             normalize_shape(2)
@@ -59,6 +62,28 @@ class ShapeUtilityTests(unittest.TestCase):
     def test_negative_shape_dimension_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "non-negative integers"):
             shape_size((2, -1))
+
+    def test_boolean_shape_dimension_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "non-negative integers"):
+            normalize_shape((True, 2))
+
+    def test_non_integer_shape_dimension_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "non-negative integers"):
+            normalize_shape((2.0, 3))
+
+    def test_flat_index_must_be_an_integer(self):
+        with self.assertRaisesRegex(TypeError, "index must be an integer"):
+            index_to_coordinates(1.0, (2, 2))
+
+        with self.assertRaisesRegex(TypeError, "index must be an integer"):
+            index_to_coordinates(True, (2, 2))
+
+    def test_coordinates_must_contain_integers(self):
+        with self.assertRaisesRegex(TypeError, "only integers"):
+            coordinates_to_index((1.0, 0), (2, 2))
+
+        with self.assertRaisesRegex(TypeError, "only integers"):
+            coordinates_to_index((True, 0), (2, 2))
 
 
 if __name__ == "__main__":
