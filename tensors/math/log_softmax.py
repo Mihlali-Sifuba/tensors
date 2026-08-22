@@ -7,6 +7,7 @@ from typing import Any, List, overload
 import math
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..backend import execute_normalization, execute_normalization_gradient
 from ..dtype import float64
 from ..tensor import Tensor
 from ._normalization import shifted_normalization
@@ -32,6 +33,9 @@ class LogSoftmax:
         axis = _normalize_axis(a, axis)
         before, axis_size, trailing = _axis_layout(a, axis)
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
+        storage = execute_normalization("log_softmax", a, axis, dtype=dtype)
+        if storage is not None:
+            return Tensor(storage, dtype=dtype, shape=a.shape)
         values = [0.0] * a.size
 
         for group in range(before):
@@ -101,6 +105,14 @@ def _log_softmax_vjp_tensor(
     axis: int,
 ) -> Tensor:
     """Return a cancellation-resistant log-softmax VJP."""
+    storage = execute_normalization_gradient(
+        "log_softmax",
+        grad,
+        value,
+        axis,
+    )
+    if storage is not None:
+        return Tensor(storage, dtype=grad.dtype, shape=value.shape)
     from .sum import _stable_product_sum
 
     probabilities, complements = _normalization_components(value, axis)

@@ -6,6 +6,7 @@ import math
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
+from ..backend import execute_rmsprop_update
 from ..tensor import Tensor
 from .optimizer import Optimizer
 from .adam import _scaled_second_moment, _visible_second_moment
@@ -105,6 +106,49 @@ class RMSprop(Optimizer):
                     )
                 else:
                     scales, scaled_values = scaled_state
+
+            accelerated = execute_rmsprop_update(
+                param.data,
+                grad,
+                scales,
+                scaled_values,
+                rho=self.rho,
+                learning_rate=self.learning_rate,
+                epsilon=self.eps,
+            )
+            if accelerated is not None:
+                (
+                    parameter_storage,
+                    visible_storage,
+                    scale_storage,
+                    scaled_storage,
+                ) = accelerated
+                visible_state = Tensor(
+                    visible_storage,
+                    dtype=grad.dtype,
+                    shape=grad.shape,
+                )
+                scaled_state = (
+                    Tensor(
+                        scale_storage,
+                        dtype=grad.dtype,
+                        shape=grad.shape,
+                    ),
+                    Tensor(
+                        scaled_storage,
+                        dtype=grad.dtype,
+                        shape=grad.shape,
+                    ),
+                )
+                new_parameter = Tensor(
+                    parameter_storage,
+                    dtype=param.dtype,
+                    shape=param.shape,
+                )
+                pending.append(
+                    (param, sid, new_parameter, visible_state, scaled_state)
+                )
+                continue
 
             new_scales = []
             new_scaled_values = []

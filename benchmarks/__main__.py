@@ -9,7 +9,13 @@ from typing import Any
 
 import tensors as ts
 
-from . import autograd_cases, graph_cases, tensor_cases, training_cases
+from . import (
+    autograd_cases,
+    backend_cases,
+    graph_cases,
+    tensor_cases,
+    training_cases,
+)
 from .runner import (
     BenchmarkCase,
     combine_backend_reports,
@@ -23,6 +29,7 @@ from .runner import (
 CaseFactory = Callable[[], list[BenchmarkCase]]
 SUITES: dict[str, CaseFactory] = {
     "tensor": tensor_cases.cases,
+    "backend": backend_cases.cases,
     "graph": graph_cases.cases,
     "autograd": autograd_cases.cases,
     "training": training_cases.cases,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, List, overload
 
-from ..backend import execute_matmul
+from ..backend import execute_matmul, execute_transpose
 from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
@@ -208,6 +208,13 @@ def _transpose_impl(
         permutation = normalized
 
     shape = tuple(tensor.shape[axis] for axis in permutation)
+    accelerated = execute_transpose(
+        tensor,
+        permutation,
+        output_shape=shape,
+    )
+    if accelerated is not None:
+        return Tensor(accelerated, dtype=tensor.dtype, shape=shape)
     inverse = [0] * tensor.ndim
     for output_axis, input_axis in enumerate(permutation):
         inverse[input_axis] = output_axis

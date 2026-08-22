@@ -7,6 +7,7 @@ from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..tensor import Tensor
+from ._unary import unary_backward, unary_forward
 
 
 class Sign:
@@ -14,17 +15,7 @@ class Sign:
 
     @staticmethod
     def forward(value: Tensor) -> Tensor:
-        values = []
-        for item in value._data:
-            if isinstance(item, float) and math.isnan(item):
-                values.append(math.nan)
-            elif item > 0:
-                values.append(1)
-            elif item < 0:
-                values.append(-1)
-            else:
-                values.append(0)
-        return Tensor(values, dtype=value.dtype, shape=value.shape)
+        return unary_forward("sign", value, dtype=value.dtype, fallback=_sign)
 
     @staticmethod
     def backward(
@@ -33,15 +24,7 @@ class Sign:
         **kwargs: object,
     ) -> list[Tensor]:
         value = inputs[0]
-        if any(item == 0 for item in value._data):
-            raise ValueError("sign derivative is undefined at zero")
-        gradients = [
-            math.nan
-            if isinstance(item, float) and math.isnan(item)
-            else 0.0
-            for item in value._data
-        ]
-        return [Tensor(gradients, dtype=grad.dtype, shape=value.shape)]
+        return [unary_backward("sign", grad, value, fallback=_gradient)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
@@ -84,3 +67,21 @@ def sign(value: TensorLike) -> TensorResult:
 
 
 __all__ = ["Sign", "sign"]
+
+
+def _sign(value):
+    if isinstance(value, float) and math.isnan(value):
+        return math.nan
+    if value > 0:
+        return 1
+    if value < 0:
+        return -1
+    return 0
+
+
+def _gradient(upstream, value):
+    if value == 0:
+        raise ValueError("sign derivative is undefined at zero")
+    if isinstance(value, float) and math.isnan(value):
+        return math.nan
+    return 0.0

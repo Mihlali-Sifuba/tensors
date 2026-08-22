@@ -6,9 +6,16 @@ import math
 from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..backend import execute_logsumexp, execute_logsumexp_gradient
 from ..dtype import float64
 from ..tensor import Tensor
-from ._reduction import Axis, keepdims_shape, reduction_groups
+from ._reduction import (
+    Axis,
+    keepdims_shape,
+    normalize_axes,
+    reduction_groups,
+    reduction_shape,
+)
 from ._normalization import shifted_normalization
 
 
@@ -38,10 +45,23 @@ class LogSumExp:
         axis: Axis = None,
         keepdims: bool = False,
     ) -> Tensor:
+        axes = normalize_axes(a.ndim, axis)
+        output_shape = reduction_shape(a.shape, axes, keepdims)
+        if axis is None and not keepdims:
+            output_shape = (1,)
+        dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
+        storage = execute_logsumexp(
+            a,
+            axes,
+            keepdims=keepdims,
+            dtype=dtype,
+            output_shape=output_shape,
+        )
+        if storage is not None:
+            return Tensor(storage, dtype=dtype, shape=output_shape)
         _, output_shape, groups = reduction_groups(
             a, axis, keepdims, scalar_as_vector=True
         )
-        dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         values = [_group_value(a, group) for group in groups]
         return Tensor(values, dtype=dtype, shape=output_shape)
 
@@ -50,13 +70,25 @@ class LogSumExp:
         a = inputs[0]
         axis = kwargs.get("axis")
         keepdims = kwargs.get("keepdims", False)
-        _, output_shape, groups = reduction_groups(
-            a, axis, keepdims, scalar_as_vector=True
-        )
+        axes = normalize_axes(a.ndim, axis)
+        output_shape = reduction_shape(a.shape, axes, keepdims)
+        if axis is None and not keepdims:
+            output_shape = (1,)
         if grad.shape != output_shape:
             raise ValueError(
                 f"Gradient shape {grad.shape} does not match output shape {output_shape}"
             )
+        storage = execute_logsumexp_gradient(
+            grad,
+            a,
+            axes,
+            keepdims=keepdims,
+        )
+        if storage is not None:
+            return [Tensor(storage, dtype=grad.dtype, shape=a.shape)]
+        _, _, groups = reduction_groups(
+            a, axis, keepdims, scalar_as_vector=True
+        )
 
         values = [0.0] * a.size
         for output_index, group in enumerate(groups):

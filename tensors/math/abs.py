@@ -8,6 +8,7 @@ from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..tensor import Tensor
+from ._unary import unary_backward, unary_forward
 
 
 class Abs:
@@ -15,10 +16,11 @@ class Abs:
 
     @staticmethod
     def forward(value: Tensor) -> Tensor:
-        return Tensor(
-            [builtins.abs(item) for item in value._data],
+        return unary_forward(
+            "abs",
+            value,
             dtype=value.dtype,
-            shape=value.shape,
+            fallback=builtins.abs,
         )
 
     @staticmethod
@@ -28,17 +30,7 @@ class Abs:
         **kwargs: object,
     ) -> list[Tensor]:
         value = inputs[0]
-        gradients = []
-        for upstream, item in zip(grad._data, value._data):
-            if isinstance(item, float) and math.isnan(item):
-                gradients.append(math.nan)
-            elif item > 0:
-                gradients.append(upstream)
-            elif item < 0:
-                gradients.append(-upstream)
-            else:
-                gradients.append(0.0)
-        return [Tensor(gradients, dtype=grad.dtype, shape=value.shape)]
+        return [unary_backward("abs", grad, value, fallback=_abs_gradient)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
@@ -96,3 +88,13 @@ def abs(value: TensorLike) -> TensorResult:
 
 
 __all__ = ["Abs", "abs"]
+
+
+def _abs_gradient(upstream, value):
+    if isinstance(value, float) and math.isnan(value):
+        return math.nan
+    if value > 0:
+        return upstream
+    if value < 0:
+        return -upstream
+    return 0.0

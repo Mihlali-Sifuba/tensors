@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
+from ..backend import execute_concat
 from ..dtype import result_dtype
 from ..tensor import Tensor
 
@@ -86,6 +87,19 @@ class Concat:
         dtype = reference.dtype
         for tensor in converted[1:]:
             dtype = result_dtype(dtype, tensor)
+
+        accelerated = execute_concat(
+            converted,
+            axis,
+            dtype=dtype,
+            output_shape=tuple(output_shape),
+        )
+        if accelerated is not None:
+            return Tensor(
+                accelerated,
+                dtype=dtype,
+                shape=tuple(output_shape),
+            )
 
         promoted = [
             tensor if tensor.dtype == dtype else tensor.astype(dtype)

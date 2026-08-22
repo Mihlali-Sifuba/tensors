@@ -51,6 +51,7 @@ python -m benchmarks --output benchmark-results.json
 | Suite | Cases |
 | --- | --- |
 | `tensor` | primitive arithmetic, casting, slicing, broadcasting, reductions, matrix multiplication, and norms |
+| `backend` | unary math, normalization, losses, selection, layout, creation, and optimizer kernels |
 | `graph` | constructing a fresh `Graph` and replaying an already traced `Computation` |
 | `autograd` | `grad`, `backward`, derivative-graph construction, second derivatives, and Hessians |
 | `training` | a complete MLP step: forward pass, loss, gradient reset, backward pass, and SGD update |

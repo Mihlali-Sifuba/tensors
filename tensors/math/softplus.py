@@ -6,6 +6,7 @@ from typing import Any, List, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
+from ._unary import unary_backward, unary_forward
 
 
 class Softplus:
@@ -14,17 +15,21 @@ class Softplus:
     @staticmethod
     def forward(a: Tensor) -> Tensor:
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
-        values = [
-            _math.log1p(_math.exp(-abs(float(value)))) + max(float(value), 0.0)
-            for value in a._data
-        ]
-        return Tensor(values, dtype=dtype, shape=a.shape)
+        return unary_forward("softplus", a, dtype=dtype, fallback=_softplus)
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         a = inputs[0]
-        values = [g * _sigmoid(float(x)) for g, x in zip(grad._data, a._data)]
-        return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
+        return [
+            unary_backward(
+                "softplus",
+                grad,
+                a,
+                fallback=lambda upstream, value: (
+                    upstream * _sigmoid(float(value))
+                ),
+            )
+        ]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
@@ -66,3 +71,8 @@ def _sigmoid(value: float) -> float:
         return 1.0 / (1.0 + z)
     z = _math.exp(value)
     return z / (1.0 + z)
+
+
+def _softplus(value):
+    value = float(value)
+    return _math.log1p(_math.exp(-abs(value))) + max(value, 0.0)
