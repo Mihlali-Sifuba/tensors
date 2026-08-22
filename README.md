@@ -129,10 +129,11 @@ for _ in range(100):
 | Area | Available functionality |
 | --- | --- |
 | Core | `Tensor`, `Variable`, dtypes, indexing, slicing, casting, broadcasting |
+| Creation | `zeros`, `ones`, `full`, `eye`, `arange`, `linspace` |
 | Autograd | `backward`, `grad`, `gradcheck`, `jacobian`, `hessian` |
 | Graphs | `Graph`, nested models, function decorators, parameter discovery |
 | Linear algebra | `dot`, `matmul`, `outer`, `transpose`, `norm` |
-| Reductions | `sum`, `prod`, `mean`, `min`, `max`, `argmin`, `argmax`, `std`, `logsumexp` |
+| Reductions | `sum`, `prod`, `mean`, `variance`, `std`, `min`, `max`, `argmin`, `argmax`, `logsumexp` |
 | Elementwise | `abs`, `sign`, `clip`, `minimum`, `maximum`, comparisons, `where` |
 | Trigonometry | `sin`, `cos`, `tan`, `arcsin`, `arccos`, `arctan` |
 | Activations | `relu`, `sigmoid`, `tanh`, `softplus`, `softmax`, `log_softmax` |
@@ -174,6 +175,7 @@ tensors/
 │   ├── math/        # reductions, activations, losses, and shape operations
 │   ├── ops/         # primitive differentiable operations
 │   ├── optim/       # SGD, Adam, and RMSprop
+│   ├── creation.py  # zeros, ones, ranges, and identity matrices
 │   ├── tensor.py    # tensor storage and core behavior
 │   └── variable.py  # differentiable tensor values
 ├── examples/        # runnable demonstrations

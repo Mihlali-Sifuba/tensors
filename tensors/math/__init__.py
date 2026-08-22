@@ -24,6 +24,7 @@ from .log_softmax import LogSoftmax, log_softmax
 from .cross_entropy import CrossEntropy, cross_entropy
 from .binary_cross_entropy import BinaryCrossEntropy, binary_cross_entropy
 from .std import Std, std
+from .variance import Variance, variance
 from .reshape import Reshape, reshape
 from .stack import Stack, stack
 from .concat import Concat, concat
@@ -41,7 +42,8 @@ __all__ = [
     "Sum", "Mean", "Min", "Max", "Sqrt", "Exp", "Log", "Sin", "Cos", "Tan",
     "ArcSin", "ArcCos", "ArcTan", "Sign",
     "ReLU", "Sigmoid", "Tanh", "Softplus", "Softmax", "LogSumExp",
-    "LogSoftmax", "CrossEntropy", "BinaryCrossEntropy", "Std", "Reshape",
+    "LogSoftmax", "CrossEntropy", "BinaryCrossEntropy", "Std", "Variance",
+    "Reshape",
     "Stack", "Concat", "Abs", "Prod", "Clip", "ArgMax", "ArgMin",
     "Where", "Maximum", "Minimum",
     "sum", "mean", "min", "max", "prod", "abs", "clip",
@@ -50,7 +52,7 @@ __all__ = [
     "arcsin", "arccos", "arctan", "sign",
     "relu", "sigmoid", "tanh", "softplus", "softmax",
     "logsumexp", "log_softmax", "cross_entropy", "binary_cross_entropy",
-    "std", "reshape", "stack", "concat",
+    "std", "variance", "reshape", "stack", "concat",
     "equal", "not_equal", "less", "less_equal", "greater",
     "greater_equal", "where", "maximum", "minimum",
 ]
