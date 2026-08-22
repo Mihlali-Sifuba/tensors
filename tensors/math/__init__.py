@@ -23,15 +23,28 @@ from .std import Std, std
 from .reshape import Reshape, reshape
 from .stack import Stack, stack
 from .concat import Concat, concat
+from .abs import Abs, abs
+from .prod import Prod, prod
+from .clip import Clip, clip
+from .arg_extrema import ArgMax, ArgMin, argmax, argmin
+from .comparison import (
+    equal, not_equal, less, less_equal, greater, greater_equal,
+)
+from .where import Where, where
+from .elementwise_extrema import Maximum, Minimum, maximum, minimum
 
 __all__ = [
     "Sum", "Mean", "Min", "Max", "Sqrt", "Exp", "Log", "Sin", "Cos", "Tan",
     "ReLU", "Sigmoid", "Tanh", "Softplus", "Softmax", "LogSumExp",
     "LogSoftmax", "CrossEntropy", "BinaryCrossEntropy", "Std", "Reshape",
-    "Stack", "Concat",
-    "sum", "mean", "min", "max",
+    "Stack", "Concat", "Abs", "Prod", "Clip", "ArgMax", "ArgMin",
+    "Where", "Maximum", "Minimum",
+    "sum", "mean", "min", "max", "prod", "abs", "clip",
+    "argmax", "argmin",
     "sqrt", "exp", "log", "sin", "cos", "tan",
     "relu", "sigmoid", "tanh", "softplus", "softmax",
     "logsumexp", "log_softmax", "cross_entropy", "binary_cross_entropy",
     "std", "reshape", "stack", "concat",
+    "equal", "not_equal", "less", "less_equal", "greater",
+    "greater_equal", "where", "maximum", "minimum",
 ]

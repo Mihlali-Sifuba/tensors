@@ -484,6 +484,10 @@ class Tensor:
         from .ops import Ops
         return Ops.neg(self)
 
+    def __abs__(self):
+        from .math import abs
+        return abs(self)
+
     def __matmul__(self, other):
         from .linalg import matmul
         return matmul(self, other)
