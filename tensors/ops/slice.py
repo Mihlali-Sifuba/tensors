@@ -3,6 +3,7 @@
 from itertools import product
 from typing import List
 
+from ..backend import execute_slice_scatter
 from ..tensor import Tensor
 from ..utils.shape import shape_size
 
@@ -76,6 +77,17 @@ class SliceScatter:
         if len(selected) != grad.size:
             raise ValueError(
                 f"Slice gradient has {grad.size} values; expected {len(selected)}"
+            )
+        accelerated = execute_slice_scatter(
+            grad,
+            selected,
+            output_shape=source_shape,
+        )
+        if accelerated is not None:
+            return Tensor(
+                accelerated,
+                dtype=grad.dtype,
+                shape=source_shape,
             )
         values = [0.0] * template.size
         for flat_index, grad_value in zip(selected, grad._data):

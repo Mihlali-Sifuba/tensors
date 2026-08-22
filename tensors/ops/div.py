@@ -2,6 +2,7 @@
 
 from typing import List, Union
 
+from ..backend import execute_binary, execute_division_denominator_gradient
 from ..dtype import result_dtype
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_shape, broadcast_to, broadcast_tensors
@@ -67,13 +68,36 @@ class Div:
     @staticmethod
     def forward(a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
         """Element-wise division."""
+        if not isinstance(b, (int, float, Tensor)):
+            raise TypeError(f"Unsupported: {type(b)}")
         dtype = result_dtype(a.dtype, b, division=True)
         if isinstance(b, (int, float)):
             if b == 0:
                 raise ZeroDivisionError("Division by zero")
+            accelerated = execute_binary(
+                "divide",
+                a,
+                b,
+                dtype=dtype,
+                output_shape=a.shape,
+            )
+            if accelerated is not None:
+                return Tensor(accelerated, dtype=dtype, shape=a.shape)
             data = [x / b for x in a._data]
             return Tensor(data, dtype=dtype, shape=a.shape)
         if isinstance(b, Tensor):
+            if any(value == 0 for value in b._data):
+                raise ZeroDivisionError("Division by zero")
+            shape = broadcast_shape(a.shape, b.shape)
+            accelerated = execute_binary(
+                "divide",
+                a,
+                b,
+                dtype=dtype,
+                output_shape=shape,
+            )
+            if accelerated is not None:
+                return Tensor(accelerated, dtype=dtype, shape=shape)
             a, b = broadcast_tensors(a, b)
             data = []
             for x, y in zip(a._data, b._data):
@@ -98,6 +122,17 @@ class Div:
     def forward_reverse(a: Tensor, scalar: Scalar) -> Tensor:
         """Forward for scalar / tensor (reverse division)."""
         dtype = result_dtype(a.dtype, scalar, division=True)
+        if any(denominator == 0 for denominator in a._data):
+            raise ZeroDivisionError("Division by zero")
+        accelerated = execute_binary(
+            "divide",
+            scalar,
+            a,
+            dtype=dtype,
+            output_shape=a.shape,
+        )
+        if accelerated is not None:
+            return Tensor(accelerated, dtype=dtype, shape=a.shape)
         values = []
         for denominator in a._data:
             if denominator == 0:
@@ -191,6 +226,19 @@ class DivisionDenominatorGradient:
             numerator,
             denominator,
         )
+        if any(value == 0 for value in denominator._data):
+            raise ZeroDivisionError("Division by zero")
+        accelerated = execute_division_denominator_gradient(
+            grad,
+            numerator,
+            denominator,
+        )
+        if accelerated is not None:
+            return Tensor(
+                accelerated,
+                dtype=grad.dtype,
+                shape=grad.shape,
+            )
         values = [
             _negative_product_over_square(upstream, value, divisor)
             for upstream, value, divisor in zip(
