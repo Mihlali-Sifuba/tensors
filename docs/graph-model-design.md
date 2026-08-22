@@ -10,6 +10,12 @@ its execution model.
 `Graph` represents a reusable, differentiable computational function while
 preserving ordinary, eager Python model code.
 
+`Graph` is the model abstraction because a mathematical model is a function.
+It does not introduce a separate layer or module hierarchy that model authors
+must translate their equations into. Persistent trainable values are ordinary
+`Variable` attributes, child models are ordinary `Graph` attributes, and
+`forward` states the computation with normal Python expressions.
+
 ```python
 class Linear(Graph):
     def __init__(self):
@@ -209,7 +215,10 @@ traverses common containers and values captured by functional Graph closures.
 
 ## Design Principles
 
+- A model is represented as a callable mathematical function.
 - Model code uses normal Python expressions.
+- Trainable state consists of `Variable` attributes discovered without manual
+  parameter registration.
 - Eager execution and fresh graph recording coexist in every graph call.
 - Reusable model capture is opt-in through `Graph`; eager `Variable`
   operations record their own autograd history independently.
@@ -217,3 +226,6 @@ traverses common containers and values captured by functional Graph closures.
 - Losses and optimisers are composable code outside the model definition.
 - The latest model graph is inspectable, and each captured `Computation` can be
   replayed independently of training while it remains active.
+- Public abstractions must clarify the mathematics or enable necessary
+  behaviour; they should not add ceremony around expressions Python already
+  represents clearly.

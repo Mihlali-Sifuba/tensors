@@ -23,6 +23,29 @@
 > [!NOTE]
 > This project is currently an educational, experimental implementation. It prioritizes clarity and correctness over production-scale performance.
 
+## API philosophy
+
+`tensors` starts from a simple premise: a numerical package should let users
+state the mathematics directly. The primary interface is the expression itself:
+
+```python
+prediction = inputs @ weight + bias
+loss = ts.mean((prediction - target) ** 2.0)
+```
+
+Python operators represent algebra, common mathematical functions are available
+from the root `ts` namespace, and `Tensor` and `Variable` use the same
+expression vocabulary. A model is a mathematical function, so `Graph` makes
+that function reusable while parameters remain ordinary `Variable`
+attributes.
+
+Organised subpackages are available for discovery and advanced use, but ordinary
+mathematical code should not require users to import a separate hierarchy of
+layers, modules, or parameter-registration abstractions. An abstraction belongs
+in the public API when it makes the mathematics clearer or enables necessary
+behaviour—not when it merely adds ceremony around an expression Python already
+represents well.
+
 ## Highlights
 
 - Multidimensional `Tensor` values with shapes, indexing, slicing, broadcasting, and dtypes
