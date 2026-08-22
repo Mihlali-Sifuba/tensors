@@ -117,7 +117,8 @@ First-order gradients are implemented and numerically checked for:
 
 - broadcast arithmetic and powers;
 - `sqrt`, `exp`, `log`, `sin`, `cos`, `tan`, `arcsin`, `arccos`, `arctan`,
-  `sign`, `relu`, `sigmoid`, `tanh`, and `softplus`;
+  `sinh`, `cosh`, `tanh`, `arcsinh`, `arccosh`, `arctanh`, `sign`, `relu`,
+  `sigmoid`, and `softplus`;
 - axis-aware `sum`, `mean`, `variance`, `min`, `max`, `std`, `norm`, `softmax`,
   `logsumexp`, and `log_softmax`;
 - stable multiclass and binary cross-entropy losses;
@@ -140,6 +141,12 @@ Production behavior includes explicit domain rules:
 - `arcsin(x)` and `arccos(x)` require `-1 <= x <= 1`. Their values exist at
   the endpoints, but their finite real derivatives are undefined there.
 - `arctan(x)` is defined and differentiable for every finite real input.
+- `sinh(x)`, `cosh(x)`, and `arcsinh(x)` are defined and differentiable for
+  every real input. Very large `sinh` and `cosh` values overflow to signed or
+  positive infinity, respectively.
+- `arccosh(x)` requires `x >= 1`. Its value exists at `x == 1`, but its finite
+  real derivative is undefined there.
+- `arctanh(x)` requires `-1 < x < 1`.
 - `sign(x)` has a zero derivative away from zero and raises when differentiated
   at zero, where the function is discontinuous.
 - `sqrt(x)` accepts `x >= 0`, but its derivative raises at `x == 0` because the
