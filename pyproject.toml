@@ -53,6 +53,6 @@ tensors = ["py.typed"]
 
 [tool.mypy]
 python_version = "3.10"
-files = ["typing_tests"]
+files = ["tests/typing"]
 follow_imports = "silent"
 strict = true
