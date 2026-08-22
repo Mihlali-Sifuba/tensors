@@ -9,10 +9,11 @@
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/ms-tensors/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/ms-tensors?color=3775A9"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
   <img alt="Backend" src="https://img.shields.io/badge/backend-pure%20Python-7A3E9D">
   <img alt="Status" src="https://img.shields.io/badge/status-experimental-F59E0B">
-  <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-D22128">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-D22128"></a>
 </p>
 
 ---
@@ -34,16 +35,19 @@
 - SGD, Adam, and RMSprop optimizers
 - A broad `unittest` test suite covering tensors, graphs, autograd, math, and optimizers
 
-## Quick start
+## Installation
 
-Clone the repository and enter its directory:
+Install the latest release from [PyPI](https://pypi.org/project/ms-tensors/):
 
 ```powershell
-git clone https://github.com/Mihlali-Sifuba/tensors.git
-cd tensors
+python -m pip install ms-tensors
 ```
 
-The package currently runs directly from the repository and has no third-party runtime dependencies.
+The distribution is named `ms-tensors`, while the Python package is imported as
+`tensors`. It supports Python 3.10 and later and has no third-party runtime
+dependencies.
+
+## Quick start
 
 ```python
 import tensors as ts
@@ -54,12 +58,6 @@ y = ts.Tensor([[2.0, 0.0], [1.0, 2.0]])
 print(x + y)
 print(x @ y)
 print(ts.mean(x))
-```
-
-Run the file from the repository root:
-
-```powershell
-python main.py
 ```
 
 ## Automatic differentiation
@@ -182,7 +180,6 @@ tensors/
 
 ## Roadmap
 
-- Add installable package metadata and versioned releases
 - Introduce an optional NumPy backend
 - Expand neural-network building blocks
 - Add performance benchmarks and user documentation
@@ -190,6 +187,14 @@ tensors/
 ## Contributing
 
 Issues, focused bug reports, tests, and small improvements are welcome. Before submitting a change, run the complete test suite and include tests for corrected or newly introduced behavior.
+
+Clone the repository for local development:
+
+```powershell
+git clone https://github.com/Mihlali-Sifuba/tensors.git
+cd tensors
+python -m unittest discover -s tests
+```
 
 ## License
 
