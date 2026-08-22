@@ -9,7 +9,7 @@ import statistics
 import subprocess
 import sys
 import timeit
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -152,7 +152,7 @@ def run_suite(
     """Run cases in order and return a serializable report."""
     results: dict[str, Any] = {}
     for case in cases:
-        print(f"Running {case.name}...", flush=True)
+        print(f"Running [{get_backend()}] {case.name}...", flush=True)
         results[case.name] = measure(
             case,
             repeats=repeats,
@@ -165,6 +165,22 @@ def run_suite(
             "target_seconds_per_sample": target_seconds,
         },
         "benchmarks": results,
+    }
+
+
+def combine_backend_reports(
+    reports: Mapping[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Combine independently measured backend reports for serialization."""
+    if not reports:
+        raise ValueError("at least one backend report is required")
+    first_report = next(iter(reports.values()))
+    return {
+        "metadata": {
+            "backends": list(reports),
+        },
+        "settings": first_report["settings"],
+        "backends": dict(reports),
     }
 
 
@@ -198,7 +214,7 @@ def print_report(report: dict[str, Any]) -> None:
         f"{'benchmark':<{name_width}}  {'median':>10}  "
         f"{'MAD':>8}  {'work':>12}"
     )
-    print()
+    print(f"\nBackend: {report['metadata']['backend']}")
     print(heading)
     print("-" * len(heading))
     for name, result in benchmarks.items():
@@ -208,6 +224,49 @@ def print_report(report: dict[str, Any]) -> None:
             f"{result['variability_percent']:>7.2f}%  "
             f"{_throughput(result.get('work_items_per_second')):>12}"
         )
+
+
+def print_backend_comparison(report: dict[str, Any]) -> None:
+    """Print backend medians, variability, and relative NumPy speedup."""
+    reports = report["backends"]
+    backend_names = list(reports)
+    first_benchmarks = reports[backend_names[0]]["benchmarks"]
+    name_width = max(
+        [len("benchmark"), *(len(name) for name in first_benchmarks)]
+    )
+    columns = "".join(
+        f"  {backend + ' median':>14}  {backend + ' MAD':>10}"
+        for backend in backend_names
+    )
+    show_speedup = "python" in reports and "numpy" in reports
+    speedup_heading = f"  {'NumPy speedup':>13}" if show_speedup else ""
+    heading = f"{'benchmark':<{name_width}}{columns}{speedup_heading}"
+
+    print("\nBackend comparison")
+    print(heading)
+    print("-" * len(heading))
+    for name in first_benchmarks:
+        row = f"{name:<{name_width}}"
+        for backend in backend_names:
+            result = reports[backend]["benchmarks"][name]
+            row += (
+                f"  {_duration(result['median_seconds']):>14}"
+                f"  {result['variability_percent']:>9.2f}%"
+            )
+        if show_speedup:
+            python_seconds = reports["python"]["benchmarks"][name][
+                "median_seconds"
+            ]
+            numpy_seconds = reports["numpy"]["benchmarks"][name][
+                "median_seconds"
+            ]
+            speedup = (
+                float("inf")
+                if numpy_seconds == 0.0
+                else python_seconds / numpy_seconds
+            )
+            row += f"  {speedup:>12.2f}x"
+        print(row)
 
 
 def write_report(report: dict[str, Any], output: Path) -> None:

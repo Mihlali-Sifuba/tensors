@@ -291,8 +291,8 @@ python -m mypy
 ## Run the benchmarks
 
 A dependency-free benchmark suite tracks tensor operations, graph tracing and
-replay, automatic differentiation, and a complete training step. Run the short
-development suite with:
+replay, automatic differentiation, and a complete training step. It compares all
+available numerical backends by default. Run the short development suite with:
 
 ```powershell
 python -m benchmarks --quick
