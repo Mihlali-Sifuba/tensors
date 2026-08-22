@@ -118,7 +118,7 @@ First-order gradients are implemented and numerically checked for:
 - broadcast arithmetic and powers;
 - `sqrt`, `exp`, `log`, `sin`, `cos`, `tan`, `arcsin`, `arccos`, `arctan`,
   `sign`, `relu`, `sigmoid`, `tanh`, and `softplus`;
-- axis-aware `sum`, `mean`, `min`, `max`, `std`, `norm`, `softmax`,
+- axis-aware `sum`, `mean`, `variance`, `min`, `max`, `std`, `norm`, `softmax`,
   `logsumexp`, and `log_softmax`;
 - stable multiclass and binary cross-entropy losses;
 - `dot`, `matmul`, `outer`, and `transpose`;
@@ -148,6 +148,8 @@ Production behavior includes explicit domain rules:
   base. A constant integer-valued exponent can differentiate negative bases.
 - `norm` and `std` use a zero first-order subgradient at a zero-magnitude
   reduction group. Their higher derivatives raise there.
+- `variance` is the population variance. It remains smooth at zero variance,
+  where both its value and first derivative are zero.
 - `relu` uses the conventional zero subgradient at zero.
 - `min` and `max` divide the first-order gradient equally among tied extrema.
   Higher-order derivatives are not provided because selection changes are

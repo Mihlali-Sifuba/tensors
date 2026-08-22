@@ -51,6 +51,7 @@ tensors/
 ├── tensor.py              # Tensor storage, construction, dtypes, indexing
 ├── variable.py            # differentiable value type
 ├── dtype.py
+├── creation.py            # tensor-value constructors
 ├── utils/                 # internal shape and broadcasting helpers
 │   ├── __init__.py
 │   ├── shape.py
@@ -112,6 +113,8 @@ ts.mean(x)
 
 The folders have deliberately narrow responsibilities:
 
+- `creation` provides public constructors for mathematically defined tensor
+  values, including zeros, ones, ranges, and identity matrices.
 - `ops` contains basic algebra only: addition, subtraction, multiplication,
   division, and negation.
 - `utils` contains internal shape, row-major indexing, and broadcasting helpers.
