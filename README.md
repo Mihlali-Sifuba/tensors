@@ -110,6 +110,10 @@ print(prediction.data.tolist())
 print([parameter.name for parameter in model.parameters()])
 ```
 
+Each call executes `forward` eagerly and records a fresh computation. The
+latest outputs, nodes, edges, and computations are available for inspection on
+the calling thread; `Graph` does not replay a cached trace on later calls.
+
 Training follows a familiar loop:
 
 ```python
@@ -164,7 +168,7 @@ python -m examples.higher_order_gradients
 The test suite uses Python's standard-library test runner:
 
 ```powershell
-python -m unittest discover -s tests
+python -m unittest discover -s tests -t .
 ```
 
 Check the public static typing contract with:
@@ -206,7 +210,7 @@ Clone the repository for local development:
 ```powershell
 git clone https://github.com/Mihlali-Sifuba/tensors.git
 cd tensors
-python -m unittest discover -s tests
+python -m unittest discover -s tests -t .
 ```
 
 ## License
