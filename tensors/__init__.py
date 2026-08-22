@@ -1,4 +1,11 @@
 from .tensor import Tensor
+from .backend import (
+    BackendUnavailableError,
+    available_backends,
+    get_backend,
+    set_backend,
+    use_backend,
+)
 from . import creation, graph, linalg, math, ops, optim
 from .creation import arange, eye, full, linspace, ones, zeros
 from .ops import Ops, pow
@@ -26,7 +33,8 @@ multiply = Ops.multiply
 divide = Ops.divide
 
 __all__ = [
-    "Tensor", "Variable", "Graph", "GradcheckError",
+    "Tensor", "Variable", "Graph", "GradcheckError", "BackendUnavailableError",
+    "available_backends", "get_backend", "set_backend", "use_backend",
     "backward", "grad", "gradcheck", "hessian", "jacobian", "Ops", "DataType",
     "creation", "graph", "ops", "linalg", "math", "optim",
     "float64", "float32", "int64", "int32", "int16", "int8", "uint8",

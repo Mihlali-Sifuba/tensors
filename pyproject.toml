@@ -34,6 +34,9 @@ dependencies = []
 typing = [
     "mypy>=2.3,<3",
 ]
+numpy = [
+    "numpy>=1.24",
+]
 
 [project.urls]
 Homepage = "https://github.com/Mihlali-Sifuba/tensors"

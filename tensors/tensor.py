@@ -123,6 +123,8 @@ class Tensor:
 
     def _create_storage(self, values: Iterable[Scalar]) -> array:
         """Create this tensor's backing storage."""
+        if isinstance(values, array) and values.typecode == self.dtype.typecode:
+            return array(values.typecode, values)
         if self.dtype.kind == "integer":
             converted = (int(value) for value in values)
         else:
@@ -142,6 +144,27 @@ class Tensor:
         # A single key indexes the first dimension for N-D tensors.
         if isinstance(key, bool):
             raise TypeError("Boolean tensor indices are not supported")
+        if not isinstance(key, (int, slice, tuple)):
+            raise TypeError(f"Unsupported index type: {type(key)}")
+
+        keys = key if isinstance(key, tuple) else (key,)
+        _, output_shape = slice_ranges_and_shape_from_key(keys, self.shape)
+        from .backend import execute_slice
+
+        accelerated = execute_slice(
+            self,
+            key,
+            output_shape=output_shape,
+        )
+        if accelerated is not None:
+            if output_shape == ():
+                return accelerated[0]
+            return Tensor(
+                accelerated,
+                dtype=self.dtype,
+                shape=output_shape,
+            )
+
         if isinstance(key, (int, slice)):
             if self.ndim != 1:
                 return self._slice_from_key((key,))
@@ -395,6 +418,12 @@ class Tensor:
             raise TypeError(
                 f"dtype must be a DataType, typecode or dtype string, got {type(dtype)}"
             )
+
+        from .backend import execute_cast
+
+        accelerated = execute_cast(self, dtype=dtype)
+        if accelerated is not None:
+            return Tensor(accelerated, dtype=dtype, shape=self.shape)
 
         values = cast_values(
             self._data,
