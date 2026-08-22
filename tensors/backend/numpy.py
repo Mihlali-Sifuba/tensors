@@ -83,6 +83,8 @@ def binary(
         "divide": numpy.true_divide,
         "power": numpy.power,
     }
+    if operation == "divide" and bool(numpy.any(right_array == 0)):
+        raise ZeroDivisionError("Division by zero")
     with numpy.errstate(
         divide="ignore",
         over="ignore",

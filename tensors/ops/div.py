@@ -86,8 +86,6 @@ class Div:
             data = [x / b for x in a._data]
             return Tensor(data, dtype=dtype, shape=a.shape)
         if isinstance(b, Tensor):
-            if any(value == 0 for value in b._data):
-                raise ZeroDivisionError("Division by zero")
             shape = broadcast_shape(a.shape, b.shape)
             accelerated = execute_binary(
                 "divide",
@@ -122,8 +120,6 @@ class Div:
     def forward_reverse(a: Tensor, scalar: Scalar) -> Tensor:
         """Forward for scalar / tensor (reverse division)."""
         dtype = result_dtype(a.dtype, scalar, division=True)
-        if any(denominator == 0 for denominator in a._data):
-            raise ZeroDivisionError("Division by zero")
         accelerated = execute_binary(
             "divide",
             scalar,

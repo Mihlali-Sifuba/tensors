@@ -293,6 +293,21 @@ class NumPyBackendTests(unittest.TestCase):
         self.assertOperationParity(lambda: 8.0 / value)
         self.assertOperationParity(lambda: 2.0 ** value)
 
+    def test_numpy_division_validates_tensor_denominators_in_kernel(self):
+        numerator = ts.Tensor([1.0] * 512)
+        denominator = ts.Tensor([2.0] * 511 + [0.0])
+
+        with patch.object(
+            numpy_backend,
+            "binary",
+            wraps=numpy_backend.binary,
+        ) as binary:
+            with ts.use_backend("numpy"):
+                with self.assertRaisesRegex(ZeroDivisionError, "Division by zero"):
+                    ts.divide(numerator, denominator)
+
+        binary.assert_called_once()
+
     def test_integer_arithmetic_and_unsigned_negation_match(self):
         left = ts.Tensor([1, 2, 3], dtype=ts.int32)
         right = ts.Tensor([4, 5, 6], dtype=ts.int32)
