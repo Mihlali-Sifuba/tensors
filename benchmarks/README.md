@@ -27,6 +27,16 @@ python -m benchmarks --match matmul
 python -m benchmarks --list
 ```
 
+Select a backend explicitly when comparing numerical implementations:
+
+```powershell
+python -m benchmarks --backend python --match matmul
+python -m benchmarks --backend numpy --match matmul
+```
+
+The NumPy command requires the optional dependency. Each JSON report records the
+backend active during that run.
+
 Save the complete measurements and environment metadata for comparison:
 
 ```powershell
@@ -37,7 +47,7 @@ python -m benchmarks --output benchmark-results.json
 
 | Suite | Cases |
 | --- | --- |
-| `tensor` | elementwise arithmetic, broadcasting, reductions, matrix multiplication, and norms |
+| `tensor` | primitive arithmetic, casting, slicing, broadcasting, reductions, matrix multiplication, and norms |
 | `graph` | constructing a fresh `Graph` and replaying an already traced `Computation` |
 | `autograd` | `grad`, `backward`, derivative-graph construction, second derivatives, and Hessians |
 | `training` | a complete MLP step: forward pass, loss, gradient reset, backward pass, and SGD update |
@@ -60,11 +70,11 @@ it is under `timeit`. It is enabled for cases that intentionally construct graph
 objects, because those objects can contain cycles and collection is part of their
 sustained cost.
 
-Compare results only under similar conditions. Use the JSON report's Python,
-platform, processor, Git commit, and dirty-worktree metadata, and avoid running
-unrelated heavy workloads at the same time. A useful regression check compares
-several runs from the same machine rather than treating a single sample as
-definitive.
+Compare results only under similar conditions. Use the JSON report's backend,
+Python, platform, processor, Git commit, and dirty-worktree metadata, and avoid
+running unrelated heavy workloads at the same time. A useful regression check
+compares several runs from the same machine rather than treating a single sample
+as definitive.
 
 ## Adding a case
 

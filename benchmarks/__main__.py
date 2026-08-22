@@ -6,6 +6,8 @@ import argparse
 from collections.abc import Callable
 from pathlib import Path
 
+import tensors as ts
+
 from . import autograd_cases, graph_cases, tensor_cases, training_cases
 from .runner import BenchmarkCase, print_report, run_suite, write_report
 
@@ -32,6 +34,11 @@ def _cases(suite: str) -> list[BenchmarkCase]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Benchmark the public tensors API.",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=("python", "numpy", "auto"),
+        help="numerical backend to select for this run",
     )
     parser.add_argument(
         "--suite",
@@ -75,6 +82,11 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = _parser()
     arguments = parser.parse_args()
+    if arguments.backend is not None:
+        try:
+            ts.set_backend(arguments.backend)
+        except (ValueError, ts.BackendUnavailableError) as error:
+            parser.error(str(error))
     selected = _cases(arguments.suite)
     if arguments.match:
         selected = [
