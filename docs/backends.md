@@ -74,9 +74,17 @@ The NumPy backend provides kernels for every primitive operation in `tensors.ops
 - power gradients with respect to bases and exponents.
 
 It also accelerates floating-point `dot` and `matmul`, including vector, matrix,
-batched, and broadcasted matrix products. Integer matrix products and
+batched, and broadcasted matrix products, together with `sum`, `mean`,
+`variance`, and Euclidean `norm` reductions. Integer matrix products and
 floating-point edge cases that require the reference implementation's stable
 summation fall back to the Python kernel.
+
+Backend selection expresses a preference rather than forcing every operation
+through NumPy. Internal dispatch keeps very small elementwise operations and
+matrix products on the Python implementation when NumPy setup would cost more
+than the numerical work. Current local crossover benchmarks use 32 output
+elements for elementwise kernels, eight input elements for reductions, and 32
+multiply-accumulate work units for matrix products.
 
 Graph recording and automatic differentiation remain backend-agnostic. Primitive
 operations used while constructing or differentiating a graph use the active

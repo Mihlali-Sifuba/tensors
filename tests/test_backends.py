@@ -123,8 +123,8 @@ class NumPyBackendTests(unittest.TestCase):
         self.assertEqual(actual.tolist(), expected.tolist())
 
     def test_every_binary_operation_dispatches_to_numpy(self):
-        left = ts.Tensor([[1.0], [2.0]])
-        right = ts.Tensor([[3.0, 4.0]])
+        left = ts.full((32, 1), 2.0)
+        right = ts.full((1, 32), 3.0)
 
         with patch.object(
             numpy_backend,
@@ -159,12 +159,12 @@ class NumPyBackendTests(unittest.TestCase):
             "negate",
             wraps=numpy_backend.negate,
         ) as negate:
-            self._evaluate("numpy", lambda: -ts.Tensor([1.0, -2.0]))
+            self._evaluate("numpy", lambda: -ts.full((64,), 2.0))
 
         negate.assert_called_once()
 
     def test_slice_dispatches_to_numpy(self):
-        value = ts.Variable([[1.0, 2.0], [3.0, 4.0]])
+        value = ts.Variable(ts.full((64, 2), 2.0))
         with patch.object(
             numpy_backend,
             "slice_tensor",
@@ -181,8 +181,8 @@ class NumPyBackendTests(unittest.TestCase):
             wraps=numpy_backend.slice_scatter,
         ) as slice_scatter:
             with ts.use_backend("numpy"):
-                value = ts.Variable([1.0, 2.0, 3.0])
-                output = ts.sum(value[1:])
+                value = ts.Variable(ts.full((128,), 2.0))
+                output = ts.sum(value[::2])
                 ts.grad(output, value, create_graph=True)
 
         slice_scatter.assert_called_once()
@@ -206,12 +206,16 @@ class NumPyBackendTests(unittest.TestCase):
             ) as power_exponent_gradient,
         ):
             with ts.use_backend("numpy"):
-                denominator = ts.Variable([2.0])
-                ts.grad(3.0 / denominator, denominator, create_graph=True)
+                denominator = ts.Variable(ts.full((64,), 2.0))
+                ts.grad(
+                    ts.sum(3.0 / denominator),
+                    denominator,
+                    create_graph=True,
+                )
 
-                base = ts.Variable([2.0])
-                exponent = ts.Variable([3.0])
-                output = base ** exponent
+                base = ts.Variable(ts.full((64,), 2.0))
+                exponent = ts.Variable(ts.full((64,), 3.0))
+                output = ts.sum(base ** exponent)
                 ts.grad(output, base, create_graph=True)
                 ts.grad(output, exponent, create_graph=True)
 
@@ -220,7 +224,7 @@ class NumPyBackendTests(unittest.TestCase):
         self.assertGreaterEqual(power_exponent_gradient.call_count, 1)
 
     def test_cast_dispatches_to_numpy(self):
-        value = ts.Tensor([1.25, -2.75])
+        value = ts.full((64,), 1.25)
         with patch.object(
             numpy_backend,
             "cast_tensor",
@@ -333,11 +337,33 @@ class NumPyBackendTests(unittest.TestCase):
         with patch.object(numpy, "matmul", wraps=original_matmul) as matmul:
             self._matmul(
                 "numpy",
-                ts.Tensor([[1.0, 2.0]]),
-                ts.Tensor([[3.0], [4.0]]),
+                ts.full((4, 4), 2.0),
+                ts.full((4, 4), 3.0),
             )
 
         matmul.assert_called_once()
+
+    def test_tiny_operations_bypass_numpy_kernel_dispatch(self):
+        value = ts.Tensor([2.0])
+        with (
+            patch.object(numpy_backend, "binary") as binary,
+            patch.object(numpy_backend, "negate") as negate,
+            patch.object(numpy_backend, "cast_tensor") as cast_tensor,
+            patch.object(numpy_backend, "reduction") as reduction,
+            patch.object(numpy_backend, "matmul") as matmul,
+        ):
+            with ts.use_backend("numpy"):
+                _ = value + value
+                _ = -value
+                _ = value.astype(ts.float32)
+                _ = ts.sum(value)
+                _ = value @ value
+
+        binary.assert_not_called()
+        negate.assert_not_called()
+        cast_tensor.assert_not_called()
+        reduction.assert_not_called()
+        matmul.assert_not_called()
 
     def test_vector_product_matches_python_backend(self):
         self.assertBackendParity(

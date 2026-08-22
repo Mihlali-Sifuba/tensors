@@ -39,6 +39,9 @@ class BackendUnavailableError(RuntimeError):
 
 
 _VALID_BACKENDS = {"python", "numpy", "auto"}
+_NUMPY_ELEMENTWISE_MIN_SIZE = 32
+_NUMPY_REDUCTION_MIN_SIZE = 8
+_NUMPY_MATMUL_MIN_WORK = 32
 _backend_lock = threading.RLock()
 _backend_override: ContextVar[BackendName | None] = ContextVar(
     "tensors_backend_override",
@@ -85,6 +88,17 @@ def _environment_default() -> BackendName:
 _process_backend = _environment_default()
 
 
+def _shape_size(shape: tuple[int, ...]) -> int:
+    size = 1
+    for dimension in shape:
+        size *= dimension
+    return size
+
+
+def _numpy_work_is_large_enough(work: int, minimum: int) -> bool:
+    return get_backend() == "numpy" and work >= minimum
+
+
 def get_backend() -> BackendName:
     """Return the backend active in the current execution context."""
     override = _backend_override.get()
@@ -126,7 +140,9 @@ def execute_matmul(
     output_shape: tuple[int, ...],
 ) -> array[Any] | None:
     """Run an accelerated matrix product or request the Python fallback."""
-    if get_backend() == "python":
+    contraction_size = left.shape[-1]
+    work = _shape_size(output_shape) * contraction_size
+    if not _numpy_work_is_large_enough(work, _NUMPY_MATMUL_MIN_WORK):
         return None
 
     from .numpy import matmul
@@ -143,7 +159,10 @@ def execute_binary(
     output_shape: tuple[int, ...],
 ) -> array[Any] | None:
     """Run an accelerated binary operation or request the Python fallback."""
-    if get_backend() == "python":
+    if not _numpy_work_is_large_enough(
+        _shape_size(output_shape),
+        _NUMPY_ELEMENTWISE_MIN_SIZE,
+    ):
         return None
 
     from .numpy import binary
@@ -163,7 +182,10 @@ def execute_negate(
     dtype: DataType,
 ) -> array[Any] | None:
     """Run accelerated elementwise negation or request the Python fallback."""
-    if get_backend() == "python":
+    if not _numpy_work_is_large_enough(
+        value.size,
+        _NUMPY_ELEMENTWISE_MIN_SIZE,
+    ):
         return None
 
     from .numpy import negate
@@ -178,7 +200,10 @@ def execute_slice(
     output_shape: tuple[int, ...],
 ) -> array[Any] | None:
     """Run accelerated tensor slicing or request the Python fallback."""
-    if get_backend() == "python":
+    if not _numpy_work_is_large_enough(
+        _shape_size(output_shape),
+        _NUMPY_ELEMENTWISE_MIN_SIZE,
+    ):
         return None
 
     from .numpy import slice_tensor
@@ -193,7 +218,10 @@ def execute_slice_scatter(
     output_shape: tuple[int, ...],
 ) -> array[Any] | None:
     """Run accelerated slice scattering or request the Python fallback."""
-    if get_backend() == "python":
+    if not _numpy_work_is_large_enough(
+        _shape_size(output_shape),
+        _NUMPY_ELEMENTWISE_MIN_SIZE,
+    ):
         return None
 
     from .numpy import slice_scatter
@@ -207,7 +235,10 @@ def execute_cast(
     dtype: DataType,
 ) -> array[Any] | None:
     """Run accelerated dtype conversion or request the Python fallback."""
-    if get_backend() == "python":
+    if not _numpy_work_is_large_enough(
+        value.size,
+        _NUMPY_ELEMENTWISE_MIN_SIZE,
+    ):
         return None
 
     from .numpy import cast_tensor
@@ -225,7 +256,10 @@ def execute_reduction(
     output_shape: tuple[int, ...],
 ) -> array[Any] | None:
     """Run an accelerated reduction or request the stable Python fallback."""
-    if get_backend() == "python":
+    if not _numpy_work_is_large_enough(
+        value.size,
+        _NUMPY_REDUCTION_MIN_SIZE,
+    ):
         return None
 
     from .numpy import reduction
@@ -246,7 +280,10 @@ def execute_division_denominator_gradient(
     denominator: Tensor,
 ) -> array[Any] | None:
     """Run the accelerated division-denominator VJP when numerically safe."""
-    if get_backend() == "python":
+    if not _numpy_work_is_large_enough(
+        max(grad.size, numerator.size, denominator.size),
+        _NUMPY_ELEMENTWISE_MIN_SIZE,
+    ):
         return None
 
     from .numpy import division_denominator_gradient
@@ -260,7 +297,10 @@ def execute_power_base_gradient(
     exponent: Tensor,
 ) -> array[Any] | None:
     """Run the accelerated power-base VJP when numerically safe."""
-    if get_backend() == "python":
+    if not _numpy_work_is_large_enough(
+        max(grad.size, base.size, exponent.size),
+        _NUMPY_ELEMENTWISE_MIN_SIZE,
+    ):
         return None
 
     from .numpy import power_base_gradient
@@ -274,7 +314,10 @@ def execute_power_exponent_gradient(
     exponent: Tensor,
 ) -> array[Any] | None:
     """Run the accelerated power-exponent VJP when numerically safe."""
-    if get_backend() == "python":
+    if not _numpy_work_is_large_enough(
+        max(grad.size, base.size, exponent.size),
+        _NUMPY_ELEMENTWISE_MIN_SIZE,
+    ):
         return None
 
     from .numpy import power_exponent_gradient
