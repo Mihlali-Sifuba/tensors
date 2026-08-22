@@ -72,6 +72,9 @@ should not need to import internal operation or graph-node classes.
 ```text
 tensors/
 ├── __init__.py            # root public facade
+├── backend/               # backend selection and optional kernels
+│   ├── __init__.py
+│   └── numpy.py
 ├── _typing.py             # shared public type aliases
 ├── tensor.py              # Tensor storage, construction, and indexing
 ├── variable.py            # differentiable value type
@@ -136,6 +139,8 @@ ts.mean(x)
 
 The folders have deliberately narrow responsibilities:
 
+- `backend` owns process and context-local selection, internal kernel dispatch,
+  and optional accelerated implementations.
 - `creation` provides public constructors for mathematically defined tensor
   values, including zeros, ones, ranges, and identity matrices.
 - `ops` contains primitive differentiable operations such as arithmetic,
