@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 def _view(tensor: Tensor, numpy: Any) -> Any:
     """Return a zero-copy NumPy view of a tensor's canonical storage."""
-    storage = cast(array[Any], getattr(tensor, "_data"))
+    storage = cast("array[Any]", getattr(tensor, "_data"))
     return numpy.frombuffer(
         storage,
         dtype=numpy.dtype(tensor.dtype.name),
@@ -1175,7 +1175,7 @@ def adam_update(
     if any(storage is None for storage in storages):
         return None
     return cast(
-        tuple[array[Any], array[Any], array[Any], array[Any], array[Any]],
+        "tuple[array[Any], array[Any], array[Any], array[Any], array[Any]]",
         storages,
     )
 
@@ -1240,7 +1240,7 @@ def rmsprop_update(
     if any(storage is None for storage in storages):
         return None
     return cast(
-        tuple[array[Any], array[Any], array[Any], array[Any]],
+        "tuple[array[Any], array[Any], array[Any], array[Any]]",
         storages,
     )
 
