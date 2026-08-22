@@ -1,8 +1,9 @@
 """Elementwise softplus and its differentiation rule."""
 
 import math as _math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -32,7 +33,15 @@ class Softplus:
         return [grad * sigmoid(inputs[0])]
 
 
-def softplus(value: Any) -> Any:
+@overload
+def softplus(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def softplus(value: TensorData) -> Tensor: ...
+
+
+def softplus(value: TensorLike) -> TensorResult:
     """Return the elementwise softplus as a Tensor or Variable."""
     from ..variable import Variable
 

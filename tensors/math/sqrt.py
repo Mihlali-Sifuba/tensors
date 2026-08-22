@@ -1,8 +1,9 @@
 """Elementwise square root and its differentiation rule."""
 
 import math as _math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -37,7 +38,15 @@ class Sqrt:
         return [grad / (2.0 * sqrt(inputs[0]))]
 
 
-def sqrt(value: Any) -> Any:
+@overload
+def sqrt(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def sqrt(value: TensorData) -> Tensor: ...
+
+
+def sqrt(value: TensorLike) -> TensorResult:
     """Return the elementwise square root as a Tensor or Variable."""
     from ..variable import Variable
 

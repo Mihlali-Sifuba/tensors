@@ -2,8 +2,9 @@
 
 import builtins
 import math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..tensor import Tensor
 from ._reduction import Axis, immutable_axis, keepdims_shape, reduction_groups
 
@@ -114,7 +115,27 @@ class Max:
         ]
 
 
-def max(value: Any, axis: Axis = None, keepdims: bool = False) -> Any:
+@overload
+def max(
+    value: TensorValue,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorValue: ...
+
+
+@overload
+def max(
+    value: TensorData,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> Tensor: ...
+
+
+def max(
+    value: TensorLike,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorResult:
     """Compute maxima over one, several, or all axes."""
     from ..variable import Variable
 

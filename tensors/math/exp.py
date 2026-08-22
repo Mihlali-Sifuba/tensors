@@ -1,8 +1,9 @@
 """Elementwise exponential and its differentiation rule."""
 
 import math as _math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -34,7 +35,15 @@ class Exp:
         return [grad * exp(inputs[0])]
 
 
-def exp(value: Any) -> Any:
+@overload
+def exp(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def exp(value: TensorData) -> Tensor: ...
+
+
+def exp(value: TensorLike) -> TensorResult:
     """Return the elementwise exponential as a Tensor or differentiable Variable."""
     from ..variable import Variable
 

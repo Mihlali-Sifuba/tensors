@@ -1,8 +1,19 @@
+from __future__ import annotations
+
 from array import array
 from itertools import product
-from typing import Iterable, Union, List, Tuple, Optional
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any, overload
 
 from . import dtype as _dtype
+from ._typing import (
+    Scalar,
+    TensorData,
+    TensorIndex,
+    TensorLike,
+    TensorOperand,
+    TensorResult,
+)
 from .casting import cast_values
 from .utils.lists import flatten_nested_list, infer_nested_list_shape
 from .utils.shape import (
@@ -12,6 +23,9 @@ from .utils.shape import (
 )
 from .utils.slicing import flat_indices_from_ranges, slice_ranges_and_shape_from_key
 from .utils.indexing import indices_to_flat_index
+
+if TYPE_CHECKING:
+    from .variable import Variable
 
 
 class Tensor:
@@ -29,10 +43,10 @@ class Tensor:
 
     def __init__(
         self,
-        data: Union[List, 'Tensor', array, int, float],
-        dtype: Union[str, _dtype.DataType] = None,
-        shape: Optional[Tuple[int, ...]] = None
-    ):
+        data: TensorData,
+        dtype: str | _dtype.DataType | None = None,
+        shape: tuple[int, ...] | None = None,
+    ) -> None:
         """
         Initialize a Tensor.
 
@@ -107,7 +121,7 @@ class Tensor:
                 f"(expected {expected_element_count} elements)"
             )
 
-    def _create_storage(self, values: Iterable) -> array:
+    def _create_storage(self, values: Iterable[Scalar]) -> array:
         """Create this tensor's backing storage."""
         if self.dtype.kind == "integer":
             converted = (int(value) for value in values)
@@ -115,7 +129,7 @@ class Tensor:
             converted = (float(value) for value in values)
         return array(self.dtype.typecode, converted)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: TensorIndex) -> Scalar | Tensor:
         """
         Support indexing and slicing for N-dimensional tensors.
 
@@ -152,8 +166,8 @@ class Tensor:
 
     def _slice_from_key(
         self,
-        key: Tuple[Union[int, slice], ...],
-    ) -> 'Tensor':
+        key: tuple[int | slice, ...],
+    ) -> Tensor:
         """Return an N-dimensional slice selected by mixed ints and slices."""
         ranges, new_shape = slice_ranges_and_shape_from_key(key, self.shape)
         strides = row_major_strides(self.shape)
@@ -170,8 +184,8 @@ class Tensor:
 
     def _slice_assignment_values(
         self,
-        value: Union[int, float, List, 'Tensor', array],
-        selection_shape: Tuple[int, ...],
+        value: TensorData,
+        selection_shape: tuple[int, ...],
     ) -> array:
         """Validate and materialize values for an in-place slice assignment."""
         selection_size = shape_size(selection_shape)
@@ -199,8 +213,8 @@ class Tensor:
 
     def _assign_slice_from_key(
         self,
-        key: Tuple[Union[int, slice], ...],
-        value: Union[int, float, List, 'Tensor', array],
+        key: tuple[int | slice, ...],
+        value: TensorData,
     ) -> None:
         """Assign a scalar or broadcast-compatible values to a tensor slice."""
         ranges, selection_shape = slice_ranges_and_shape_from_key(key, self.shape)
@@ -225,8 +239,8 @@ class Tensor:
 
     def __setitem__(
         self,
-        key: Union[int, slice, Tuple[Union[int, slice], ...]],
-        value: Union[int, float, List, 'Tensor', array],
+        key: TensorIndex,
+        value: TensorData,
     ) -> None:
         """Support item assignment for N-dimensional tensors."""
         if isinstance(key, bool):
@@ -261,8 +275,8 @@ class Tensor:
 
     def _assignment_scalar(
         self,
-        value: Union[int, float, List, 'Tensor', array],
-    ) -> Union[int, float]:
+        value: TensorData,
+    ) -> Scalar:
         """Convert one value using the same rules as tensor construction."""
         if isinstance(value, (Tensor, list, array)):
             converted = Tensor(value, dtype=self.dtype)
@@ -340,7 +354,7 @@ class Tensor:
         return len(self._data)
 
     @property
-    def shape(self) -> Tuple[int, ...]:
+    def shape(self) -> tuple[int, ...]:
         """Immutable dimensions of this tensor."""
         return self._shape
 
@@ -364,15 +378,15 @@ class Tensor:
         """Size of each element in bytes."""
         return self._data.itemsize
 
-    def tolist(self) -> List:
+    def tolist(self) -> list[Scalar]:
         """Convert to Python list."""
         return list(self._data)
 
-    def clone(self) -> 'Tensor':
+    def clone(self) -> Tensor:
         """Return a copy with the same data and dtype."""
         return Tensor(self)
 
-    def astype(self, dtype: Union[str, _dtype.DataType]) -> 'Tensor':
+    def astype(self, dtype: str | _dtype.DataType) -> Tensor:
         """Return a copy converted to a new dtype."""
         if isinstance(dtype, str):
             dtype = _dtype.from_typecode(dtype)
@@ -389,7 +403,7 @@ class Tensor:
         )
         return Tensor(values, dtype=dtype, shape=self.shape)
 
-    def item(self) -> Union[int, float]:
+    def item(self) -> Scalar:
         """Return the Python scalar stored in a single-element tensor."""
         if self.size != 1:
             raise ValueError(
@@ -427,71 +441,119 @@ class Tensor:
         return format(self.item(), format_spec)
 
     # ---------- Operator Overloads (delegate to ops) ----------
-    def __add__(self, other):
+    @overload
+    def __add__(self, other: Variable) -> Variable: ...
+
+    @overload
+    def __add__(self, other: Scalar | Tensor) -> Tensor: ...
+
+    def __add__(self, other: TensorOperand) -> TensorResult:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__radd__(self)
         from .ops import Ops
         return Ops.add(self, other)
 
-    def __radd__(self, other):
+    @overload
+    def __radd__(self, other: Variable) -> Variable: ...
+
+    @overload
+    def __radd__(self, other: Scalar | Tensor) -> Tensor: ...
+
+    def __radd__(self, other: TensorOperand) -> TensorResult:
         return self + other
 
-    def __sub__(self, other):
+    @overload
+    def __sub__(self, other: Variable) -> Variable: ...
+
+    @overload
+    def __sub__(self, other: Scalar | Tensor) -> Tensor: ...
+
+    def __sub__(self, other: TensorOperand) -> TensorResult:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rsub__(self)
         from .ops import Ops
         return Ops.subtract(self, other)
 
-    def __rsub__(self, other):
+    def __rsub__(self, other: Scalar | Tensor) -> Tensor:
         return (-self) + other
 
-    def __mul__(self, other):
+    @overload
+    def __mul__(self, other: Variable) -> Variable: ...
+
+    @overload
+    def __mul__(self, other: Scalar | Tensor) -> Tensor: ...
+
+    def __mul__(self, other: TensorOperand) -> TensorResult:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rmul__(self)
         from .ops import Ops
         return Ops.multiply(self, other)
 
-    def __rmul__(self, other):
+    def __rmul__(self, other: Scalar | Tensor) -> Tensor:
         from .ops import Ops
         return Ops.multiply(self, other)
 
-    def __truediv__(self, other):
+    @overload
+    def __truediv__(self, other: Variable) -> Variable: ...
+
+    @overload
+    def __truediv__(self, other: Scalar | Tensor) -> Tensor: ...
+
+    def __truediv__(self, other: TensorOperand) -> TensorResult:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rtruediv__(self)
         from .ops import Ops
         return Ops.divide(self, other)
 
-    def __rtruediv__(self, other):
+    def __rtruediv__(self, other: Scalar) -> Tensor:
         from .ops import Div
         return Div.forward_reverse(self, other)
 
-    def __pow__(self, other):
+    @overload
+    def __pow__(self, other: Variable) -> Variable: ...
+
+    @overload
+    def __pow__(self, other: Scalar | Tensor) -> Tensor: ...
+
+    def __pow__(self, other: TensorOperand) -> TensorResult:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rpow__(self)
         from .ops import Pow
         return Pow.forward(self, other)
 
-    def __rpow__(self, other):
+    def __rpow__(self, other: Scalar) -> Tensor:
         from .ops import Pow
         return Pow.forward_reverse(self, other)
 
-    def __neg__(self):
+    def __neg__(self) -> Tensor:
         from .ops import Ops
         return Ops.neg(self)
 
-    def __abs__(self):
+    def __abs__(self) -> Tensor:
         from .math import abs
         return abs(self)
 
-    def __matmul__(self, other):
+    @overload
+    def __matmul__(self, other: Variable) -> Variable: ...
+
+    @overload
+    def __matmul__(self, other: TensorData) -> Tensor: ...
+
+    def __matmul__(self, other: TensorLike) -> TensorResult:
         from .linalg import matmul
         return matmul(self, other)
 
-    def __rmatmul__(self, other):
+    @overload
+    def __rmatmul__(self, other: Variable) -> Variable: ...
+
+    @overload
+    def __rmatmul__(self, other: TensorData) -> Tensor: ...
+
+    def __rmatmul__(self, other: TensorLike) -> TensorResult:
         from .linalg import matmul
         return matmul(other, self)

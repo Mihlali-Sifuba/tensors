@@ -189,6 +189,6 @@ def result_dtype(
     return a_dtype
 
 
-def negation_dtype(a_dtype):
+def negation_dtype(a_dtype: DataType) -> DataType:
     """Unsigned bytes need a signed type to represent negative values."""
     return int16 if a_dtype.typecode == "B" else a_dtype

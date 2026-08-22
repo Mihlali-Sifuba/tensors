@@ -1,8 +1,9 @@
 """Elementwise sigmoid and its differentiation rule."""
 
 import math as _math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -49,7 +50,15 @@ class Sigmoid:
         return [grad * (positive + negative)]
 
 
-def sigmoid(value: Any) -> Any:
+@overload
+def sigmoid(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def sigmoid(value: TensorData) -> Tensor: ...
+
+
+def sigmoid(value: TensorLike) -> TensorResult:
     """Return the elementwise sigmoid as a Tensor or Variable."""
     from ..variable import Variable
 

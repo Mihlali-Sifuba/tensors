@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -58,7 +59,15 @@ class ArcCosh:
         return [grad / denominator]
 
 
-def arccosh(value: Any) -> Any:
+@overload
+def arccosh(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def arccosh(value: TensorData) -> Tensor: ...
+
+
+def arccosh(value: TensorLike) -> TensorResult:
     """Return the elementwise inverse hyperbolic cosine."""
     from ..variable import Variable
 

@@ -1,0 +1,40 @@
+"""Static contract for the public API; checked by mypy, not executed."""
+
+from typing_extensions import assert_type
+
+import tensors as ts
+
+
+tensor = ts.Tensor([[1.0, 2.0]])
+variable = ts.Variable([[1.0, 2.0]])
+
+assert_type(tensor.shape, tuple[int, ...])
+assert_type(tensor.item(), int | float)
+assert_type(variable.data, ts.Tensor)
+assert_type(variable.requires_grad, bool)
+
+assert_type(tensor + tensor, ts.Tensor)
+assert_type(tensor + variable, ts.Variable)
+assert_type(variable * tensor, ts.Variable)
+assert_type(ts.pow(variable, 2.0), ts.Variable)
+
+assert_type(ts.sin(tensor), ts.Tensor)
+assert_type(ts.sin(variable), ts.Variable)
+assert_type(ts.sum([1.0, 2.0]), ts.Tensor)
+assert_type(ts.sum(variable), ts.Variable)
+assert_type(ts.reshape(variable, (2, 1)), ts.Variable)
+assert_type(ts.softmax(variable), ts.Variable)
+
+assert_type(ts.dot(tensor, ts.transpose(tensor)), ts.Tensor)
+assert_type(ts.dot(variable, ts.transpose(tensor)), ts.Variable)
+assert_type(ts.maximum(variable, tensor), ts.Variable)
+assert_type(ts.where(ts.greater(tensor, 0.0), variable, tensor), ts.Variable)
+assert_type(ts.concat([variable, variable]), ts.Variable)
+assert_type(ts.stack([tensor, tensor]), ts.Tensor)
+
+targets = ts.Tensor([1], dtype=ts.int64)
+loss = ts.cross_entropy(variable, targets)
+assert_type(loss, ts.Variable)
+assert_type(ts.grad(loss, variable), ts.Tensor | ts.Variable | None)
+assert_type(ts.jacobian(loss, variable), ts.Tensor | ts.Variable)
+assert_type(ts.hessian(loss, variable), ts.Tensor | ts.Variable)

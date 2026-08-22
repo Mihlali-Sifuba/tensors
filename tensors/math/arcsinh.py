@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -74,7 +75,15 @@ class ArcSinh:
         ]
 
 
-def arcsinh(value: Any) -> Any:
+@overload
+def arcsinh(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def arcsinh(value: TensorData) -> Tensor: ...
+
+
+def arcsinh(value: TensorLike) -> TensorResult:
     """Return the elementwise inverse hyperbolic sine."""
     from ..variable import Variable
 

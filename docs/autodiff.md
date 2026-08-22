@@ -161,8 +161,8 @@ Production behavior includes explicit domain rules:
 - `min` and `max` divide the first-order gradient equally among tied extrema.
   Higher-order derivatives are not provided because selection changes are
   nondifferentiable.
-- Higher-order `dot`/`matmul` currently requires both operands to have at least
-  two dimensions. First-order gradients support vector operands.
+- Higher-order `dot`/`matmul` supports vector-vector, matrix-vector,
+  vector-matrix, batched matrix products, and broadcast batch dimensions.
 - Higher-order differentiation of empty `mean` and `std` reductions is not
   implemented.
 

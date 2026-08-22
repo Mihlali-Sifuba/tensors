@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, List, overload
 
 import math
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 from ._normalization import shifted_normalization
@@ -188,7 +189,15 @@ def _log_softmax_vjp(grad, value, axis: int):
     )
 
 
-def log_softmax(value: Any, axis: int = -1) -> Any:
+@overload
+def log_softmax(value: TensorValue, axis: int = -1) -> TensorValue: ...
+
+
+@overload
+def log_softmax(value: TensorData, axis: int = -1) -> Tensor: ...
+
+
+def log_softmax(value: TensorLike, axis: int = -1) -> TensorResult:
     """Return stable log probabilities along ``axis``."""
     from ..variable import Variable
 

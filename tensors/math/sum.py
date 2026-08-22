@@ -2,8 +2,9 @@
 
 import builtins
 import math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..tensor import Tensor
 from ._reduction import Axis, immutable_axis, keepdims_shape, reduction_groups
 
@@ -136,8 +137,27 @@ class Sum:
         return [expanded * ones]
 
 
-def sum(value: Any, axis: Axis = None,
-        keepdims: bool = False) -> Any:
+@overload
+def sum(
+    value: TensorValue,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorValue: ...
+
+
+@overload
+def sum(
+    value: TensorData,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> Tensor: ...
+
+
+def sum(
+    value: TensorLike,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorResult:
     """Sum over one, several, or all axes."""
     from ..variable import Variable
 

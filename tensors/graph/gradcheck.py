@@ -6,6 +6,7 @@ import math
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from .._typing import TensorResult
 from ..tensor import Tensor
 from ..variable import Variable
 from .computation import grad
@@ -34,7 +35,10 @@ def _input_tensors(inputs: Any) -> tuple[Tensor, ...]:
     return tuple(tensors)
 
 
-def _scalar_output(function: Callable[..., Any], inputs: tuple[Tensor, ...]) -> float:
+def _scalar_output(
+    function: Callable[..., TensorResult],
+    inputs: tuple[Tensor, ...],
+) -> float:
     variables = tuple(Variable(value, requires_grad=False) for value in inputs)
     output = function(*variables)
     tensor = output.data if isinstance(output, Variable) else output
@@ -44,7 +48,7 @@ def _scalar_output(function: Callable[..., Any], inputs: tuple[Tensor, ...]) -> 
 
 
 def gradcheck(
-    function: Callable[..., Any],
+    function: Callable[..., TensorResult],
     inputs: Tensor | Variable | Sequence[Tensor | Variable],
     *,
     eps: float = 1e-6,

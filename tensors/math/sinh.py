@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -50,7 +51,15 @@ class Sinh:
         return [grad * cosh(inputs[0])]
 
 
-def sinh(value: Any) -> Any:
+@overload
+def sinh(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def sinh(value: TensorData) -> Tensor: ...
+
+
+def sinh(value: TensorLike) -> TensorResult:
     """Return the elementwise hyperbolic sine."""
     from ..variable import Variable
 

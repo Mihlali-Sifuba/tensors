@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List, Literal
+from typing import TYPE_CHECKING, Any, List, Literal, overload
 
+from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..tensor import Tensor
@@ -20,6 +21,9 @@ from .mean import _stable_float_mean
 from ._normalization import shifted_normalization
 from .softmax import Softmax, _normalize_axis
 from .sum import _stable_float_sum
+
+if TYPE_CHECKING:
+    from ..variable import Variable
 
 
 Reduction = Literal["none", "mean", "sum"]
@@ -327,13 +331,43 @@ class CrossEntropy:
         ]
 
 
+@overload
 def cross_entropy(
-    logits: Any,
-    targets: Any,
+    logits: Variable,
+    targets: TensorLike,
     *,
     axis: int = -1,
     reduction: Reduction = "mean",
-) -> Any:
+) -> Variable: ...
+
+
+@overload
+def cross_entropy(
+    logits: TensorLike,
+    targets: Variable,
+    *,
+    axis: int = -1,
+    reduction: Reduction = "mean",
+) -> Variable: ...
+
+
+@overload
+def cross_entropy(
+    logits: TensorData,
+    targets: TensorData,
+    *,
+    axis: int = -1,
+    reduction: Reduction = "mean",
+) -> Tensor: ...
+
+
+def cross_entropy(
+    logits: TensorLike,
+    targets: TensorLike,
+    *,
+    axis: int = -1,
+    reduction: Reduction = "mean",
+) -> TensorResult:
     """Return stable multiclass cross-entropy from unnormalized ``logits``.
 
     ``targets`` may contain class indices with the class axis removed, or

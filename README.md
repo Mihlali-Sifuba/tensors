@@ -33,6 +33,7 @@
 - Neural-network functions including ReLU, sigmoid, tanh, softmax, and softplus
 - Stable cross-entropy and binary cross-entropy losses
 - SGD, Adam, and RMSprop optimizers
+- Inline type information distributed through the standard `py.typed` marker
 - A broad `unittest` test suite covering tensors, graphs, autograd, math, and optimizers
 
 ## Installation
@@ -164,6 +165,13 @@ The test suite uses Python's standard-library test runner:
 
 ```powershell
 python -m unittest discover -s tests
+```
+
+Check the public static typing contract with:
+
+```powershell
+python -m pip install -e ".[typing]"
+python -m mypy
 ```
 
 ## Project structure

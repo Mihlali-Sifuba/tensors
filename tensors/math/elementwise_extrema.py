@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_tensors
+
+if TYPE_CHECKING:
+    from ..variable import Variable
 
 
 def _tensor(value: Any, *, dtype=None) -> Tensor:
@@ -203,12 +207,36 @@ def _extremum(operation, label: str, left: Any, right: Any) -> Any:
     return operation.forward(left_tensor, right_tensor)
 
 
-def maximum(left: Any, right: Any) -> Any:
+@overload
+def maximum(left: Variable, right: TensorLike) -> Variable: ...
+
+
+@overload
+def maximum(left: TensorLike, right: Variable) -> Variable: ...
+
+
+@overload
+def maximum(left: TensorData, right: TensorData) -> Tensor: ...
+
+
+def maximum(left: TensorLike, right: TensorLike) -> TensorResult:
     """Return the broadcasting elementwise maximum of two values."""
     return _extremum(Maximum, "maximum", left, right)
 
 
-def minimum(left: Any, right: Any) -> Any:
+@overload
+def minimum(left: Variable, right: TensorLike) -> Variable: ...
+
+
+@overload
+def minimum(left: TensorLike, right: Variable) -> Variable: ...
+
+
+@overload
+def minimum(left: TensorData, right: TensorData) -> Tensor: ...
+
+
+def minimum(left: TensorLike, right: TensorLike) -> TensorResult:
     """Return the broadcasting elementwise minimum of two values."""
     return _extremum(Minimum, "minimum", left, right)
 

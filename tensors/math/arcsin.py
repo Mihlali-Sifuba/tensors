@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -48,7 +49,15 @@ class ArcSin:
         return [grad / sqrt(1.0 - value ** 2.0)]
 
 
-def arcsin(value: Any) -> Any:
+@overload
+def arcsin(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def arcsin(value: TensorData) -> Tensor: ...
+
+
+def arcsin(value: TensorLike) -> TensorResult:
     """Return the elementwise inverse sine in radians."""
     from ..variable import Variable
 

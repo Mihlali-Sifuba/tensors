@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import builtins
 import math
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..tensor import Tensor
 
 
@@ -70,7 +71,15 @@ class Abs:
             - masked_value_graph(grad, negative_mask)
             + zero_like_graph(value)
         ]
-def abs(value: Any) -> Any:
+@overload
+def abs(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def abs(value: TensorData) -> Tensor: ...
+
+
+def abs(value: TensorLike) -> TensorResult:
     """Return the elementwise absolute value of a Tensor or Variable."""
     from ..variable import Variable
 

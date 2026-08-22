@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from .._typing import TensorLike
 from ..dtype import int64
 from ..tensor import Tensor
 from ..utils.shape import index_to_coordinates
@@ -99,7 +100,7 @@ def _arg_extremum(
 
 
 def argmax(
-    value: Any,
+    value: TensorLike,
     axis: int | None = None,
     keepdims: bool = False,
 ) -> Tensor:
@@ -108,7 +109,7 @@ def argmax(
 
 
 def argmin(
-    value: Any,
+    value: TensorLike,
     axis: int | None = None,
     keepdims: bool = False,
 ) -> Tensor:

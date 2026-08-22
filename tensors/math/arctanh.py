@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -46,7 +47,15 @@ class ArcTanh:
         return [grad / (1.0 - value ** 2.0)]
 
 
-def arctanh(value: Any) -> Any:
+@overload
+def arctanh(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def arctanh(value: TensorData) -> Tensor: ...
+
+
+def arctanh(value: TensorLike) -> TensorResult:
     """Return the elementwise inverse hyperbolic tangent."""
     from ..variable import Variable
 

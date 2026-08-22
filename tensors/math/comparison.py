@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from .._typing import TensorLike
 from ..dtype import result_dtype, uint8
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_tensors
@@ -48,32 +49,32 @@ def _compare(
     )
 
 
-def equal(left: Any, right: Any) -> Tensor:
+def equal(left: TensorLike, right: TensorLike) -> Tensor:
     """Return an elementwise equality mask with dtype ``uint8``."""
     return _compare(left, right, lambda a, b: a == b)
 
 
-def not_equal(left: Any, right: Any) -> Tensor:
+def not_equal(left: TensorLike, right: TensorLike) -> Tensor:
     """Return an elementwise inequality mask with dtype ``uint8``."""
     return _compare(left, right, lambda a, b: a != b)
 
 
-def less(left: Any, right: Any) -> Tensor:
+def less(left: TensorLike, right: TensorLike) -> Tensor:
     """Return the elementwise ``left < right`` mask."""
     return _compare(left, right, lambda a, b: a < b)
 
 
-def less_equal(left: Any, right: Any) -> Tensor:
+def less_equal(left: TensorLike, right: TensorLike) -> Tensor:
     """Return the elementwise ``left <= right`` mask."""
     return _compare(left, right, lambda a, b: a <= b)
 
 
-def greater(left: Any, right: Any) -> Tensor:
+def greater(left: TensorLike, right: TensorLike) -> Tensor:
     """Return the elementwise ``left > right`` mask."""
     return _compare(left, right, lambda a, b: a > b)
 
 
-def greater_equal(left: Any, right: Any) -> Tensor:
+def greater_equal(left: TensorLike, right: TensorLike) -> Tensor:
     """Return the elementwise ``left >= right`` mask."""
     return _compare(left, right, lambda a, b: a >= b)
 

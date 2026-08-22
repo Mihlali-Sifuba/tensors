@@ -1,8 +1,9 @@
 """Elementwise cosine and its differentiation rule."""
 
 import math as _math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -33,7 +34,15 @@ class Cos:
         return [-(grad * sin(inputs[0]))]
 
 
-def cos(value: Any) -> Any:
+@overload
+def cos(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def cos(value: TensorData) -> Tensor: ...
+
+
+def cos(value: TensorLike) -> TensorResult:
     """Return the elementwise cosine as a Tensor or differentiable Variable."""
     from ..variable import Variable
 

@@ -139,6 +139,40 @@ class HigherOrderDerivativeTests(unittest.TestCase):
         self.assertEqual(vector_gradient.data.tolist(), [7.0, 11.0])
         self.assertEqual(mixed_gradient.tolist(), [1.0, 1.0, 1.0, 1.0])
 
+    def test_vector_dot_returns_all_hessian_blocks(self):
+        left = ts.Variable([1.0, 2.0])
+        right = ts.Variable([3.0, 4.0])
+
+        hessian = ts.hessian(ts.dot(left, right), (left, right))
+
+        self.assertEqual(hessian[0][0].tolist(), [0.0, 0.0, 0.0, 0.0])
+        self.assertEqual(hessian[0][1].tolist(), [1.0, 0.0, 0.0, 1.0])
+        self.assertEqual(hessian[1][0].tolist(), [1.0, 0.0, 0.0, 1.0])
+        self.assertEqual(hessian[1][1].tolist(), [0.0, 0.0, 0.0, 0.0])
+
+    def test_batched_matrix_vector_hessian_is_mathematically_complete(self):
+        matrix = ts.Variable([[[1.0, 2.0]], [[3.0, 4.0]]])
+        vector = ts.Variable([5.0, 6.0])
+        loss = ts.sum((matrix @ vector) ** 2.0)
+
+        hessian = ts.hessian(loss, vector)
+
+        self.assertEqual(hessian.shape, (2, 2))
+        self.assertEqual(hessian.tolist(), [20.0, 28.0, 28.0, 40.0])
+
+    def test_vector_batched_matrix_hessian_is_mathematically_complete(self):
+        vector = ts.Variable([1.0, 2.0])
+        matrix = ts.Variable([
+            [[3.0, 4.0], [5.0, 6.0]],
+            [[7.0, 8.0], [9.0, 10.0]],
+        ])
+        loss = ts.sum((vector @ matrix) ** 2.0)
+
+        hessian = ts.hessian(loss, vector)
+
+        self.assertEqual(hessian.shape, (2, 2))
+        self.assertEqual(hessian.tolist(), [276.0, 364.0, 364.0, 484.0])
+
     def test_singleton_standard_deviation_has_zero_higher_derivatives(self):
         value = ts.Variable([4.0])
 

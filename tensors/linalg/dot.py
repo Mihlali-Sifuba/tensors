@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import TYPE_CHECKING, Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_shape
 from ..utils.shape import coordinates_to_index, index_to_coordinates, shape_size
+
+if TYPE_CHECKING:
+    from ..variable import Variable
 
 
 MatmulMetadata = tuple[
@@ -317,7 +321,19 @@ class Dot:
         return [left_gradient, right_gradient]
 
 
-def dot(a: Any, b: Any) -> Any:
+@overload
+def dot(a: Variable, b: TensorLike) -> Variable: ...
+
+
+@overload
+def dot(a: TensorLike, b: Variable) -> Variable: ...
+
+
+@overload
+def dot(a: TensorData, b: TensorData) -> Tensor: ...
+
+
+def dot(a: TensorLike, b: TensorLike) -> TensorResult:
     """Return the general matrix product of two Tensors or Variables."""
     from ..variable import Variable
 

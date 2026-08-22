@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 from ._reduction import Axis, keepdims_shape, reduction_groups
@@ -233,11 +234,27 @@ class LogSumExpGradient:
         return [grad_gradient, value_gradient]
 
 
+@overload
 def logsumexp(
-    value: Any,
+    value: TensorValue,
     axis: Axis = None,
     keepdims: bool = False,
-) -> Any:
+) -> TensorValue: ...
+
+
+@overload
+def logsumexp(
+    value: TensorData,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> Tensor: ...
+
+
+def logsumexp(
+    value: TensorLike,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorResult:
     """Compute ``log(sum(exp(value)))`` stably over selected axes."""
     from ..variable import Variable
 

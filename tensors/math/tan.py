@@ -1,8 +1,9 @@
 """Elementwise tangent and its differentiation rule."""
 
 import math as _math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -33,7 +34,15 @@ class Tan:
         return [grad / (cos(inputs[0]) ** 2.0)]
 
 
-def tan(value: Any) -> Any:
+@overload
+def tan(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def tan(value: TensorData) -> Tensor: ...
+
+
+def tan(value: TensorLike) -> TensorResult:
     """Return the elementwise tangent as a Tensor or differentiable Variable."""
     from ..variable import Variable
 

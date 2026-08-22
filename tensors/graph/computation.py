@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from array import array
-from typing import TYPE_CHECKING, Any
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any, overload
 
+from .._typing import TensorLike
 from ..tensor import Tensor
 from .node import Node
 from .protocols import HigherOrderOperation, ReverseOperation
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 class Computation:
     """A concrete computation that owns its forward and backward passes."""
 
-    def __init__(self, output: Any) -> None:
+    def __init__(self, output: Variable) -> None:
         if getattr(output, "node", None) is None:
             raise TypeError("Computation output must have a graph node")
         self.output = output
@@ -120,7 +121,7 @@ class Computation:
 
     def backward(
         self,
-        grad: Tensor | array | list[Any] | int | float | None = None,
+        grad: TensorLike | None = None,
         *,
         create_graph: bool = False,
     ) -> None:
@@ -145,7 +146,7 @@ class Computation:
 
     def _gradient_seed(
         self,
-        grad: Tensor | array | list[Any] | int | float | None,
+        grad: TensorLike | None,
         *,
         create_graph: bool = False,
     ) -> Any:
@@ -370,8 +371,8 @@ class Computation:
         return result if isinstance(result, Tensor) else Tensor([result])
 
 def backward(
-    output: Any,
-    grad: Tensor | array | list[Any] | int | float | None = None,
+    output: Variable,
+    grad: TensorLike | None = None,
     *,
     create_graph: bool = False,
 ) -> None:
@@ -381,13 +382,35 @@ def backward(
     Computation(output).backward(grad, create_graph=create_graph)
 
 
+@overload
 def grad(
-    output: Any,
-    inputs: Any,
-    grad_outputs: Tensor | array | list[Any] | int | float | None = None,
+    output: Variable,
+    inputs: Variable,
+    grad_outputs: TensorLike | None = None,
     *,
     create_graph: bool = False,
-) -> Any:
+) -> Tensor | Variable | None:
+    ...
+
+
+@overload
+def grad(
+    output: Variable,
+    inputs: Iterable[Variable],
+    grad_outputs: TensorLike | None = None,
+    *,
+    create_graph: bool = False,
+) -> tuple[Tensor | Variable | None, ...]:
+    ...
+
+
+def grad(
+    output: Variable,
+    inputs: Variable | Iterable[Variable],
+    grad_outputs: TensorLike | None = None,
+    *,
+    create_graph: bool = False,
+) -> Tensor | Variable | None | tuple[Tensor | Variable | None, ...]:
     """Return gradients of ``output`` without modifying any ``.grad`` field.
 
     Set ``create_graph=True`` when the returned gradients will themselves be

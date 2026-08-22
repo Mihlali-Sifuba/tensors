@@ -1,7 +1,8 @@
 """Reshape operation."""
 
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..tensor import Tensor
 from ..utils.shape import shape_size
 
@@ -31,7 +32,15 @@ class Reshape:
         return [reshape(grad, inputs[0].shape)]
 
 
-def reshape(tensor: Any, shape: Tuple[int, ...]) -> Any:
+@overload
+def reshape(tensor: TensorValue, shape: tuple[int, ...]) -> TensorValue: ...
+
+
+@overload
+def reshape(tensor: TensorData, shape: tuple[int, ...]) -> Tensor: ...
+
+
+def reshape(tensor: TensorLike, shape: tuple[int, ...]) -> TensorResult:
     """Reshape a Tensor or Variable without changing its values."""
     from ..variable import Variable
 

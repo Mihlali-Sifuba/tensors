@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..tensor import Tensor
 from ._reduction import Axis, immutable_axis, reduction_groups
 
@@ -107,11 +108,27 @@ class Prod:
         return [reshape(concat(terms), value.shape)]
 
 
+@overload
 def prod(
-    value: Any,
+    value: TensorValue,
     axis: Axis = None,
     keepdims: bool = False,
-) -> Any:
+) -> TensorValue: ...
+
+
+@overload
+def prod(
+    value: TensorData,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> Tensor: ...
+
+
+def prod(
+    value: TensorLike,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorResult:
     """Multiply values over one, several, or all axes."""
     from ..variable import Variable
 

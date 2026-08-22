@@ -30,6 +30,11 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+typing = [
+    "mypy>=2.3,<3",
+]
+
 [project.urls]
 Homepage = "https://github.com/Mihlali-Sifuba/tensors"
 Repository = "https://github.com/Mihlali-Sifuba/tensors"
@@ -39,3 +44,12 @@ Issues = "https://github.com/Mihlali-Sifuba/tensors/issues"
 where = ["."]
 include = ["tensors*"]
 exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+tensors = ["py.typed"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["typing_tests"]
+follow_imports = "silent"
+strict = true

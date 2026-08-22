@@ -1,8 +1,9 @@
 """Elementwise hyperbolic tangent and its differentiation rule."""
 
 import math as _math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -49,7 +50,15 @@ class Tanh:
         return [grad * (positive + negative)]
 
 
-def tanh(value: Any) -> Any:
+@overload
+def tanh(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def tanh(value: TensorData) -> Tensor: ...
+
+
+def tanh(value: TensorLike) -> TensorResult:
     """Return the elementwise hyperbolic tangent as a Tensor or Variable."""
     from ..variable import Variable
 
