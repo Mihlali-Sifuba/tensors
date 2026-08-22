@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed design. This document describes the intended public API and
-responsibilities; it does not describe the current implementation exactly.
+Current implementation. This document describes the public `Graph` API and
+its execution model.
 
 ## Goal
 
@@ -27,18 +27,23 @@ Calling the model remains Pythonic:
 prediction = model(x)
 ```
 
-The call eagerly computes a result and also uses the model's persistent graph
-representation. A user opts into graph construction by defining or wrapping a
-`Graph`; ordinary Python functions and classes remain eager-only.
+Each call eagerly computes a result and records a fresh graph for that
+execution. A user opts into reusable model capture by defining or wrapping a
+`Graph`. Operations on `Variable` values still record autograd history when
+they occur in ordinary Python functions or classes.
 
 ## Responsibilities
 
-A `Graph` owns the computational representation of its function:
+A `Graph` retains the latest execution metadata for its function:
 
-- parameters and child graphs;
-- the input bindings used by a call;
-- operation nodes and edges;
-- the output or outputs produced by `forward`.
+- persistent parameters and child graphs stored as normal Python attributes;
+- the output or outputs produced by the latest `forward` call;
+- computations rooted at those outputs;
+- the reachable operation nodes and edges.
+
+Latest execution metadata is stored per thread. Parameters and other mutable
+model attributes remain shared Python state and are not synchronized by
+`Graph`.
 
 A `Graph` does not own training policy:
 
@@ -64,8 +69,9 @@ model = Linear()
 prediction = model(x)  # calls model.forward(x) through Graph.__call__
 ```
 
-The existing graph-execution method named `forward` should therefore be
-renamed internally, for example to `_replay`, `_run`, or `_execute`.
+Tensor inputs are wrapped as non-trainable `Variable` values before `forward`
+runs. Existing `Variable` inputs are preserved, and ordinary Python arguments
+are passed through unchanged.
 
 ## Functional Model API
 
@@ -120,25 +126,22 @@ graphs, or more substantial behaviour.
 
 ## Execution Lifecycle
 
-The intended lifecycle is:
+The lifecycle is:
 
 1. Construct the model and its persistent parameters.
-2. On the first call, run `forward` eagerly and record the operations as the
-   model graph.
-3. On later compatible calls, bind new input values and replay the stored
-   graph.
-4. When the function's traced structure is no longer compatible with the new
-   input shapes or control-flow path, rebuild explicitly.
+2. On every call, convert Tensor inputs to non-trainable Variables and execute
+   `forward` eagerly.
+3. Record the operations created by that call and capture the nodes and edges
+   reachable from each returned Variable.
+4. Store the outputs and computations as the calling thread's latest Graph
+   execution metadata.
 
-Illustrative API:
-
-```python
-prediction = model(x)  # builds graph on first call; replays it thereafter
-model.rebuild(x)       # explicitly trace again when required
-```
-
-The exact compatibility and rebuild policy remains a design decision, but it
-must be explicit and predictable.
+Calling the model again records a new computation; it does not bind values into
+or replay a cached graph. `rebuild(*args, **kwargs)` currently has the same
+behavior as a normal call and exists as an explicit retracing entry point.
+Previously returned Variables retain their own computation history when kept
+by the caller. `release()` only drops the Graph object's references to its
+latest execution on the calling thread.
 
 ## Training Is External
 
@@ -200,14 +203,17 @@ class Network(Graph):
         return self.second(self.first(x))
 ```
 
-`Network.parameters()` should recursively return parameters from child graphs,
-allowing an optimiser to update the complete model.
+`Network.parameters()` recursively returns parameters from child graphs,
+allowing an optimiser to update the complete model. Parameter discovery also
+traverses common containers and values captured by functional Graph closures.
 
 ## Design Principles
 
 - Model code uses normal Python expressions.
-- Eager execution and graph construction coexist in a graph call.
-- Graph construction is opt-in through `Graph`, not globally ambient.
+- Eager execution and fresh graph recording coexist in every graph call.
+- Reusable model capture is opt-in through `Graph`; eager `Variable`
+  operations record their own autograd history independently.
 - A graph is a function representation, not a training loop.
 - Losses and optimisers are composable code outside the model definition.
-- The model graph must be inspectable and reusable independently of training.
+- The latest model graph is inspectable, and each captured `Computation` can be
+  replayed independently of training while it remains active.

@@ -286,5 +286,5 @@ control execution.
 Run the full suite from the repository root with:
 
 ```powershell
-python -m unittest discover -s . -p "test*.py" -v
+python -m unittest discover -s tests -t .
 ```

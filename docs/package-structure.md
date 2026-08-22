@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed design. This document describes the intended package hierarchy and
-public import surface; it does not describe the current implementation exactly.
+Current implementation. This document describes the package hierarchy and
+public import surface provided by the project.
 
 ## Public API
 
@@ -43,65 +43,64 @@ class Linear(ts.Graph):
 The organised subpackages remain available for advanced use, but model authors
 should not need to import internal operation or graph-node classes.
 
-## Target Folder Layout
+## Folder Layout (Abridged)
 
 ```text
 tensors/
 ├── __init__.py            # root public facade
-├── tensor.py              # Tensor storage, construction, dtypes, indexing
+├── _typing.py             # shared public type aliases
+├── tensor.py              # Tensor storage, construction, and indexing
 ├── variable.py            # differentiable value type
-├── dtype.py
+├── dtype.py               # dtype definitions and promotion
+├── casting.py             # storage conversion helpers
 ├── creation.py            # tensor-value constructors
+├── py.typed               # marker for inline package typing
 ├── utils/                 # internal shape and broadcasting helpers
-│   ├── __init__.py
+│   ├── broadcasting.py
+│   ├── indexing.py
+│   ├── lists.py
 │   ├── shape.py
-│   └── broadcasting.py
-├── ops/                   # basic algebra only
-│   ├── __init__.py
-│   ├── add.py
-│   ├── sub.py
-│   ├── mul.py
-│   ├── div.py
-│   └── neg.py
+│   └── slicing.py
+├── ops/                   # primitive differentiable operations
+│   ├── add.py, sub.py, mul.py, div.py, neg.py
+│   └── pow.py, slice.py, cast.py
 ├── linalg/                # linear algebra
-│   ├── __init__.py
 │   ├── dot.py
 │   ├── matmul.py
+│   ├── norm.py
+│   ├── outer.py
 │   └── transpose.py
-├── math/                  # mathematical functions
-│   ├── __init__.py
-│   ├── exp.py
-│   ├── log.py
-│   ├── sqrt.py
-│   ├── sin.py
-│   ├── cos.py
-│   ├── tanh.py
-│   ├── relu.py
-│   ├── sigmoid.py
-│   ├── sum.py
-│   ├── mean.py
-│   ├── min.py
-│   ├── max.py
-│   └── std.py
-├── optim/                 # optimisers, added with the training API
-│   └── __init__.py
-└── graph/                 # reusable graph-functions/models
-    ├── __init__.py
-    ├── graph.py
+├── math/                  # functions, reductions, activations, and losses
+├── optim/                 # parameter-update algorithms
+│   ├── optimizer.py
+│   ├── sgd.py
+│   ├── adam.py
+│   └── rmsprop.py
+└── graph/                 # tracing, execution, and differentiation
+    ├── graph.py           # reusable callable model abstraction
+    ├── computation.py     # forward replay and reverse-mode execution
+    ├── derivatives.py     # Jacobian and Hessian construction
+    ├── gradcheck.py       # finite-difference verification
     ├── node.py
-    └── edge.py
+    ├── edge.py
+    ├── protocols.py
+    └── state.py
 ```
 
 ## Namespace Rules
 
-The namespace mirrors the package hierarchy:
+The public API supports both root conveniences and organised subpackages:
 
 ```python
-ts.ops.add(x, y)
+ts.add(x, y)
 ts.linalg.matmul(x, weight)
 ts.math.exp(x)
 ts.math.mean(x)
 ```
+
+Primitive operation classes remain available through `ts.ops` for advanced
+inspection, and the compatibility namespace exposes calls such as
+`ts.Ops.add(x, y)`.
 
 Common math functions are also root aliases for concise model code:
 
@@ -115,8 +114,8 @@ The folders have deliberately narrow responsibilities:
 
 - `creation` provides public constructors for mathematically defined tensor
   values, including zeros, ones, ranges, and identity matrices.
-- `ops` contains basic algebra only: addition, subtraction, multiplication,
-  division, and negation.
+- `ops` contains primitive differentiable operations such as arithmetic,
+  powers, slicing, and casting.
 - `utils` contains internal shape, row-major indexing, and broadcasting helpers.
   It is not re-exported from the root package.
 - `linalg` contains linear-algebra operations such as dot products and matrix
@@ -124,10 +123,11 @@ The folders have deliberately narrow responsibilities:
 - `math` contains all mathematical functions, including reductions and
   activation functions. It remains flat rather than separating activations or
   reductions into extra namespaces.
-- `graph` owns reusable computational model functions and their nodes/edges.
+- `graph` owns tracing state, operation protocols, computation execution,
+  derivatives, and reusable computational model functions.
 - `Computation` owns forward and backward execution; `ts.backward` is a root
   convenience alias.
-- `optim` will own parameter-update algorithms when the training API is built.
+- `optim` provides the shared optimizer contract plus SGD, Adam, and RMSprop.
 
 Operation classes, `Node`, and `Edge` are implementation or advanced
 inspection details. They should not be part of the everyday root API.
