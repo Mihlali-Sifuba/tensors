@@ -12,6 +12,7 @@
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
   <img alt="Backend" src="https://img.shields.io/badge/backend-pure%20Python-7A3E9D">
   <img alt="Status" src="https://img.shields.io/badge/status-experimental-F59E0B">
+  <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-D22128">
 </p>
 
 ---
@@ -189,6 +190,11 @@ tensors/
 ## Contributing
 
 Issues, focused bug reports, tests, and small improvements are welcome. Before submitting a change, run the complete test suite and include tests for corrected or newly introduced behavior.
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE). You may use,
+modify, and distribute it under the terms of that license.
 
 ---
 
