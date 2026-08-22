@@ -6,11 +6,12 @@ from . import dtype as _dtype
 from .casting import cast_values
 from .utils.lists import flatten_nested_list, infer_nested_list_shape
 from .utils.shape import (
-    coordinates_to_index,
     normalize_shape,
     row_major_strides,
     shape_size,
 )
+from .utils.slicing import slice_ranges_and_shape_from_key
+from .utils.tuples import indices_to_flat_index
 
 
 class Tensor:
@@ -114,31 +115,6 @@ class Tensor:
             converted = (float(value) for value in values)
         return array(self.dtype.typecode, converted)
 
-    def _indices_to_flat_index(self, indices: Tuple[int, ...]) -> int:
-        """Normalize tensor indices and convert them to a row-major flat index."""
-        if len(indices) != self.ndim:
-            raise IndexError(
-                f"Expected {self.ndim} indices, got {len(indices)}"
-            )
-
-        normalized_indices = []
-        for index, dimension_size in zip(indices, self.shape):
-            if isinstance(index, bool) or not isinstance(index, int):
-                raise TypeError("Tensor indices must be integers, not bools")
-            normalized_index = (
-                index + dimension_size
-                if index < 0
-                else index
-            )
-            if not 0 <= normalized_index < dimension_size:
-                raise IndexError("Index out of range")
-            normalized_indices.append(normalized_index)
-
-        return coordinates_to_index(
-            tuple(normalized_indices),
-            self.shape,
-        )
-
     def __getitem__(self, key):
         """
         Support indexing and slicing for N-dimensional tensors.
@@ -156,7 +132,7 @@ class Tensor:
             if self.ndim != 1:
                 return self._slice_from_key((key,))
             if isinstance(key, int):
-                idx = self._indices_to_flat_index((key,))
+                idx = indices_to_flat_index((key,), self.shape)
                 return self._data[idx]
             indices = range(*key.indices(self.shape[0]))
             values = [self._data[i] for i in indices]
@@ -166,7 +142,7 @@ class Tensor:
         if isinstance(key, tuple):
             if len(key) == self.ndim and all(isinstance(k, int) for k in key):
                 # All ints — return a scalar
-                idx = self._indices_to_flat_index(key)
+                idx = indices_to_flat_index(key, self.shape)
                 return self._data[idx]
 
             # Mixed ints and slices — return a sub-tensor
@@ -174,52 +150,12 @@ class Tensor:
 
         raise TypeError(f"Unsupported index type: {type(key)}")
 
-    def _slice_ranges_and_shape_from_key(
-        self,
-        key: Tuple[Union[int, slice], ...],
-    ) -> Tuple[List[range], Tuple[int, ...]]:
-        """Normalize a slice key into dimension ranges and its result shape."""
-        if len(key) > self.ndim:
-            raise IndexError(
-                f"Too many indices: {len(key)} for {self.ndim}D tensor"
-            )
-
-        # Build ranges for each dimension and compute output shape
-        ranges = []
-        new_shape = []
-        for dim_idx, k in enumerate(key):
-            if isinstance(k, bool):
-                raise TypeError("Boolean tensor indices are not supported")
-            if isinstance(k, int):
-                idx = k if k >= 0 else k + self.shape[dim_idx]
-                if not (0 <= idx < self.shape[dim_idx]):
-                    raise IndexError("Index out of range")
-                ranges.append(range(idx, idx + 1))
-                # Int collapses the dimension → not added to new_shape
-            elif isinstance(k, slice):
-                dim_range = range(*k.indices(self.shape[dim_idx]))
-                ranges.append(dim_range)
-                new_shape.append(len(dim_range))
-            else:
-                raise TypeError(
-                    f"Unsupported index type in tuple: {type(k)}"
-                )
-
-        # If key is shorter than ndim, remaining dims are taken fully
-        while len(ranges) < self.ndim:
-            dim_idx = len(ranges)
-            dim_range = range(self.shape[dim_idx])
-            ranges.append(dim_range)
-            new_shape.append(self.shape[dim_idx])
-
-        return ranges, tuple(new_shape)
-
     def _slice_from_key(
         self,
         key: Tuple[Union[int, slice], ...],
     ) -> 'Tensor':
         """Return an N-dimensional slice selected by mixed ints and slices."""
-        ranges, new_shape = self._slice_ranges_and_shape_from_key(key)
+        ranges, new_shape = slice_ranges_and_shape_from_key(key, self.shape)
         strides = row_major_strides(self.shape)
 
         result_data = self._create_storage(
@@ -281,7 +217,7 @@ class Tensor:
         value: Union[int, float, List, 'Tensor', array],
     ) -> None:
         """Assign a scalar or broadcast-compatible values to a tensor slice."""
-        ranges, selection_shape = self._slice_ranges_and_shape_from_key(key)
+        ranges, selection_shape = slice_ranges_and_shape_from_key(key, self.shape)
         flat_indices = self._flat_indices_from_ranges(
             ranges,
             row_major_strides(self.shape),
@@ -318,7 +254,7 @@ class Tensor:
                 raise ValueError(
                     f"Cannot assign to {self.ndim}D tensor with single integer"
                 )
-            idx = self._indices_to_flat_index((key,))
+            idx = indices_to_flat_index((key,), self.shape)
             self._data[idx] = self._assignment_scalar(value)
             self._version += 1
             return
@@ -330,7 +266,7 @@ class Tensor:
                 self._assign_slice_from_key(key, value)
                 return
 
-            idx = self._indices_to_flat_index(key)
+            idx = indices_to_flat_index(key, self.shape)
             self._data[idx] = self._assignment_scalar(value)
             self._version += 1
             return
