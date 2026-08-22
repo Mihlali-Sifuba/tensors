@@ -133,7 +133,8 @@ for _ in range(100):
 | Graphs | `Graph`, nested models, function decorators, parameter discovery |
 | Linear algebra | `dot`, `matmul`, `outer`, `transpose`, `norm` |
 | Reductions | `sum`, `prod`, `mean`, `min`, `max`, `argmin`, `argmax`, `std`, `logsumexp` |
-| Elementwise | `abs`, `clip`, `minimum`, `maximum`, comparisons, `where` |
+| Elementwise | `abs`, `sign`, `clip`, `minimum`, `maximum`, comparisons, `where` |
+| Trigonometry | `sin`, `cos`, `tan`, `arcsin`, `arccos`, `arctan` |
 | Activations | `relu`, `sigmoid`, `tanh`, `softplus`, `softmax`, `log_softmax` |
 | Shape operations | `reshape`, `stack`, `concat` |
 | Losses | `cross_entropy`, `binary_cross_entropy` |

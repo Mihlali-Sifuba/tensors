@@ -9,7 +9,8 @@ from .graph import (
 from .linalg import dot, matmul, norm, outer, transpose
 from .math import (
     sum, mean, min, max,
-    sqrt, exp, log, sin, cos, tan, relu, sigmoid, tanh, softplus, softmax,
+    sqrt, exp, log, sin, cos, tan, arcsin, arccos, arctan, sign,
+    relu, sigmoid, tanh, softplus, softmax,
     logsumexp, log_softmax, cross_entropy, binary_cross_entropy,
     std, reshape, stack, concat, abs, prod, clip, argmax, argmin,
     equal, not_equal, less, less_equal, greater, greater_equal,
@@ -32,6 +33,7 @@ __all__ = [
     "sum", "mean", "min", "max", "prod", "abs", "clip",
     "argmax", "argmin",
     "sqrt", "exp", "log", "sin", "cos", "tan",
+    "arcsin", "arccos", "arctan", "sign",
     "relu", "sigmoid", "tanh", "softplus", "softmax",
     "logsumexp", "log_softmax", "cross_entropy", "binary_cross_entropy", "std",
     "equal", "not_equal", "less", "less_equal", "greater", "greater_equal",
