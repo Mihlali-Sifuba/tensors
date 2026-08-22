@@ -11,7 +11,7 @@ from .utils.shape import (
     shape_size,
 )
 from .utils.slicing import slice_ranges_and_shape_from_key
-from .utils.tuples import indices_to_flat_index
+from .utils.indexing import indices_to_flat_index
 
 
 class Tensor:

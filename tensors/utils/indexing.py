@@ -1,4 +1,4 @@
-"""Utilities for validating and transforming tuples."""
+"""Utilities for normalizing tensor indices."""
 
 from typing import Tuple
 
