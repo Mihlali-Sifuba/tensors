@@ -28,8 +28,7 @@ class Node:
         Node._next_id += 1
 
         if op_cls is not None and (
-            not isinstance(op_cls, Operation)
-            or not callable(getattr(op_cls, "forward", None))
+            not callable(getattr(op_cls, "forward", None))
             or not callable(getattr(op_cls, "backward", None))
         ):
             raise TypeError(

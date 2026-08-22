@@ -15,34 +15,45 @@ class WeakRegistry(Generic[T]):
     __slots__ = ("_references", "__weakref__")
 
     def __init__(self) -> None:
-        self._references: list[ReferenceType[T]] = []
+        self._references: dict[int, ReferenceType[T]] = {}
 
     def add(self, value: T) -> None:
         """Register ``value`` without taking ownership of it."""
+        identity = id(value)
+        existing = self._references.get(identity)
+        if existing is not None and existing() is value:
+            return
+        if existing is not None:
+            del self._references[identity]
         owner_reference = ref(self)
 
         def discard(reference: ReferenceType[T]) -> None:
             owner = owner_reference()
             if owner is None:
                 return
-            try:
-                owner._references.remove(reference)
-            except ValueError:
-                pass
+            if owner._references.get(identity) is reference:
+                del owner._references[identity]
 
-        self._references.append(ref(value, discard))
+        reference = ref(value, discard)
+        self._references[identity] = reference
+
+    def __contains__(self, value: object) -> bool:
+        """Return whether the identical live object is registered."""
+        reference = self._references.get(id(value))
+        return reference is not None and reference() is value
 
     def values(self) -> list[T]:
         """Return live values and discard dead weak references."""
         live = []
-        references = []
-        for reference in self._references:
+        dead = []
+        for identity, reference in tuple(self._references.items()):
             value = reference()
             if value is not None:
                 live.append(value)
-                references.append(reference)
-        if len(references) != len(self._references):
-            self._references = references
+            else:
+                dead.append(identity)
+        for identity in dead:
+            self._references.pop(identity, None)
         return live
 
     def clear(self) -> None:
