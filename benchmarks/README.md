@@ -12,8 +12,9 @@ From the repository root:
 python -m benchmarks --quick
 ```
 
-The quick run is useful during development. The default run spends longer
-calibrating and sampling each case:
+The quick run is useful during development. By default, every case is measured
+with every available backend and the final table reports their relative speed.
+The default run spends longer calibrating and sampling each case:
 
 ```powershell
 python -m benchmarks
@@ -27,15 +28,17 @@ python -m benchmarks --match matmul
 python -m benchmarks --list
 ```
 
-Select a backend explicitly when comparing numerical implementations:
+Restrict a run to one backend when investigating its implementation:
 
 ```powershell
 python -m benchmarks --backend python --match matmul
 python -m benchmarks --backend numpy --match matmul
 ```
 
-The NumPy command requires the optional dependency. Each JSON report records the
-backend active during that run.
+The NumPy command requires the optional dependency. Use `--backend auto` to
+select NumPy when available and Python otherwise. `--backend all`, which is the
+default, runs Python and every installed optional backend. A comparison JSON
+report stores each backend's measurements and environment metadata separately.
 
 Save the complete measurements and environment metadata for comparison:
 
