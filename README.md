@@ -262,6 +262,21 @@ python -m pip install -e ".[typing]"
 python -m mypy
 ```
 
+## Run the benchmarks
+
+A dependency-free benchmark suite tracks tensor operations, graph tracing and
+replay, automatic differentiation, and a complete training step. Run the short
+development suite with:
+
+```powershell
+python -m benchmarks --quick
+```
+
+Use `python -m benchmarks` for a longer run or write a machine-readable report
+with `python -m benchmarks --output benchmark-results.json`. See the
+[`benchmarks` guide](benchmarks/README.md) for the case matrix and measurement
+methodology.
+
 ## Project structure
 
 ```text
@@ -276,6 +291,7 @@ tensors/
 │   ├── tensor.py    # tensor storage and core behavior
 │   └── variable.py  # differentiable tensor values
 ├── examples/        # runnable demonstrations
+├── benchmarks/      # repeatable local performance baselines
 └── tests/           # automated test suite
 ```
 
@@ -283,7 +299,6 @@ tensors/
 
 - Introduce an optional NumPy backend
 - Expand neural-network building blocks
-- Add performance benchmarks and user documentation
 
 ## Contributing
 

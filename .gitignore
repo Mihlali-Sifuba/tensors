@@ -18,3 +18,4 @@ Thumbs.db
 
 # Scratch files
 main.py
+/benchmark-results*.json
