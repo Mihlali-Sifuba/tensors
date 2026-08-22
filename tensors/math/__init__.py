@@ -13,6 +13,11 @@ from .tan import Tan, tan
 from .arcsin import ArcSin, arcsin
 from .arccos import ArcCos, arccos
 from .arctan import ArcTan, arctan
+from .sinh import Sinh, sinh
+from .cosh import Cosh, cosh
+from .arcsinh import ArcSinh, arcsinh
+from .arccosh import ArcCosh, arccosh
+from .arctanh import ArcTanh, arctanh
 from .sign import Sign, sign
 from .relu import ReLU, relu
 from .sigmoid import Sigmoid, sigmoid
@@ -40,7 +45,8 @@ from .elementwise_extrema import Maximum, Minimum, maximum, minimum
 
 __all__ = [
     "Sum", "Mean", "Min", "Max", "Sqrt", "Exp", "Log", "Sin", "Cos", "Tan",
-    "ArcSin", "ArcCos", "ArcTan", "Sign",
+    "ArcSin", "ArcCos", "ArcTan", "Sinh", "Cosh",
+    "ArcSinh", "ArcCosh", "ArcTanh", "Sign",
     "ReLU", "Sigmoid", "Tanh", "Softplus", "Softmax", "LogSumExp",
     "LogSoftmax", "CrossEntropy", "BinaryCrossEntropy", "Std", "Variance",
     "Reshape",
@@ -49,7 +55,8 @@ __all__ = [
     "sum", "mean", "min", "max", "prod", "abs", "clip",
     "argmax", "argmin",
     "sqrt", "exp", "log", "sin", "cos", "tan",
-    "arcsin", "arccos", "arctan", "sign",
+    "arcsin", "arccos", "arctan",
+    "sinh", "cosh", "arcsinh", "arccosh", "arctanh", "sign",
     "relu", "sigmoid", "tanh", "softplus", "softmax",
     "logsumexp", "log_softmax", "cross_entropy", "binary_cross_entropy",
     "std", "variance", "reshape", "stack", "concat",

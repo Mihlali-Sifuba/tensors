@@ -136,7 +136,8 @@ for _ in range(100):
 | Reductions | `sum`, `prod`, `mean`, `variance`, `std`, `min`, `max`, `argmin`, `argmax`, `logsumexp` |
 | Elementwise | `abs`, `sign`, `clip`, `minimum`, `maximum`, comparisons, `where` |
 | Trigonometry | `sin`, `cos`, `tan`, `arcsin`, `arccos`, `arctan` |
-| Activations | `relu`, `sigmoid`, `tanh`, `softplus`, `softmax`, `log_softmax` |
+| Hyperbolic | `sinh`, `cosh`, `tanh`, `arcsinh`, `arccosh`, `arctanh` |
+| Activations | `relu`, `sigmoid`, `softplus`, `softmax`, `log_softmax` |
 | Shape operations | `reshape`, `stack`, `concat` |
 | Losses | `cross_entropy`, `binary_cross_entropy` |
 | Optimizers | `SGD`, `Adam`, `RMSprop` |
