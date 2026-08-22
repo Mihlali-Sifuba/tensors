@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tensors import get_backend
+
 
 @dataclass(frozen=True)
 class BenchmarkCase:
@@ -132,6 +134,7 @@ def environment_metadata() -> dict[str, Any]:
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "commit": _git_commit(),
         "git_dirty": _git_dirty(),
+        "backend": get_backend(),
         "python": sys.version,
         "python_implementation": platform.python_implementation(),
         "platform": platform.platform(),
