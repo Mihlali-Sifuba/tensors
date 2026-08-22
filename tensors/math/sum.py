@@ -5,8 +5,16 @@ import math
 from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..backend import execute_reduction
 from ..tensor import Tensor
-from ._reduction import Axis, immutable_axis, keepdims_shape, reduction_groups
+from ._reduction import (
+    Axis,
+    immutable_axis,
+    keepdims_shape,
+    normalize_axes,
+    reduction_groups,
+    reduction_shape,
+)
 
 
 def _sum_exact_ratios(
@@ -77,6 +85,20 @@ def _stable_product_sum(factors: list[tuple[float, float]]) -> float:
 def _sum_impl(a: Tensor, axis: Axis = None,
               keepdims: bool = False) -> Tensor:
     """Sum over one, several, or all axes."""
+    axes = normalize_axes(a.ndim, axis)
+    output_shape = reduction_shape(a.shape, axes, keepdims)
+    if axis is None and not keepdims:
+        output_shape = (1,)
+    accelerated = execute_reduction(
+        "sum",
+        a,
+        axes,
+        keepdims=keepdims,
+        dtype=a.dtype,
+        output_shape=output_shape,
+    )
+    if accelerated is not None:
+        return Tensor(accelerated, dtype=a.dtype, shape=output_shape)
     _, output_shape, groups = reduction_groups(
         a, axis, keepdims, scalar_as_vector=True
     )

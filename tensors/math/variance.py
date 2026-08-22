@@ -6,9 +6,16 @@ import math
 from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..backend import execute_reduction
 from ..dtype import float64
 from ..tensor import Tensor
-from ._reduction import Axis, immutable_axis, normalize_axes, reduction_groups
+from ._reduction import (
+    Axis,
+    immutable_axis,
+    normalize_axes,
+    reduction_groups,
+    reduction_shape,
+)
 from .std import _scaled_deviations
 
 
@@ -21,11 +28,23 @@ class Variance:
         axis: Axis = None,
         keepdims: bool = False,
     ) -> Tensor:
-        _, output_shape, groups = reduction_groups(
+        axes = normalize_axes(value.ndim, axis)
+        output_shape = reduction_shape(value.shape, axes, keepdims)
+        if axis is None and not keepdims:
+            output_shape = (1,)
+        dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
+        accelerated = execute_reduction(
+            "variance",
             value,
-            axis,
-            keepdims,
-            scalar_as_vector=True,
+            axes,
+            keepdims=keepdims,
+            dtype=dtype,
+            output_shape=output_shape,
+        )
+        if accelerated is not None:
+            return Tensor(accelerated, dtype=dtype, shape=output_shape)
+        _, output_shape, groups = reduction_groups(
+            value, axis, keepdims, scalar_as_vector=True
         )
         values = []
         for group in groups:
@@ -35,7 +54,6 @@ class Variance:
             scale, _, normalized_deviation = _scaled_deviations(value, group)
             deviation = scale * normalized_deviation
             values.append(deviation * deviation)
-        dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         return Tensor(values, dtype=dtype, shape=output_shape)
 
     @staticmethod
