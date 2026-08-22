@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
+from ..backend import execute_where, execute_where_gradient
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
 from ..tensor import Tensor
@@ -38,10 +39,19 @@ class Where:
             broadcast_shape(condition.shape, left.shape),
             right.shape,
         )
+        dtype = result_dtype(left.dtype, right)
+        accelerated = execute_where(
+            condition,
+            left,
+            right,
+            dtype=dtype,
+            output_shape=shape,
+        )
+        if accelerated is not None:
+            return Tensor(accelerated, dtype=dtype, shape=shape)
         expanded_condition = broadcast_to(condition, shape)
         expanded_left = broadcast_to(left, shape)
         expanded_right = broadcast_to(right, shape)
-        dtype = result_dtype(left.dtype, right)
         return Tensor(
             [
                 left_value if selected != 0 else right_value
@@ -62,6 +72,28 @@ class Where:
         **kwargs: object,
     ) -> list[Tensor]:
         condition, left, right = inputs
+        accelerated = execute_where_gradient(grad, condition)
+        if accelerated is not None:
+            left_storage, right_storage = accelerated
+            left_gradient = Tensor(
+                left_storage,
+                dtype=grad.dtype,
+                shape=grad.shape,
+            )
+            right_gradient = Tensor(
+                right_storage,
+                dtype=grad.dtype,
+                shape=grad.shape,
+            )
+            return [
+                Tensor(
+                    [0.0] * condition.size,
+                    dtype=grad.dtype,
+                    shape=condition.shape,
+                ),
+                sum_to_shape(left_gradient, left.shape),
+                sum_to_shape(right_gradient, right.shape),
+            ]
         expanded_condition = broadcast_to(condition, grad.shape)
         left_gradient = Tensor(
             [

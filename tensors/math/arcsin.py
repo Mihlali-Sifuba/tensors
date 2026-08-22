@@ -8,6 +8,7 @@ from typing import Any, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
+from ._unary import unary_backward, unary_forward
 
 
 class ArcSin:
@@ -16,12 +17,7 @@ class ArcSin:
     @staticmethod
     def forward(value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
-        values = []
-        for item in value._data:
-            if item < -1.0 or item > 1.0:
-                raise ValueError("arcsin is only defined for values between -1 and 1")
-            values.append(math.asin(float(item)))
-        return Tensor(values, dtype=dtype, shape=value.shape)
+        return unary_forward("arcsin", value, dtype=dtype, fallback=_arcsin)
 
     @staticmethod
     def backward(
@@ -30,13 +26,14 @@ class ArcSin:
         **kwargs: object,
     ) -> list[Tensor]:
         value = inputs[0]
-        if any(item == -1.0 or item == 1.0 for item in value._data):
-            raise ValueError("arcsin derivative is undefined at -1 and 1")
-        values = [
-            upstream / math.sqrt(1.0 - float(item) ** 2.0)
-            for upstream, item in zip(grad._data, value._data)
+        return [
+            unary_backward(
+                "arcsin",
+                grad,
+                value,
+                fallback=_arcsin_gradient,
+            )
         ]
-        return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
@@ -74,3 +71,15 @@ def arcsin(value: TensorLike) -> TensorResult:
 
 
 __all__ = ["ArcSin", "arcsin"]
+
+
+def _arcsin(value):
+    if value < -1.0 or value > 1.0:
+        raise ValueError("arcsin is only defined for values between -1 and 1")
+    return math.asin(float(value))
+
+
+def _arcsin_gradient(upstream, value):
+    if value == -1.0 or value == 1.0:
+        raise ValueError("arcsin derivative is undefined at -1 and 1")
+    return upstream / math.sqrt(1.0 - float(value) ** 2.0)

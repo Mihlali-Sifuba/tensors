@@ -8,6 +8,7 @@ from typing import Any, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
+from ._unary import unary_backward, unary_forward
 
 
 class ArcTan:
@@ -16,10 +17,11 @@ class ArcTan:
     @staticmethod
     def forward(value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
-        return Tensor(
-            [math.atan(float(item)) for item in value._data],
+        return unary_forward(
+            "arctan",
+            value,
             dtype=dtype,
-            shape=value.shape,
+            fallback=lambda item: math.atan(float(item)),
         )
 
     @staticmethod
@@ -29,19 +31,7 @@ class ArcTan:
         **kwargs: object,
     ) -> list[Tensor]:
         value = inputs[0]
-        values = []
-        for upstream, item in zip(grad._data, value._data):
-            item = float(item)
-            if math.isinf(item):
-                derivative = 0.0
-            elif abs(item) <= 1.0:
-                derivative = 1.0 / (1.0 + item * item)
-            else:
-                reciprocal = 1.0 / item
-                square = reciprocal * reciprocal
-                derivative = square / (1.0 + square)
-            values.append(upstream * derivative)
-        return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
+        return [unary_backward("arctan", grad, value, fallback=_gradient)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
@@ -84,3 +74,16 @@ def arctan(value: TensorLike) -> TensorResult:
 
 
 __all__ = ["ArcTan", "arctan"]
+
+
+def _gradient(upstream, value):
+    value = float(value)
+    if math.isinf(value):
+        derivative = 0.0
+    elif abs(value) <= 1.0:
+        derivative = 1.0 / (1.0 + value * value)
+    else:
+        reciprocal = 1.0 / value
+        square = reciprocal * reciprocal
+        derivative = square / (1.0 + square)
+    return upstream * derivative

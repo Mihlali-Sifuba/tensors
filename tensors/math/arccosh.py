@@ -8,6 +8,7 @@ from typing import Any, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
+from ._unary import unary_backward, unary_forward
 
 
 class ArcCosh:
@@ -16,15 +17,7 @@ class ArcCosh:
     @staticmethod
     def forward(value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
-        values = []
-        for item in value._data:
-            if item < 1.0:
-                raise ValueError(
-                    "arccosh is only defined for values greater than or "
-                    "equal to 1"
-                )
-            values.append(math.acosh(float(item)))
-        return Tensor(values, dtype=dtype, shape=value.shape)
+        return unary_forward("arccosh", value, dtype=dtype, fallback=_arccosh)
 
     @staticmethod
     def backward(
@@ -33,19 +26,7 @@ class ArcCosh:
         **kwargs: object,
     ) -> list[Tensor]:
         value = inputs[0]
-        if any(item == 1.0 for item in value._data):
-            raise ValueError("arccosh derivative is undefined at 1")
-        gradients = []
-        for upstream, item in zip(grad._data, value._data):
-            item = float(item)
-            if math.isinf(item):
-                derivative = 0.0
-            else:
-                derivative = 1.0 / (
-                    math.sqrt(item - 1.0) * math.sqrt(item + 1.0)
-                )
-            gradients.append(upstream * derivative)
-        return [Tensor(gradients, dtype=grad.dtype, shape=value.shape)]
+        return [unary_backward("arccosh", grad, value, fallback=_gradient)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
@@ -84,3 +65,24 @@ def arccosh(value: TensorLike) -> TensorResult:
 
 
 __all__ = ["ArcCosh", "arccosh"]
+
+
+def _arccosh(value):
+    if value < 1.0:
+        raise ValueError(
+            "arccosh is only defined for values greater than or equal to 1"
+        )
+    return math.acosh(float(value))
+
+
+def _gradient(upstream, value):
+    if value == 1.0:
+        raise ValueError("arccosh derivative is undefined at 1")
+    value = float(value)
+    if math.isinf(value):
+        derivative = 0.0
+    else:
+        derivative = 1.0 / (
+            math.sqrt(value - 1.0) * math.sqrt(value + 1.0)
+        )
+    return upstream * derivative

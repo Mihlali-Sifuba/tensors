@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, List, overload
 
+from ..backend import execute_matmul, execute_transpose
 from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
@@ -146,6 +147,15 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
     ) = _matmul_metadata(a, b)
 
     dtype = result_dtype(a.dtype, b)
+    accelerated = execute_matmul(
+        a,
+        b,
+        dtype=dtype,
+        output_shape=output_shape,
+    )
+    if accelerated is not None:
+        return Tensor(accelerated, dtype=dtype, shape=output_shape)
+
     values = []
     for batch_index in range(shape_size(batch_shape)):
         batch_coordinates = index_to_coordinates(batch_index, batch_shape)
@@ -198,6 +208,13 @@ def _transpose_impl(
         permutation = normalized
 
     shape = tuple(tensor.shape[axis] for axis in permutation)
+    accelerated = execute_transpose(
+        tensor,
+        permutation,
+        output_shape=shape,
+    )
+    if accelerated is not None:
+        return Tensor(accelerated, dtype=tensor.dtype, shape=shape)
     inverse = [0] * tensor.ndim
     for output_axis, input_axis in enumerate(permutation):
         inverse[input_axis] = output_axis

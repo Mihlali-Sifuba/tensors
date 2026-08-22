@@ -6,6 +6,10 @@ import math
 from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
+from ..backend import (
+    execute_binary_cross_entropy,
+    execute_binary_cross_entropy_gradient,
+)
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..tensor import Tensor
@@ -80,6 +84,17 @@ class BinaryCrossEntropy:
         prediction, target = broadcast_tensors(prediction, target)
         _validate_targets(target)
         dtype = result_dtype(prediction.dtype, target, division=True)
+        output_shape = prediction.shape if reduction == "none" else (1,)
+        storage = execute_binary_cross_entropy(
+            prediction,
+            target,
+            from_logits=from_logits,
+            reduction=reduction,
+            dtype=dtype,
+            output_shape=output_shape,
+        )
+        if storage is not None:
+            return Tensor(storage, dtype=dtype, shape=output_shape)
 
         values = []
         for raw_prediction, raw_target in zip(prediction._data, target._data):
@@ -121,6 +136,34 @@ class BinaryCrossEntropy:
 
         expanded_prediction, expanded_target = broadcast_tensors(prediction, target)
         size = expanded_prediction.size
+        accelerated = execute_binary_cross_entropy_gradient(
+            grad,
+            expanded_prediction,
+            expanded_target,
+            from_logits=from_logits,
+            reduction=reduction,
+        )
+        if accelerated is not None:
+            prediction_storage, target_storage = accelerated
+            expanded_shape = expanded_prediction.shape
+            return [
+                sum_to_shape(
+                    Tensor(
+                        prediction_storage,
+                        dtype=grad.dtype,
+                        shape=expanded_shape,
+                    ),
+                    prediction.shape,
+                ),
+                sum_to_shape(
+                    Tensor(
+                        target_storage,
+                        dtype=grad.dtype,
+                        shape=expanded_shape,
+                    ),
+                    target.shape,
+                ),
+            ]
         if reduction == "none":
             upstream = list(grad._data)
         else:

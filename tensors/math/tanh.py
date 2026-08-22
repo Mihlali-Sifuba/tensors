@@ -6,6 +6,7 @@ from typing import Any, List, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
+from ._unary import unary_backward, unary_forward
 
 
 class Tanh:
@@ -14,17 +15,26 @@ class Tanh:
     @staticmethod
     def forward(a: Tensor) -> Tensor:
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
-        values = [_math.tanh(float(value)) for value in a._data]
-        return Tensor(values, dtype=dtype, shape=a.shape)
+        return unary_forward(
+            "tanh",
+            a,
+            dtype=dtype,
+            fallback=lambda value: _math.tanh(float(value)),
+        )
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         a = inputs[0]
-        values = [
-            g * _tanh_derivative(float(value))
-            for g, value in zip(grad._data, a._data)
+        return [
+            unary_backward(
+                "tanh",
+                grad,
+                a,
+                fallback=lambda upstream, value: (
+                    upstream * _tanh_derivative(float(value))
+                ),
+            )
         ]
-        return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):

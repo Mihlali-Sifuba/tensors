@@ -34,6 +34,9 @@ dependencies = []
 typing = [
     "mypy>=2.3,<3",
 ]
+numpy = [
+    "numpy>=1.24",
+]
 
 [project.urls]
 Homepage = "https://github.com/Mihlali-Sifuba/tensors"
@@ -50,6 +53,6 @@ tensors = ["py.typed"]
 
 [tool.mypy]
 python_version = "3.10"
-files = ["typing_tests"]
+files = ["tests/typing"]
 follow_imports = "silent"
 strict = true

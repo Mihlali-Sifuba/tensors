@@ -6,6 +6,7 @@ import math
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
+from ..backend import execute_adam_update
 from ..tensor import Tensor
 from .optimizer import Optimizer
 
@@ -144,6 +145,62 @@ class Adam(Optimizer):
             beta2_product = float(current_state.get("beta2_product", b2 ** (step_count - 1))) * b2
             first_correction = 1.0 - beta1_product
             second_correction = 1.0 - beta2_product
+
+            accelerated = execute_adam_update(
+                param.data,
+                grad,
+                m,
+                scales,
+                scaled_values,
+                beta1=b1,
+                beta2=b2,
+                learning_rate=lr,
+                epsilon=eps,
+                first_correction=first_correction,
+                second_correction=second_correction,
+            )
+            if accelerated is not None:
+                (
+                    parameter_storage,
+                    moment_storage,
+                    visible_storage,
+                    scale_storage,
+                    scaled_storage,
+                ) = accelerated
+                accelerated_state: dict[str, Tensor | int | float] = {
+                    "step": step_count,
+                    "m": Tensor(
+                        moment_storage,
+                        dtype=grad.dtype,
+                        shape=grad.shape,
+                    ),
+                    "v": Tensor(
+                        visible_storage,
+                        dtype=grad.dtype,
+                        shape=grad.shape,
+                    ),
+                    "v_scale": Tensor(
+                        scale_storage,
+                        dtype=grad.dtype,
+                        shape=grad.shape,
+                    ),
+                    "v_scaled": Tensor(
+                        scaled_storage,
+                        dtype=grad.dtype,
+                        shape=grad.shape,
+                    ),
+                    "beta1_product": beta1_product,
+                    "beta2_product": beta2_product,
+                }
+                new_parameter = Tensor(
+                    parameter_storage,
+                    dtype=param.dtype,
+                    shape=param.shape,
+                )
+                pending.append(
+                    (param, sid, new_parameter, accelerated_state)
+                )
+                continue
 
             moment_values = []
             visible_second_values = []

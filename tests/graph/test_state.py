@@ -35,6 +35,16 @@ class GraphStateTests(unittest.TestCase):
 
         self.assertEqual(state.nodes, [target, source])
 
+    def test_adding_edges_does_not_duplicate_registered_nodes(self):
+        state = get_graph_state()
+        source = state.add_node("source")
+        target = state.add_node("target")
+
+        state.add_edge(source, target)
+        state.add_edge(source, target)
+
+        self.assertEqual(state.nodes, [source, target])
+
     def test_outer_trace_scope_resets_state_and_nested_scope_reuses_it(self):
         previous = get_graph_state()
         previous.add_node("stale")

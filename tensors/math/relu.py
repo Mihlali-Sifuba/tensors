@@ -5,6 +5,7 @@ from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..tensor import Tensor
+from ._unary import unary_backward, unary_forward
 
 
 class ReLU:
@@ -12,22 +13,12 @@ class ReLU:
 
     @staticmethod
     def forward(a: Tensor) -> Tensor:
-        values = [
-            math.nan if isinstance(value, float) and math.isnan(value)
-            else value if value > 0 else 0
-            for value in a._data
-        ]
-        return Tensor(values, dtype=a.dtype, shape=a.shape)
+        return unary_forward("relu", a, dtype=a.dtype, fallback=_relu)
 
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         a = inputs[0]
-        values = [
-            math.nan if isinstance(x, float) and math.isnan(x)
-            else g if x > 0 else 0
-            for g, x in zip(grad._data, a._data)
-        ]
-        return [Tensor(values, dtype=grad.dtype, shape=a.shape)]
+        return [unary_backward("relu", grad, a, fallback=_gradient)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
@@ -71,3 +62,15 @@ def relu(value: TensorLike) -> TensorResult:
 
 
 __all__ = ["ReLU", "relu"]
+
+
+def _relu(value):
+    if isinstance(value, float) and math.isnan(value):
+        return math.nan
+    return value if value > 0 else 0
+
+
+def _gradient(upstream, value):
+    if isinstance(value, float) and math.isnan(value):
+        return math.nan
+    return upstream if value > 0 else 0
