@@ -1,0 +1,90 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Test and build distributions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Verify release tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          metadata = tomllib.loads(
+              Path("pyproject.toml").read_text(encoding="utf-8")
+          )
+          expected_tag = f"v{metadata['project']['version']}"
+          release_tag = os.environ["RELEASE_TAG"]
+          if release_tag != expected_tag:
+              raise SystemExit(
+                  f"Release tag {release_tag!r} does not match {expected_tag!r}"
+              )
+          print(f"Publishing {metadata['project']['name']} {expected_tag}")
+          PY
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -t .
+
+      - name: Install packaging tools
+        run: python -m pip install build twine
+
+      - name: Build wheel and source distribution
+        run: python -m build
+
+      - name: Validate distributions
+        run: python -m twine check dist/*
+
+      - name: Store distributions
+        uses: actions/upload-artifact@v5
+        with:
+          name: python-package-distributions
+          path: dist/
+          retention-days: 1
+
+  publish:
+    name: Publish distributions to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ms-tensors
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
