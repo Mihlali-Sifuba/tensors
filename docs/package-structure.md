@@ -5,6 +5,30 @@
 Current implementation. This document describes the package hierarchy and
 public import surface provided by the project.
 
+## API Philosophy
+
+The public API is organised around mathematical expression rather than
+framework ceremony. Users should be able to translate a formula into Python
+without first translating it into a hierarchy of framework-specific objects:
+
+```python
+logits = inputs @ weight + bias
+loss = ts.cross_entropy(logits, targets)
+```
+
+Python operators express algebra, root-level functions carry familiar
+mathematical names, and both `Tensor` and `Variable` participate in the same
+expression language. `Graph` represents a reusable mathematical function;
+trainable values are normal `Variable` attributes and are discovered without
+manual registration.
+
+The package hierarchy exists to organise implementation and support
+discoverability. It must not force users to navigate subpackages or import
+parallel layer, module, and parameter abstractions merely to state ordinary
+mathematics. New public abstractions should make the mathematics clearer or
+provide behaviour that cannot be expressed cleanly with the existing
+vocabulary.
+
 ## Public API
 
 The canonical user import is:
