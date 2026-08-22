@@ -61,9 +61,9 @@ class GraphState:
         target: Node,
         label: str | None = None,
     ) -> Edge:
-        if source not in self.nodes:
+        if source not in self._nodes:
             self._nodes.add(source)
-        if target not in self.nodes:
+        if target not in self._nodes:
             self._nodes.add(target)
         edge = Edge(source, target, label=label)
         self._edges.add(edge)
