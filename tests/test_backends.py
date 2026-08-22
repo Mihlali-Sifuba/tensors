@@ -230,6 +230,49 @@ class NumPyBackendTests(unittest.TestCase):
 
         cast_tensor.assert_called_once()
 
+    def test_reductions_dispatch_to_numpy(self):
+        value = ts.Tensor([float(index + 1) for index in range(512)])
+        with patch.object(
+            numpy_backend,
+            "reduction",
+            wraps=numpy_backend.reduction,
+        ) as reduction:
+            with ts.use_backend("numpy"):
+                ts.sum(value)
+                ts.mean(value)
+                ts.variance(value)
+                ts.norm(value)
+
+        self.assertEqual(
+            [call.args[0] for call in reduction.call_args_list],
+            ["sum", "mean", "variance", "norm"],
+        )
+
+    def test_axis_reductions_match_python_backend(self):
+        value = ts.Tensor(
+            [float(index + 1) for index in range(24)],
+            shape=(2, 3, 4),
+        )
+
+        for operation in (ts.sum, ts.mean, ts.variance, ts.norm):
+            with self.subTest(operation=operation.__name__):
+                self.assertOperationParity(
+                    lambda operation=operation: operation(
+                        value,
+                        axis=(0, 2),
+                        keepdims=True,
+                    )
+                )
+
+    def test_stable_reductions_fall_back_without_changing_results(self):
+        value = ts.Tensor([1.0e308, 1.0e308, -1.0e308, -1.0e308])
+        smallest = ts.Tensor([5e-324, 5e-324])
+
+        self.assertOperationParity(lambda: ts.sum(value))
+        self.assertOperationParity(lambda: ts.mean(smallest))
+        self.assertOperationParity(lambda: ts.variance(value))
+        self.assertOperationParity(lambda: ts.norm(value))
+
     def test_broadcast_arithmetic_matches_python_backend(self):
         left = ts.Tensor([[1.5], [2.5]])
         right = ts.Tensor([[3.0, 4.0]])

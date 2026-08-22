@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from .._typing import Scalar, TensorIndex
     from ..dtype import DataType
     from ..tensor import Tensor
-    from . import BinaryOperation
+    from . import BinaryOperation, ReductionOperation
 
 
 def _view(tensor: Tensor, numpy: Any) -> Any:
@@ -185,6 +185,87 @@ def cast_tensor(value: Tensor, *, dtype: DataType) -> array[Any] | None:
         result,
         dtype=dtype,
         output_shape=value.shape,
+        numpy=numpy,
+    )
+
+
+def reduction(
+    operation: ReductionOperation,
+    value: Tensor,
+    axes: tuple[int, ...],
+    *,
+    keepdims: bool,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> array[Any] | None:
+    """Run a numerically guarded NumPy reduction."""
+    if value.size == 0:
+        return None
+
+    numpy = _numpy()
+    values = _view(value, numpy).astype(numpy.float64, copy=False)
+    if not bool(numpy.all(numpy.isfinite(values))):
+        return None
+
+    axis = axes
+    if operation in {"sum", "mean"}:
+        if operation == "sum" and dtype.kind == "integer":
+            return None
+        has_positive = bool(numpy.any(values > 0.0))
+        has_negative = bool(numpy.any(values < 0.0))
+        has_subnormal = bool(
+            numpy.any(
+                (values != 0.0)
+                & (numpy.abs(values) < numpy.finfo(numpy.float64).tiny)
+            )
+        )
+        if (has_positive and has_negative) or has_subnormal:
+            return None
+        with numpy.errstate(over="ignore", under="ignore", invalid="ignore"):
+            if operation == "sum":
+                result = numpy.sum(values, axis=axis, keepdims=keepdims)
+            else:
+                result = numpy.mean(values, axis=axis, keepdims=keepdims)
+        if not bool(numpy.all(numpy.isfinite(result))):
+            return None
+    elif operation == "variance":
+        with numpy.errstate(over="ignore", under="ignore", invalid="ignore"):
+            center = numpy.mean(values, axis=axis, keepdims=True)
+            centered = values - center
+        if not bool(numpy.all(numpy.isfinite(centered))):
+            return None
+        scale = numpy.max(numpy.abs(centered), axis=axis, keepdims=True)
+        safe_scale = numpy.where(scale == 0.0, 1.0, scale)
+        normalized = centered / safe_scale
+        normalized_variance = numpy.mean(
+            normalized * normalized,
+            axis=axis,
+            keepdims=keepdims,
+        )
+        output_scale = scale if keepdims else numpy.squeeze(scale, axis=axis)
+        with numpy.errstate(over="ignore", under="ignore", invalid="ignore"):
+            deviation = output_scale * numpy.sqrt(normalized_variance)
+            result = deviation * deviation
+    else:
+        absolute = numpy.abs(values)
+        scale = numpy.max(absolute, axis=axis, keepdims=True)
+        safe_scale = numpy.where(scale == 0.0, 1.0, scale)
+        normalized = values / safe_scale
+        normalized_magnitude = numpy.sqrt(
+            numpy.sum(
+                normalized * normalized,
+                axis=axis,
+                keepdims=keepdims,
+            )
+        )
+        output_scale = scale if keepdims else numpy.squeeze(scale, axis=axis)
+        with numpy.errstate(over="ignore", under="ignore", invalid="ignore"):
+            result = output_scale * normalized_magnitude
+
+    return _storage(
+        result,
+        dtype=dtype,
+        output_shape=output_shape,
         numpy=numpy,
     )
 

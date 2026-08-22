@@ -4,9 +4,17 @@ import math
 from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..backend import execute_reduction
 from ..dtype import float64
 from ..tensor import Tensor
-from ..math._reduction import Axis, immutable_axis, keepdims_shape, reduction_groups
+from ..math._reduction import (
+    Axis,
+    immutable_axis,
+    keepdims_shape,
+    normalize_axes,
+    reduction_groups,
+    reduction_shape,
+)
 
 
 def _scaled_norm(
@@ -39,6 +47,18 @@ class Norm:
     ) -> Tensor:
         """Return Euclidean norms over one, several, or all axes."""
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
+        axes = normalize_axes(value.ndim, axis)
+        output_shape = reduction_shape(value.shape, axes, keepdims)
+        accelerated = execute_reduction(
+            "norm",
+            value,
+            axes,
+            keepdims=keepdims,
+            dtype=dtype,
+            output_shape=output_shape,
+        )
+        if accelerated is not None:
+            return Tensor(accelerated, dtype=dtype, shape=output_shape)
         _, output_shape, groups = reduction_groups(value, axis, keepdims)
         results = []
         for group in groups:

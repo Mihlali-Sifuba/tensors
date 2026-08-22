@@ -26,6 +26,12 @@ BinaryOperation: TypeAlias = Literal[
     "divide",
     "power",
 ]
+ReductionOperation: TypeAlias = Literal[
+    "sum",
+    "mean",
+    "variance",
+    "norm",
+]
 
 
 class BackendUnavailableError(RuntimeError):
@@ -207,6 +213,31 @@ def execute_cast(
     from .numpy import cast_tensor
 
     return cast_tensor(value, dtype=dtype)
+
+
+def execute_reduction(
+    operation: ReductionOperation,
+    value: Tensor,
+    axes: tuple[int, ...],
+    *,
+    keepdims: bool,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> array[Any] | None:
+    """Run an accelerated reduction or request the stable Python fallback."""
+    if get_backend() == "python":
+        return None
+
+    from .numpy import reduction
+
+    return reduction(
+        operation,
+        value,
+        axes,
+        keepdims=keepdims,
+        dtype=dtype,
+        output_shape=output_shape,
+    )
 
 
 def execute_division_denominator_gradient(
