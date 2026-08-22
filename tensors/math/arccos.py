@@ -8,6 +8,7 @@ from typing import Any, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
+from ._unary import unary_backward, unary_forward
 
 
 class ArcCos:
@@ -16,12 +17,7 @@ class ArcCos:
     @staticmethod
     def forward(value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
-        values = []
-        for item in value._data:
-            if item < -1.0 or item > 1.0:
-                raise ValueError("arccos is only defined for values between -1 and 1")
-            values.append(math.acos(float(item)))
-        return Tensor(values, dtype=dtype, shape=value.shape)
+        return unary_forward("arccos", value, dtype=dtype, fallback=_arccos)
 
     @staticmethod
     def backward(
@@ -30,13 +26,14 @@ class ArcCos:
         **kwargs: object,
     ) -> list[Tensor]:
         value = inputs[0]
-        if any(item == -1.0 or item == 1.0 for item in value._data):
-            raise ValueError("arccos derivative is undefined at -1 and 1")
-        values = [
-            -upstream / math.sqrt(1.0 - float(item) ** 2.0)
-            for upstream, item in zip(grad._data, value._data)
+        return [
+            unary_backward(
+                "arccos",
+                grad,
+                value,
+                fallback=_arccos_gradient,
+            )
         ]
-        return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
@@ -74,3 +71,15 @@ def arccos(value: TensorLike) -> TensorResult:
 
 
 __all__ = ["ArcCos", "arccos"]
+
+
+def _arccos(value):
+    if value < -1.0 or value > 1.0:
+        raise ValueError("arccos is only defined for values between -1 and 1")
+    return math.acos(float(value))
+
+
+def _arccos_gradient(upstream, value):
+    if value == -1.0 or value == 1.0:
+        raise ValueError("arccos derivative is undefined at -1 and 1")
+    return -upstream / math.sqrt(1.0 - float(value) ** 2.0)

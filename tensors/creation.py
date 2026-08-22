@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from typing import Iterable, TypeAlias
 
+from . import dtype as _dtype
+from .backend import execute_arange, execute_eye, execute_full, execute_linspace
 from .dtype import DataType
 from .tensor import Tensor
 from .utils.shape import normalize_shape, shape_size
@@ -15,14 +17,39 @@ DType: TypeAlias = str | DataType | None
 Scalar: TypeAlias = int | float
 
 
+def _resolve_dtype(dtype: DType) -> DataType:
+    if dtype is None:
+        return _dtype.default
+    if isinstance(dtype, str):
+        return _dtype.from_typecode(dtype)
+    if not isinstance(dtype, DataType):
+        raise TypeError(
+            "dtype must be a DataType, typecode or dtype string, "
+            f"got {type(dtype)}"
+        )
+    return dtype
+
+
 def full(shape: Shape, fill_value: Scalar, dtype: DType = None) -> Tensor:
     """Return a Tensor of ``shape`` filled with one constant value."""
     if isinstance(fill_value, bool) or not isinstance(fill_value, (int, float)):
         raise TypeError("fill_value must be an int or float")
     normalized_shape = normalize_shape(shape)
+    resolved_dtype = _resolve_dtype(dtype)
+    accelerated = execute_full(
+        normalized_shape,
+        fill_value,
+        dtype=resolved_dtype,
+    )
+    if accelerated is not None:
+        return Tensor(
+            accelerated,
+            dtype=resolved_dtype,
+            shape=normalized_shape,
+        )
     return Tensor(
         [fill_value] * shape_size(normalized_shape),
-        dtype=dtype,
+        dtype=resolved_dtype,
         shape=normalized_shape,
     )
 
@@ -57,12 +84,26 @@ def eye(
     if isinstance(k, bool) or not isinstance(k, int):
         raise TypeError("k must be an integer")
 
+    resolved_dtype = _resolve_dtype(dtype)
+    accelerated = execute_eye(
+        rows,
+        columns,
+        k,
+        dtype=resolved_dtype,
+    )
+    if accelerated is not None:
+        return Tensor(
+            accelerated,
+            dtype=resolved_dtype,
+            shape=(rows, columns),
+        )
+
     values = [
         1 if column - row == k else 0
         for row in range(rows)
         for column in range(columns)
     ]
-    return Tensor(values, dtype=dtype, shape=(rows, columns))
+    return Tensor(values, dtype=resolved_dtype, shape=(rows, columns))
 
 
 def arange(
@@ -82,8 +123,28 @@ def arange(
     if stop is None:
         start, stop = 0, start
 
-    if all(isinstance(value, int) for value in (start, stop, step)):
-        values = list(range(start, stop, step))
+    resolved_dtype = _resolve_dtype(dtype)
+    values: list[int | float]
+    if (
+        isinstance(start, int)
+        and isinstance(stop, int)
+        and isinstance(step, int)
+    ):
+        progression = range(start, stop, step)
+        count = len(progression)
+        accelerated = execute_arange(
+            start,
+            step,
+            count,
+            dtype=resolved_dtype,
+        )
+        if accelerated is not None:
+            return Tensor(
+                accelerated,
+                dtype=resolved_dtype,
+                shape=(count,),
+            )
+        values = list(progression)
     else:
         try:
             finite = all(math.isfinite(value) for value in (start, stop, step))
@@ -101,13 +162,30 @@ def arange(
             if not math.isfinite(ratio):
                 raise OverflowError("arange result is too large to construct")
             count = max(0, math.ceil(ratio))
+            while count:
+                final = start + (count - 1) * step
+                if final < stop if increasing else final > stop:
+                    break
+                count -= 1
+            accelerated = execute_arange(
+                start,
+                step,
+                count,
+                dtype=resolved_dtype,
+            )
+            if accelerated is not None:
+                return Tensor(
+                    accelerated,
+                    dtype=resolved_dtype,
+                    shape=(count,),
+                )
             candidates = [start + index * step for index in range(count)]
             values = [
                 value
                 for value in candidates
                 if (value < stop if increasing else value > stop)
             ]
-    return Tensor(values, dtype=dtype, shape=(len(values),))
+    return Tensor(values, dtype=resolved_dtype, shape=(len(values),))
 
 
 def linspace(
@@ -131,6 +209,19 @@ def linspace(
     if count < 0:
         raise ValueError("count must be non-negative")
 
+    resolved_dtype = _resolve_dtype(dtype)
+    accelerated = execute_linspace(
+        start,
+        stop,
+        count,
+        dtype=resolved_dtype,
+    )
+    if accelerated is not None:
+        return Tensor(
+            accelerated,
+            dtype=resolved_dtype,
+            shape=(count,),
+        )
     if count == 0:
         values = []
     elif count == 1:
@@ -145,7 +236,7 @@ def linspace(
                 float(stop) * fraction,
             )))
         values.append(stop)
-    return Tensor(values, dtype=dtype, shape=(count,))
+    return Tensor(values, dtype=resolved_dtype, shape=(count,))
 
 
 __all__ = ["arange", "eye", "full", "linspace", "ones", "zeros"]

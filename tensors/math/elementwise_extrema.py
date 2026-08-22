@@ -6,10 +6,11 @@ import math
 from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
+from ..backend import execute_extremum, execute_extremum_gradient
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_tensors
+from ..utils.broadcasting import broadcast_shape, broadcast_tensors
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -39,6 +40,18 @@ class _ElementwiseExtremum:
 
     @classmethod
     def forward(cls, left: Tensor, right: Tensor) -> Tensor:
+        shape = broadcast_shape(left.shape, right.shape)
+        dtype = result_dtype(left.dtype, right)
+        operation = "maximum" if cls.select_maximum else "minimum"
+        accelerated = execute_extremum(
+            operation,
+            left,
+            right,
+            dtype=dtype,
+            output_shape=shape,
+        )
+        if accelerated is not None:
+            return Tensor(accelerated, dtype=dtype, shape=shape)
         expanded_left, expanded_right = broadcast_tensors(left, right)
         values = []
         for left_value, right_value in zip(
@@ -57,7 +70,7 @@ class _ElementwiseExtremum:
                 )
         return Tensor(
             values,
-            dtype=result_dtype(left.dtype, right),
+            dtype=dtype,
             shape=expanded_left.shape,
         )
 
@@ -111,6 +124,33 @@ class _ElementwiseExtremum:
         **kwargs: object,
     ) -> list[Tensor]:
         left, right = inputs
+        operation = "maximum" if cls.select_maximum else "minimum"
+        accelerated = execute_extremum_gradient(
+            operation,
+            grad,
+            left,
+            right,
+        )
+        if accelerated is not None:
+            left_storage, right_storage = accelerated
+            return [
+                sum_to_shape(
+                    Tensor(
+                        left_storage,
+                        dtype=grad.dtype,
+                        shape=grad.shape,
+                    ),
+                    left.shape,
+                ),
+                sum_to_shape(
+                    Tensor(
+                        right_storage,
+                        dtype=grad.dtype,
+                        shape=grad.shape,
+                    ),
+                    right.shape,
+                ),
+            ]
         left_weights, right_weights = cls._weights(
             left,
             right,

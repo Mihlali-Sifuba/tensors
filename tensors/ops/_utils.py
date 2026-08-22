@@ -18,6 +18,12 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
     if len(shape) > gradient.ndim:
         raise ValueError(f"Cannot reduce gradient shape {gradient.shape} to {shape}")
 
+    from ..backend import execute_sum_to_shape
+
+    accelerated = execute_sum_to_shape(gradient, shape)
+    if accelerated is not None:
+        return Tensor(accelerated, dtype=gradient.dtype, shape=shape)
+
     padded_shape = (1,) * (gradient.ndim - len(shape)) + shape
     groups: list[list[int | float]] = [
         [] for _ in range(shape_size(shape))
@@ -55,8 +61,13 @@ def sum_products_to_shape(
     reduced result is finite. Grouping the factors before rounding preserves
     that cancellation.
     """
+    from ..backend import execute_sum_products_to_shape
     from ..math.sum import _stable_product_sum
     from ..utils.broadcasting import broadcast_tensors
+
+    accelerated = execute_sum_products_to_shape(gradient, factor, shape)
+    if accelerated is not None:
+        return Tensor(accelerated, dtype=gradient.dtype, shape=shape)
 
     expanded_gradient, expanded_factor = broadcast_tensors(gradient, factor)
     if len(shape) > expanded_gradient.ndim:

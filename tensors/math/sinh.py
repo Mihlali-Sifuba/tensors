@@ -8,6 +8,7 @@ from typing import Any, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
+from ._unary import unary_backward, unary_forward
 
 
 class Sinh:
@@ -16,13 +17,7 @@ class Sinh:
     @staticmethod
     def forward(value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
-        values = []
-        for item in value._data:
-            try:
-                values.append(math.sinh(float(item)))
-            except OverflowError:
-                values.append(math.copysign(math.inf, item))
-        return Tensor(values, dtype=dtype, shape=value.shape)
+        return unary_forward("sinh", value, dtype=dtype, fallback=_sinh)
 
     @staticmethod
     def backward(
@@ -30,18 +25,15 @@ class Sinh:
         *inputs: Tensor,
         **kwargs: object,
     ) -> list[Tensor]:
-        from .cosh import Cosh
-
         value = inputs[0]
-        derivative = Cosh.forward(value)
-        return [Tensor(
-            [
-                upstream * weight
-                for upstream, weight in zip(grad._data, derivative._data)
-            ],
-            dtype=grad.dtype,
-            shape=value.shape,
-        )]
+        return [
+            unary_backward(
+                "sinh",
+                grad,
+                value,
+                fallback=lambda upstream, item: upstream * _cosh(item),
+            )
+        ]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
@@ -76,3 +68,17 @@ def sinh(value: TensorLike) -> TensorResult:
 
 
 __all__ = ["Sinh", "sinh"]
+
+
+def _sinh(value):
+    try:
+        return math.sinh(float(value))
+    except OverflowError:
+        return math.copysign(math.inf, value)
+
+
+def _cosh(value):
+    try:
+        return math.cosh(float(value))
+    except OverflowError:
+        return math.inf

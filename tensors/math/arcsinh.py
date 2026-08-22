@@ -8,6 +8,7 @@ from typing import Any, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
+from ._unary import unary_backward, unary_forward
 
 
 class ArcSinh:
@@ -16,10 +17,11 @@ class ArcSinh:
     @staticmethod
     def forward(value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
-        return Tensor(
-            [math.asinh(float(item)) for item in value._data],
+        return unary_forward(
+            "arcsinh",
+            value,
             dtype=dtype,
-            shape=value.shape,
+            fallback=lambda item: math.asinh(float(item)),
         )
 
     @staticmethod
@@ -29,19 +31,7 @@ class ArcSinh:
         **kwargs: object,
     ) -> list[Tensor]:
         value = inputs[0]
-        gradients = []
-        for upstream, item in zip(grad._data, value._data):
-            item = float(item)
-            magnitude = abs(item)
-            if math.isinf(magnitude):
-                derivative = 0.0
-            elif magnitude <= 1.0:
-                derivative = 1.0 / math.sqrt(1.0 + item * item)
-            else:
-                reciprocal = 1.0 / magnitude
-                derivative = reciprocal / math.sqrt(1.0 + reciprocal * reciprocal)
-            gradients.append(upstream * derivative)
-        return [Tensor(gradients, dtype=grad.dtype, shape=value.shape)]
+        return [unary_backward("arcsinh", grad, value, fallback=_gradient)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
@@ -100,3 +90,16 @@ def arcsinh(value: TensorLike) -> TensorResult:
 
 
 __all__ = ["ArcSinh", "arcsinh"]
+
+
+def _gradient(upstream, value):
+    value = float(value)
+    magnitude = abs(value)
+    if math.isinf(magnitude):
+        derivative = 0.0
+    elif magnitude <= 1.0:
+        derivative = 1.0 / math.sqrt(1.0 + value * value)
+    else:
+        reciprocal = 1.0 / magnitude
+        derivative = reciprocal / math.sqrt(1.0 + reciprocal * reciprocal)
+    return upstream * derivative

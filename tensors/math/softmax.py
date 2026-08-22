@@ -6,6 +6,7 @@ import math
 from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..backend import execute_normalization, execute_normalization_gradient
 from ..dtype import float64
 from ..tensor import Tensor
 from ._normalization import shifted_normalization
@@ -48,6 +49,9 @@ class Softmax:
         axis = _normalize_axis(a, axis)
         before, axis_size, trailing = _axis_layout(a, axis)
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
+        storage = execute_normalization("softmax", a, axis, dtype=dtype)
+        if storage is not None:
+            return Tensor(storage, dtype=dtype, shape=a.shape)
         values = [0.0] * a.size
 
         for group in range(before):
@@ -168,6 +172,9 @@ def _centered_softmax_tensor(
 
 def _softmax_vjp_tensor(grad: Tensor, value: Tensor, axis: int) -> Tensor:
     """Return a cancellation-resistant softmax Jacobian-vector product."""
+    storage = execute_normalization_gradient("softmax", grad, value, axis)
+    if storage is not None:
+        return Tensor(storage, dtype=grad.dtype, shape=value.shape)
     probabilities = Softmax.forward(value, axis=axis)
     centered = _centered_softmax_tensor(grad, value, axis)
     return Tensor(

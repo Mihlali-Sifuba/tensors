@@ -5,6 +5,11 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Any, List, Union, overload
 
+from ..backend import (
+    execute_binary,
+    execute_power_base_gradient,
+    execute_power_exponent_gradient,
+)
 from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import float64, result_dtype
 from ..tensor import Tensor
@@ -184,7 +189,23 @@ class Pow:
         **kwargs: object,
     ) -> Tensor:
         """Raise every element in ``base`` to ``exponent``."""
+        if not isinstance(exponent, (int, float, Tensor)):
+            raise TypeError(f"Unsupported exponent type: {type(exponent)}")
         dtype = _power_dtype(base, exponent)
+        output_shape = (
+            broadcast_shape(base.shape, exponent.shape)
+            if isinstance(exponent, Tensor)
+            else base.shape
+        )
+        accelerated = execute_binary(
+            "power",
+            base,
+            exponent,
+            dtype=dtype,
+            output_shape=output_shape,
+        )
+        if accelerated is not None:
+            return Tensor(accelerated, dtype=dtype, shape=output_shape)
         if isinstance(exponent, (int, float)):
             values = [_power(value, exponent) for value in base._data]
             return Tensor(values, dtype=dtype, shape=base.shape)
@@ -201,6 +222,15 @@ class Pow:
     def forward_reverse(exponent: Tensor, base: Scalar) -> Tensor:
         """Return ``base`` raised element-wise to ``exponent``."""
         dtype = result_dtype(exponent.dtype, base)
+        accelerated = execute_binary(
+            "power",
+            base,
+            exponent,
+            dtype=dtype,
+            output_shape=exponent.shape,
+        )
+        if accelerated is not None:
+            return Tensor(accelerated, dtype=dtype, shape=exponent.shape)
         base_tensor = Tensor([base] * exponent.size, dtype=dtype, shape=exponent.shape)
         return Pow.forward(base_tensor, exponent)
 
@@ -455,6 +485,13 @@ class PowerBaseGradient:
         differentiate_exponent: bool,
     ) -> Tensor:
         grad, base, exponent = _expanded_power_inputs(grad, base, exponent)
+        accelerated = execute_power_base_gradient(grad, base, exponent)
+        if accelerated is not None:
+            return Tensor(
+                accelerated,
+                dtype=grad.dtype,
+                shape=grad.shape,
+            )
         output = Pow.forward(base, exponent)
         values = [
             _base_gradient_value(
@@ -586,6 +623,17 @@ class PowerExponentGradient:
     @staticmethod
     def forward(grad: Tensor, base: Tensor, exponent: Tensor) -> Tensor:
         grad, base, exponent = _expanded_power_inputs(grad, base, exponent)
+        accelerated = execute_power_exponent_gradient(
+            grad,
+            base,
+            exponent,
+        )
+        if accelerated is not None:
+            return Tensor(
+                accelerated,
+                dtype=grad.dtype,
+                shape=grad.shape,
+            )
         output = Pow.forward(base, exponent)
         values = [
             _exponent_gradient_value(

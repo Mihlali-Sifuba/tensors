@@ -5,14 +5,31 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
-from . import autograd_cases, graph_cases, tensor_cases, training_cases
-from .runner import BenchmarkCase, print_report, run_suite, write_report
+import tensors as ts
+
+from . import (
+    autograd_cases,
+    backend_cases,
+    graph_cases,
+    tensor_cases,
+    training_cases,
+)
+from .runner import (
+    BenchmarkCase,
+    combine_backend_reports,
+    print_backend_comparison,
+    print_report,
+    run_suite,
+    write_report,
+)
 
 
 CaseFactory = Callable[[], list[BenchmarkCase]]
 SUITES: dict[str, CaseFactory] = {
     "tensor": tensor_cases.cases,
+    "backend": backend_cases.cases,
     "graph": graph_cases.cases,
     "autograd": autograd_cases.cases,
     "training": training_cases.cases,
@@ -32,6 +49,12 @@ def _cases(suite: str) -> list[BenchmarkCase]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Benchmark the public tensors API.",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=("all", "python", "numpy", "auto"),
+        default="all",
+        help="backend to benchmark (default: all available backends)",
     )
     parser.add_argument(
         "--suite",
@@ -75,6 +98,14 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = _parser()
     arguments = parser.parse_args()
+    if arguments.backend == "all":
+        backends = ts.available_backends()
+    else:
+        try:
+            with ts.use_backend(arguments.backend):
+                backends = (ts.get_backend(),)
+        except (ValueError, ts.BackendUnavailableError) as error:
+            parser.error(str(error))
     selected = _cases(arguments.suite)
     if arguments.match:
         selected = [
@@ -101,12 +132,27 @@ def main() -> int:
     if target_seconds <= 0.0:
         parser.error("--target-time must be positive")
 
-    report = run_suite(
-        selected,
-        repeats=repeats,
-        target_seconds=target_seconds,
-    )
-    print_report(report)
+    reports: dict[str, dict[str, Any]] = {}
+    for backend in backends:
+        with ts.use_backend(backend):
+            backend_cases = _cases(arguments.suite)
+            if arguments.match:
+                backend_cases = [
+                    case for case in backend_cases
+                    if arguments.match.casefold() in case.name.casefold()
+                ]
+            reports[backend] = run_suite(
+                backend_cases,
+                repeats=repeats,
+                target_seconds=target_seconds,
+            )
+
+    if len(reports) == 1:
+        report = next(iter(reports.values()))
+        print_report(report)
+    else:
+        report = combine_backend_reports(reports)
+        print_backend_comparison(report)
     if arguments.output is not None:
         write_report(report, arguments.output)
         print(f"\nWrote {arguments.output}")

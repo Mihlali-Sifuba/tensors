@@ -79,6 +79,89 @@ def cases() -> list[BenchmarkCase]:
             3.0,
         )
     )
+    benchmarks.extend([
+        _elementwise_case(
+            "tensor.subtract/10000",
+            10_000,
+            ts.subtract,
+            -0.5,
+        ),
+        _elementwise_case(
+            "tensor.divide/10000",
+            10_000,
+            ts.divide,
+            0.75,
+        ),
+        _elementwise_case(
+            "tensor.power/10000",
+            10_000,
+            ts.pow,
+            2.25,
+        ),
+    ])
+
+    unary_size = 10_000
+    unary_input = ts.full((unary_size,), 1.5)
+
+    def negate() -> ts.Tensor:
+        return -unary_input
+
+    def validate_negate() -> None:
+        result = negate()
+        assert result.shape == unary_input.shape
+        assert result[0] == -1.5
+        assert result[-1] == -1.5
+
+    benchmarks.append(
+        BenchmarkCase(
+            name="tensor.negate/10000",
+            run=negate,
+            validate=validate_negate,
+            work_items=unary_size,
+            description="elementwise negation over 10000 values",
+        )
+    )
+
+    def cast() -> ts.Tensor:
+        return unary_input.astype(ts.float32)
+
+    def validate_cast() -> None:
+        result = cast()
+        assert result.shape == unary_input.shape
+        assert result.dtype is ts.float32
+
+    benchmarks.append(
+        BenchmarkCase(
+            name="tensor.cast/10000",
+            run=cast,
+            validate=validate_cast,
+            work_items=unary_size,
+            description="float64-to-float32 conversion over 10000 values",
+        )
+    )
+
+    slice_size = 100_000
+    slice_input = ts.full((slice_size,), 1.0)
+
+    def slice_tensor() -> ts.Tensor:
+        return slice_input[::2]
+
+    def validate_slice() -> None:
+        result = slice_tensor()
+        assert isinstance(result, ts.Tensor)
+        assert result.shape == (slice_size // 2,)
+        assert result[0] == 1.0
+        assert result[-1] == 1.0
+
+    benchmarks.append(
+        BenchmarkCase(
+            name="tensor.slice/100000-step-2",
+            run=slice_tensor,
+            validate=validate_slice,
+            work_items=slice_size // 2,
+            description="strided selection of half the input values",
+        )
+    )
 
     broadcast_left = ts.full((256, 1), 1.0)
     broadcast_right = ts.full((1, 256), 2.0)

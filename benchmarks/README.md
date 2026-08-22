@@ -12,8 +12,9 @@ From the repository root:
 python -m benchmarks --quick
 ```
 
-The quick run is useful during development. The default run spends longer
-calibrating and sampling each case:
+The quick run is useful during development. By default, every case is measured
+with every available backend and the final table reports their relative speed.
+The default run spends longer calibrating and sampling each case:
 
 ```powershell
 python -m benchmarks
@@ -27,6 +28,18 @@ python -m benchmarks --match matmul
 python -m benchmarks --list
 ```
 
+Restrict a run to one backend when investigating its implementation:
+
+```powershell
+python -m benchmarks --backend python --match matmul
+python -m benchmarks --backend numpy --match matmul
+```
+
+The NumPy command requires the optional dependency. Use `--backend auto` to
+select NumPy when available and Python otherwise. `--backend all`, which is the
+default, runs Python and every installed optional backend. A comparison JSON
+report stores each backend's measurements and environment metadata separately.
+
 Save the complete measurements and environment metadata for comparison:
 
 ```powershell
@@ -37,7 +50,8 @@ python -m benchmarks --output benchmark-results.json
 
 | Suite | Cases |
 | --- | --- |
-| `tensor` | elementwise arithmetic, broadcasting, reductions, matrix multiplication, and norms |
+| `tensor` | primitive arithmetic, casting, slicing, broadcasting, reductions, matrix multiplication, and norms |
+| `backend` | unary math, normalization, losses, selection, layout, creation, and optimizer kernels |
 | `graph` | constructing a fresh `Graph` and replaying an already traced `Computation` |
 | `autograd` | `grad`, `backward`, derivative-graph construction, second derivatives, and Hessians |
 | `training` | a complete MLP step: forward pass, loss, gradient reset, backward pass, and SGD update |
@@ -60,11 +74,11 @@ it is under `timeit`. It is enabled for cases that intentionally construct graph
 objects, because those objects can contain cycles and collection is part of their
 sustained cost.
 
-Compare results only under similar conditions. Use the JSON report's Python,
-platform, processor, Git commit, and dirty-worktree metadata, and avoid running
-unrelated heavy workloads at the same time. A useful regression check compares
-several runs from the same machine rather than treating a single sample as
-definitive.
+Compare results only under similar conditions. Use the JSON report's backend,
+Python, platform, processor, Git commit, and dirty-worktree metadata, and avoid
+running unrelated heavy workloads at the same time. A useful regression check
+compares several runs from the same machine rather than treating a single sample
+as definitive.
 
 ## Adding a case
 

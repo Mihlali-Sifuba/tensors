@@ -4,11 +4,12 @@ import math
 from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..backend import execute_reduction
 from ..dtype import float64
 from ..tensor import Tensor
 from ._reduction import (
     Axis, immutable_axis, keepdims_shape, normalize_axes, reduction_groups,
-    reduction_size,
+    reduction_shape, reduction_size,
 )
 from .sum import Sum, _stable_float_sum, _sum_exact_ratios
 
@@ -31,13 +32,24 @@ class Mean:
     @staticmethod
     def forward(a: Tensor, axis: Axis = None,
                 keepdims: bool = False) -> Tensor:
-        _, output_shape, groups = reduction_groups(
-            a,
-            axis,
-            keepdims,
-            scalar_as_vector=True,
-        )
+        axes = normalize_axes(a.ndim, axis)
+        output_shape = reduction_shape(a.shape, axes, keepdims)
+        if axis is None and not keepdims:
+            output_shape = (1,)
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
+        accelerated = execute_reduction(
+            "mean",
+            a,
+            axes,
+            keepdims=keepdims,
+            dtype=dtype,
+            output_shape=output_shape,
+        )
+        if accelerated is not None:
+            return Tensor(accelerated, dtype=dtype, shape=output_shape)
+        _, output_shape, groups = reduction_groups(
+            a, axis, keepdims, scalar_as_vector=True
+        )
         values = [
             _stable_float_mean([
                 float(a._data[index]) for index in group

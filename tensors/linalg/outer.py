@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
+from ..backend import execute_outer, execute_outer_gradient
 from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
 from ..tensor import Tensor
@@ -23,6 +24,13 @@ class Outer:
             raise ValueError("outer requires two 1D vectors")
 
         dtype = result_dtype(a.dtype, b)
+        accelerated = execute_outer(a, b, dtype=dtype)
+        if accelerated is not None:
+            return Tensor(
+                accelerated,
+                dtype=dtype,
+                shape=(a.size, b.size),
+            )
         values = [left * right for left in a._data for right in b._data]
         return Tensor(values, dtype=dtype, shape=(a.size, b.size))
 
@@ -36,6 +44,13 @@ class Outer:
                 f"Gradient shape {grad.shape} does not match output shape "
                 f"{expected_shape}"
             )
+        accelerated = execute_outer_gradient(grad, left, right)
+        if accelerated is not None:
+            left_storage, right_storage = accelerated
+            return [
+                Tensor(left_storage, dtype=grad.dtype, shape=left.shape),
+                Tensor(right_storage, dtype=grad.dtype, shape=right.shape),
+            ]
 
         left_gradient = [
             _stable_product_sum(

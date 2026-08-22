@@ -6,6 +6,7 @@ import math
 from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..backend import execute_clip, execute_clip_gradient
 from ..dtype import result_dtype
 from ..tensor import Tensor
 
@@ -46,6 +47,19 @@ class Clip:
         max_value: int | float | None,
     ) -> Tensor:
         _validate_bounds(min_value, max_value)
+        dtype = value.dtype
+        if min_value is not None:
+            dtype = result_dtype(dtype, min_value)
+        if max_value is not None:
+            dtype = result_dtype(dtype, max_value)
+        accelerated = execute_clip(
+            value,
+            min_value,
+            max_value,
+            dtype=dtype,
+        )
+        if accelerated is not None:
+            return Tensor(accelerated, dtype=dtype, shape=value.shape)
         values = []
         for item in value._data:
             if min_value is not None and item < min_value:
@@ -53,11 +67,6 @@ class Clip:
             if max_value is not None and item > max_value:
                 item = max_value
             values.append(item)
-        dtype = value.dtype
-        if min_value is not None:
-            dtype = result_dtype(dtype, min_value)
-        if max_value is not None:
-            dtype = result_dtype(dtype, max_value)
         return Tensor(values, dtype=dtype, shape=value.shape)
 
     @staticmethod
@@ -86,6 +95,18 @@ class Clip:
         min_value = kwargs.get("min_value")
         max_value = kwargs.get("max_value")
         _validate_bounds(min_value, max_value)
+        accelerated = execute_clip_gradient(
+            grad,
+            value,
+            min_value,
+            max_value,
+        )
+        if accelerated is not None:
+            return [Tensor(
+                accelerated,
+                dtype=grad.dtype,
+                shape=value.shape,
+            )]
         mask = Clip._mask(value, min_value, max_value)
         return [Tensor(
             [upstream * weight for upstream, weight in zip(grad._data, mask)],

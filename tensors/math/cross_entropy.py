@@ -6,6 +6,7 @@ import math
 from typing import TYPE_CHECKING, Any, List, Literal, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
+from ..backend import execute_cross_entropy, execute_cross_entropy_gradient
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..tensor import Tensor
@@ -180,12 +181,21 @@ class CrossEntropy:
         axis = _normalize_axis(logits, axis)
         logits, targets = broadcast_tensors(logits, targets)
         _validate_distributions(targets, axis)
-        log_probabilities = LogSoftmax.forward(logits, axis=axis)
-        _, output_shape, groups = reduction_groups(
+        output_shape = logits.shape[:axis] + logits.shape[axis + 1:]
+        dtype = result_dtype(logits.dtype, targets, division=True)
+        result_shape = output_shape if reduction == "none" else (1,)
+        storage = execute_cross_entropy(
             logits,
+            targets,
             axis,
-            keepdims=False,
+            reduction=reduction,
+            dtype=dtype,
+            output_shape=result_shape,
         )
+        if storage is not None:
+            return Tensor(storage, dtype=dtype, shape=result_shape)
+        log_probabilities = LogSoftmax.forward(logits, axis=axis)
+        _, _, groups = reduction_groups(logits, axis, keepdims=False)
 
         # Zero-probability targets make no contribution. Skipping those terms
         # avoids the otherwise indeterminate floating-point product 0 * -inf.
@@ -198,7 +208,6 @@ class CrossEntropy:
             ]
             losses.append(_stable_float_sum(contributions))
 
-        dtype = result_dtype(logits.dtype, targets, division=True)
         if reduction == "none":
             return Tensor(losses, dtype=dtype, shape=output_shape)
         if reduction == "mean":
@@ -219,12 +228,9 @@ class CrossEntropy:
 
         expanded_logits, expanded_targets = broadcast_tensors(logits, targets)
         _validate_distributions(expanded_targets, axis)
-        probabilities = Softmax.forward(expanded_logits, axis=axis)
-        log_probabilities = LogSoftmax.forward(expanded_logits, axis=axis)
-        _, output_shape, groups = reduction_groups(
-            expanded_logits,
-            axis,
-            keepdims=False,
+        output_shape = (
+            expanded_logits.shape[:axis]
+            + expanded_logits.shape[axis + 1:]
         )
         expected_shape = output_shape if reduction == "none" else (1,)
         if grad.shape != expected_shape:
@@ -232,6 +238,42 @@ class CrossEntropy:
                 f"Gradient shape {grad.shape} does not match output shape "
                 f"{expected_shape}"
             )
+        accelerated = execute_cross_entropy_gradient(
+            grad,
+            expanded_logits,
+            expanded_targets,
+            axis,
+            reduction=reduction,
+        )
+        if accelerated is not None:
+            logits_storage, targets_storage = accelerated
+            expanded_shape = expanded_logits.shape
+            return [
+                sum_to_shape(
+                    Tensor(
+                        logits_storage,
+                        dtype=grad.dtype,
+                        shape=expanded_shape,
+                    ),
+                    logits.shape,
+                ),
+                sum_to_shape(
+                    Tensor(
+                        targets_storage,
+                        dtype=grad.dtype,
+                        shape=expanded_shape,
+                    ),
+                    targets.shape,
+                ),
+            ]
+
+        probabilities = Softmax.forward(expanded_logits, axis=axis)
+        log_probabilities = LogSoftmax.forward(expanded_logits, axis=axis)
+        _, _, groups = reduction_groups(
+            expanded_logits,
+            axis,
+            keepdims=False,
+        )
 
         logits_gradient = [0.0] * expanded_logits.size
         targets_gradient = [0.0] * expanded_targets.size

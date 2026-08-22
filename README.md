@@ -1,7 +1,7 @@
 # tensors
 
 <p align="center">
-  <strong>A small tensor and automatic-differentiation engine, written in pure Python.</strong>
+  <strong>A small tensor and automatic-differentiation engine with a transparent Python reference implementation.</strong>
 </p>
 
 <p align="center">
@@ -11,14 +11,14 @@
 <p align="center">
   <a href="https://pypi.org/project/ms-tensors/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/ms-tensors?color=3775A9"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
-  <img alt="Backend" src="https://img.shields.io/badge/backend-pure%20Python-7A3E9D">
+  <img alt="Backend" src="https://img.shields.io/badge/backend-Python%20%7C%20NumPy-7A3E9D">
   <img alt="Status" src="https://img.shields.io/badge/status-experimental-F59E0B">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-D22128"></a>
 </p>
 
 ---
 
-`tensors` is a compact numerical-computing project for exploring the machinery behind modern machine-learning frameworks. It includes multidimensional tensors, broadcasting, reverse-mode automatic differentiation, reusable computation graphs, higher-order derivatives, common mathematical functions, losses, and optimizers—all without hiding the implementation behind a large numerical backend.
+`tensors` is a compact numerical-computing project for exploring the machinery behind modern machine-learning frameworks. It includes multidimensional tensors, broadcasting, reverse-mode automatic differentiation, reusable computation graphs, higher-order derivatives, common mathematical functions, losses, and optimizers. A transparent pure-Python implementation defines the behaviour, while optional NumPy kernels can accelerate supported operations without changing the mathematical API.
 
 > [!NOTE]
 > This project is currently an educational, experimental implementation. It prioritizes clarity and correctness over production-scale performance.
@@ -107,6 +107,11 @@ in the public API when it makes the mathematics clearer or enables necessary
 behaviour—not when it merely adds ceremony around an expression Python already
 represents well.
 
+The numerical backend follows the same principle. Backend selection is
+application configuration, not a second expression language: tensors, graphs,
+gradients, and training loops are written identically under the Python and NumPy
+implementations.
+
 ## Highlights
 
 - Multidimensional `Tensor` values with shapes, indexing, slicing, broadcasting, and dtypes
@@ -114,6 +119,7 @@ represents well.
 - First-order gradients plus Jacobians, Hessians, and higher-order derivative graphs
 - Class-based and function-based `Graph` models with automatic parameter discovery
 - Linear algebra including matrix multiplication, dot products, outer products, transposes, and norms
+- Runtime-selectable Python and optional NumPy numerical backends
 - Neural-network functions including ReLU, sigmoid, tanh, softmax, and softplus
 - Stable cross-entropy and binary cross-entropy losses
 - SGD, Adam, and RMSprop optimizers
@@ -129,8 +135,27 @@ python -m pip install ms-tensors
 ```
 
 The distribution is named `ms-tensors`, while the Python package is imported as
-`tensors`. It supports Python 3.10 and later and has no third-party runtime
-dependencies.
+`tensors`. It supports Python 3.10 and later. The default Python backend has no
+third-party runtime dependencies.
+
+Install the optional NumPy backend into the same environment with:
+
+```powershell
+python -m pip install "ms-tensors[numpy]"
+```
+
+Both backends then remain available without reinstalling the package. Python is
+the default; select NumPy once before expressing the computation:
+
+```python
+import tensors as ts
+
+ts.set_backend("numpy")
+```
+
+Use `ts.use_backend(...)` for a scoped override or set `TENSORS_BACKEND` for a
+script. See [Numerical backends](docs/backends.md) for selection, fallback, and
+concurrency behaviour.
 
 ## Quick start
 
@@ -218,6 +243,7 @@ for _ in range(100):
 | Area | Available functionality |
 | --- | --- |
 | Core | `Tensor`, `Variable`, dtypes, indexing, slicing, casting, broadcasting |
+| Backends | `available_backends`, `get_backend`, `set_backend`, `use_backend` |
 | Creation | `zeros`, `ones`, `full`, `eye`, `arange`, `linspace` |
 | Autograd | `backward`, `grad`, `gradcheck`, `jacobian`, `hessian` |
 | Graphs | `Graph`, nested models, function decorators, parameter discovery |
@@ -265,8 +291,8 @@ python -m mypy
 ## Run the benchmarks
 
 A dependency-free benchmark suite tracks tensor operations, graph tracing and
-replay, automatic differentiation, and a complete training step. Run the short
-development suite with:
+replay, automatic differentiation, and a complete training step. It compares all
+available numerical backends by default. Run the short development suite with:
 
 ```powershell
 python -m benchmarks --quick
@@ -282,14 +308,15 @@ methodology.
 ```text
 tensors/
 ├── tensors/
-│   ├── graph/       # computation graphs and automatic differentiation
-│   ├── linalg/      # linear-algebra operations
-│   ├── math/        # reductions, activations, losses, and shape operations
-│   ├── ops/         # primitive differentiable operations
-│   ├── optim/       # SGD, Adam, and RMSprop
-│   ├── creation.py  # zeros, ones, ranges, and identity matrices
-│   ├── tensor.py    # tensor storage and core behavior
-│   └── variable.py  # differentiable tensor values
+│   ├── backend/           # backend selection and optional kernels
+│   ├── graph/             # computation graphs and automatic differentiation
+│   ├── linalg/            # linear-algebra operations
+│   ├── math/              # reductions, activations, losses, and shape operations
+│   ├── ops/               # primitive differentiable operations
+│   ├── optim/             # SGD, Adam, and RMSprop
+│   ├── creation.py        # zeros, ones, ranges, and identity matrices
+│   ├── tensor.py          # tensor storage and core behavior
+│   └── variable.py        # differentiable tensor values
 ├── examples/        # runnable demonstrations
 ├── benchmarks/      # repeatable local performance baselines
 └── tests/           # automated test suite
@@ -297,7 +324,6 @@ tensors/
 
 ## Roadmap
 
-- Introduce an optional NumPy backend
 - Expand neural-network building blocks
 
 ## Contributing

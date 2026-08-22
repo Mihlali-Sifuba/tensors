@@ -236,6 +236,13 @@ class Graph:
     def _capture(
         computations: tuple[Computation, ...],
     ) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+        if len(computations) == 1:
+            nodes = computations[0]._nodes
+            edges = tuple(
+                edge for node in nodes for edge in node._in_edges
+            )
+            return nodes, edges
+
         nodes = []
         edges = []
         visited = set()
