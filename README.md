@@ -35,9 +35,70 @@ loss = ts.mean((prediction - target) ** 2.0)
 
 Python operators represent algebra, common mathematical functions are available
 from the root `ts` namespace, and `Tensor` and `Variable` use the same
-expression vocabulary. A model is a mathematical function, so `Graph` makes
-that function reusable while parameters remain ordinary `Variable`
-attributes.
+expression vocabulary.
+
+A function can be represented in several ways: as a formula, as values, as a
+plotted graph, or as a sequence of computations. A computational graph is that
+last representation. Its nodes and edges describe how inputs flow through
+operations to produce outputs. For differentiable tensor functions, the same
+structure records the dependencies that reverse-mode automatic differentiation
+follows when applying the chain rule.
+
+`Graph` therefore represents a function; it is not an additional model-building
+procedure placed around one. Defining `forward` defines the function, and
+calling the `Graph` both evaluates that function eagerly and records its fresh
+computational representation. Parameters remain ordinary `Variable`
+attributes. There is no separate layer-registration, graph-construction, or
+compilation ceremony required before stating the computation.
+
+For example, consider the affine function
+
+$$
+f_{\theta}(x) = xW + b, \qquad \theta = \{W, b\}.
+$$
+
+Use a `Graph` subclass when the function has explicit state or child graphs:
+
+```python
+class Linear(ts.Graph):
+    def __init__(self) -> None:
+        super().__init__()
+        self.weight = ts.Variable([[0.5]], name="weight")
+        self.bias = ts.Variable([0.0], name="bias")
+
+    def forward(self, inputs):
+        return inputs @ self.weight + self.bias
+```
+
+For a small function, the decorator form represents the same idea directly:
+
+```python
+weight = ts.Variable([[0.5]], name="weight")
+bias = ts.Variable([0.0], name="bias")
+
+
+@ts.Graph
+def linear(inputs):
+    return inputs @ weight + bias
+```
+
+Both forms produce callable `Graph` objects, discover their trainable
+parameters, and record the computation expressed by the function body.
+
+Training is also an algorithm, so the training loop remains explicit code:
+
+```python
+for _ in range(steps):
+    prediction = model(inputs)
+    loss = ts.mean((prediction - target) ** 2.0)
+
+    optimizer.zero_grad()
+    ts.backward(loss)
+    optimizer.step()
+```
+
+Those visible steps are part of the idea being expressed: evaluate the
+function, measure the loss, differentiate it, and update the parameters.
 
 Organised subpackages are available for discovery and advanced use, but ordinary
 mathematical code should not require users to import a separate hierarchy of
