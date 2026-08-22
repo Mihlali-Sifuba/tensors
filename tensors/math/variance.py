@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 from ._reduction import Axis, immutable_axis, normalize_axes, reduction_groups
@@ -114,11 +115,27 @@ class Variance:
         return [expanded * (normalized - center) * factor]
 
 
+@overload
 def variance(
-    value: Any,
+    value: TensorValue,
     axis: Axis = None,
     keepdims: bool = False,
-) -> Any:
+) -> TensorValue: ...
+
+
+@overload
+def variance(
+    value: TensorData,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> Tensor: ...
+
+
+def variance(
+    value: TensorLike,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorResult:
     """Compute population variance over one, several, or all axes."""
     from ..variable import Variable
 

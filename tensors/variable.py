@@ -15,6 +15,12 @@ Differentiation starts from a chosen output::
     print(w.grad)   # Tensor([1.0, 2.0])
 """
 
+from __future__ import annotations
+
+from types import NotImplementedType
+from typing import Any
+
+from ._typing import TensorData, TensorIndex, TensorLike, TensorOperand, VariableData
 from .dtype import DataType
 from .tensor import Tensor
 from .ops import Ops
@@ -31,7 +37,13 @@ class Variable:
         requires_grad: Whether gradients should be accumulated for this leaf.
     """
 
-    def __init__(self, data, name=None, requires_grad=True, _register=True):
+    def __init__(
+        self,
+        data: VariableData,
+        name: str | None = None,
+        requires_grad: bool = True,
+        _register: bool = True,
+    ) -> None:
         self._data_generation = 0
         self.requires_grad = requires_grad
         self.data = data.data if isinstance(data, Variable) else data
@@ -76,12 +88,12 @@ class Variable:
     # -- properties mirroring Tensor -----------------------------------
 
     @property
-    def requires_grad(self):
+    def requires_grad(self) -> bool:
         """Whether reverse-mode derivatives should flow into this variable."""
         return self._requires_grad
 
     @requires_grad.setter
-    def requires_grad(self, value):
+    def requires_grad(self, value: bool) -> None:
         if not isinstance(value, bool):
             raise TypeError("requires_grad must be a bool")
         if (
@@ -93,12 +105,12 @@ class Variable:
         self._requires_grad = value
 
     @property
-    def data(self):
+    def data(self) -> Tensor:
         """Tensor currently holding this variable's eager value."""
         return self._data
 
     @data.setter
-    def data(self, value):
+    def data(self, value: TensorData) -> None:
         """Replace the eager value and invalidate computations using the old one."""
         tensor = value if isinstance(value, Tensor) else Tensor(value)
         if getattr(self, "requires_grad", False) and tensor.dtype.typecode not in {
@@ -120,24 +132,24 @@ class Variable:
         )
 
     @property
-    def shape(self):
+    def shape(self) -> tuple[int, ...]:
         return self.data.shape
 
     @property
-    def ndim(self):
+    def ndim(self) -> int:
         return self.data.ndim
 
     @property
-    def dtype(self):
+    def dtype(self) -> DataType:
         return self.data.dtype
 
     @property
-    def size(self):
+    def size(self) -> int:
         return self.data.size
 
     # -- representation ------------------------------------------------
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         grad_str = f", grad={self.grad}" if self.grad is not None else ""
         return f"Variable({self.data}{grad_str})"
 
@@ -161,7 +173,7 @@ class Variable:
 
     # -- operators (build graph implicitly) ----------------------------
 
-    def __add__(self, other):
+    def __add__(self, other: TensorOperand) -> Variable:
         if isinstance(other, Tensor):
             other = Variable(other, requires_grad=False)
         if isinstance(other, Variable):
@@ -173,10 +185,10 @@ class Variable:
             _scalar_operand=True, scalar=other
         )
 
-    def __radd__(self, other):
+    def __radd__(self, other: int | float | Tensor) -> Variable:
         return self + other
 
-    def __sub__(self, other):
+    def __sub__(self, other: TensorOperand) -> Variable:
         if isinstance(other, Tensor):
             other = Variable(other, requires_grad=False)
         if isinstance(other, Variable):
@@ -188,10 +200,10 @@ class Variable:
             _scalar_operand=True, scalar=other
         )
 
-    def __rsub__(self, other):
+    def __rsub__(self, other: int | float | Tensor) -> Variable:
         return (-self) + other
 
-    def __mul__(self, other):
+    def __mul__(self, other: TensorOperand) -> Variable:
         if isinstance(other, Tensor):
             other = Variable(other, requires_grad=False)
         if isinstance(other, Variable):
@@ -203,10 +215,10 @@ class Variable:
             _scalar_operand=True, scalar=other
         )
 
-    def __rmul__(self, other):
+    def __rmul__(self, other: int | float | Tensor) -> Variable:
         return self * other
 
-    def __truediv__(self, other):
+    def __truediv__(self, other: TensorOperand) -> Variable:
         if isinstance(other, Tensor):
             other = Variable(other, requires_grad=False)
         if isinstance(other, Variable):
@@ -218,7 +230,7 @@ class Variable:
             _scalar_operand=True, scalar=other
         )
 
-    def __rtruediv__(self, other):
+    def __rtruediv__(self, other: int | float | Tensor) -> Variable:
         if isinstance(other, Tensor):
             numerator = Variable(other, requires_grad=False)
             return numerator / self
@@ -232,7 +244,7 @@ class Variable:
             reverse=True,
         )
 
-    def __pow__(self, other):
+    def __pow__(self, other: TensorOperand) -> Variable:
         if isinstance(other, Variable):
             return self._from_operation(
                 Pow.forward(self.data, other.data),
@@ -257,7 +269,10 @@ class Variable:
             _scalar_operand=True, scalar=other
         )
 
-    def __rpow__(self, other):
+    def __rpow__(
+        self,
+        other: int | float | Tensor,
+    ) -> Variable | NotImplementedType:
         if isinstance(other, Tensor):
             base = Variable(other, requires_grad=False)
             return base ** self
@@ -273,22 +288,22 @@ class Variable:
             reverse=True,
         )
 
-    def __neg__(self):
+    def __neg__(self) -> Variable:
         return self._from_operation(Ops.neg(self.data), "neg", Neg, [self])
 
-    def __abs__(self):
+    def __abs__(self) -> Variable:
         from .math import abs
         return abs(self)
 
-    def __matmul__(self, other):
+    def __matmul__(self, other: TensorLike) -> Variable:
         from .linalg import matmul
         return matmul(self, other)
 
-    def __rmatmul__(self, other):
+    def __rmatmul__(self, other: TensorLike) -> Variable:
         from .linalg import matmul
         return matmul(other, self)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: TensorIndex) -> Variable:
         return self._from_operation(
             Slice.forward(self.data, key), "slice", Slice, [self], key=key
         )

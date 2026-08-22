@@ -1,8 +1,9 @@
 """Standard-deviation public API."""
 
 import math as _math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 from ._reduction import Axis, immutable_axis, normalize_axes, reduction_groups
@@ -133,7 +134,27 @@ class Std:
         return [expanded * (normalized - center) / (count * deviation)]
 
 
-def std(value: Any, axis: Axis = None, keepdims: bool = False) -> Any:
+@overload
+def std(
+    value: TensorValue,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorValue: ...
+
+
+@overload
+def std(
+    value: TensorData,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> Tensor: ...
+
+
+def std(
+    value: TensorLike,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorResult:
     """Compute population standard deviation over selected axes."""
     from ..variable import Variable
 

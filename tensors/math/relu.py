@@ -1,8 +1,9 @@
 """Elementwise rectified linear unit and its differentiation rule."""
 
 import math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..tensor import Tensor
 
 
@@ -45,7 +46,15 @@ class ReLU:
         return [grad * Variable(mask, requires_grad=False)]
 
 
-def relu(value: Any) -> Any:
+@overload
+def relu(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def relu(value: TensorData) -> Tensor: ...
+
+
+def relu(value: TensorLike) -> TensorResult:
     """Return the elementwise rectified linear unit as a Tensor or Variable."""
     from ..variable import Variable
 

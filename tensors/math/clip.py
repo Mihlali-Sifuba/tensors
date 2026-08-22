@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import result_dtype
 from ..tensor import Tensor
 
@@ -115,11 +116,27 @@ class Clip:
         return [masked_value_graph(grad, mask) + zero_like_graph(value)]
 
 
+@overload
 def clip(
-    value: Any,
+    value: TensorValue,
     min_value: int | float | None = None,
     max_value: int | float | None = None,
-) -> Any:
+) -> TensorValue: ...
+
+
+@overload
+def clip(
+    value: TensorData,
+    min_value: int | float | None = None,
+    max_value: int | float | None = None,
+) -> Tensor: ...
+
+
+def clip(
+    value: TensorLike,
+    min_value: int | float | None = None,
+    max_value: int | float | None = None,
+) -> TensorResult:
     """Clip each value to the inclusive interval defined by the bounds."""
     from ..variable import Variable
 

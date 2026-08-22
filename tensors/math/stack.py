@@ -1,11 +1,17 @@
 """Differentiable stack operation."""
 
+from __future__ import annotations
+
 from array import array
 from collections.abc import Sequence
-from typing import Any, List
+from typing import TYPE_CHECKING, Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..tensor import Tensor
+
+if TYPE_CHECKING:
+    from ..variable import Variable
 
 
 class Stack:
@@ -96,7 +102,19 @@ class Stack:
         return gradients
 
 
-def stack(tensors: Sequence[Any], axis: int = 0) -> Any:
+@overload
+def stack(tensors: Sequence[Variable], axis: int = 0) -> Variable: ...
+
+
+@overload
+def stack(tensors: Sequence[TensorData], axis: int = 0) -> Tensor: ...
+
+
+@overload
+def stack(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult: ...
+
+
+def stack(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult:
     """Stack a sequence of Tensors or Variables along a new axis."""
     from ..variable import Variable
 

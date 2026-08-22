@@ -1,7 +1,8 @@
 """Differentiable tensor transpose."""
 
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..tensor import Tensor
 from .dot import _transpose_impl
 
@@ -32,10 +33,24 @@ class Transpose:
         return [transpose(grad, axes=inverse)]
 
 
+@overload
 def transpose(
-    value: Any,
+    value: TensorValue,
     axes: tuple[int, ...] | list[int] | None = None,
-) -> Any:
+) -> TensorValue: ...
+
+
+@overload
+def transpose(
+    value: TensorData,
+    axes: tuple[int, ...] | list[int] | None = None,
+) -> Tensor: ...
+
+
+def transpose(
+    value: TensorLike,
+    axes: tuple[int, ...] | list[int] | None = None,
+) -> TensorResult:
     """Permute axes, or transpose the final two matrix axes by default."""
     from ..variable import Variable
 

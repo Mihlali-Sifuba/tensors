@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -50,7 +51,15 @@ class Cosh:
         return [grad * sinh(inputs[0])]
 
 
-def cosh(value: Any) -> Any:
+@overload
+def cosh(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def cosh(value: TensorData) -> Tensor: ...
+
+
+def cosh(value: TensorLike) -> TensorResult:
     """Return the elementwise hyperbolic cosine."""
     from ..variable import Variable
 

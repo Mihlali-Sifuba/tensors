@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from array import array
 from collections.abc import Sequence
-from typing import Any, List
+from typing import TYPE_CHECKING, Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..tensor import Tensor
+
+if TYPE_CHECKING:
+    from ..variable import Variable
 
 
 class Concat:
@@ -140,7 +144,19 @@ class Concat:
         return gradients
 
 
-def concat(tensors: Sequence[Any], axis: int = 0) -> Any:
+@overload
+def concat(tensors: Sequence[Variable], axis: int = 0) -> Variable: ...
+
+
+@overload
+def concat(tensors: Sequence[TensorData], axis: int = 0) -> Tensor: ...
+
+
+@overload
+def concat(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult: ...
+
+
+def concat(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult:
     """Concatenate Tensors or Variables along an existing axis."""
     from ..variable import Variable
 

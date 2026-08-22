@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List
+from typing import TYPE_CHECKING, Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..tensor import Tensor
@@ -14,6 +15,9 @@ from .cross_entropy import Reduction, _validate_reduction
 from .mean import _stable_float_mean
 from .sigmoid import _sigmoid
 from .sum import _stable_float_sum
+
+if TYPE_CHECKING:
+    from ..variable import Variable
 
 
 def _validate_targets(target: Tensor) -> None:
@@ -252,13 +256,43 @@ class BinaryCrossEntropy:
         ]
 
 
+@overload
 def binary_cross_entropy(
-    prediction: Any,
-    target: Any,
+    prediction: Variable,
+    target: TensorLike,
     *,
     from_logits: bool = False,
     reduction: Reduction = "mean",
-) -> Any:
+) -> Variable: ...
+
+
+@overload
+def binary_cross_entropy(
+    prediction: TensorLike,
+    target: Variable,
+    *,
+    from_logits: bool = False,
+    reduction: Reduction = "mean",
+) -> Variable: ...
+
+
+@overload
+def binary_cross_entropy(
+    prediction: TensorData,
+    target: TensorData,
+    *,
+    from_logits: bool = False,
+    reduction: Reduction = "mean",
+) -> Tensor: ...
+
+
+def binary_cross_entropy(
+    prediction: TensorLike,
+    target: TensorLike,
+    *,
+    from_logits: bool = False,
+    reduction: Reduction = "mean",
+) -> TensorResult:
     """Compute binary cross-entropy with optional stable logits input."""
     from ..variable import Variable
 

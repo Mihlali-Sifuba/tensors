@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List, Union
+from typing import TYPE_CHECKING, Any, List, Union, overload
 
+from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import float64, result_dtype
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_shape, broadcast_to, broadcast_tensors
+
+if TYPE_CHECKING:
+    from ..variable import Variable
 from ._utils import sum_to_shape, sum_to_shape_graph
 
 
@@ -767,7 +771,19 @@ def _power_exponent_vjp(
     )
 
 
-def pow(base: Any, exponent: Any) -> Any:
+@overload
+def pow(base: Variable, exponent: TensorLike) -> Variable: ...
+
+
+@overload
+def pow(base: TensorLike, exponent: Variable) -> Variable: ...
+
+
+@overload
+def pow(base: TensorData, exponent: TensorData) -> Tensor: ...
+
+
+def pow(base: TensorLike, exponent: TensorLike) -> TensorResult:
     """Return the element-wise power of two Tensors, Variables, or scalars."""
     return base ** exponent
 

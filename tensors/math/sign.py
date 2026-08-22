@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..tensor import Tensor
 
 
@@ -58,7 +59,15 @@ class Sign:
         return [zero_like_graph(value)]
 
 
-def sign(value: Any) -> Any:
+@overload
+def sign(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def sign(value: TensorData) -> Tensor: ...
+
+
+def sign(value: TensorLike) -> TensorResult:
     """Return -1, 0, or 1 according to each element's sign."""
     from ..variable import Variable
 

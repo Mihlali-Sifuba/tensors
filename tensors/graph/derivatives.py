@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, overload
 
 from ..tensor import Tensor
 from ..variable import Variable
@@ -130,6 +130,26 @@ def _assemble_rows(
     return Tensor(values, dtype=rows[0].dtype, shape=shape)
 
 
+@overload
+def jacobian(
+    output: Variable,
+    inputs: Variable,
+    *,
+    create_graph: bool = False,
+) -> Tensor | Variable:
+    ...
+
+
+@overload
+def jacobian(
+    output: Variable,
+    inputs: Iterable[Variable],
+    *,
+    create_graph: bool = False,
+) -> tuple[Tensor | Variable, ...]:
+    ...
+
+
 def jacobian(
     output: Variable,
     inputs: Variable | Iterable[Variable],
@@ -182,6 +202,26 @@ def jacobian(
         for input_variable, input_rows in zip(requested, rows)
     )
     return results[0] if single_input else results
+
+
+@overload
+def hessian(
+    output: Variable,
+    inputs: Variable,
+    *,
+    create_graph: bool = False,
+) -> Tensor | Variable:
+    ...
+
+
+@overload
+def hessian(
+    output: Variable,
+    inputs: Iterable[Variable],
+    *,
+    create_graph: bool = False,
+) -> tuple[tuple[Tensor | Variable, ...], ...]:
+    ...
 
 
 def hessian(

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_shape, broadcast_to
+
+if TYPE_CHECKING:
+    from ..variable import Variable
 
 
 def _tensor(value: Any, *, dtype=None) -> Tensor:
@@ -124,7 +128,35 @@ class Where:
         ]
 
 
-def where(condition: Any, left: Any, right: Any) -> Any:
+@overload
+def where(
+    condition: TensorLike,
+    left: Variable,
+    right: TensorLike,
+) -> Variable: ...
+
+
+@overload
+def where(
+    condition: TensorLike,
+    left: TensorLike,
+    right: Variable,
+) -> Variable: ...
+
+
+@overload
+def where(
+    condition: TensorLike,
+    left: TensorData,
+    right: TensorData,
+) -> Tensor: ...
+
+
+def where(
+    condition: TensorLike,
+    left: TensorLike,
+    right: TensorLike,
+) -> TensorResult:
     """Select elements from ``left`` or ``right`` using a nonzero mask."""
     from ..variable import Variable
 

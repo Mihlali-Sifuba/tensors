@@ -1,8 +1,9 @@
 """Differentiable Euclidean norm."""
 
 import math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 from ..math._reduction import Axis, immutable_axis, keepdims_shape, reduction_groups
@@ -105,7 +106,27 @@ class Norm:
         ]
 
 
-def norm(value: Any, axis: Axis = None, keepdims: bool = False) -> Any:
+@overload
+def norm(
+    value: TensorValue,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorValue: ...
+
+
+@overload
+def norm(
+    value: TensorData,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> Tensor: ...
+
+
+def norm(
+    value: TensorLike,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorResult:
     """Compute Euclidean norms over one, several, or all axes."""
     from ..variable import Variable
 

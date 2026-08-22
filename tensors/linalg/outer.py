@@ -1,10 +1,16 @@
 """Differentiable outer product of two vectors."""
 
-from typing import Any, List
+from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, List, overload
+
+from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
 from ..tensor import Tensor
+
+if TYPE_CHECKING:
+    from ..variable import Variable
 
 
 class Outer:
@@ -67,7 +73,19 @@ class Outer:
         return [grad @ right, left @ grad]
 
 
-def outer(a: Any, b: Any) -> Any:
+@overload
+def outer(a: Variable, b: TensorLike) -> Variable: ...
+
+
+@overload
+def outer(a: TensorLike, b: Variable) -> Variable: ...
+
+
+@overload
+def outer(a: TensorData, b: TensorData) -> Tensor: ...
+
+
+def outer(a: TensorLike, b: TensorLike) -> TensorResult:
     """Return the outer product of two vectors as a Tensor or Variable."""
     from ..variable import Variable
 

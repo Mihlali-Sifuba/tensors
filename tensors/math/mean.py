@@ -1,8 +1,9 @@
 """Mean and its differentiation rule."""
 
 import math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 from ._reduction import (
@@ -81,8 +82,27 @@ class Mean:
         return [(expanded * ones) / count]
 
 
-def mean(value: Any, axis: Axis = None,
-         keepdims: bool = False) -> Any:
+@overload
+def mean(
+    value: TensorValue,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorValue: ...
+
+
+@overload
+def mean(
+    value: TensorData,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> Tensor: ...
+
+
+def mean(
+    value: TensorLike,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> TensorResult:
     """Compute the mean over one, several, or all axes."""
     from ..variable import Variable
 

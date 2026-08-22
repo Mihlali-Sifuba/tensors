@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -48,7 +49,15 @@ class ArcCos:
         return [-(grad / sqrt(1.0 - value ** 2.0))]
 
 
-def arccos(value: Any) -> Any:
+@overload
+def arccos(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def arccos(value: TensorData) -> Tensor: ...
+
+
+def arccos(value: TensorLike) -> TensorResult:
     """Return the elementwise inverse cosine in radians."""
     from ..variable import Variable
 

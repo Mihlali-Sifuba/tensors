@@ -1,8 +1,9 @@
 """Elementwise natural logarithm and its differentiation rule."""
 
 import math as _math
-from typing import Any, List
+from typing import Any, List, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -32,7 +33,15 @@ class Log:
         return [grad / inputs[0]]
 
 
-def log(value: Any) -> Any:
+@overload
+def log(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def log(value: TensorData) -> Tensor: ...
+
+
+def log(value: TensorLike) -> TensorResult:
     """Return the elementwise natural logarithm as a Tensor or differentiable Variable."""
     from ..variable import Variable
 

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
+from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
 
@@ -58,7 +59,15 @@ class ArcTan:
         return [grad * derivative]
 
 
-def arctan(value: Any) -> Any:
+@overload
+def arctan(value: TensorValue) -> TensorValue: ...
+
+
+@overload
+def arctan(value: TensorData) -> Tensor: ...
+
+
+def arctan(value: TensorLike) -> TensorResult:
     """Return the elementwise inverse tangent in radians."""
     from ..variable import Variable
 
