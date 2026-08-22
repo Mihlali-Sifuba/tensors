@@ -4,9 +4,16 @@ import math as _math
 from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..backend import execute_reduction, execute_reduction_gradient
 from ..dtype import float64
 from ..tensor import Tensor
-from ._reduction import Axis, immutable_axis, normalize_axes, reduction_groups
+from ._reduction import (
+    Axis,
+    immutable_axis,
+    normalize_axes,
+    reduction_groups,
+    reduction_shape,
+)
 from .mean import _stable_float_mean
 
 
@@ -48,6 +55,21 @@ class Std:
         axis: Axis = None,
         keepdims: bool = False,
     ) -> Tensor:
+        axes = normalize_axes(value.ndim, axis)
+        output_shape = reduction_shape(value.shape, axes, keepdims)
+        if axis is None and not keepdims:
+            output_shape = (1,)
+        dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
+        accelerated = execute_reduction(
+            "std",
+            value,
+            axes,
+            keepdims=keepdims,
+            dtype=dtype,
+            output_shape=output_shape,
+        )
+        if accelerated is not None:
+            return Tensor(accelerated, dtype=dtype, shape=output_shape)
         _, output_shape, groups = reduction_groups(
             value, axis, keepdims, scalar_as_vector=True
         )
@@ -58,7 +80,6 @@ class Std:
                 continue
             scale, _, normalized_deviation = _scaled_deviations(value, group)
             values.append(scale * normalized_deviation)
-        dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         return Tensor(values, dtype=dtype, shape=output_shape)
 
     @staticmethod
@@ -67,13 +88,26 @@ class Std:
         value = inputs[0]
         axis = kwargs.get("axis")
         keepdims = kwargs.get("keepdims", False)
-        _, output_shape, groups = reduction_groups(
-            value, axis, keepdims, scalar_as_vector=True
-        )
+        axes = normalize_axes(value.ndim, axis)
+        output_shape = reduction_shape(value.shape, axes, keepdims)
+        if axis is None and not keepdims:
+            output_shape = (1,)
         if grad.shape != output_shape:
             raise ValueError(
                 f"Gradient shape {grad.shape} does not match output shape {output_shape}"
             )
+        accelerated = execute_reduction_gradient(
+            "std",
+            grad,
+            value,
+            axes,
+            keepdims=keepdims,
+        )
+        if accelerated is not None:
+            return [Tensor(accelerated, dtype=grad.dtype, shape=value.shape)]
+        _, _, groups = reduction_groups(
+            value, axis, keepdims, scalar_as_vector=True
+        )
         result = [0.0] * value.size
         for output_index, group in enumerate(groups):
             if not group:

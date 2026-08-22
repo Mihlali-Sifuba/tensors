@@ -8,6 +8,7 @@ from typing import Any, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..tensor import Tensor
+from ._unary import unary_backward, unary_forward
 
 
 class ArcTanh:
@@ -16,16 +17,7 @@ class ArcTanh:
     @staticmethod
     def forward(value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
-        values = []
-        for item in value._data:
-            item = float(item)
-            if not math.isnan(item) and not -1.0 < item < 1.0:
-                raise ValueError(
-                    "arctanh is only defined for values strictly between "
-                    "-1 and 1"
-                )
-            values.append(math.atanh(item))
-        return Tensor(values, dtype=dtype, shape=value.shape)
+        return unary_forward("arctanh", value, dtype=dtype, fallback=_arctanh)
 
     @staticmethod
     def backward(
@@ -34,11 +26,16 @@ class ArcTanh:
         **kwargs: object,
     ) -> list[Tensor]:
         value = inputs[0]
-        gradients = [
-            upstream / (1.0 - float(item) * float(item))
-            for upstream, item in zip(grad._data, value._data)
+        return [
+            unary_backward(
+                "arctanh",
+                grad,
+                value,
+                fallback=lambda upstream, item: (
+                    upstream / (1.0 - float(item) * float(item))
+                ),
+            )
         ]
-        return [Tensor(gradients, dtype=grad.dtype, shape=value.shape)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
@@ -72,3 +69,12 @@ def arctanh(value: TensorLike) -> TensorResult:
 
 
 __all__ = ["ArcTanh", "arctanh"]
+
+
+def _arctanh(value):
+    value = float(value)
+    if not math.isnan(value) and not -1.0 < value < 1.0:
+        raise ValueError(
+            "arctanh is only defined for values strictly between -1 and 1"
+        )
+    return math.atanh(value)

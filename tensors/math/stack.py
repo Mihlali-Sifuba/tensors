@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
+from ..backend import execute_stack
 from ..dtype import result_dtype
 from ..tensor import Tensor
 
@@ -62,6 +63,18 @@ class Stack:
         dtype = converted[0].dtype
         for tensor in converted[1:]:
             dtype = result_dtype(dtype, tensor)
+        accelerated = execute_stack(
+            converted,
+            axis,
+            dtype=dtype,
+            output_shape=tuple(out_shape),
+        )
+        if accelerated is not None:
+            return Tensor(
+                accelerated,
+                dtype=dtype,
+                shape=tuple(out_shape),
+            )
         result = array(dtype.typecode, [])
         for g in range(before):
             base = g * axis_stride

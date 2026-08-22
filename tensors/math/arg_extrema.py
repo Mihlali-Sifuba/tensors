@@ -6,10 +6,11 @@ import math
 from typing import Any
 
 from .._typing import TensorLike
+from ..backend import execute_arg_extremum
 from ..dtype import int64
 from ..tensor import Tensor
 from ..utils.shape import index_to_coordinates
-from ._reduction import reduction_groups
+from ._reduction import normalize_axes, reduction_groups, reduction_shape
 
 
 def _axis(axis: int | None, ndim: int) -> int | None:
@@ -36,6 +37,20 @@ class _ArgExtremum:
         keepdims: bool = False,
     ) -> Tensor:
         axis = _axis(axis, value.ndim)
+        axes = normalize_axes(value.ndim, axis)
+        output_shape = reduction_shape(value.shape, axes, keepdims)
+        if axis is None and not keepdims:
+            output_shape = (1,)
+        operation = "argmax" if cls.select_maximum else "argmin"
+        accelerated = execute_arg_extremum(
+            operation,
+            value,
+            axis,
+            keepdims=keepdims,
+            output_shape=output_shape,
+        )
+        if accelerated is not None:
+            return Tensor(accelerated, dtype=int64, shape=output_shape)
         _, output_shape, groups = reduction_groups(
             value,
             axis,

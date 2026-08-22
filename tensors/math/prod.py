@@ -5,8 +5,15 @@ from __future__ import annotations
 from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..backend import execute_reduction, execute_reduction_gradient
 from ..tensor import Tensor
-from ._reduction import Axis, immutable_axis, reduction_groups
+from ._reduction import (
+    Axis,
+    immutable_axis,
+    normalize_axes,
+    reduction_groups,
+    reduction_shape,
+)
 
 
 def _product(values: list[int | float]) -> int | float:
@@ -25,6 +32,24 @@ class Prod:
         axis: Axis = None,
         keepdims: bool = False,
     ) -> Tensor:
+        axes = normalize_axes(value.ndim, axis)
+        output_shape = reduction_shape(value.shape, axes, keepdims)
+        if axis is None and not keepdims:
+            output_shape = (1,)
+        accelerated = execute_reduction(
+            "prod",
+            value,
+            axes,
+            keepdims=keepdims,
+            dtype=value.dtype,
+            output_shape=output_shape,
+        )
+        if accelerated is not None:
+            return Tensor(
+                accelerated,
+                dtype=value.dtype,
+                shape=output_shape,
+            )
         _, output_shape, groups = reduction_groups(
             value,
             axis,
@@ -46,17 +71,30 @@ class Prod:
         value = inputs[0]
         axis = kwargs.get("axis")
         keepdims = kwargs.get("keepdims", False)
-        _, output_shape, groups = reduction_groups(
-            value,
-            axis,
-            keepdims,
-            scalar_as_vector=True,
-        )
+        axes = normalize_axes(value.ndim, axis)
+        output_shape = reduction_shape(value.shape, axes, keepdims)
+        if axis is None and not keepdims:
+            output_shape = (1,)
         if grad.shape != output_shape:
             raise ValueError(
                 f"Gradient shape {grad.shape} does not match output shape "
                 f"{output_shape}"
             )
+        accelerated = execute_reduction_gradient(
+            "prod",
+            grad,
+            value,
+            axes,
+            keepdims=keepdims,
+        )
+        if accelerated is not None:
+            return [Tensor(accelerated, dtype=grad.dtype, shape=value.shape)]
+        _, _, groups = reduction_groups(
+            value,
+            axis,
+            keepdims,
+            scalar_as_vector=True,
+        )
         gradients = [0.0] * value.size
         for output_index, group in enumerate(groups):
             for input_index in group:

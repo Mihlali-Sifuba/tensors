@@ -62,22 +62,29 @@ backend raises an error rather than silently changing implementations.
 
 ## Kernel coverage
 
-The NumPy backend provides kernels for every primitive operation in `tensors.ops`:
+The NumPy backend accelerates the numerical surface without introducing a
+second public API. Kernel families include:
 
-- broadcasting addition, subtraction, multiplication, and division;
-- elementwise power, including scalar and reverse forms;
-- negation;
-- tensor indexing and slicing;
-- differentiable slice scatter;
-- dtype casting;
-- range-safe division-denominator gradients; and
-- power gradients with respect to bases and exponents.
+- broadcasting arithmetic, power, negation, casting, slicing, and slice scatter;
+- unary mathematical functions and their first-order gradients;
+- sum, mean, variance, standard deviation, product, norm, extrema, and
+  arg-extrema reductions;
+- softmax, log-softmax, log-sum-exp, cross-entropy, and binary cross-entropy;
+- comparisons, `where`, clipping, and elementwise minimum and maximum;
+- floating-point `dot`, `matmul`, outer products, transposes, concatenation,
+  and stacking;
+- constant, range, evenly spaced, and identity-like tensor construction; and
+- fused SGD, Adam, and RMSprop parameter updates.
 
-It also accelerates floating-point `dot` and `matmul`, including vector, matrix,
-batched, and broadcasted matrix products, together with `sum`, `mean`,
-`variance`, and Euclidean `norm` reductions. Integer matrix products and
-floating-point edge cases that require the reference implementation's stable
-summation fall back to the Python kernel.
+Unary, normalization, loss, outer-product, extrema, clipping, and selection
+families include dedicated first-order kernels. Other gradient rules compose
+already-dispatched primitives or structural slices. Broadcast-gradient
+reductions are fused so an elementwise derivative can multiply and reduce
+without constructing another Python-level broadcast traversal.
+
+Integer matrix products and floating-point edge cases that require the
+reference implementation's stable summation, scaled moments, exact
+cancellation, or boundary rules fall back to the Python kernel.
 
 Backend selection expresses a preference rather than forcing every operation
 through NumPy. Internal dispatch keeps very small elementwise operations and
