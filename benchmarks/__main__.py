@@ -12,7 +12,14 @@ import tensors as ts
 from . import (
     autograd_cases,
     backend_cases,
+    chain_cases,
     graph_cases,
+    loss_cases,
+    optimizer_cases,
+    provider_cases,
+    scaling_cases,
+    startup_cases,
+    storage_cases,
     tensor_cases,
     training_cases,
 )
@@ -33,10 +40,27 @@ SUITES: dict[str, CaseFactory] = {
     "graph": graph_cases.cases,
     "autograd": autograd_cases.cases,
     "training": training_cases.cases,
+    "provider": provider_cases.cases,
+    "scaling": scaling_cases.cases,
+    "storage": storage_cases.cases,
+    "chain": chain_cases.cases,
+    "loss": loss_cases.cases,
+    "optimizer": optimizer_cases.cases,
+    "startup": startup_cases.cases,
 }
+
+CORE_FACTORIES: tuple[CaseFactory, ...] = (
+    tensor_cases.cases,
+    backend_cases.cases,
+    graph_cases.core_cases,
+    autograd_cases.core_cases,
+    training_cases.core_cases,
+)
 
 
 def _cases(suite: str) -> list[BenchmarkCase]:
+    if suite == "core":
+        return [case for factory in CORE_FACTORIES for case in factory()]
     if suite == "all":
         return [
             case
@@ -52,15 +76,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--backend",
-        choices=("all", "python", "numpy", "cuda", "auto"),
+        choices=("all", "accelerated", "python", "numpy", "cuda", "auto"),
         default="all",
         help="backend to benchmark (default: all available backends)",
     )
     parser.add_argument(
         "--suite",
-        choices=("all", *SUITES),
-        default="all",
-        help="benchmark group to run (default: all)",
+        choices=("core", "all", *SUITES),
+        default="core",
+        help="benchmark group to run (default: core)",
     )
     parser.add_argument(
         "--match",
@@ -100,24 +124,36 @@ def main() -> int:
     arguments = parser.parse_args()
     if arguments.backend == "all":
         backends = ts.available_backends()
+    elif arguments.backend == "accelerated":
+        backends = tuple(
+            backend
+            for backend in ts.available_backends()
+            if backend != "python"
+        )
+        if not backends:
+            parser.error("no accelerated backend is available")
     else:
         try:
             with ts.use_backend(arguments.backend):
                 backends = (ts.get_backend(),)
         except (ValueError, ts.BackendUnavailableError) as error:
             parser.error(str(error))
-    selected = _cases(arguments.suite)
-    if arguments.match:
-        selected = [
-            case for case in selected
-            if arguments.match.casefold() in case.name.casefold()
-        ]
-    if not selected:
-        parser.error("no benchmark cases matched")
-
     if arguments.list:
-        for case in selected:
-            print(case.name)
+        listed: dict[str, list[str]] = {}
+        for backend in backends:
+            with ts.use_backend(backend):
+                for case in _cases(arguments.suite):
+                    if not case.supports_backend(backend):
+                        continue
+                    if arguments.match and (
+                        arguments.match.casefold() not in case.name.casefold()
+                    ):
+                        continue
+                    listed.setdefault(case.name, []).append(backend)
+        if not listed:
+            parser.error("no benchmark cases matched")
+        for name, eligible in listed.items():
+            print(f"{name} [{','.join(eligible)}]")
         return 0
 
     repeats = arguments.repeats
@@ -141,12 +177,21 @@ def main() -> int:
                     case for case in backend_cases
                     if arguments.match.casefold() in case.name.casefold()
                 ]
+            backend_cases = [
+                case
+                for case in backend_cases
+                if case.supports_backend(backend)
+            ]
+            if not backend_cases:
+                continue
             reports[backend] = run_suite(
                 backend_cases,
                 repeats=repeats,
                 target_seconds=target_seconds,
             )
 
+    if not reports:
+        parser.error("no benchmark cases matched the selected backends")
     if len(reports) == 1:
         report = next(iter(reports.values()))
         print_report(report)

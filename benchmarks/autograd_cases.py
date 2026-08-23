@@ -6,7 +6,10 @@ import math
 
 import tensors as ts
 
-from .runner import BenchmarkCase
+from .runner import BenchmarkBackend, BenchmarkCase
+
+
+_ACCELERATED = frozenset[BenchmarkBackend]({"numpy", "cuda"})
 
 
 def _first_derivative_case(size: int) -> BenchmarkCase:
@@ -30,6 +33,7 @@ def _first_derivative_case(size: int) -> BenchmarkCase:
         run=run,
         validate=validate,
         work_items=size,
+        layer="autograd",
         description="functional first derivative of an elementwise expression",
     )
 
@@ -55,6 +59,7 @@ def _backward_case(size: int) -> BenchmarkCase:
         run=run,
         validate=validate,
         work_items=size,
+        layer="autograd",
         description="reverse pass that publishes gradients on Variables",
     )
 
@@ -81,6 +86,7 @@ def _derivative_graph_case(size: int) -> BenchmarkCase:
         validate=validate,
         work_items=size,
         gc_enabled=True,
+        layer="autograd",
         description="first derivative recorded as a differentiable graph",
     )
 
@@ -103,6 +109,7 @@ def _second_derivative_case() -> BenchmarkCase:
         validate=validate,
         work_items=1,
         gc_enabled=True,
+        layer="autograd",
         description="fresh scalar expression and two reverse-mode passes",
     )
 
@@ -130,11 +137,158 @@ def _hessian_case(size: int) -> BenchmarkCase:
         validate=validate,
         work_items=size * size,
         gc_enabled=True,
+        layer="autograd",
         description="complete Hessian of a scalar separable polynomial",
     )
 
 
-def cases() -> list[BenchmarkCase]:
+def _forward_case(
+    size: int,
+    backends: frozenset[BenchmarkBackend] | None,
+) -> BenchmarkCase:
+    value = ts.Variable(ts.linspace(1.0, 2.0, size), name="forward_x")
+
+    def run():
+        return ts.sum(value ** 2.0 + value * 3.0)
+
+    def validate() -> None:
+        result = run()
+        assert result.size == 1
+        assert math.isfinite(float(result.data.item()))
+
+    return BenchmarkCase(
+        name=f"autograd.forward/{size}",
+        run=run,
+        validate=validate,
+        work_items=size,
+        gc_enabled=True,
+        description="fresh elementwise differentiable forward expression",
+        layer="autograd",
+        backends=backends,
+    )
+
+
+def _forward_backward_case(
+    size: int,
+    backends: frozenset[BenchmarkBackend] | None,
+) -> BenchmarkCase:
+    base = ts.linspace(1.0, 2.0, size)
+
+    def run():
+        value = ts.Variable(base, name="step_x")
+        output = ts.sum(value ** 2.0 + value * 3.0)
+        ts.backward(output)
+        return value.grad
+
+    def validate() -> None:
+        result = run()
+        assert isinstance(result, ts.Tensor)
+        assert result.shape == (size,)
+        assert math.isclose(float(result[0]), 5.0)
+
+    return BenchmarkCase(
+        name=f"autograd.forward_backward/{size}",
+        run=run,
+        validate=validate,
+        work_items=size,
+        gc_enabled=True,
+        description="fresh forward graph followed by reverse mode",
+        layer="autograd",
+        backends=backends,
+    )
+
+
+def _accumulation_case(size: int) -> BenchmarkCase:
+    value = ts.Variable(ts.linspace(1.0, 2.0, size), name="accumulate_x")
+    output = ts.sum(value ** 2.0)
+    value.grad = ts.zeros((size,))
+
+    def run() -> None:
+        ts.backward(output)
+
+    def validate() -> None:
+        run()
+        assert isinstance(value.grad, ts.Tensor)
+        assert value.grad.shape == (size,)
+
+    return BenchmarkCase(
+        name=f"autograd.accumulate/{size}",
+        run=run,
+        validate=validate,
+        work_items=size,
+        description="reverse pass accumulated into an existing gradient",
+        layer="autograd",
+    )
+
+
+def _matrix_backward_case(
+    size: int,
+    backends: frozenset[BenchmarkBackend] | None,
+) -> BenchmarkCase:
+    left = ts.Variable(ts.full((size, size), 0.25), name="matrix_left")
+    right = ts.Variable(ts.full((size, size), 0.5), name="matrix_right")
+    output = ts.sum(left @ right)
+
+    def run() -> None:
+        left.grad = None
+        right.grad = None
+        ts.backward(output)
+
+    def validate() -> None:
+        run()
+        assert isinstance(left.grad, ts.Tensor)
+        assert isinstance(right.grad, ts.Tensor)
+        assert left.grad.shape == left.shape
+        assert right.grad.shape == right.shape
+
+    return BenchmarkCase(
+        name=f"autograd.matrix_backward/{size}x{size}",
+        run=run,
+        validate=validate,
+        work_items=2 * size ** 3,
+        description="reverse pass through square matrix multiplication",
+        layer="autograd",
+        backends=backends,
+    )
+
+
+def _planned_chain_backward_case(
+    depth: int,
+    width: int,
+    backends: frozenset[BenchmarkBackend] | None,
+) -> BenchmarkCase:
+    """Measure repeated reverse execution through a precompiled scalar chain."""
+    value = ts.Variable(ts.full((width,), 1.0), name="planned_chain")
+    output = value
+    for _ in range(depth):
+        output = output * 1.0001 + 0.1
+    computation = ts.graph.Computation(output)
+    seed = ts.full((width,), 1.0)
+    expected = 1.0001 ** depth
+
+    def run():
+        computation.backward(seed)
+        return value.grad
+
+    def validate() -> None:
+        result = run()
+        assert isinstance(result, ts.Tensor)
+        assert result.shape == (width,)
+        assert math.isclose(float(result[0]), expected)
+
+    return BenchmarkCase(
+        name=f"autograd.planned_chain/depth-{depth}/width-{width}",
+        run=run,
+        validate=validate,
+        work_items=depth * width,
+        description="reused compiled reverse plan for a scalar elementwise chain",
+        layer="autograd",
+        backends=backends,
+    )
+
+
+def core_cases() -> list[BenchmarkCase]:
+    """Return the compact historical automatic-differentiation baselines."""
     return [
         _first_derivative_case(1_024),
         _backward_case(1_024),
@@ -142,3 +296,29 @@ def cases() -> list[BenchmarkCase]:
         _second_derivative_case(),
         _hessian_case(8),
     ]
+
+
+def cases() -> list[BenchmarkCase]:
+    """Return phase, topology, accumulation, and higher-order benchmarks."""
+    backend = ts.get_backend()
+    benchmarks = core_cases()
+    benchmarks.extend((
+        _forward_case(1_024, None),
+        _forward_backward_case(1_024, None),
+        _accumulation_case(1_024),
+        _matrix_backward_case(16, None),
+        _planned_chain_backward_case(10, 1_024, None),
+        _planned_chain_backward_case(100, 1_024, None),
+    ))
+    if backend != "python":
+        benchmarks.extend((
+            _forward_case(100_000, _ACCELERATED),
+            _forward_backward_case(100_000, _ACCELERATED),
+            _matrix_backward_case(64, _ACCELERATED),
+            _planned_chain_backward_case(
+                100,
+                100_000,
+                _ACCELERATED,
+            ),
+        ))
+    return benchmarks

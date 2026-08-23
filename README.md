@@ -300,18 +300,20 @@ python -m mypy
 
 ## Run the benchmarks
 
-A dependency-free benchmark suite tracks tensor operations, graph tracing and
-replay, automatic differentiation, and a complete training step. It compares all
-available numerical backends by default. Run the short development suite with:
+A dependency-free benchmark suite tracks operations from raw provider kernels
+through storage, the public API, graph tracing, automatic differentiation, and
+complete training phases. The compact `core` suite compares all available
+numerical backends by default. Run its short development configuration with:
 
 ```powershell
 python -m benchmarks --quick
 ```
 
-Use `python -m benchmarks` for a longer run or write a machine-readable report
-with `python -m benchmarks --output benchmark-results.json`. See the
-[`benchmarks` guide](benchmarks/README.md) for the case matrix and measurement
-methodology.
+Use `python -m benchmarks` for a longer core run, or target an attribution suite
+such as `python -m benchmarks --backend accelerated --suite scaling`. Write a
+machine-readable report with `--output benchmark-results.json`. See the
+[`benchmarks` guide](benchmarks/README.md) for the full case matrix, backend
+eligibility, and measurement methodology.
 
 ## Project structure
 

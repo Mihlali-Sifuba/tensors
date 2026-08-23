@@ -177,6 +177,66 @@ class CudaBackendTests(unittest.TestCase):
         self.assertIsInstance(parameter.data._storage, CudaStorage)
         self.assertAlmostEqual(parameter.data[0], 0.95)
 
+    def test_graph_replay_fuses_scalar_elementwise_chains(self):
+        with ts.use_backend("cuda"):
+            value = ts.Variable(ts.full((4_096,), 1.0), requires_grad=False)
+            intermediate = value * 2.0
+            output = intermediate + 3.0
+            computation = ts.graph.Computation(output)
+            value.data = ts.full((4_096,), 4.0)
+            with patch.object(
+                cuda_backend,
+                "fused_elementwise",
+                wraps=cuda_backend.fused_elementwise,
+            ) as fused:
+                result = computation.forward()
+
+        fused.assert_called_once()
+        self.assertIsInstance(result._storage, CudaStorage)
+        self.assertEqual(intermediate.data.tolist(), [8.0] * 4_096)
+        self.assertEqual(result.tolist(), [11.0] * 4_096)
+
+    def test_backward_fuses_scalar_elementwise_chains(self):
+        with ts.use_backend("cuda"):
+            value = ts.Variable(ts.full((4_096,), 2.0))
+            intermediate = value * 2.0
+            output = intermediate * 3.0 + 1.0
+            computation = ts.graph.Computation(output)
+            with patch.object(
+                cuda_backend,
+                "fused_elementwise",
+                wraps=cuda_backend.fused_elementwise,
+            ) as fused:
+                backend_state._clear_backend_kernel_cache()
+                computation.backward(ts.full((4_096,), 1.0))
+
+        fused.assert_called_once()
+        self.assertIsInstance(value.grad._storage, CudaStorage)
+        self.assertEqual(intermediate.grad.tolist(), [3.0] * 4_096)
+        self.assertEqual(value.grad.tolist(), [6.0] * 4_096)
+
+    def test_multi_parameter_sgd_uses_grouped_cuda_update(self):
+        with ts.use_backend("cuda"):
+            parameters = [
+                ts.Variable(ts.full((64,), float(index + 1)))
+                for index in range(4)
+            ]
+            for parameter in parameters:
+                parameter.grad = ts.full((64,), 0.5)
+            optimizer = ts.optim.SGD(parameters, learning_rate=0.1)
+            with patch.object(
+                cuda_backend,
+                "sgd_updates",
+                wraps=cuda_backend.sgd_updates,
+            ) as grouped:
+                optimizer.step()
+
+        grouped.assert_called_once()
+        self.assertTrue(all(
+            isinstance(parameter.data._storage, CudaStorage)
+            for parameter in parameters
+        ))
+
 
 @unittest.skipUnless(
     "numpy" in ts.available_backends(),
@@ -212,6 +272,71 @@ class NumPyBackendTests(unittest.TestCase):
         self.assertEqual(actual.shape, expected.shape)
         self.assertIs(actual.dtype, expected.dtype)
         self.assertEqual(actual.tolist(), expected.tolist())
+
+    def test_multi_parameter_optimizers_use_grouped_updates(self):
+        optimizers = (
+            (ts.optim.SGD, "sgd_updates"),
+            (ts.optim.Adam, "adam_updates"),
+            (ts.optim.RMSprop, "rmsprop_updates"),
+        )
+        for optimizer_type, kernel_name in optimizers:
+            with self.subTest(optimizer=optimizer_type.__name__):
+                with ts.use_backend("numpy"):
+                    parameters = [
+                        ts.Variable(ts.full((64,), float(index + 1)))
+                        for index in range(4)
+                    ]
+                    for parameter in parameters:
+                        parameter.grad = ts.full((64,), 0.5)
+                    optimizer = optimizer_type(
+                        parameters,
+                        learning_rate=0.01,
+                    )
+                    kernel = getattr(numpy_backend, kernel_name)
+                    with patch.object(
+                        numpy_backend,
+                        kernel_name,
+                        wraps=kernel,
+                    ) as grouped:
+                        backend_state._clear_backend_kernel_cache()
+                        optimizer.step()
+
+                grouped.assert_called_once()
+                self.assertTrue(all(
+                    isinstance(parameter.data._storage, NumPyStorage)
+                    for parameter in parameters
+                ))
+
+    def test_grouped_optimizer_updates_match_python(self):
+        def updated(backend, optimizer_type):
+            with ts.use_backend(backend):
+                parameters = [
+                    ts.Variable(ts.full((64,), float(index + 1)))
+                    for index in range(4)
+                ]
+                for index, parameter in enumerate(parameters):
+                    parameter.grad = ts.full(
+                        (64,),
+                        0.25 * (index + 1),
+                    )
+                optimizer = optimizer_type(
+                    parameters,
+                    learning_rate=0.01,
+                )
+                optimizer.step()
+                optimizer.step()
+                return tuple(parameter.data.tolist() for parameter in parameters)
+
+        for optimizer_type in (ts.optim.SGD, ts.optim.Adam, ts.optim.RMSprop):
+            with self.subTest(optimizer=optimizer_type.__name__):
+                expected = updated("python", optimizer_type)
+                actual = updated("numpy", optimizer_type)
+                for expected_values, actual_values in zip(expected, actual):
+                    for expected_value, actual_value in zip(
+                        expected_values,
+                        actual_values,
+                    ):
+                        self.assertAlmostEqual(actual_value, expected_value)
 
     def test_every_binary_operation_dispatches_to_numpy(self):
         left = ts.full((32, 1), 2.0)
@@ -408,6 +533,16 @@ class NumPyBackendTests(unittest.TestCase):
             ) as cross_entropy_gradient,
             patch.object(
                 numpy_backend,
+                "one_hot_targets",
+                wraps=numpy_backend.one_hot_targets,
+            ) as one_hot_targets,
+            patch.object(
+                numpy_backend,
+                "distributions_valid",
+                wraps=numpy_backend.distributions_valid,
+            ) as distributions_valid,
+            patch.object(
+                numpy_backend,
                 "binary_cross_entropy",
                 wraps=numpy_backend.binary_cross_entropy,
             ) as binary_cross_entropy,
@@ -443,6 +578,8 @@ class NumPyBackendTests(unittest.TestCase):
         logsumexp_gradient.assert_called_once()
         cross_entropy.assert_called_once()
         cross_entropy_gradient.assert_called_once()
+        one_hot_targets.assert_called_once()
+        self.assertEqual(distributions_valid.call_count, 2)
         binary_cross_entropy.assert_called_once()
         binary_cross_entropy_gradient.assert_called_once()
 
@@ -1026,6 +1163,56 @@ class NumPyBackendTests(unittest.TestCase):
             )
 
         matmul.assert_called_once()
+
+    def test_numpy_kernel_is_used_for_floating_point_matmul_gradient(self):
+        with patch.object(
+            numpy_backend,
+            "matmul_gradient",
+            wraps=numpy_backend.matmul_gradient,
+        ) as matmul_gradient:
+            with ts.use_backend("numpy"):
+                left = ts.Variable(ts.full((8, 8), 0.25))
+                right = ts.Variable(ts.full((8, 8), 0.5))
+                ts.backward(ts.sum(left @ right))
+
+        matmul_gradient.assert_called_once()
+
+    def test_broadcast_matmul_gradient_matches_python_backend(self):
+        def gradients(backend):
+            with ts.use_backend(backend):
+                left = ts.Variable(ts.full((1, 4, 8), 0.25))
+                right = ts.Variable(ts.full((3, 8, 4), 0.5))
+                ts.backward(ts.sum(left @ right))
+                return left.grad, right.grad
+
+        expected = gradients("python")
+        actual = gradients("numpy")
+        for actual_tensor, expected_tensor in zip(actual, expected):
+            self.assertEqual(actual_tensor.shape, expected_tensor.shape)
+            for actual_item, expected_item in zip(
+                actual_tensor.tolist(),
+                expected_tensor.tolist(),
+            ):
+                self.assertAlmostEqual(actual_item, expected_item)
+
+    def test_dense_target_validation_dispatches_to_numpy(self):
+        targets = (
+            ts.full((16, 4), 0.25),
+            ts.full((16, 4), 0.25),
+        )
+        targets[0][0, 0] = 0.5
+        targets[1][0, 0] = 0.25000015
+        with patch.object(
+            numpy_backend,
+            "distributions_valid",
+            wraps=numpy_backend.distributions_valid,
+        ) as distributions_valid:
+            with ts.use_backend("numpy"):
+                for target in targets:
+                    with self.assertRaisesRegex(ValueError, "sum to 1"):
+                        ts.cross_entropy(ts.full((16, 4), 1.0), target)
+
+        self.assertEqual(distributions_valid.call_count, 2)
 
     def test_tiny_operations_bypass_numpy_kernel_dispatch(self):
         value = ts.Tensor([2.0])

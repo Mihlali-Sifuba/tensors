@@ -3,7 +3,7 @@
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
-from ..backend import execute_sgd_update
+from ..backend import execute_sgd_update, execute_sgd_updates
 from ..tensor import Tensor
 from .optimizer import Optimizer
 
@@ -20,8 +20,33 @@ class SGD(Optimizer):
 
     def step(self) -> None:
         """Apply one in-place parameter update using current gradients."""
+        prepared = self._prepared_gradients()
+        if len(prepared) > 1:
+            parameters = tuple(parameter.data for parameter, _ in prepared)
+            gradients = tuple(gradient for _, gradient in prepared)
+            storages = execute_sgd_updates(
+                parameters,
+                gradients,
+                self.learning_rate,
+            )
+            if storages is not None:
+                pending = tuple(
+                    (
+                        parameter,
+                        Tensor(
+                            storage,
+                            dtype=parameter.dtype,
+                            shape=parameter.shape,
+                        ),
+                    )
+                    for (parameter, _), storage in zip(prepared, storages)
+                )
+                for parameter, value in pending:
+                    parameter.data = value
+                return
+
         pending = []
-        for parameter, gradient in self._prepared_gradients():
+        for parameter, gradient in prepared:
             storage = execute_sgd_update(
                 parameter.data,
                 gradient,

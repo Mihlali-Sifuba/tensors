@@ -335,6 +335,20 @@ class Pow:
                         shape=value.shape,
                     )
                 ]
+            scalar_base = Tensor([float(exponent)], dtype=grad.dtype)
+            accelerated = execute_power_exponent_gradient(
+                grad,
+                scalar_base,
+                value,
+            )
+            if accelerated is not None:
+                return [
+                    Tensor(
+                        accelerated,
+                        dtype=grad.dtype,
+                        shape=value.shape,
+                    )
+                ]
             output = Pow.forward_reverse(value, exponent)
             values = [
                 _exponent_gradient_value(
@@ -354,6 +368,20 @@ class Pow:
         if exponent == 0:
             values = [0.0] * value.size
         else:
+            scalar_exponent = Tensor([float(exponent)], dtype=grad.dtype)
+            accelerated = execute_power_base_gradient(
+                grad,
+                value,
+                scalar_exponent,
+            )
+            if accelerated is not None:
+                return [
+                    Tensor(
+                        accelerated,
+                        dtype=grad.dtype,
+                        shape=value.shape,
+                    )
+                ]
             output = Pow.forward(value, exponent)
             values = [
                 _base_gradient_value(

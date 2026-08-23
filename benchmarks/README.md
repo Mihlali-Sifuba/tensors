@@ -1,97 +1,136 @@
 # Benchmarks
 
-These benchmarks establish repeatable local performance baselines for the public
-`tensors` API. They are intended to reveal regressions and guide optimization;
-they are not correctness tests or claims about performance on other machines.
+These benchmarks establish repeatable local performance baselines for `tensors`.
+They are designed to locate overhead, identify backend crossover points, and show
+whether an optimization improved the intended layer. They are not correctness
+tests or performance claims for other machines.
 
-## Run the suite
+## Run the benchmarks
 
-From the repository root:
+From the repository root, run the compact development baseline with:
 
 ```powershell
 python -m benchmarks --quick
 ```
 
-The quick run is useful during development. By default, every case is measured
-with every available backend and the final table reports their relative speed.
-The default run spends longer calibrating and sampling each case:
+The default `core` suite retains the original tensor, graph, autograd, and small
+training baselines. `--quick` takes three short samples; omitting it takes seven
+longer samples:
 
 ```powershell
 python -m benchmarks
 ```
 
-Select a group or filter case names when investigating a particular subsystem:
+The extended suites are deliberately opt-in because some cases allocate millions
+of values or exercise currently expensive backward paths:
 
 ```powershell
-python -m benchmarks --suite graph
-python -m benchmarks --match matmul
-python -m benchmarks --list
+python -m benchmarks --suite scaling
+python -m benchmarks --suite storage
+python -m benchmarks --suite autograd --match matrix_backward
+python -m benchmarks --suite autograd --match planned_chain
+python -m benchmarks --suite optimizer --match _many
+python -m benchmarks --suite all
 ```
 
-Restrict a run to one backend when investigating its implementation:
+By default, each eligible case runs on Python and every installed optional
+backend. Select one backend or all installed accelerators when narrowing an
+investigation:
 
 ```powershell
-python -m benchmarks --backend python --match matmul
-python -m benchmarks --backend numpy --match matmul
-python -m benchmarks --backend cuda --match matmul
+python -m benchmarks --backend python --suite scaling
+python -m benchmarks --backend numpy --suite provider
+python -m benchmarks --backend cuda --suite storage
+python -m benchmarks --backend accelerated --suite chain
 ```
 
-The NumPy and CUDA commands require their respective optional dependencies. Use
-`--backend auto` to select NumPy when available and Python otherwise. CUDA is
-always selected explicitly. `--backend all`, which is the default, runs Python
-and every available optional backend. A comparison JSON report stores each
-backend's measurements and environment metadata separately.
-
-Save the complete measurements and environment metadata for comparison:
+NumPy and CUDA require their respective optional dependencies. `--backend auto`
+selects NumPy when available and Python otherwise. Use `--list` to see both case
+names and their eligible backends without timing them:
 
 ```powershell
-python -m benchmarks --output benchmark-results.json
+python -m benchmarks --suite all --list
 ```
 
-## What is measured
+Save measurements and environment metadata for a before-and-after comparison:
 
-| Suite | Cases |
+```powershell
+python -m benchmarks --backend accelerated --suite scaling --output before.json
+python -m benchmarks --backend accelerated --suite scaling --output after.json
+```
+
+## Suites
+
+| Suite | What it isolates |
 | --- | --- |
-| `tensor` | primitive arithmetic, casting, slicing, broadcasting, reductions, matrix multiplication, and norms |
-| `backend` | unary math, normalization, losses, selection, layout, creation, and optimizer kernels |
-| `graph` | constructing a fresh `Graph` and replaying an already traced `Computation` |
-| `autograd` | `grad`, `backward`, derivative-graph construction, second derivatives, and Hessians |
-| `training` | a complete MLP step: forward pass, loss, gradient reset, backward pass, and SGD update |
+| `core` | compact historical regression baseline used by the default command |
+| `tensor` | primitive public tensor operations at representative sizes |
+| `backend` | broader public unary, normalization, loss, layout, creation, and optimizer coverage |
+| `provider` | raw NumPy or CuPy primitives versus guarded internal backend kernels |
+| `scaling` | public elementwise, reduction, broadcast, and matrix-multiplication size curves |
+| `storage` | host/device conversion, cached lookup, materialization, and mutation invalidation |
+| `chain` | unfused expression chains across tensor width and expression depth |
+| `graph` | trace versus compiled replay for scalar-chain, branch, and matrix-heavy graph topologies |
+| `autograd` | forward, backward, compiled deep-chain VJPs, accumulation, matrix gradients, graph creation, and higher derivatives |
+| `loss` | target preparation, dense backend kernel, public cross-entropy, and backward pass |
+| `optimizer` | first-step state creation, steady updates, and many-small-parameter batching for SGD, Adam, and RMSprop |
+| `training` | complete MLP steps and separate forward, replay, loss, backward, and optimizer phases |
+| `startup` | optional-provider import and first tensor operation in fresh interpreters |
+| `all` | every suite above; intended for deliberate, long-running investigations |
 
-Graph construction and replay are deliberately separate. Construction measures
-the cost of expressing and tracing a function; replay measures repeated evaluation
-of the computation that representation produced. Likewise, ordinary gradients are
-kept separate from `create_graph=True` and Hessian cases because higher-order
-differentiation builds additional graph structure.
+## Reading the layers
+
+Every JSON result records a `layer`. Comparing adjacent layers explains where
+time is spent:
+
+1. `provider` measures NumPy or CuPy directly.
+2. `kernel` adds the internal backend guard and storage contract.
+3. `public` adds tensor dispatch and result construction.
+4. `graph` and `autograd` add tracing and differentiation.
+5. `optimizer` and `training` measure complete algorithmic phases.
+
+`storage` and `startup` isolate conversion and initialization costs separately.
+For example, if raw provider and kernel matrix multiplication are close but the
+public operation is slower, the likely target is public dispatch or storage—not
+the numerical kernel.
+
+Not every case is meaningful on every backend. Accelerator-only rows display `-`
+for Python in comparison tables, and no speedup is calculated without a matching
+Python measurement.
 
 ## Methodology
 
 Each case validates its result before timing. Stable inputs and models are created
-outside the timed callable unless their construction is the operation being
-measured. The runner calibrates an iteration count, takes repeated samples, and
-reports the median, minimum, and median absolute deviation (MAD).
+outside the timed callable unless their creation is explicitly part of the case.
+The runner calibrates an iteration count, takes repeated samples, and reports the
+median, minimum, and median absolute deviation (MAD).
 
-CUDA operations are asynchronous, so the runner synchronizes the active CuPy
-stream after every timed iteration. Reported CUDA durations therefore include
-the completed device work rather than only Python-side kernel launch time.
+Validation and calibration warm ordinary cases. A name containing `first` means
+that fresh storage, model, or optimizer state is created inside each timed call;
+only the `startup` suite measures a genuinely fresh interpreter. Optimizer
+`steady` cases reuse initialized state.
 
-Python's cyclic garbage collector stays disabled for ordinary tensor kernels, as
-it is under `timeit`. It is enabled for cases that intentionally construct graph
-objects, because those objects can contain cycles and collection is part of their
-sustained cost.
+CUDA operations are asynchronous, so the active CuPy stream is synchronized after
+every timed iteration. CUDA durations therefore include completed device work,
+not just Python-side kernel launch time.
 
-Compare results only under similar conditions. Use the JSON report's backend,
-Python, platform, processor, Git commit, and dirty-worktree metadata, and avoid
-running unrelated heavy workloads at the same time. A useful regression check
-compares several runs from the same machine rather than treating a single sample
-as definitive.
+Python's cyclic garbage collector stays disabled for ordinary kernels, as it is
+under `timeit`. It is enabled for cases that intentionally construct cyclic graph
+objects so collection remains part of their sustained cost.
+
+Compare results only under similar conditions. JSON reports include backend,
+Python, platform, processor, Git commit, dirty-worktree state, and CUDA device
+metadata. Prefer several runs on the same machine over treating one sample as
+definitive, and investigate a high MAD before drawing conclusions.
 
 ## Adding a case
 
-Add a `BenchmarkCase` to the relevant `*_cases.py` module. Keep setup outside the
-timed function, provide a validation callback, and set `work_items` only when the
-unit of work is meaningful enough to report as throughput. Enable garbage
-collection when a case creates cyclic graph structures on every iteration.
+Add a `BenchmarkCase` to the relevant `*_cases.py` module. Keep unrelated setup
+outside the timed callable, provide a validation callback, assign the closest
+`layer`, and restrict `backends` when a case is accelerator-specific. Use a size
+curve rather than one arbitrary size when looking for a crossover point, and split
+end-to-end work into phases when attribution matters.
 
-The runner intentionally uses only the Python standard library so benchmarks work
-in a normal development checkout without an additional benchmarking dependency.
+Set `work_items` only when its unit is meaningful as throughput. Enable garbage
+collection when each invocation creates cyclic graph structures. The runner uses
+only the Python standard library, so no separate benchmark dependency is needed.
