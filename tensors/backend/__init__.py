@@ -85,6 +85,12 @@ UnaryOperation: TypeAlias = Literal[
     "tanh",
     "softplus",
 ]
+FusedElementwiseStep: TypeAlias = tuple[
+    str,
+    float | None,
+    bool,
+    int | None,
+]
 
 
 class BackendUnavailableError(RuntimeError):
@@ -295,24 +301,63 @@ def execute_binary(
 
 
 def execute_fused_elementwise(
-    value: Tensor,
-    steps: Sequence[tuple[str, float | None, bool]],
+    values: Sequence[Tensor],
+    steps: Sequence[FusedElementwiseStep],
     *,
     dtype: DataType,
+    output_shape: tuple[int, ...],
 ) -> tuple[Storage, ...] | None:
-    """Run a compatible scalar expression chain in one CUDA kernel."""
+    """Run a compatible floating-point expression chain in one CUDA kernel."""
+    work = _shape_size(output_shape)
     if (
         get_backend() != "cuda"
+        or not values
         or len(steps) < 2
-        or dtype.name != "float64"
+        or dtype.kind != "floating"
         or (
-            value.size * len(steps) < _CUDA_FUSION_MIN_WORK
+            work * len(steps) < _CUDA_FUSION_MIN_WORK
             and len(steps) < 64
         )
     ):
         return None
     fused_elementwise = _backend_kernel("fused_elementwise")
-    return fused_elementwise(value, tuple(steps), dtype=dtype)
+    return fused_elementwise(
+        tuple(values),
+        tuple(steps),
+        dtype=dtype,
+        output_shape=output_shape,
+    )
+
+
+def execute_fused_elementwise_backward(
+    values: Sequence[Tensor],
+    grad: Tensor,
+    steps: Sequence[FusedElementwiseStep],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> tuple[Storage, ...] | None:
+    """Run a compatible floating-point chain VJP in one CUDA kernel."""
+    work = _shape_size(output_shape)
+    if (
+        get_backend() != "cuda"
+        or not values
+        or len(steps) < 2
+        or dtype.kind != "floating"
+        or (
+            work * len(steps) < _CUDA_FUSION_MIN_WORK
+            and len(steps) < 64
+        )
+    ):
+        return None
+    fused_backward = _backend_kernel("fused_elementwise_backward")
+    return fused_backward(
+        tuple(values),
+        grad,
+        tuple(steps),
+        dtype=dtype,
+        output_shape=output_shape,
+    )
 
 
 def execute_negate(

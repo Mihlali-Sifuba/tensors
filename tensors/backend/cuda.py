@@ -22,6 +22,7 @@ from ._array import (
     eye,
     full,
     fused_elementwise,
+    fused_elementwise_backward,
     linspace,
     logsumexp,
     logsumexp_gradient,
