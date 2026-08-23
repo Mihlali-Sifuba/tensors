@@ -52,7 +52,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--backend",
-        choices=("all", "python", "numpy", "auto"),
+        choices=("all", "python", "numpy", "cuda", "auto"),
         default="all",
         help="backend to benchmark (default: all available backends)",
     )

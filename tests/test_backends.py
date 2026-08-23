@@ -4,7 +4,9 @@ from unittest.mock import patch
 
 import tensors as ts
 import tensors.backend as backend_state
+import tensors.backend.cuda as cuda_backend
 import tensors.backend.numpy as numpy_backend
+from tensors.storage import CudaStorage, NumPyStorage, PythonStorage
 
 
 class BackendSelectionTests(unittest.TestCase):
@@ -39,6 +41,14 @@ class BackendSelectionTests(unittest.TestCase):
                 r"ms-tensors\[numpy\]",
             ):
                 ts.set_backend("numpy")
+
+    def test_unavailable_cuda_backend_has_install_guidance(self):
+        with patch.object(backend_state, "_cuda_available", return_value=False):
+            with self.assertRaisesRegex(
+                ts.BackendUnavailableError,
+                r"ms-tensors\[cuda1[23]\]",
+            ):
+                ts.set_backend("cuda")
 
     @unittest.skipUnless(
         "numpy" in ts.available_backends(),
@@ -85,6 +95,87 @@ class BackendSelectionTests(unittest.TestCase):
             self.assertEqual(ts.get_backend(), "numpy")
 
         self.assertEqual(observed, ["python"])
+
+
+@unittest.skipUnless(
+    "numpy" in ts.available_backends(),
+    "NumPy is not installed",
+)
+class NativeStorageTests(unittest.TestCase):
+    def test_numpy_results_retain_native_storage(self):
+        with ts.use_backend("numpy"):
+            result = ts.full((64,), 2.0) + 3.0
+
+        self.assertIsInstance(result._storage, NumPyStorage)
+        self.assertEqual(result.tolist(), [5.0] * 64)
+
+    def test_backend_views_are_cached_until_mutation(self):
+        import numpy
+
+        value = ts.Tensor([1.0, 2.0, 3.0])
+        original = value._storage
+
+        first = value._storage_for("numpy")
+        second = value._storage_for("numpy")
+
+        self.assertIs(first, second)
+        self.assertIs(value._storage, original)
+        host_view = numpy.frombuffer(
+            original.buffer,
+            dtype=numpy.dtype(value.dtype.name),
+        )
+        self.assertTrue(numpy.shares_memory(first.buffer, host_view))
+        value[0] = 4.0
+        self.assertIsInstance(value._storage, PythonStorage)
+        self.assertEqual(set(value._storage_cache), {"python"})
+
+
+@unittest.skipUnless(
+    "cuda" in ts.available_backends(),
+    "CUDA is not available",
+)
+class CudaBackendTests(unittest.TestCase):
+    def test_floating_results_remain_device_resident(self):
+        with ts.use_backend("cuda"):
+            value = ts.full((64,), 2.0)
+            with patch.object(
+                cuda_backend,
+                "binary",
+                wraps=cuda_backend.binary,
+            ) as kernel:
+                result = value * 3.0 + 1.0
+
+        self.assertGreaterEqual(kernel.call_count, 1)
+        self.assertIsInstance(value._storage, CudaStorage)
+        self.assertIsInstance(result._storage, CudaStorage)
+        self.assertEqual(result.tolist(), [7.0] * 64)
+
+    def test_cuda_matmul_matches_python(self):
+        left = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
+        right = ts.Tensor([[2.0, 0.0], [1.0, 2.0]])
+        with ts.use_backend("python"):
+            expected = (left @ right).tolist()
+        with ts.use_backend("cuda"):
+            actual = left @ right
+
+        self.assertIsInstance(actual._storage, CudaStorage)
+        self.assertEqual(actual.tolist(), expected)
+
+    def test_integer_operations_use_reference_storage(self):
+        with ts.use_backend("cuda"):
+            result = ts.full((64,), 2, dtype=ts.int32) + 3
+
+        self.assertIsInstance(result._storage, PythonStorage)
+        self.assertEqual(result.tolist(), [5] * 64)
+
+    def test_optimizer_updates_remain_device_resident(self):
+        with ts.use_backend("cuda"):
+            parameter = ts.Variable(ts.full((64,), 1.0))
+            parameter.grad = ts.full((64,), 0.5)
+            ts.optim.SGD([parameter], learning_rate=0.1).step()
+
+        self.assertIsInstance(parameter.data._storage, CudaStorage)
+        self.assertAlmostEqual(parameter.data[0], 0.95)
 
 
 @unittest.skipUnless(

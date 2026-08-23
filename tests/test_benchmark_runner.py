@@ -49,6 +49,7 @@ class BackendBenchmarkTests(unittest.TestCase):
         combined = combine_backend_reports({
             "python": _report("python", 0.004),
             "numpy": _report("numpy", 0.001),
+            "cuda": _report("cuda", 0.0005),
         })
         output = io.StringIO()
 
@@ -58,7 +59,9 @@ class BackendBenchmarkTests(unittest.TestCase):
         rendered = output.getvalue()
         self.assertIn("python median", rendered)
         self.assertIn("numpy median", rendered)
+        self.assertIn("cuda median", rendered)
         self.assertIn("4.00x", rendered)
+        self.assertIn("8.00x", rendered)
 
     def test_single_backend_report_identifies_backend(self) -> None:
         output = io.StringIO()

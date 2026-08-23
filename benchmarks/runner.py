@@ -48,7 +48,22 @@ def _calibrate(timer: timeit.Timer, target_seconds: float) -> int:
 def _timer(case: BenchmarkCase) -> timeit.Timer:
     """Create a Timer with consistent garbage-collection behavior."""
     setup = gc.enable if case.gc_enabled else (lambda: None)
-    return timeit.Timer(case.run, setup=setup)
+
+    def run_and_synchronize() -> object:
+        result = case.run()
+        _synchronize_backend()
+        return result
+
+    return timeit.Timer(run_and_synchronize, setup=setup)
+
+
+def _synchronize_backend() -> None:
+    """Wait for asynchronous backend work before recording elapsed time."""
+    if get_backend() != "cuda":
+        return
+    import cupy
+
+    cupy.cuda.get_current_stream().synchronize()
 
 
 def measure(
@@ -60,6 +75,7 @@ def measure(
     """Validate, calibrate, and measure one benchmark case."""
     if case.validate is not None:
         case.validate()
+    _synchronize_backend()
 
     gc.collect()
     timer = _timer(case)
@@ -130,7 +146,7 @@ def _git_dirty() -> bool | None:
 
 def environment_metadata() -> dict[str, Any]:
     """Return enough context to make a benchmark result interpretable."""
-    return {
+    metadata = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "commit": _git_commit(),
         "git_dirty": _git_dirty(),
@@ -141,6 +157,19 @@ def environment_metadata() -> dict[str, Any]:
         "machine": platform.machine(),
         "processor": platform.processor(),
     }
+    if get_backend() == "cuda":
+        import cupy
+
+        device = cupy.cuda.Device()
+        properties = cupy.cuda.runtime.getDeviceProperties(device.id)
+        name = properties["name"]
+        if isinstance(name, bytes):
+            name = name.decode("utf-8")
+        metadata["cupy"] = cupy.__version__
+        metadata["cuda_runtime"] = cupy.cuda.runtime.runtimeGetVersion()
+        metadata["cuda_device"] = name
+        metadata["cuda_device_id"] = device.id
+    return metadata
 
 
 def run_suite(
@@ -227,7 +256,7 @@ def print_report(report: dict[str, Any]) -> None:
 
 
 def print_backend_comparison(report: dict[str, Any]) -> None:
-    """Print backend medians, variability, and relative NumPy speedup."""
+    """Print backend medians, variability, and optional-backend speedups."""
     reports = report["backends"]
     backend_names = list(reports)
     first_benchmarks = reports[backend_names[0]]["benchmarks"]
@@ -238,9 +267,16 @@ def print_backend_comparison(report: dict[str, Any]) -> None:
         f"  {backend + ' median':>14}  {backend + ' MAD':>10}"
         for backend in backend_names
     )
-    show_speedup = "python" in reports and "numpy" in reports
-    speedup_heading = f"  {'NumPy speedup':>13}" if show_speedup else ""
-    heading = f"{'benchmark':<{name_width}}{columns}{speedup_heading}"
+    speedup_backends = (
+        [name for name in backend_names if name != "python"]
+        if "python" in reports
+        else []
+    )
+    speedup_headings = "".join(
+        f"  {backend.title() + ' speedup':>13}"
+        for backend in speedup_backends
+    )
+    heading = f"{'benchmark':<{name_width}}{columns}{speedup_headings}"
 
     print("\nBackend comparison")
     print(heading)
@@ -253,17 +289,17 @@ def print_backend_comparison(report: dict[str, Any]) -> None:
                 f"  {_duration(result['median_seconds']):>14}"
                 f"  {result['variability_percent']:>9.2f}%"
             )
-        if show_speedup:
+        for backend in speedup_backends:
             python_seconds = reports["python"]["benchmarks"][name][
                 "median_seconds"
             ]
-            numpy_seconds = reports["numpy"]["benchmarks"][name][
+            backend_seconds = reports[backend]["benchmarks"][name][
                 "median_seconds"
             ]
             speedup = (
                 float("inf")
-                if numpy_seconds == 0.0
-                else python_seconds / numpy_seconds
+                if backend_seconds == 0.0
+                else python_seconds / backend_seconds
             )
             row += f"  {speedup:>12.2f}x"
         print(row)

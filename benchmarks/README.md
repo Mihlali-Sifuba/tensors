@@ -33,12 +33,14 @@ Restrict a run to one backend when investigating its implementation:
 ```powershell
 python -m benchmarks --backend python --match matmul
 python -m benchmarks --backend numpy --match matmul
+python -m benchmarks --backend cuda --match matmul
 ```
 
-The NumPy command requires the optional dependency. Use `--backend auto` to
-select NumPy when available and Python otherwise. `--backend all`, which is the
-default, runs Python and every installed optional backend. A comparison JSON
-report stores each backend's measurements and environment metadata separately.
+The NumPy and CUDA commands require their respective optional dependencies. Use
+`--backend auto` to select NumPy when available and Python otherwise. CUDA is
+always selected explicitly. `--backend all`, which is the default, runs Python
+and every available optional backend. A comparison JSON report stores each
+backend's measurements and environment metadata separately.
 
 Save the complete measurements and environment metadata for comparison:
 
@@ -68,6 +70,10 @@ Each case validates its result before timing. Stable inputs and models are creat
 outside the timed callable unless their construction is the operation being
 measured. The runner calibrates an iteration count, takes repeated samples, and
 reports the median, minimum, and median absolute deviation (MAD).
+
+CUDA operations are asynchronous, so the runner synchronizes the active CuPy
+stream after every timed iteration. Reported CUDA durations therefore include
+the completed device work rather than only Python-side kernel launch time.
 
 Python's cyclic garbage collector stays disabled for ordinary tensor kernels, as
 it is under `timeit`. It is enabled for cases that intentionally construct graph
