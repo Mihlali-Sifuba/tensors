@@ -11,14 +11,14 @@
 <p align="center">
   <a href="https://pypi.org/project/ms-tensors/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/ms-tensors?color=3775A9"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
-  <img alt="Backend" src="https://img.shields.io/badge/backend-Python%20%7C%20NumPy-7A3E9D">
+  <img alt="Backend" src="https://img.shields.io/badge/backend-Python%20%7C%20NumPy%20%7C%20CUDA-7A3E9D">
   <img alt="Status" src="https://img.shields.io/badge/status-experimental-F59E0B">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-D22128"></a>
 </p>
 
 ---
 
-`tensors` is a compact numerical-computing project for exploring the machinery behind modern machine-learning frameworks. It includes multidimensional tensors, broadcasting, reverse-mode automatic differentiation, reusable computation graphs, higher-order derivatives, common mathematical functions, losses, and optimizers. A transparent pure-Python implementation defines the behaviour, while optional NumPy kernels can accelerate supported operations without changing the mathematical API.
+`tensors` is a compact numerical-computing project for exploring the machinery behind modern machine-learning frameworks. It includes multidimensional tensors, broadcasting, reverse-mode automatic differentiation, reusable computation graphs, higher-order derivatives, common mathematical functions, losses, and optimizers. A transparent pure-Python implementation defines the behaviour, while optional NumPy and CUDA kernels can accelerate supported operations without changing the mathematical API.
 
 > [!NOTE]
 > This project is currently an educational, experimental implementation. It prioritizes clarity and correctness over production-scale performance.
@@ -109,8 +109,8 @@ represents well.
 
 The numerical backend follows the same principle. Backend selection is
 application configuration, not a second expression language: tensors, graphs,
-gradients, and training loops are written identically under the Python and NumPy
-implementations.
+gradients, and training loops are written identically under the Python, NumPy,
+and CUDA implementations.
 
 ## Highlights
 
@@ -119,7 +119,7 @@ implementations.
 - First-order gradients plus Jacobians, Hessians, and higher-order derivative graphs
 - Class-based and function-based `Graph` models with automatic parameter discovery
 - Linear algebra including matrix multiplication, dot products, outer products, transposes, and norms
-- Runtime-selectable Python and optional NumPy numerical backends
+- Runtime-selectable Python, NumPy, and CUDA numerical backends
 - Neural-network functions including ReLU, sigmoid, tanh, softmax, and softplus
 - Stable cross-entropy and binary cross-entropy losses
 - SGD, Adam, and RMSprop optimizers
@@ -144,13 +144,23 @@ Install the optional NumPy backend into the same environment with:
 python -m pip install "ms-tensors[numpy]"
 ```
 
-Both backends then remain available without reinstalling the package. Python is
-the default; select NumPy once before expressing the computation:
+For an NVIDIA GPU, install one CuPy build matching the CUDA generation supported
+by the installed driver:
+
+```powershell
+python -m pip install "ms-tensors[cuda12]"
+# or
+python -m pip install "ms-tensors[cuda13]"
+```
+
+Installed backends coexist in the same environment. Python is the default;
+select an accelerated backend once before expressing the computation:
 
 ```python
 import tensors as ts
 
 ts.set_backend("numpy")
+# or: ts.set_backend("cuda")
 ```
 
 Use `ts.use_backend(...)` for a scoped override or set `TENSORS_BACKEND` for a
@@ -309,6 +319,7 @@ methodology.
 tensors/
 ├── tensors/
 │   ├── backend/           # backend selection and optional kernels
+│   ├── storage/           # Python, NumPy, and CUDA native storage
 │   ├── graph/             # computation graphs and automatic differentiation
 │   ├── linalg/            # linear-algebra operations
 │   ├── math/              # reductions, activations, losses, and shape operations
