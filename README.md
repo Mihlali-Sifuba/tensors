@@ -1,7 +1,7 @@
 # tensors
 
 <p align="center">
-  <strong>A small tensor and automatic-differentiation engine with a transparent Python reference implementation.</strong>
+  <strong>A small tensor and automatic-differentiation engine with Python, NumPy, and NVIDIA CUDA backends.</strong>
 </p>
 
 <p align="center">
@@ -19,6 +19,11 @@
 ---
 
 `tensors` is a compact numerical-computing project for exploring the machinery behind modern machine-learning frameworks. It includes multidimensional tensors, broadcasting, reverse-mode automatic differentiation, reusable computation graphs, higher-order derivatives, common mathematical functions, losses, and optimizers. A transparent pure-Python implementation defines the behaviour, while optional NumPy and CUDA kernels can accelerate supported operations without changing the mathematical API.
+
+CUDA is a supported optional backend. With a compatible NVIDIA GPU and the
+appropriate CuPy extra installed, tensor operations, graph replay, automatic
+differentiation, and optimizer updates can remain device-resident while using
+the same public API as the Python and NumPy backends.
 
 > [!NOTE]
 > This project is currently an educational, experimental implementation. It prioritizes clarity and correctness over production-scale performance.
@@ -164,8 +169,9 @@ ts.set_backend("numpy")
 ```
 
 Use `ts.use_backend(...)` for a scoped override or set `TENSORS_BACKEND` for a
-script. See [Numerical backends](docs/backends.md) for selection, fallback, and
-concurrency behaviour.
+script. See [Numerical backends](docs/backends.md) for selection, fallback,
+concurrency, device residency, and guidance on choosing a backend for a
+workload.
 
 ## Quick start
 
@@ -308,6 +314,12 @@ numerical backends by default. Run its short development configuration with:
 ```powershell
 python -m benchmarks --quick
 ```
+
+The core cases are intentionally small regression baselines. They are useful
+for tracking latency and framework overhead, but they should not be used alone
+to rank NumPy and CUDA: small operations usually favour NumPy because CUDA must
+launch and complete device work. Use the scaling, graph, and optimizer suites
+to find the crossover for a particular machine and workload.
 
 Use `python -m benchmarks` for a longer core run, or target an attribution suite
 such as `python -m benchmarks --backend accelerated --suite scaling`. Write a

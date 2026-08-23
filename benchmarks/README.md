@@ -21,6 +21,12 @@ longer samples:
 python -m benchmarks
 ```
 
+The core suite is a latency and regression baseline, not a complete backend
+ranking. Most of its tensors and matrices are deliberately small, so NumPy will
+often beat CUDA by avoiding kernel-launch and synchronization costs. CUDA should
+be judged with size curves, wide graph replay, and sufficiently large or batched
+optimizer work while values remain device-resident.
+
 The extended suites are deliberately opt-in because some cases allocate millions
 of values or exercise currently expensive backward paths:
 
@@ -31,6 +37,14 @@ python -m benchmarks --suite autograd --match matrix_backward
 python -m benchmarks --suite autograd --match planned_chain
 python -m benchmarks --suite optimizer --match _many
 python -m benchmarks --suite all
+```
+
+For a focused NumPy/CUDA crossover investigation, run:
+
+```powershell
+python -m benchmarks --backend accelerated --suite scaling
+python -m benchmarks --backend accelerated --suite graph --match width-100000
+python -m benchmarks --backend accelerated --suite optimizer
 ```
 
 By default, each eligible case runs on Python and every installed optional

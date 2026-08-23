@@ -216,10 +216,20 @@ same graph do not overwrite one another's `computation`, `nodes`, or `edges`.
 Parameters and other mutable attributes are still shared Python state and
 must be synchronized separately if callers modify them concurrently.
 
-`Computation` calculates its dependency-first node order once at construction
-and reuses the immutable cached order for forward and backward passes. Call
-`Computation.release()` when a long-lived Computation object no longer needs
-its output or traversal. A released Computation cannot be reused.
+`Computation` compiles its dependency-first traversal into forward and backward
+execution plans once at construction. The plans resolve variable slots,
+operation callables, scalar metadata, and consumer counts ahead of replay.
+Thread-local workspaces reuse value and gradient slots without sharing mutable
+execution state between threads.
+
+On CUDA, compatible single-consumer float64 scalar chains may execute as one
+fused kernel in both directions. Intermediate `.data` and `.grad` values are
+still published, so fusion changes execution cost rather than graph semantics.
+Native backend VJPs are also used for supported reductions and elementwise
+operations; numerically delicate inputs return to the stable Python rules.
+
+Call `Computation.release()` when a long-lived Computation object no longer
+needs its output, plans, or workspaces. A released Computation cannot be reused.
 
 ## Operation protocols
 
