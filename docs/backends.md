@@ -100,6 +100,53 @@ Graph recording and automatic differentiation remain backend-agnostic.
 Primitives used while tracing, differentiating, or replaying a graph use the
 backend active for that operation.
 
+## Performance model
+
+Backend choice is workload-dependent:
+
+- Python is the transparent reference implementation and is useful for
+  inspection, exact-integer edge cases, and environments without optional
+  dependencies.
+- NumPy usually gives the best latency for small and medium CPU workloads. It
+  also avoids GPU launch and synchronization costs.
+- CUDA is intended for wide tensors, deep replayed computations, large matrix
+  operations, and sufficiently batched training work. Small CUDA operations can
+  be slower even when their numerical kernel is efficient.
+
+CUDA performs best when values remain device-resident. Chained tensor
+expressions, graph replay, native gradients, and optimizer updates preserve
+CUDA storage. Calls such as `item()` and `tolist()` intentionally materialize
+host values and therefore synchronize or transfer data. Frequent host
+inspection inside a training loop can erase the benefit of device execution.
+
+`Computation` resolves graph slots and operation callables once, then reuses
+thread-local execution workspaces on forward and backward replay. Compatible
+float64 scalar chains can be fused into one CUDA launch while retaining the
+intermediate tensor values required by graph semantics. Reduction VJPs execute
+on the selected optional backend when their stable native path is valid, and
+SGD, Adam, and RMSprop batch compatible parameter updates to reduce repeated
+dispatch and launch overhead.
+
+These optimizations do not bypass the behaviour contract. Numerically delicate
+or unsupported cases still use the stable Python implementation.
+
+Use the benchmark attribution suites instead of one small operation to choose a
+backend:
+
+```powershell
+python -m benchmarks --backend accelerated --suite provider
+python -m benchmarks --backend accelerated --suite scaling
+python -m benchmarks --backend accelerated --suite storage
+python -m benchmarks --backend accelerated --suite graph --match width-100000
+python -m benchmarks --backend accelerated --suite optimizer
+```
+
+The `provider` suite separates NumPy or CuPy time from internal kernel guards,
+`storage` exposes transfer and materialization costs, and `scaling` shows the
+size at which an accelerator begins to repay its fixed overhead. CUDA timings
+include stream synchronization, so they represent completed device work. See
+the [benchmark guide](../benchmarks/README.md) for the complete methodology.
+
 ## Behaviour contract
 
 Exact integer results and structural behaviour must match the Python reference.
