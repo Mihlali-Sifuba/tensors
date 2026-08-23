@@ -37,10 +37,13 @@ class _ForwardInstruction:
 
 @dataclass(frozen=True)
 class _ForwardGroup:
-    """One instruction or a CUDA-fusible scalar elementwise chain."""
+    """One instruction or a CUDA-fusible elementwise chain."""
 
     instructions: tuple[_ForwardInstruction, ...]
-    fused_steps: tuple[tuple[str, float | None, bool], ...] | None = None
+    fused_steps: (
+        tuple[tuple[str, float | None, bool, int | None], ...] | None
+    ) = None
+    fused_input_slots: tuple[int, ...] = ()
 
 
 @dataclass
@@ -120,40 +123,52 @@ class Computation:
         instructions: list[_ForwardInstruction],
         consumer_counts: list[int],
     ) -> tuple[_ForwardGroup, ...]:
-        """Collect linear, same-dtype scalar chains for optional CUDA fusion."""
+        """Collect linear floating-point chains for optional CUDA fusion."""
         groups: list[_ForwardGroup] = []
         index = 0
         while index < len(instructions):
             first = instructions[index]
-            first_step = cls._fused_scalar_step(first)
-            if first_step is None:
+            start = cls._start_fused_instruction(first)
+            if start is None:
                 groups.append(_ForwardGroup((first,)))
                 index += 1
                 continue
 
+            first_step, fused_input_slots = start
             chain = [first]
             steps = [first_step]
+            chain_output_slots = {first.output_slot}
             next_index = index + 1
             while next_index < len(instructions):
                 candidate = instructions[next_index]
-                step = cls._fused_scalar_step(candidate)
                 if (
-                    step is None
-                    or candidate.input_slots != (chain[-1].output_slot,)
-                    or consumer_counts[chain[-1].output_slot] != 1
+                    consumer_counts[chain[-1].output_slot] != 1
                     or candidate.output_variable.shape
                     != first.output_variable.shape
                     or candidate.output_variable.dtype
                     != first.output_variable.dtype
                 ):
                     break
+                step = cls._extend_fused_instruction(
+                    candidate,
+                    chain[-1].output_slot,
+                    fused_input_slots,
+                    chain_output_slots,
+                )
+                if step is None:
+                    break
                 chain.append(candidate)
                 steps.append(step)
+                chain_output_slots.add(candidate.output_slot)
                 next_index += 1
 
             if len(chain) > 1:
                 groups.append(
-                    _ForwardGroup(tuple(chain), tuple(steps))
+                    _ForwardGroup(
+                        tuple(chain),
+                        tuple(steps),
+                        tuple(fused_input_slots),
+                    )
                 )
                 index = next_index
             else:
@@ -162,43 +177,144 @@ class Computation:
         return tuple(groups)
 
     @staticmethod
-    def _fused_scalar_step(
+    def _fused_operation(
         instruction: _ForwardInstruction,
-    ) -> tuple[str, float | None, bool] | None:
-        """Describe a scalar operation supported by the fused CUDA kernel."""
+    ) -> str | None:
+        """Return the internal operation name for a fusible instruction."""
         names = {
             "Add": "add",
             "Sub": "subtract",
             "Mul": "multiply",
             "Div": "divide",
             "Neg": "negate",
+            "Abs": "abs",
+            "Exp": "exp",
+            "ReLU": "relu",
+            "Sigmoid": "sigmoid",
+            "Tanh": "tanh",
+            "Softplus": "softplus",
         }
-        operation = names.get(instruction.node.op_cls.__name__)
-        if operation is None or len(instruction.input_variables) != 1:
+        return names.get(instruction.node.op_cls.__name__)
+
+    @classmethod
+    def _start_fused_instruction(
+        cls,
+        instruction: _ForwardInstruction,
+    ) -> tuple[
+        tuple[str, float | None, bool, int | None],
+        list[int],
+    ] | None:
+        """Describe the first operation and source slots of a fused chain."""
+        operation = cls._fused_operation(instruction)
+        output = instruction.output_variable
+        if operation is None or output.dtype.kind != "floating":
             return None
-        input_variable = instruction.input_variables[0]
-        output_variable = instruction.output_variable
-        if (
-            input_variable.shape != output_variable.shape
-            or input_variable.dtype != output_variable.dtype
-            or output_variable.dtype.name != "float64"
-        ):
-            return None
-        if operation == "negate":
-            if instruction.scalar_operand:
+        unary = operation not in {"add", "subtract", "multiply", "divide"}
+        if unary:
+            if (
+                len(instruction.input_slots) != 1
+                or instruction.scalar_operand
+                or instruction.input_variables[0].shape != output.shape
+            ):
                 return None
-            return operation, None, False
-        if not instruction.scalar_operand or instruction.reverse:
+            return (
+                (operation, None, False, None),
+                [instruction.input_slots[0]],
+            )
+
+        if instruction.scalar_operand:
+            if (
+                len(instruction.input_slots) != 1
+                or instruction.input_variables[0].shape != output.shape
+            ):
+                return None
+            scalar = instruction.scalar
+            if (
+                isinstance(scalar, bool)
+                or not isinstance(scalar, (int, float))
+                or not math.isfinite(float(scalar))
+                or (
+                    operation == "divide"
+                    and not instruction.reverse
+                    and scalar == 0
+                )
+            ):
+                return None
+            return (
+                (operation, float(scalar), instruction.reverse, None),
+                [instruction.input_slots[0]],
+            )
+
+        if len(instruction.input_slots) != 2:
             return None
-        scalar = instruction.scalar
-        if (
-            isinstance(scalar, bool)
-            or not isinstance(scalar, (int, float))
-            or not math.isfinite(float(scalar))
-            or (operation == "divide" and scalar == 0)
-        ):
+        left_slot, right_slot = instruction.input_slots
+        source_slots = [left_slot]
+        if right_slot == left_slot:
+            operand_index = -1
+        else:
+            source_slots.append(right_slot)
+            operand_index = 1
+        return (operation, None, False, operand_index), source_slots
+
+    @classmethod
+    def _extend_fused_instruction(
+        cls,
+        instruction: _ForwardInstruction,
+        current_slot: int,
+        fused_input_slots: list[int],
+        chain_output_slots: set[int],
+    ) -> tuple[str, float | None, bool, int | None] | None:
+        """Describe a chain continuation and register external source slots."""
+        operation = cls._fused_operation(instruction)
+        if operation is None or instruction.output_variable.dtype.kind != "floating":
             return None
-        return operation, float(scalar), False
+        unary = operation not in {"add", "subtract", "multiply", "divide"}
+        if unary:
+            if (
+                instruction.scalar_operand
+                or instruction.input_slots != (current_slot,)
+            ):
+                return None
+            return operation, None, False, None
+
+        if instruction.scalar_operand:
+            if instruction.input_slots != (current_slot,):
+                return None
+            scalar = instruction.scalar
+            if (
+                isinstance(scalar, bool)
+                or not isinstance(scalar, (int, float))
+                or not math.isfinite(float(scalar))
+                or (
+                    operation == "divide"
+                    and not instruction.reverse
+                    and scalar == 0
+                )
+            ):
+                return None
+            return operation, float(scalar), instruction.reverse, None
+
+        if len(instruction.input_slots) != 2:
+            return None
+        left_slot, right_slot = instruction.input_slots
+        if left_slot == current_slot and right_slot == current_slot:
+            return operation, None, False, -1
+        if left_slot == current_slot:
+            external_slot = right_slot
+            reverse = False
+        elif right_slot == current_slot:
+            external_slot = left_slot
+            reverse = True
+        else:
+            return None
+        if external_slot in chain_output_slots:
+            return None
+        try:
+            operand_index = fused_input_slots.index(external_slot)
+        except ValueError:
+            fused_input_slots.append(external_slot)
+            operand_index = len(fused_input_slots) - 1
+        return operation, None, reverse, operand_index
 
     def _workspace(self) -> _ExecutionWorkspace:
         """Return reusable execution slots private to the current thread."""
@@ -324,21 +440,23 @@ class Computation:
         group: _ForwardGroup,
         values: list[Tensor | None],
     ) -> bool:
-        """Execute a scalar chain in one CUDA kernel when it remains compatible."""
+        """Execute an elementwise chain in one CUDA kernel."""
         from ..backend import execute_fused_elementwise
 
         first = group.instructions[0]
-        value = values[first.input_slots[0]]
-        if (
-            value is None
-            or value.shape != first.output_variable.shape
-            or value.dtype != first.output_variable.dtype
-        ):
-            return False
+        source_values = []
+        for slot in group.fused_input_slots:
+            value = values[slot]
+            if value is None:
+                return False
+            source_values.append(value)
+        output_shape = first.output_variable.shape
+        dtype = first.output_variable.dtype
         storages = execute_fused_elementwise(
-            value,
+            tuple(source_values),
             group.fused_steps or (),
-            dtype=value.dtype,
+            dtype=dtype,
+            output_shape=output_shape,
         )
         if storages is None:
             return False
@@ -350,7 +468,7 @@ class Computation:
             tensor = Tensor(
                 storage,
                 dtype=instruction.output_variable.dtype,
-                shape=value.shape,
+                shape=output_shape,
             )
             instruction.output_variable.data = tensor
             instruction.node.capture_states()
@@ -602,55 +720,73 @@ class Computation:
         gradient_terms: list[list[Any]],
         gradients: list[Any | None],
     ) -> bool:
-        """Run a single-consumer scalar-chain VJP in one CUDA kernel."""
-        from ..backend import execute_fused_elementwise
+        """Run a safe single-consumer elementwise-chain VJP in one CUDA kernel."""
+        from ..backend import execute_fused_elementwise_backward
 
-        reverse_instructions = tuple(reversed(group.instructions))
-        last = reverse_instructions[0]
+        instructions = group.instructions
+        last = instructions[-1]
         output_terms = gradient_terms[last.output_slot]
         if not output_terms:
             return True
         output_gradient = self._sum_gradient_values(output_terms)
-        gradients[last.output_slot] = output_gradient
-        if not last.input_variables[0].requires_grad:
-            return True
-
-        derivative_steps = []
-        for operation, scalar, reverse in reversed(group.fused_steps or ()):
-            if reverse:
-                return False
-            if operation in {"add", "subtract"}:
-                derivative_steps.append(("identity", None, False))
-            elif operation == "multiply":
-                derivative_steps.append(("multiply", scalar, False))
-            elif operation == "divide":
-                derivative_steps.append(("divide", scalar, False))
-            elif operation == "negate":
-                derivative_steps.append(("negate", None, False))
-            else:
-                return False
-
-        storages = execute_fused_elementwise(
+        source_variables = tuple(
+            self._variables[slot] for slot in group.fused_input_slots
+        )
+        source_values = tuple(variable.data for variable in source_variables)
+        steps = group.fused_steps or ()
+        output_shape = last.output_variable.shape
+        dtype = last.output_variable.dtype
+        storages = execute_fused_elementwise_backward(
+            source_values,
             output_gradient,
-            tuple(derivative_steps),
-            dtype=output_gradient.dtype,
+            steps,
+            dtype=dtype,
+            output_shape=output_shape,
         )
         if storages is None:
             return False
-        current_output_gradient = output_gradient
-        for instruction, storage in zip(reverse_instructions, storages):
-            gradients[instruction.output_slot] = current_output_gradient
-            input_variable = instruction.input_variables[0]
-            input_gradient = Tensor(
-                storage,
-                dtype=input_variable.dtype,
-                shape=input_variable.shape,
+
+        external_steps = tuple(
+            (step_index, operand_index)
+            for step_index, (_, scalar, _, operand_index) in enumerate(steps)
+            if scalar is None
+            and operand_index is not None
+            and operand_index >= 0
+        )
+        expected = len(instructions) + 1 + len(external_steps)
+        if len(storages) != expected:
+            raise RuntimeError(
+                "Fused elementwise VJP returned an unexpected output count"
             )
-            if input_variable.requires_grad:
-                gradient_terms[instruction.input_slots[0]].append(
-                    input_gradient
-                )
-            current_output_gradient = input_gradient
+
+        for instruction, storage in zip(instructions, storages):
+            gradients[instruction.output_slot] = Tensor(
+                storage,
+                dtype=dtype,
+                shape=output_shape,
+            )
+
+        def append_source_gradient(storage: Any, source_index: int) -> None:
+            slot = group.fused_input_slots[source_index]
+            variable = self._variables[slot]
+            if not variable.requires_grad:
+                return
+            gradient = Tensor(storage, dtype=dtype, shape=output_shape)
+            if gradient.shape != variable.shape:
+                from ..ops._utils import sum_to_shape
+
+                gradient = sum_to_shape(gradient, variable.shape)
+            if gradient.dtype != variable.dtype:
+                gradient = gradient.astype(variable.dtype)
+            gradient_terms[slot].append(gradient)
+
+        append_source_gradient(storages[len(instructions)], 0)
+        external_offset = len(instructions) + 1
+        for row, (_, operand_index) in enumerate(external_steps):
+            append_source_gradient(
+                storages[external_offset + row],
+                operand_index,
+            )
         return True
 
     @staticmethod

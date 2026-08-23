@@ -21,6 +21,7 @@ if TYPE_CHECKING:
         ComparisonOperation,
         DifferentiableReductionOperation,
         ExtremumOperation,
+        FusedElementwiseStep,
         LossReduction,
         NormalizationOperation,
         ReductionOperation,
@@ -226,97 +227,520 @@ def binary(
     )
 
 
-@lru_cache(maxsize=128)
-def _cuda_fused_scalar_kernel(
-    steps: tuple[tuple[str, float | None, bool], ...],
-) -> Any:
-    """Compile and cache one CuPy scalar-chain elementwise kernel."""
-    cupy = importlib.import_module("cupy")
-    statements = ["double current = input[index];"]
-    for index, (operation, scalar, reverse) in enumerate(steps):
-        if reverse:
-            raise ValueError("Fused scalar chains do not support reverse steps")
-        if operation == "identity":
-            expression = "current"
-        elif operation == "negate":
-            expression = "-current"
-        else:
-            if scalar is None:
-                raise ValueError("A fused binary step requires a scalar")
-            literal = format(float(scalar), ".17g")
-            operators = {
-                "add": "+",
-                "subtract": "-",
-                "multiply": "*",
-                "divide": "/",
-            }
-            operator = operators.get(operation)
-            if operator is None:
-                raise ValueError(
-                    f"Unsupported fused elementwise operation {operation!r}"
-                )
-            expression = f"current {operator} ({literal})"
-        statements.extend((
-            f"current = {expression};",
-            f"output[index + {index}ULL * size] = current;",
-        ))
+_FUSED_BINARY_OPERATIONS = frozenset({
+    "add",
+    "subtract",
+    "multiply",
+    "divide",
+})
+_FUSED_UNARY_OPERATIONS = frozenset({
+    "identity",
+    "negate",
+    "abs",
+    "exp",
+    "relu",
+    "sigmoid",
+    "tanh",
+    "softplus",
+})
 
-    signature = repr(steps).encode("utf-8")
-    digest = hashlib.sha1(signature).hexdigest()[:16]
-    name = f"tensors_scalar_chain_{digest}"
-    source = f"""
+
+def _contiguous_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
+    """Return row-major element strides for a shape."""
+    result = [1] * len(shape)
+    stride = 1
+    for index in range(len(shape) - 1, -1, -1):
+        result[index] = stride
+        stride *= shape[index]
+    return tuple(result)
+
+
+def _broadcast_offset_expression(
+    input_shape: tuple[int, ...],
+    output_shape: tuple[int, ...],
+) -> str:
+    """Return CUDA code mapping one flat output index to a broadcast input."""
+    if len(input_shape) > len(output_shape):
+        raise ValueError("Fused input rank exceeds the output rank")
+    aligned = (1,) * (len(output_shape) - len(input_shape)) + input_shape
+    input_strides = _contiguous_strides(aligned)
+    output_strides = _contiguous_strides(output_shape)
+    terms = []
+    for input_size, output_size, input_stride, output_stride in zip(
+        aligned,
+        output_shape,
+        input_strides,
+        output_strides,
+    ):
+        if input_size not in {1, output_size}:
+            raise ValueError("Fused input is not broadcast-compatible")
+        if input_size == 1:
+            continue
+        terms.append(
+            f"((index / {output_stride}ULL) % {output_size}ULL) "
+            f"* {input_stride}ULL"
+        )
+    return " + ".join(terms) if terms else "0ULL"
+
+
+def _fused_operand_expression(
+    step: FusedElementwiseStep,
+    current: str,
+) -> str | None:
+    """Return the scalar, current, or tensor operand expression for a step."""
+    _, scalar, _, operand_index = step
+    if scalar is not None:
+        return format(float(scalar), ".17g")
+    if operand_index == -1:
+        return current
+    if operand_index is not None:
+        return f"((double)input_{operand_index}[offset_{operand_index}])"
+    return None
+
+
+def _fused_unary_expression(operation: str, value: str) -> str:
+    """Return a range-stable CUDA expression for a total unary operation."""
+    if operation == "identity":
+        return value
+    if operation == "negate":
+        return f"-({value})"
+    if operation == "abs":
+        return f"fabs({value})"
+    if operation == "exp":
+        return f"exp({value})"
+    if operation == "relu":
+        return f"(isnan({value}) ? ({value}) : (({value}) > 0.0 ? ({value}) : 0.0))"
+    if operation == "sigmoid":
+        return (
+            f"(({value}) >= 0.0 "
+            f"? 1.0 / (1.0 + exp(-({value}))) "
+            f": exp({value}) / (1.0 + exp({value})))"
+        )
+    if operation == "tanh":
+        return f"tanh({value})"
+    if operation == "softplus":
+        return f"(log1p(exp(-fabs({value}))) + fmax(({value}), 0.0))"
+    raise ValueError(f"Unsupported fused unary operation {operation!r}")
+
+
+def _fused_step_expression(
+    step: FusedElementwiseStep,
+    current: str,
+) -> tuple[str, str | None]:
+    """Return a step expression and an optional denominator to validate."""
+    operation, _, reverse, _ = step
+    if operation in _FUSED_UNARY_OPERATIONS:
+        return _fused_unary_expression(operation, current), None
+    if operation not in _FUSED_BINARY_OPERATIONS:
+        raise ValueError(f"Unsupported fused operation {operation!r}")
+    operand = _fused_operand_expression(step, current)
+    if operand is None:
+        raise ValueError("A fused binary step requires an operand")
+    left, right = (operand, current) if reverse else (current, operand)
+    operators = {
+        "add": "+",
+        "subtract": "-",
+        "multiply": "*",
+        "divide": "/",
+    }
+    expression = f"({left}) {operators[operation]} ({right})"
+    return expression, right if operation == "divide" else None
+
+
+def _fused_value_statements(
+    name: str,
+    expression: str,
+    *,
+    dtype_name: str,
+) -> list[str]:
+    """Assign a working value with the same rounding as a graph boundary."""
+    if dtype_name == "float32":
+        return [
+            f"const float {name}_stored = (float)({expression});",
+            f"const double {name} = (double){name}_stored;",
+        ]
+    return [f"const double {name} = (double)({expression});"]
+
+
+def _fused_output_statement(
+    row: int,
+    expression: str,
+    *,
+    storage_type: str,
+) -> str:
+    return (
+        f"output[index + {row}ULL * size] = "
+        f"({storage_type})({expression});"
+    )
+
+
+def _fused_kernel_source(
+    *,
+    name: str,
+    input_shapes: tuple[tuple[int, ...], ...],
+    output_shape: tuple[int, ...],
+    storage_type: str,
+    body: list[str],
+    validate_division: bool,
+    include_gradient: bool,
+) -> str:
+    """Build one broadcast-aware CUDA kernel source string."""
+    parameters = [
+        f"const {storage_type}* input_{index}"
+        for index in range(len(input_shapes))
+    ]
+    if include_gradient:
+        parameters.append(f"const {storage_type}* gradient")
+    parameters.append(f"{storage_type}* output")
+    if validate_division:
+        parameters.append("int* error")
+    parameters.append("const unsigned long long size")
+    offsets = [
+        f"const unsigned long long offset_{index} = "
+        f"{_broadcast_offset_expression(shape, output_shape)};"
+        for index, shape in enumerate(input_shapes)
+    ]
+    joined_parameters = ",\n    ".join(parameters)
+    joined_body = "\n    ".join(offsets + body)
+    return f"""
 extern "C" __global__
 void {name}(
-    const double* input,
-    double* output,
-    const unsigned long long size
+    {joined_parameters}
 ) {{
     const unsigned long long index =
         (unsigned long long)blockDim.x * blockIdx.x + threadIdx.x;
     if (index >= size) {{
         return;
     }}
-    {" ".join(statements)}
+    {joined_body}
 }}
 """
-    return cupy.RawKernel(
-        source,
-        name,
+
+
+@lru_cache(maxsize=128)
+def _cuda_fused_elementwise_kernel(
+    steps: tuple[FusedElementwiseStep, ...],
+    dtype_name: str,
+    input_shapes: tuple[tuple[int, ...], ...],
+    output_shape: tuple[int, ...],
+) -> tuple[Any, bool]:
+    """Compile and cache one typed broadcast-aware forward kernel."""
+    cupy = importlib.import_module("cupy")
+    storage_type = "float" if dtype_name == "float32" else "double"
+    body = ["const double value_0 = (double)input_0[offset_0];"]
+    validate_division = False
+    for index, step in enumerate(steps):
+        expression, denominator = _fused_step_expression(
+            step,
+            f"value_{index}",
+        )
+        if denominator is not None:
+            _, scalar, reverse, operand_index = step
+            needs_check = scalar is None or reverse or operand_index is not None
+            if needs_check:
+                validate_division = True
+                body.append(
+                    f"if (({denominator}) == 0.0) {{ atomicExch(error, 1); }}"
+                )
+        body.extend(_fused_value_statements(
+            f"value_{index + 1}",
+            expression,
+            dtype_name=dtype_name,
+        ))
+        body.append(_fused_output_statement(
+            index,
+            f"value_{index + 1}",
+            storage_type=storage_type,
+        ))
+
+    signature = repr((
+        "forward",
+        steps,
+        dtype_name,
+        input_shapes,
+        output_shape,
+    )).encode("utf-8")
+    digest = hashlib.sha1(signature).hexdigest()[:16]
+    name = f"tensors_fused_forward_{digest}"
+    source = _fused_kernel_source(
+        name=name,
+        input_shapes=input_shapes,
+        output_shape=output_shape,
+        storage_type=storage_type,
+        body=body,
+        validate_division=validate_division,
+        include_gradient=False,
+    )
+    return cupy.RawKernel(source, name), validate_division
+
+
+def _fused_derivative_expressions(
+    step: FusedElementwiseStep,
+    value: str,
+) -> tuple[str, str | None]:
+    """Return derivatives with respect to current and an external operand."""
+    operation, scalar, reverse, operand_index = step
+    operand = _fused_operand_expression(step, value)
+    if operation == "identity":
+        return "1.0", None
+    if operation == "negate":
+        return "-1.0", None
+    if operation == "abs":
+        return (
+            f"(isnan({value}) ? ({value}) : "
+            f"(({value}) > 0.0 ? 1.0 : (({value}) < 0.0 ? -1.0 : 0.0)))",
+            None,
+        )
+    if operation == "exp":
+        return f"exp({value})", None
+    if operation == "relu":
+        return (
+            f"(isnan({value}) ? ({value}) : "
+            f"(({value}) > 0.0 ? 1.0 : 0.0))",
+            None,
+        )
+    if operation in {"sigmoid", "softplus"}:
+        z = (
+            f"(({value}) >= 0.0 ? exp(-({value})) : exp({value}))"
+        )
+        sigmoid_derivative = f"(({z}) / ((1.0 + ({z})) * (1.0 + ({z}))))"
+        if operation == "sigmoid":
+            return sigmoid_derivative, None
+        sigmoid_value = _fused_unary_expression("sigmoid", value)
+        return sigmoid_value, None
+    if operation == "tanh":
+        z = f"exp(-2.0 * fabs({value}))"
+        return f"(4.0 * ({z}) / ((1.0 + ({z})) * (1.0 + ({z}))))", None
+
+    if operation not in _FUSED_BINARY_OPERATIONS or operand is None:
+        raise ValueError(f"Unsupported fused backward operation {operation!r}")
+    if operand_index == -1:
+        derivatives = {
+            "add": "2.0",
+            "subtract": "0.0",
+            "multiply": f"(2.0 * ({value}))",
+        }
+        derivative = derivatives.get(operation)
+        if derivative is None:
+            raise ValueError("Self-division is not fused in backward")
+        return derivative, None
+    if operation == "add":
+        return "1.0", None if scalar is not None else "1.0"
+    if operation == "subtract":
+        current = "-1.0" if reverse else "1.0"
+        external = "1.0" if reverse else "-1.0"
+        return current, None if scalar is not None else external
+    if operation == "multiply":
+        return operand, None if scalar is not None else value
+    if operation == "divide":
+        if scalar is None or reverse:
+            raise ValueError("Tensor and reverse division use the stable VJP path")
+        return f"(1.0 / ({operand}))", None
+    raise ValueError(f"Unsupported fused backward operation {operation!r}")
+
+
+@lru_cache(maxsize=128)
+def _cuda_fused_elementwise_backward_kernel(
+    steps: tuple[FusedElementwiseStep, ...],
+    dtype_name: str,
+    input_shapes: tuple[tuple[int, ...], ...],
+    output_shape: tuple[int, ...],
+) -> Any:
+    """Compile and cache one typed VJP kernel for a fused chain."""
+    cupy = importlib.import_module("cupy")
+    storage_type = "float" if dtype_name == "float32" else "double"
+    body = ["const double value_0 = (double)input_0[offset_0];"]
+    for index, step in enumerate(steps):
+        expression, _ = _fused_step_expression(step, f"value_{index}")
+        body.extend(_fused_value_statements(
+            f"value_{index + 1}",
+            expression,
+            dtype_name=dtype_name,
+        ))
+
+    external_rows = {}
+    next_row = len(steps) + 1
+    for index, (_, scalar, _, operand_index) in enumerate(steps):
+        if scalar is None and operand_index is not None and operand_index >= 0:
+            external_rows[index] = next_row
+            next_row += 1
+
+    body.append(
+        f"const double upstream_{len(steps)} = (double)gradient[index];"
+    )
+    for index in range(len(steps) - 1, -1, -1):
+        upstream = f"upstream_{index + 1}"
+        body.append(_fused_output_statement(
+            index,
+            upstream,
+            storage_type=storage_type,
+        ))
+        current_derivative, operand_derivative = (
+            _fused_derivative_expressions(
+                steps[index],
+                f"value_{index}",
+            )
+        )
+        if operand_derivative is not None:
+            body.append(_fused_output_statement(
+                external_rows[index],
+                f"({upstream}) * ({operand_derivative})",
+                storage_type=storage_type,
+            ))
+        body.extend(_fused_value_statements(
+            f"upstream_{index}",
+            f"({upstream}) * ({current_derivative})",
+            dtype_name=dtype_name,
+        ))
+    body.append(_fused_output_statement(
+        len(steps),
+        "upstream_0",
+        storage_type=storage_type,
+    ))
+
+    signature = repr((
+        "backward",
+        steps,
+        dtype_name,
+        input_shapes,
+        output_shape,
+    )).encode("utf-8")
+    digest = hashlib.sha1(signature).hexdigest()[:16]
+    name = f"tensors_fused_backward_{digest}"
+    source = _fused_kernel_source(
+        name=name,
+        input_shapes=input_shapes,
+        output_shape=output_shape,
+        storage_type=storage_type,
+        body=body,
+        validate_division=False,
+        include_gradient=True,
+    )
+    return cupy.RawKernel(source, name)
+
+
+def _fused_arrays(
+    values: Sequence[Tensor],
+    dtype: DataType,
+    cupy: Any,
+) -> tuple[Any, ...]:
+    """Return contiguous device arrays cast to the fused storage dtype."""
+    provider_dtype = cupy.dtype(dtype.name)
+    return tuple(
+        _view(value, cupy).astype(provider_dtype, copy=False).reshape(-1)
+        for value in values
     )
 
 
 def fused_elementwise(
-    value: Tensor,
-    steps: tuple[tuple[str, float | None, bool], ...],
+    values: tuple[Tensor, ...],
+    steps: tuple[FusedElementwiseStep, ...],
     *,
     dtype: DataType,
+    output_shape: tuple[int, ...],
 ) -> tuple[Storage, ...] | None:
-    """Evaluate a float64 scalar chain with one asynchronous CUDA launch."""
+    """Evaluate a typed broadcast-aware expression chain in one CUDA launch."""
     from . import get_backend
 
-    if get_backend() != "cuda" or dtype.name != "float64" or len(steps) < 2:
+    if (
+        get_backend() != "cuda"
+        or dtype.kind != "floating"
+        or not values
+        or len(steps) < 2
+    ):
         return None
     cupy = _numpy()
-    values = _view(value, cupy).astype(cupy.float64, copy=False)
-    flat_values = values.reshape(-1)
-    result = cupy.empty(
-        (len(steps), flat_values.size),
-        dtype=cupy.float64,
-    )
+    size = 1
+    for dimension in output_shape:
+        size *= dimension
+    result = cupy.empty((len(steps), size), dtype=cupy.dtype(dtype.name))
+    if not size:
+        return tuple(CudaStorage(result[index], dtype) for index in range(len(steps)))
     try:
-        if flat_values.size:
-            threads = 256
-            blocks = (flat_values.size + threads - 1) // threads
-            _cuda_fused_scalar_kernel(steps)(
-                (blocks,),
-                (threads,),
-                (flat_values, result, cupy.uint64(flat_values.size)),
-            )
+        arrays = _fused_arrays(values, dtype, cupy)
+        kernel, validate_division = _cuda_fused_elementwise_kernel(
+            steps,
+            dtype.name,
+            tuple(value.shape for value in values),
+            output_shape,
+        )
+        error = cupy.zeros((1,), dtype=cupy.int32) if validate_division else None
+        threads = 256
+        blocks = (size + threads - 1) // threads
+        arguments = list(arrays)
+        arguments.append(result)
+        if error is not None:
+            arguments.append(error)
+        arguments.append(cupy.uint64(size))
+        kernel((blocks,), (threads,), tuple(arguments))
+        if error is not None and bool(error.item()):
+            raise ZeroDivisionError("Division by zero")
     except (TypeError, ValueError):
         return None
     return tuple(
         CudaStorage(result[index], dtype)
         for index in range(len(steps))
+    )
+
+
+def fused_elementwise_backward(
+    values: tuple[Tensor, ...],
+    grad: Tensor,
+    steps: tuple[FusedElementwiseStep, ...],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> tuple[Storage, ...] | None:
+    """Evaluate safe same-shape VJPs for a fused expression chain."""
+    from . import get_backend
+
+    if (
+        get_backend() != "cuda"
+        or dtype.kind != "floating"
+        or not values
+        or len(steps) < 2
+        or grad.shape != output_shape
+        or any(value.shape != output_shape for value in values)
+        or any(
+            operation == "divide" and (scalar is None or reverse)
+            for operation, scalar, reverse, _ in steps
+        )
+    ):
+        return None
+    cupy = _numpy()
+    size = grad.size
+    external_count = sum(
+        scalar is None and operand_index is not None and operand_index >= 0
+        for _, scalar, _, operand_index in steps
+    )
+    row_count = len(steps) + 1 + external_count
+    result = cupy.empty((row_count, size), dtype=cupy.dtype(dtype.name))
+    if not size:
+        return tuple(CudaStorage(result[index], dtype) for index in range(row_count))
+    try:
+        arrays = _fused_arrays(values, dtype, cupy)
+        gradient = _view(grad, cupy).astype(
+            cupy.dtype(dtype.name),
+            copy=False,
+        ).reshape(-1)
+        kernel = _cuda_fused_elementwise_backward_kernel(
+            steps,
+            dtype.name,
+            tuple(value.shape for value in values),
+            output_shape,
+        )
+        threads = 256
+        blocks = (size + threads - 1) // threads
+        kernel(
+            (blocks,),
+            (threads,),
+            tuple((*arrays, gradient, result, cupy.uint64(size))),
+        )
+    except (TypeError, ValueError):
+        return None
+    return tuple(
+        CudaStorage(result[index], dtype)
+        for index in range(row_count)
     )
 
 
