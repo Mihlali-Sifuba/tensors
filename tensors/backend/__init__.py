@@ -9,6 +9,7 @@ import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 from ..storage import Storage
@@ -39,6 +40,9 @@ ReductionOperation: TypeAlias = Literal[
     "norm",
 ]
 DifferentiableReductionOperation: TypeAlias = Literal[
+    "sum",
+    "mean",
+    "variance",
     "std",
     "prod",
     "min",
@@ -91,6 +95,7 @@ _VALID_BACKENDS = {"python", "numpy", "cuda", "auto"}
 _NUMPY_ELEMENTWISE_MIN_SIZE = 32
 _NUMPY_REDUCTION_MIN_SIZE = 8
 _NUMPY_MATMUL_MIN_WORK = 32
+_CUDA_FUSION_MIN_WORK = 8_192
 _backend_lock = threading.RLock()
 _backend_override: ContextVar[BackendName | None] = ContextVar(
     "tensors_backend_override",
@@ -174,13 +179,23 @@ def _array_work_is_large_enough(work: int, minimum: int) -> bool:
     return backend == "numpy" and work >= minimum
 
 
-def _backend_kernel(name: str) -> Any:
-    """Load a kernel from the active optional backend."""
-    backend = get_backend()
+@lru_cache(maxsize=None)
+def _load_backend_kernel(backend: BackendName, name: str) -> Any:
+    """Load and cache one optional-backend kernel callable."""
     if backend not in {"numpy", "cuda"}:
         raise RuntimeError("A kernel was requested for the Python backend")
     module = importlib.import_module(f"{__name__}.{backend}")
     return getattr(module, name)
+
+
+def _backend_kernel(name: str) -> Any:
+    """Return a cached kernel from the active optional backend."""
+    return _load_backend_kernel(get_backend(), name)
+
+
+def _clear_backend_kernel_cache() -> None:
+    """Forget cached callables after an explicit backend-context change."""
+    _load_backend_kernel.cache_clear()
 
 
 def get_backend() -> BackendName:
@@ -203,17 +218,23 @@ def set_backend(backend: BackendSelection) -> None:
     global _process_backend
     with _backend_lock:
         _process_backend = selected
+        _clear_backend_kernel_cache()
 
 
 @contextmanager
 def use_backend(backend: BackendSelection) -> Iterator[None]:
     """Temporarily select a backend in the current execution context."""
     selected = _resolve_backend(backend)
+    # Besides keeping the cache bounded across backend changes, clearing here
+    # ensures deliberate runtime replacement of an internal kernel (for
+    # instrumentation or tests) is observed on entry to the scoped backend.
+    _clear_backend_kernel_cache()
     token = _backend_override.set(selected)
     try:
         yield
     finally:
         _backend_override.reset(token)
+        _clear_backend_kernel_cache()
 
 
 def execute_matmul(
@@ -231,6 +252,21 @@ def execute_matmul(
 
     matmul = _backend_kernel("matmul")
     return matmul(left, right, dtype=dtype, output_shape=output_shape)
+
+
+def execute_matmul_gradient(
+    grad: Tensor,
+    left: Tensor,
+    right: Tensor,
+) -> tuple[Storage, Storage] | None:
+    """Run matrix-product VJPs with an accelerated backend when safe."""
+    contraction_size = left.shape[-1]
+    work = grad.size * contraction_size
+    if not _array_work_is_large_enough(work, _NUMPY_MATMUL_MIN_WORK):
+        return None
+
+    matmul_gradient = _backend_kernel("matmul_gradient")
+    return matmul_gradient(grad, left, right)
 
 
 def execute_binary(
@@ -256,6 +292,27 @@ def execute_binary(
         dtype=dtype,
         output_shape=output_shape,
     )
+
+
+def execute_fused_elementwise(
+    value: Tensor,
+    steps: Sequence[tuple[str, float | None, bool]],
+    *,
+    dtype: DataType,
+) -> tuple[Storage, ...] | None:
+    """Run a compatible scalar expression chain in one CUDA kernel."""
+    if (
+        get_backend() != "cuda"
+        or len(steps) < 2
+        or dtype.name != "float64"
+        or (
+            value.size * len(steps) < _CUDA_FUSION_MIN_WORK
+            and len(steps) < 64
+        )
+    ):
+        return None
+    fused_elementwise = _backend_kernel("fused_elementwise")
+    return fused_elementwise(value, tuple(steps), dtype=dtype)
 
 
 def execute_negate(
@@ -529,6 +586,25 @@ def execute_sgd_update(
     return sgd_update(parameter, gradient, learning_rate)
 
 
+def execute_sgd_updates(
+    parameters: Sequence[Tensor],
+    gradients: Sequence[Tensor],
+    learning_rate: float,
+) -> tuple[Storage, ...] | None:
+    """Update several compatible parameters with one native array batch."""
+    if (
+        len(parameters) < 2
+        or len(parameters) != len(gradients)
+        or not _array_work_is_large_enough(
+            sum(parameter.size for parameter in parameters),
+            _NUMPY_ELEMENTWISE_MIN_SIZE,
+        )
+    ):
+        return None
+    sgd_updates = _backend_kernel("sgd_updates")
+    return sgd_updates(parameters, gradients, learning_rate)
+
+
 def execute_adam_update(
     parameter: Tensor,
     gradient: Tensor,
@@ -566,6 +642,57 @@ def execute_adam_update(
     )
 
 
+def execute_adam_updates(
+    parameters: Sequence[Tensor],
+    gradients: Sequence[Tensor],
+    moments: Sequence[Tensor],
+    scales: Sequence[Tensor],
+    scaled_values: Sequence[Tensor],
+    *,
+    beta1: float,
+    beta2: float,
+    learning_rate: float,
+    epsilon: float,
+    first_corrections: Sequence[float],
+    second_corrections: Sequence[float],
+) -> tuple[tuple[Storage, ...], ...] | None:
+    """Update several compatible Adam states in one native array batch."""
+    count = len(parameters)
+    if (
+        count < 2
+        or any(
+            len(items) != count
+            for items in (
+                gradients,
+                moments,
+                scales,
+                scaled_values,
+                first_corrections,
+                second_corrections,
+            )
+        )
+        or not _array_work_is_large_enough(
+            sum(parameter.size for parameter in parameters),
+            _NUMPY_ELEMENTWISE_MIN_SIZE,
+        )
+    ):
+        return None
+    adam_updates = _backend_kernel("adam_updates")
+    return adam_updates(
+        parameters,
+        gradients,
+        moments,
+        scales,
+        scaled_values,
+        beta1=beta1,
+        beta2=beta2,
+        learning_rate=learning_rate,
+        epsilon=epsilon,
+        first_corrections=first_corrections,
+        second_corrections=second_corrections,
+    )
+
+
 def execute_rmsprop_update(
     parameter: Tensor,
     gradient: Tensor,
@@ -589,6 +716,42 @@ def execute_rmsprop_update(
         gradient,
         scale,
         scaled,
+        rho=rho,
+        learning_rate=learning_rate,
+        epsilon=epsilon,
+    )
+
+
+def execute_rmsprop_updates(
+    parameters: Sequence[Tensor],
+    gradients: Sequence[Tensor],
+    scales: Sequence[Tensor],
+    scaled_values: Sequence[Tensor],
+    *,
+    rho: float,
+    learning_rate: float,
+    epsilon: float,
+) -> tuple[tuple[Storage, ...], ...] | None:
+    """Update several compatible RMSprop states in one native array batch."""
+    count = len(parameters)
+    if (
+        count < 2
+        or any(
+            len(items) != count
+            for items in (gradients, scales, scaled_values)
+        )
+        or not _array_work_is_large_enough(
+            sum(parameter.size for parameter in parameters),
+            _NUMPY_ELEMENTWISE_MIN_SIZE,
+        )
+    ):
+        return None
+    rmsprop_updates = _backend_kernel("rmsprop_updates")
+    return rmsprop_updates(
+        parameters,
+        gradients,
+        scales,
+        scaled_values,
         rho=rho,
         learning_rate=learning_rate,
         epsilon=epsilon,
@@ -920,6 +1083,37 @@ def execute_cross_entropy(
         dtype=dtype,
         output_shape=output_shape,
     )
+
+
+def execute_one_hot_targets(
+    logits: Tensor,
+    targets: Tensor,
+    axis: int,
+) -> Storage | None:
+    """Expand class-index targets with the active array backend."""
+    if not _array_work_is_large_enough(
+        logits.size,
+        _NUMPY_ELEMENTWISE_MIN_SIZE,
+    ):
+        return None
+
+    one_hot_targets = _backend_kernel("one_hot_targets")
+    return one_hot_targets(logits, targets, axis)
+
+
+def execute_validate_distributions(
+    targets: Tensor,
+    axis: int,
+) -> bool | None:
+    """Validate dense probability rows with the active array backend."""
+    if not _array_work_is_large_enough(
+        targets.size,
+        _NUMPY_ELEMENTWISE_MIN_SIZE,
+    ):
+        return None
+
+    distributions_valid = _backend_kernel("distributions_valid")
+    return distributions_valid(targets, axis)
 
 
 def execute_cross_entropy_gradient(

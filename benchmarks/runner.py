@@ -13,14 +13,28 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypeAlias
 
 from tensors import get_backend
 
 
+BenchmarkBackend: TypeAlias = Literal["python", "numpy", "cuda"]
+BenchmarkLayer: TypeAlias = Literal[
+    "provider",
+    "kernel",
+    "public",
+    "storage",
+    "graph",
+    "autograd",
+    "optimizer",
+    "training",
+    "startup",
+]
+
+
 @dataclass(frozen=True)
 class BenchmarkCase:
-    """One independently calibrated public-API benchmark."""
+    """One independently calibrated benchmark with explicit applicability."""
 
     name: str
     run: Callable[[], object]
@@ -28,6 +42,12 @@ class BenchmarkCase:
     work_items: int | None = None
     gc_enabled: bool = False
     description: str = ""
+    layer: BenchmarkLayer = "public"
+    backends: frozenset[BenchmarkBackend] | None = None
+
+    def supports_backend(self, backend: str) -> bool:
+        """Return whether this case is meaningful for ``backend``."""
+        return self.backends is None or backend in self.backends
 
 
 def _calibrate(timer: timeit.Timer, target_seconds: float) -> int:
@@ -97,6 +117,7 @@ def measure(
 
     result: dict[str, Any] = {
         "description": case.description,
+        "layer": case.layer,
         "loops_per_sample": loops,
         "median_seconds": median_seconds,
         "minimum_seconds": min(samples),
@@ -180,8 +201,11 @@ def run_suite(
 ) -> dict[str, Any]:
     """Run cases in order and return a serializable report."""
     results: dict[str, Any] = {}
+    backend = get_backend()
     for case in cases:
-        print(f"Running [{get_backend()}] {case.name}...", flush=True)
+        if not case.supports_backend(backend):
+            continue
+        print(f"Running [{backend}] {case.name}...", flush=True)
         results[case.name] = measure(
             case,
             repeats=repeats,
@@ -238,6 +262,9 @@ def _throughput(value: float | None) -> str:
 def print_report(report: dict[str, Any]) -> None:
     """Print a compact comparison-friendly result table."""
     benchmarks = report["benchmarks"]
+    if not benchmarks:
+        print(f"\nBackend: {report['metadata']['backend']} (no eligible cases)")
+        return
     name_width = max([len("benchmark"), *(len(name) for name in benchmarks)])
     heading = (
         f"{'benchmark':<{name_width}}  {'median':>10}  "
@@ -259,9 +286,13 @@ def print_backend_comparison(report: dict[str, Any]) -> None:
     """Print backend medians, variability, and optional-backend speedups."""
     reports = report["backends"]
     backend_names = list(reports)
-    first_benchmarks = reports[backend_names[0]]["benchmarks"]
+    benchmark_names = list(dict.fromkeys(
+        name
+        for backend in backend_names
+        for name in reports[backend]["benchmarks"]
+    ))
     name_width = max(
-        [len("benchmark"), *(len(name) for name in first_benchmarks)]
+        [len("benchmark"), *(len(name) for name in benchmark_names)]
     )
     columns = "".join(
         f"  {backend + ' median':>14}  {backend + ' MAD':>10}"
@@ -281,21 +312,25 @@ def print_backend_comparison(report: dict[str, Any]) -> None:
     print("\nBackend comparison")
     print(heading)
     print("-" * len(heading))
-    for name in first_benchmarks:
+    for name in benchmark_names:
         row = f"{name:<{name_width}}"
         for backend in backend_names:
-            result = reports[backend]["benchmarks"][name]
-            row += (
-                f"  {_duration(result['median_seconds']):>14}"
-                f"  {result['variability_percent']:>9.2f}%"
-            )
+            result = reports[backend]["benchmarks"].get(name)
+            if result is None:
+                row += f"  {'-':>14}  {'-':>10}"
+            else:
+                row += (
+                    f"  {_duration(result['median_seconds']):>14}"
+                    f"  {result['variability_percent']:>9.2f}%"
+                )
         for backend in speedup_backends:
-            python_seconds = reports["python"]["benchmarks"][name][
-                "median_seconds"
-            ]
-            backend_seconds = reports[backend]["benchmarks"][name][
-                "median_seconds"
-            ]
+            python_result = reports["python"]["benchmarks"].get(name)
+            backend_result = reports[backend]["benchmarks"].get(name)
+            if python_result is None or backend_result is None:
+                row += f"  {'-':>13}"
+                continue
+            python_seconds = python_result["median_seconds"]
+            backend_seconds = backend_result["median_seconds"]
             speedup = (
                 float("inf")
                 if backend_seconds == 0.0

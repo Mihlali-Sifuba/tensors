@@ -169,7 +169,7 @@ class Div:
                 for g, x in zip(grad._data, a._data)
             )
             return [Tensor(list(values), dtype=dtype, shape=a.shape)]
-        return [Tensor([g / scalar for g in grad._data], dtype=grad.dtype.typecode, shape=grad.shape)]
+        return [Div.forward(grad, scalar)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):

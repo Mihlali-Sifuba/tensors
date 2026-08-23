@@ -4,7 +4,7 @@ import math
 from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
-from ..backend import execute_reduction
+from ..backend import execute_reduction, execute_reduction_gradient
 from ..dtype import float64
 from ..tensor import Tensor
 from ._reduction import (
@@ -63,9 +63,27 @@ class Mean:
         a = inputs[0]
         axis = kwargs.get("axis")
         keepdims = kwargs.get("keepdims", False)
-        count = reduction_size(a.shape, normalize_axes(a.ndim, axis))
+        axes = normalize_axes(a.ndim, axis)
+        output_shape = reduction_shape(a.shape, axes, keepdims)
+        if axis is None and not keepdims:
+            output_shape = (1,)
+        if grad.shape != output_shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match output shape "
+                f"{output_shape}"
+            )
+        count = reduction_size(a.shape, axes)
         if count == 0:
             return [Tensor([], dtype=grad.dtype, shape=a.shape)]
+        accelerated = execute_reduction_gradient(
+            "mean",
+            grad,
+            a,
+            axes,
+            keepdims=keepdims,
+        )
+        if accelerated is not None:
+            return [Tensor(accelerated, dtype=grad.dtype, shape=a.shape)]
         summed = Sum.backward(grad, a, axis=axis, keepdims=keepdims)[0]
         return [Tensor(
             [float(item) / count for item in summed._data],
@@ -76,6 +94,7 @@ class Mean:
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
         """Build a differentiable VJP for an axis-aware mean."""
+        from ..creation import ones
         from ..ops._utils import zero_like_graph
         from ..variable import Variable
         from .reshape import reshape
@@ -87,11 +106,11 @@ class Mean:
         if count == 0:
             return [zero_like_graph(value)]
         expanded = grad if keepdims else reshape(grad, keepdims_shape(value.shape, axis))
-        ones = Variable(
-            Tensor([1.0] * value.size, dtype=grad.dtype, shape=value.shape),
+        unit = Variable(
+            ones(value.shape, dtype=grad.dtype),
             requires_grad=False,
         )
-        return [(expanded * ones) / count]
+        return [(expanded * unit) / count]
 
 
 @overload
