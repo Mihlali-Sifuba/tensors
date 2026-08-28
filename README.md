@@ -1,27 +1,32 @@
 # tensors
 
 <p align="center">
-  <strong>A small tensor and automatic-differentiation engine with a transparent Python reference implementation.</strong>
+  <strong>A tensor and automatic-differentiation engine with Python, NumPy, and NVIDIA CUDA backends.</strong>
 </p>
 
 <p align="center">
-  Learn how tensor operations, computation graphs, gradients, and optimizers work by building with them directly.
+  Build numerical workloads with eager execution, reusable computation graphs, and hardware-accelerated backends.
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/ms-tensors/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/ms-tensors?color=3775A9"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white">
-  <img alt="Backend" src="https://img.shields.io/badge/backend-Python%20%7C%20NumPy-7A3E9D">
-  <img alt="Status" src="https://img.shields.io/badge/status-experimental-F59E0B">
+  <img alt="Backend" src="https://img.shields.io/badge/backend-Python%20%7C%20NumPy%20%7C%20CUDA-7A3E9D">
+  <img alt="Status" src="https://img.shields.io/badge/status-active%20development-2E8B57">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-D22128"></a>
 </p>
 
 ---
 
-`tensors` is a compact numerical-computing project for exploring the machinery behind modern machine-learning frameworks. It includes multidimensional tensors, broadcasting, reverse-mode automatic differentiation, reusable computation graphs, higher-order derivatives, common mathematical functions, losses, and optimizers. A transparent pure-Python implementation defines the behaviour, while optional NumPy kernels can accelerate supported operations without changing the mathematical API.
+`tensors` is a numerical-computing library for multidimensional tensor workloads and automatic differentiation. It includes broadcasting, reverse-mode automatic differentiation, reusable computation graphs, higher-order derivatives, common mathematical functions, losses, and optimizers. A portable Python backend defines consistent behaviour, while optional NumPy and CUDA kernels accelerate supported operations without changing the public API.
+
+CUDA is a supported optional backend. With a compatible NVIDIA GPU and the
+appropriate CuPy extra installed, tensor operations, graph replay, automatic
+differentiation, and optimizer updates can remain device-resident while using
+the same public API as the Python and NumPy backends.
 
 > [!NOTE]
-> This project is currently an educational, experimental implementation. It prioritizes clarity and correctness over production-scale performance.
+> This project is under active pre-1.0 development with a production-readiness focus. APIs and performance characteristics may continue to evolve before 1.0.
 
 ## API philosophy
 
@@ -109,8 +114,8 @@ represents well.
 
 The numerical backend follows the same principle. Backend selection is
 application configuration, not a second expression language: tensors, graphs,
-gradients, and training loops are written identically under the Python and NumPy
-implementations.
+gradients, and training loops are written identically under the Python, NumPy,
+and CUDA implementations.
 
 ## Highlights
 
@@ -119,7 +124,7 @@ implementations.
 - First-order gradients plus Jacobians, Hessians, and higher-order derivative graphs
 - Class-based and function-based `Graph` models with automatic parameter discovery
 - Linear algebra including matrix multiplication, dot products, outer products, transposes, and norms
-- Runtime-selectable Python and optional NumPy numerical backends
+- Runtime-selectable Python, NumPy, and CUDA numerical backends
 - Neural-network functions including ReLU, sigmoid, tanh, softmax, and softplus
 - Stable cross-entropy and binary cross-entropy losses
 - SGD, Adam, and RMSprop optimizers
@@ -144,18 +149,29 @@ Install the optional NumPy backend into the same environment with:
 python -m pip install "ms-tensors[numpy]"
 ```
 
-Both backends then remain available without reinstalling the package. Python is
-the default; select NumPy once before expressing the computation:
+For an NVIDIA GPU, install one CuPy build matching the CUDA generation supported
+by the installed driver:
+
+```powershell
+python -m pip install "ms-tensors[cuda12]"
+# or
+python -m pip install "ms-tensors[cuda13]"
+```
+
+Installed backends coexist in the same environment. Python is the default;
+select an accelerated backend once before expressing the computation:
 
 ```python
 import tensors as ts
 
 ts.set_backend("numpy")
+# or: ts.set_backend("cuda")
 ```
 
 Use `ts.use_backend(...)` for a scoped override or set `TENSORS_BACKEND` for a
-script. See [Numerical backends](docs/backends.md) for selection, fallback, and
-concurrency behaviour.
+script. See [Numerical backends](docs/backends.md) for selection, fallback,
+concurrency, device residency, and guidance on choosing a backend for a
+workload.
 
 ## Quick start
 
@@ -259,7 +275,7 @@ for _ in range(100):
 
 ## Examples
 
-The [`examples`](examples) directory contains runnable demonstrations in a suggested learning order:
+The [`examples`](examples) directory contains runnable demonstrations of representative workflows:
 
 1. `computation_forward.py` — inspect and replay a simple computation
 2. `graph_structure.py` — explore nodes, edges, and graph state
@@ -290,18 +306,26 @@ python -m mypy
 
 ## Run the benchmarks
 
-A dependency-free benchmark suite tracks tensor operations, graph tracing and
-replay, automatic differentiation, and a complete training step. It compares all
-available numerical backends by default. Run the short development suite with:
+A dependency-free benchmark suite tracks operations from raw provider kernels
+through storage, the public API, graph tracing, automatic differentiation, and
+complete training phases. The compact `core` suite compares all available
+numerical backends by default. Run its short development configuration with:
 
 ```powershell
 python -m benchmarks --quick
 ```
 
-Use `python -m benchmarks` for a longer run or write a machine-readable report
-with `python -m benchmarks --output benchmark-results.json`. See the
-[`benchmarks` guide](benchmarks/README.md) for the case matrix and measurement
-methodology.
+The core cases are intentionally small regression baselines. They are useful
+for tracking latency and framework overhead, but they should not be used alone
+to rank NumPy and CUDA: small operations usually favour NumPy because CUDA must
+launch and complete device work. Use the scaling, graph, and optimizer suites
+to find the crossover for a particular machine and workload.
+
+Use `python -m benchmarks` for a longer core run, or target an attribution suite
+such as `python -m benchmarks --backend accelerated --suite scaling`. Write a
+machine-readable report with `--output benchmark-results.json`. See the
+[`benchmarks` guide](benchmarks/README.md) for the full case matrix, backend
+eligibility, and measurement methodology.
 
 ## Project structure
 
@@ -309,6 +333,7 @@ methodology.
 tensors/
 ├── tensors/
 │   ├── backend/           # backend selection and optional kernels
+│   ├── storage/           # Python, NumPy, and CUDA native storage
 │   ├── graph/             # computation graphs and automatic differentiation
 │   ├── linalg/            # linear-algebra operations
 │   ├── math/              # reductions, activations, losses, and shape operations
@@ -346,5 +371,5 @@ modify, and distribute it under the terms of that license.
 ---
 
 <p align="center">
-  Built to make tensor internals easier to inspect, understand, and improve.
+  Built for reliable, backend-portable tensor computation.
 </p>

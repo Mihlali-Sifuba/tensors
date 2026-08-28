@@ -1,8 +1,4 @@
-"""NumPy backend kernels.
-
-The implementations are shared with the CUDA backend because NumPy and CuPy
-provide the same array-operation surface used by tensors.
-"""
+"""CUDA backend kernels implemented with CuPy."""
 
 from ._array import (
     adam_update,
@@ -25,6 +21,8 @@ from ._array import (
     extremum_gradient,
     eye,
     full,
+    fused_elementwise,
+    fused_elementwise_backward,
     linspace,
     logsumexp,
     logsumexp_gradient,

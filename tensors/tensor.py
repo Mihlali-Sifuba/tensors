@@ -15,6 +15,7 @@ from ._typing import (
     TensorResult,
 )
 from .casting import cast_values
+from .storage import PythonStorage, Storage, StorageKind, convert_storage
 from .utils.lists import flatten_nested_list, infer_nested_list_shape
 from .utils.shape import (
     normalize_shape,
@@ -30,15 +31,20 @@ if TYPE_CHECKING:
 
 class Tensor:
     """
-    A simple tensor implementation using Python's array module.
+    An n-dimensional typed tensor with backend-native storage.
+
+    Tensor operations dispatch through the configured Python, NumPy, or CUDA
+    backend and preserve native storage where possible.
 
     Supports:
-    - N-dimensional tensors
-    - Basic operations (add, subtract, multiply)
-    - Reshaping
-    - Transpose
-    - Indexing and slicing
-    - Scalar arithmetic
+    - Broadcasting and scalar arithmetic
+    - Matrix multiplication
+    - Reshaping and transposition
+    - Indexing, slicing, and mutation
+    - Dtype conversion and scalar extraction
+
+    Gradient tracking is provided by :class:`Variable`; ``Tensor`` itself is
+    the non-differentiable value and storage abstraction.
     """
 
     def __init__(
@@ -48,20 +54,28 @@ class Tensor:
         shape: tuple[int, ...] | None = None,
     ) -> None:
         """
-        Initialize a Tensor.
+        Initialize a tensor.
 
         Args:
-            data: The data to store (list, array, number, or another Tensor)
-            dtype: Data type (e.g. ``float64``, ``float32``, ``int32``).
-                   Accepts a ``DataType``, a raw array typecode string, or a
-                   human-readable dtype name such as ``"float32"``.
-                   Defaults to ``float64``.
-            shape: Shape of the tensor. If None, inferred from data.
+            data: Scalar, nested list, array, backend storage, or tensor to
+                initialize from.
+            dtype: Optional ``DataType``, array typecode, or dtype name.
+                Existing dtype is preserved for tensor, storage, and array
+                inputs; otherwise, the default is ``float64``.
+            shape: Optional tensor shape. When omitted, inferred from ``data``.
+
+        Raises:
+            TypeError: If ``data`` or ``dtype`` is unsupported, or a storage
+                dtype conflicts with ``dtype``.
+            ValueError: If a dtype name is unknown or the data size does not
+                match ``shape``.
         """
         # Resolve dtype. Copies and raw arrays preserve their dtype unless
         # the caller explicitly requests a conversion.
         if dtype is None:
             if isinstance(data, Tensor):
+                dtype = data.dtype
+            elif isinstance(data, Storage):
                 dtype = data.dtype
             elif isinstance(data, array):
                 dtype = _dtype.from_typecode(data.typecode)
@@ -78,25 +92,40 @@ class Tensor:
 
         # Handle different input types ----------------------------------
         if isinstance(data, Tensor):
-            # Copy from another tensor
-            self._data = self._create_storage(data._data)
+            # Preserve native storage for same-dtype copies. An explicitly
+            # requested dtype still follows Tensor's normal cast semantics.
+            if data.dtype == self.dtype:
+                self._set_storage(data._storage.copy())
+            else:
+                self._set_storage(
+                    PythonStorage.from_values(data._data, self.dtype)
+                )
             inferred_shape = data.shape
+
+        elif isinstance(data, Storage):
+            if data.dtype != self.dtype:
+                raise TypeError(
+                    f"storage dtype {data.dtype.name!r} does not match "
+                    f"tensor dtype {self.dtype.name!r}"
+                )
+            self._set_storage(data)
+            inferred_shape = (data.size,)
 
         elif isinstance(data, (int, float)):
             # Scalar value
-            self._data = self._create_storage([data])
+            self._set_storage(PythonStorage.from_values([data], self.dtype))
             inferred_shape = (1,)
 
         elif isinstance(data, list):
             # Flatten the list if it's nested
             flat_data = flatten_nested_list(data)
-            self._data = self._create_storage(flat_data)
+            self._set_storage(PythonStorage.from_values(flat_data, self.dtype))
 
             inferred_shape = infer_nested_list_shape(data)
 
         elif isinstance(data, array):
             # Direct array input
-            self._data = self._create_storage(data)
+            self._set_storage(PythonStorage.from_values(data, self.dtype))
             inferred_shape = (len(data),)
 
         else:
@@ -115,11 +144,43 @@ class Tensor:
 
         # Verify total elements match shape
         expected_element_count = shape_size(self.shape)
-        if len(self._data) != expected_element_count:
+        if self._storage.size != expected_element_count:
             raise ValueError(
-                f"Data size {len(self._data)} does not match shape {self.shape} "
+                f"Data size {self._storage.size} does not match shape {self.shape} "
                 f"(expected {expected_element_count} elements)"
             )
+
+    def _set_storage(self, storage: Storage) -> None:
+        """Install authoritative storage and invalidate other representations."""
+        self._storage = storage
+        self._storage_cache: dict[StorageKind, Storage] = {
+            storage.kind: storage,
+        }
+
+    def _storage_for(self, kind: StorageKind) -> Storage:
+        """Return a cached native representation, converting only once."""
+        cached = self._storage_cache.get(kind)
+        if cached is not None:
+            return cached
+        converted = convert_storage(self._storage, kind)
+        self._storage_cache[kind] = converted
+        return converted
+
+    def _mutable_data(self) -> array:
+        """Return authoritative host storage for an in-place mutation."""
+        storage = self._storage_for("python")
+        if not isinstance(storage, PythonStorage):
+            raise TypeError("Python storage conversion returned an invalid buffer")
+        self._set_storage(storage)
+        return storage.buffer
+
+    @property
+    def _data(self) -> array:
+        """Compatibility view for reference kernels that read host values."""
+        storage = self._storage_for("python")
+        if not isinstance(storage, PythonStorage):
+            raise TypeError("Python storage conversion returned an invalid buffer")
+        return storage.buffer
 
     def _create_storage(self, values: Iterable[Scalar]) -> array:
         """Create this tensor's backing storage."""
@@ -158,7 +219,11 @@ class Tensor:
         )
         if accelerated is not None:
             if output_shape == ():
-                return accelerated[0]
+                return Tensor(
+                    accelerated,
+                    dtype=self.dtype,
+                    shape=output_shape,
+                ).item()
             return Tensor(
                 accelerated,
                 dtype=self.dtype,
@@ -256,8 +321,9 @@ class Tensor:
                 f"expected {len(flat_indices)}"
             )
 
+        mutable_data = self._mutable_data()
         for flat_index, assignment_value in zip(flat_indices, assignment_values):
-            self._data[flat_index] = assignment_value
+            mutable_data[flat_index] = assignment_value
         self._version += 1
 
     def __setitem__(
@@ -278,7 +344,7 @@ class Tensor:
                     f"Cannot assign to {self.ndim}D tensor with single integer"
                 )
             idx = indices_to_flat_index((key,), self.shape)
-            self._data[idx] = self._assignment_scalar(value)
+            self._mutable_data()[idx] = self._assignment_scalar(value)
             self._version += 1
             return
 
@@ -290,7 +356,7 @@ class Tensor:
                 return
 
             idx = indices_to_flat_index(key, self.shape)
-            self._data[idx] = self._assignment_scalar(value)
+            self._mutable_data()[idx] = self._assignment_scalar(value)
             self._version += 1
             return
 
@@ -374,7 +440,7 @@ class Tensor:
     @property
     def size(self) -> int:
         """Total number of elements."""
-        return len(self._data)
+        return self._storage.size
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -399,7 +465,7 @@ class Tensor:
     @property
     def itemsize(self) -> int:
         """Size of each element in bytes."""
-        return self._data.itemsize
+        return self.dtype.size
 
     def tolist(self) -> list[Scalar]:
         """Convert to Python list."""

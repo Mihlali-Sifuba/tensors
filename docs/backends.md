@@ -2,109 +2,156 @@
 
 The public API expresses tensor mathematics independently of its numerical
 implementation. Backend selection changes how supported kernels are calculated;
-it does not create a different tensor type or alter how graphs, gradients, and
+it does not create another tensor type or change how graphs, gradients, and
 training loops are written.
 
 ## Installation
 
 The Python backend has no third-party runtime dependencies and is always
-available. Install the optional NumPy backend with the same package:
+available. Optional backends are installed into the same environment:
 
 ```powershell
 python -m pip install "ms-tensors[numpy]"
+python -m pip install "ms-tensors[cuda12]"  # CUDA 12 runtime
+python -m pip install "ms-tensors[cuda13]"  # CUDA 13 runtime
 ```
 
-Both backends then coexist in the same environment. Tensors retain canonical
-`array.array` storage, so the same tensor and recorded computation can be used
-with either backend.
+Install only one CUDA extra. It supplies CuPy and its CUDA runtime libraries;
+the machine still needs a compatible NVIDIA driver and CUDA-capable GPU. Python,
+NumPy, and the selected CUDA backend can coexist without separate `tensors`
+installations.
 
 ## Selection
 
-Python is the default backend. Select NumPy once for an application:
+Python is the default. Select an accelerated backend once for an application:
 
 ```python
 import tensors as ts
 
 ts.set_backend("numpy")
+# or
+ts.set_backend("cuda")
 ```
 
-Inspect backend state with:
+`ts.available_backends()` reports backends that can execute in the current
+environment, and `ts.get_backend()` returns the active selection. Use a scoped
+override for tests, comparisons, or one complete training step:
 
 ```python
-ts.available_backends()
-ts.get_backend()
-```
-
-Use a scoped override for tests, comparisons, or one complete training step:
-
-```python
-with ts.use_backend("numpy"):
+with ts.use_backend("cuda"):
     prediction = model(inputs)
     loss = ts.mean((prediction - targets) ** 2.0)
     ts.backward(loss)
     optimizer.step()
 ```
 
-Scoped overrides are context-local and restore the previous backend even when an
-exception is raised. Set the process default before starting worker threads;
-new threads use that process default rather than inheriting a temporary override.
+Scoped overrides are context-local and restore the previous backend even when
+an exception is raised. Set the process default before starting worker threads;
+new threads use that default rather than inheriting a temporary override.
 
-For scripts and CI, select the initial backend through the environment:
+For scripts and CI, set the initial backend through the environment:
 
 ```powershell
-$env:TENSORS_BACKEND = "numpy"
+$env:TENSORS_BACKEND = "cuda"
 python train.py
 ```
 
-Valid selections are `python`, `numpy`, and `auto`. Auto mode selects NumPy when
-it is installed and otherwise uses Python. An explicit unavailable or unknown
-backend raises an error rather than silently changing implementations.
+Valid selections are `python`, `numpy`, `cuda`, and `auto`. Auto mode deliberately
+selects NumPy when installed and otherwise Python; it does not move work to a GPU
+implicitly. Selecting an unavailable or unknown backend raises an error.
 
-## Kernel coverage
+## Native storage
 
-The NumPy backend accelerates the numerical surface without introducing a
-second public API. Kernel families include:
+Backend selection does not alter the public `Tensor` type, but supported kernels
+retain results in their natural internal representation:
 
-- broadcasting arithmetic, power, negation, casting, slicing, and slice scatter;
-- unary mathematical functions and their first-order gradients;
-- sum, mean, variance, standard deviation, product, norm, extrema, and
-  arg-extrema reductions;
-- softmax, log-softmax, log-sum-exp, cross-entropy, and binary cross-entropy;
-- comparisons, `where`, clipping, and elementwise minimum and maximum;
-- floating-point `dot`, `matmul`, outer products, transposes, concatenation,
-  and stacking;
-- constant, range, evenly spaced, and identity-like tensor construction; and
-- fused SGD, Adam, and RMSprop parameter updates.
+- Python uses `array.array`;
+- NumPy uses `numpy.ndarray`; and
+- CUDA uses device-resident `cupy.ndarray`.
 
-Unary, normalization, loss, outer-product, extrema, clipping, and selection
-families include dedicated first-order kernels. Other gradient rules compose
-already-dispatched primitives or structural slices. Broadcast-gradient
-reductions are fused so an elementwise derivative can multiply and reduce
-without constructing another Python-level broadcast traversal.
+Representations are converted lazily and cached. A Python tensor transferred for
+a NumPy or CUDA operation is reused by later operations on that backend, and a
+CUDA result stays on the device across a chain of expressions. Public operations
+such as `tolist()` materialize host values when needed. An in-place mutation
+makes host storage authoritative and invalidates cached native representations,
+preventing stale backend data.
 
-Integer matrix products and floating-point edge cases that require the
-reference implementation's stable summation, scaled moments, exact
-cancellation, or boundary rules fall back to the Python kernel.
+These storage classes are internal implementation details, not a second public
+array API. Users continue to write ordinary tensor expressions.
 
-Backend selection expresses a preference rather than forcing every operation
-through NumPy. Internal dispatch keeps very small elementwise operations and
-matrix products on the Python implementation when NumPy setup would cost more
-than the numerical work. Current local crossover benchmarks use 32 output
-elements for elementwise kernels, eight input elements for reductions, and 32
-multiply-accumulate work units for matrix products.
+## Kernel coverage and fallback
 
-Graph recording and automatic differentiation remain backend-agnostic. Primitive
-operations used while constructing or differentiating a graph use the active
-backend, and replaying a recorded computation uses the backend active for that
-replay.
+NumPy and CUDA share kernels for broadcasting arithmetic, unary mathematics,
+reductions, normalization, losses, selection, layout operations, tensor
+construction, linear algebra, gradients, and fused optimizer updates.
+
+The Python implementation defines shape, dtype, error, and differentiation
+semantics. Optional kernels return to that implementation for edge cases that
+need stable reference algorithms or exact Python integer intermediates. CuPy has
+no Python object dtype, so exact integer operations currently use the Python
+path; floating-point kernels remain device-resident.
+
+Small NumPy workloads may use Python when array setup would cost more than the
+numerical work. Explicit CUDA selection keeps supported floating-point work on
+the device, although launch and synchronization overhead can make small
+expressions slower than CPU execution.
+
+Graph recording and automatic differentiation remain backend-agnostic.
+Primitives used while tracing, differentiating, or replaying a graph use the
+backend active for that operation.
+
+## Performance model
+
+Backend choice is workload-dependent:
+
+- Python is the transparent reference implementation and is useful for
+  inspection, exact-integer edge cases, and environments without optional
+  dependencies.
+- NumPy usually gives the best latency for small and medium CPU workloads. It
+  also avoids GPU launch and synchronization costs.
+- CUDA is intended for wide tensors, deep replayed computations, large matrix
+  operations, and sufficiently batched training work. Small CUDA operations can
+  be slower even when their numerical kernel is efficient.
+
+CUDA performs best when values remain device-resident. Chained tensor
+expressions, graph replay, native gradients, and optimizer updates preserve
+CUDA storage. Calls such as `item()` and `tolist()` intentionally materialize
+host values and therefore synchronize or transfer data. Frequent host
+inspection inside a training loop can erase the benefit of device execution.
+
+`Computation` resolves graph slots and operation callables once, then reuses
+thread-local execution workspaces on forward and backward replay. Compatible
+float32 and float64 elementwise chains—including broadcast tensor arithmetic,
+scalar powers, and common unary mathematics—can be fused into one CUDA launch
+while retaining the intermediate tensor values required by graph semantics.
+Reduction VJPs execute
+on the selected optional backend when their stable native path is valid, and
+SGD, Adam, and RMSprop batch compatible parameter updates to reduce repeated
+dispatch and launch overhead.
+
+These optimizations do not bypass the behaviour contract. Numerically delicate
+or unsupported cases still use the stable Python implementation.
+
+Use the benchmark attribution suites instead of one small operation to choose a
+backend:
+
+```powershell
+python -m benchmarks --backend accelerated --suite provider
+python -m benchmarks --backend accelerated --suite scaling
+python -m benchmarks --backend accelerated --suite storage
+python -m benchmarks --backend accelerated --suite graph --match width-100000
+python -m benchmarks --backend accelerated --suite optimizer
+```
+
+The `provider` suite separates NumPy or CuPy time from internal kernel guards,
+`storage` exposes transfer and materialization costs, and `scaling` shows the
+size at which an accelerator begins to repay its fixed overhead. CUDA timings
+include stream synchronization, so they represent completed device work. See
+the [benchmark guide](../benchmarks/README.md) for the complete methodology.
 
 ## Behaviour contract
 
-The Python implementation defines backend-independent shape, dtype, error, and
-automatic-differentiation behaviour. NumPy kernels preserve that contract. Exact
-integer results and structural behaviour must match; floating-point results are
-expected to agree within dtype-appropriate tolerances.
-
-NumPy arrays are not exposed through this initial backend. Public array
-interoperability requires separate copy, shared-memory, mutation, and versioning
-semantics and is therefore outside the backend-selection contract.
+Exact integer results and structural behaviour must match the Python reference.
+Floating-point results are expected to agree within dtype-appropriate
+tolerances. Changing a backend is an execution choice, not a change to the
+mathematical API.

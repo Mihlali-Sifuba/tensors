@@ -141,23 +141,27 @@ class Div:
         if len(inputs) == 2:
             a, b = inputs
             expanded_a, expanded_b = broadcast_tensors(a, b)
-            da = Tensor(
-                [g / y for g, y in zip(grad._data, expanded_b._data)],
-                dtype=grad.dtype,
-                shape=grad.shape,
+            da = Div.forward(grad, expanded_b)
+            accelerated = execute_division_denominator_gradient(
+                grad,
+                expanded_a,
+                expanded_b,
             )
-            db = Tensor(
-                [
-                    _negative_product_over_square(g, x, y)
-                    for g, x, y in zip(
-                        grad._data,
-                        expanded_a._data,
-                        expanded_b._data,
-                    )
-                ],
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
+            if accelerated is not None:
+                db = Tensor(accelerated, dtype=grad.dtype, shape=grad.shape)
+            else:
+                db = Tensor(
+                    [
+                        _negative_product_over_square(g, x, y)
+                        for g, x, y in zip(
+                            grad._data,
+                            expanded_a._data,
+                            expanded_b._data,
+                        )
+                    ],
+                    dtype=grad.dtype,
+                    shape=grad.shape,
+                )
             return [sum_to_shape(da, a.shape), sum_to_shape(db, b.shape)]
         scalar = kwargs.get("scalar", 1.0)
         assert isinstance(scalar, (int, float))
@@ -169,7 +173,7 @@ class Div:
                 for g, x in zip(grad._data, a._data)
             )
             return [Tensor(list(values), dtype=dtype, shape=a.shape)]
-        return [Tensor([g / scalar for g in grad._data], dtype=grad.dtype.typecode, shape=grad.shape)]
+        return [Div.forward(grad, scalar)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):

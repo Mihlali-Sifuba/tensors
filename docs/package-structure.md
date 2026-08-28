@@ -74,7 +74,16 @@ tensors/
 ├── __init__.py            # root public facade
 ├── backend/               # backend selection and optional kernels
 │   ├── __init__.py
-│   └── numpy.py
+│   ├── _array.py          # shared NumPy/CuPy kernel implementation
+│   ├── numpy.py
+│   └── cuda.py
+├── storage/               # internal native storage implementations
+│   ├── __init__.py
+│   ├── _base.py
+│   ├── _conversion.py
+│   ├── python.py
+│   ├── numpy.py
+│   └── cuda.py
 ├── _typing.py             # shared public type aliases
 ├── tensor.py              # Tensor storage, construction, and indexing
 ├── variable.py            # differentiable value type
@@ -139,8 +148,11 @@ ts.mean(x)
 
 The folders have deliberately narrow responsibilities:
 
-- `backend` owns process and context-local selection, internal kernel dispatch,
-  and optional accelerated implementations.
+- `backend` owns process and context-local selection, cached internal kernel
+  dispatch, provider-neutral array kernels, and optional NumPy/CUDA entry
+  points.
+- `storage` owns the internal Python, NumPy, and CUDA representations and their
+  lazy conversion cache. Storage classes are not a second public tensor API.
 - `creation` provides public constructors for mathematically defined tensor
   values, including zeros, ones, ranges, and identity matrices.
 - `ops` contains primitive differentiable operations such as arithmetic,
@@ -154,7 +166,8 @@ The folders have deliberately narrow responsibilities:
   reductions into extra namespaces.
 - `graph` owns tracing state, operation protocols, computation execution,
   derivatives, and reusable computational model functions.
-- `Computation` owns forward and backward execution; `ts.backward` is a root
+- `Computation` owns compiled forward and backward plans, reusable execution
+  workspaces, and eligible CUDA chain fusion; `ts.backward` is a root
   convenience alias.
 - `optim` provides the shared optimizer contract plus SGD, Adam, and RMSprop.
 
