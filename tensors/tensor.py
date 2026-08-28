@@ -31,15 +31,20 @@ if TYPE_CHECKING:
 
 class Tensor:
     """
-    A simple tensor implementation with backend-native internal storage.
+    An n-dimensional typed tensor with backend-native storage.
+
+    Tensor operations dispatch through the configured Python, NumPy, or CUDA
+    backend and preserve native storage where possible.
 
     Supports:
-    - N-dimensional tensors
-    - Basic operations (add, subtract, multiply)
-    - Reshaping
-    - Transpose
-    - Indexing and slicing
-    - Scalar arithmetic
+    - Broadcasting and scalar arithmetic
+    - Matrix multiplication
+    - Reshaping and transposition
+    - Indexing, slicing, and mutation
+    - Dtype conversion and scalar extraction
+
+    Gradient tracking is provided by :class:`Variable`; ``Tensor`` itself is
+    the non-differentiable value and storage abstraction.
     """
 
     def __init__(
@@ -49,15 +54,21 @@ class Tensor:
         shape: tuple[int, ...] | None = None,
     ) -> None:
         """
-        Initialize a Tensor.
+        Initialize a tensor.
 
         Args:
-            data: The data to store (list, array, number, or another Tensor)
-            dtype: Data type (e.g. ``float64``, ``float32``, ``int32``).
-                   Accepts a ``DataType``, a raw array typecode string, or a
-                   human-readable dtype name such as ``"float32"``.
-                   Defaults to ``float64``.
-            shape: Shape of the tensor. If None, inferred from data.
+            data: Scalar, nested list, array, backend storage, or tensor to
+                initialize from.
+            dtype: Optional ``DataType``, array typecode, or dtype name.
+                Existing dtype is preserved for tensor, storage, and array
+                inputs; otherwise, the default is ``float64``.
+            shape: Optional tensor shape. When omitted, inferred from ``data``.
+
+        Raises:
+            TypeError: If ``data`` or ``dtype`` is unsupported, or a storage
+                dtype conflicts with ``dtype``.
+            ValueError: If a dtype name is unknown or the data size does not
+                match ``shape``.
         """
         # Resolve dtype. Copies and raw arrays preserve their dtype unless
         # the caller explicitly requests a conversion.
