@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, List, overload
 
-from ..backend import execute_matmul, execute_transpose
+from ..backend import (
+    execute_matmul,
+    execute_matmul_gradient,
+    execute_transpose,
+)
 from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
@@ -257,6 +261,14 @@ class Dot:
             raise ValueError(
                 f"Gradient shape {grad.shape} does not match output shape {output_shape}"
             )
+
+        accelerated = execute_matmul_gradient(grad, a, b)
+        if accelerated is not None:
+            a_storage, b_storage = accelerated
+            return [
+                Tensor(a_storage, dtype=grad.dtype, shape=a.shape),
+                Tensor(b_storage, dtype=grad.dtype, shape=b.shape),
+            ]
 
         a_terms: list[list[tuple[float, float]]] = [[] for _ in range(a.size)]
         b_terms: list[list[tuple[float, float]]] = [[] for _ in range(b.size)]

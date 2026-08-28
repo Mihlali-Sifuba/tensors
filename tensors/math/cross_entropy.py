@@ -6,7 +6,12 @@ import math
 from typing import TYPE_CHECKING, Any, List, Literal, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
-from ..backend import execute_cross_entropy, execute_cross_entropy_gradient
+from ..backend import (
+    execute_cross_entropy,
+    execute_cross_entropy_gradient,
+    execute_one_hot_targets,
+    execute_validate_distributions,
+)
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..tensor import Tensor
@@ -54,6 +59,14 @@ def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:
         raise ValueError(
             f"Class-index target shape {targets.shape} does not match "
             f"logits sample shape {sample_shape}"
+        )
+
+    accelerated = execute_one_hot_targets(logits, targets, axis)
+    if accelerated is not None:
+        return Tensor(
+            accelerated,
+            dtype=logits.dtype,
+            shape=logits.shape,
         )
 
     values = [0.0] * logits.size
@@ -152,6 +165,8 @@ def _targets_for_logits(logits: Any, targets: Any, axis: int) -> Any:
 
 def _validate_distributions(targets: Tensor, axis: int) -> None:
     """Require finite probability distributions along the class axis."""
+    if execute_validate_distributions(targets, axis) is True:
+        return
     _, _, groups = reduction_groups(targets, axis, keepdims=False)
     for group in groups:
         values = [float(targets._data[index]) for index in group]

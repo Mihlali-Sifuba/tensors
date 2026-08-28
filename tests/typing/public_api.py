@@ -5,6 +5,11 @@ from typing import Literal
 from typing_extensions import assert_type
 
 import tensors as ts
+from tensors.storage import Storage
+
+
+def tensor_from_storage(storage: Storage) -> ts.Tensor:
+    return ts.Tensor(storage)
 
 
 tensor = ts.Tensor([[1.0, 2.0]])
@@ -30,11 +35,16 @@ assert_type(ts.softmax(variable), ts.Variable)
 assert_type(ts.dot(tensor, ts.transpose(tensor)), ts.Tensor)
 assert_type(ts.dot(variable, ts.transpose(tensor)), ts.Variable)
 
-assert_type(ts.available_backends(), tuple[Literal["python", "numpy"], ...])
-assert_type(ts.get_backend(), Literal["python", "numpy"])
+assert_type(
+    ts.available_backends(),
+    tuple[Literal["python", "numpy", "cuda"], ...],
+)
+assert_type(ts.get_backend(), Literal["python", "numpy", "cuda"])
 assert_type(ts.set_backend("python"), None)
 with ts.use_backend("numpy"):
-    assert_type(ts.get_backend(), Literal["python", "numpy"])
+    assert_type(ts.get_backend(), Literal["python", "numpy", "cuda"])
+with ts.use_backend("cuda"):
+    assert_type(ts.get_backend(), Literal["python", "numpy", "cuda"])
 assert_type(ts.maximum(variable, tensor), ts.Variable)
 assert_type(ts.where(ts.greater(tensor, 0.0), variable, tensor), ts.Variable)
 assert_type(ts.concat([variable, variable]), ts.Variable)

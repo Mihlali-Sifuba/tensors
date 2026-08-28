@@ -6,7 +6,8 @@ import math
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
-from ..backend import execute_adam_update
+from ..backend import execute_adam_update, execute_adam_updates
+from ..creation import zeros
 from ..tensor import Tensor
 from .optimizer import Optimizer
 
@@ -84,6 +85,166 @@ class Adam(Optimizer):
             raise ValueError("eps must be positive and finite")
         self._eps = value
 
+    def _batched_step(
+        self,
+        prepared: tuple[tuple[Variable, Tensor], ...],
+        *,
+        beta1: float,
+        beta2: float,
+        learning_rate: float,
+        epsilon: float,
+    ) -> bool:
+        """Apply a grouped native update when all prepared states are compatible."""
+        if len(prepared) < 2:
+            return False
+        records = []
+        for parameter, gradient in prepared:
+            identity = id(parameter)
+            state = self._state.get(identity)
+            if state is not None:
+                current_m = state["m"]
+                current_v = state["v"]
+                assert isinstance(current_m, Tensor)
+                assert isinstance(current_v, Tensor)
+                if (
+                    current_m.shape != gradient.shape
+                    or current_m.dtype != gradient.dtype
+                    or current_v.shape != gradient.shape
+                    or current_v.dtype != gradient.dtype
+                ):
+                    state = None
+            if state is None:
+                zero_state = zeros(gradient.shape, dtype=gradient.dtype)
+                state = {
+                    "step": 0,
+                    "m": zero_state,
+                    "v": zero_state,
+                    "v_scale": zero_state,
+                    "v_scaled": zero_state,
+                    "beta1_product": 1.0,
+                    "beta2_product": 1.0,
+                }
+
+            step_count = int(state["step"]) + 1
+            moment = state["m"]
+            visible = state["v"]
+            assert isinstance(moment, Tensor)
+            assert isinstance(visible, Tensor)
+            scales = state.get("v_scale")
+            scaled_values = state.get("v_scaled")
+            if not isinstance(scales, Tensor) or not isinstance(
+                scaled_values,
+                Tensor,
+            ):
+                scale_data = [
+                    math.sqrt(float(value)) for value in visible._data
+                ]
+                scales = Tensor(
+                    scale_data,
+                    dtype=gradient.dtype,
+                    shape=gradient.shape,
+                )
+                scaled_values = Tensor(
+                    [1.0 if value else 0.0 for value in scale_data],
+                    dtype=gradient.dtype,
+                    shape=gradient.shape,
+                )
+            beta1_product = float(
+                state.get("beta1_product", beta1 ** (step_count - 1))
+            ) * beta1
+            beta2_product = float(
+                state.get("beta2_product", beta2 ** (step_count - 1))
+            ) * beta2
+            records.append((
+                parameter,
+                gradient,
+                identity,
+                step_count,
+                moment,
+                scales,
+                scaled_values,
+                beta1_product,
+                beta2_product,
+            ))
+
+        accelerated = execute_adam_updates(
+            tuple(record[0].data for record in records),
+            tuple(record[1] for record in records),
+            tuple(record[4] for record in records),
+            tuple(record[5] for record in records),
+            tuple(record[6] for record in records),
+            beta1=beta1,
+            beta2=beta2,
+            learning_rate=learning_rate,
+            epsilon=epsilon,
+            first_corrections=tuple(1.0 - record[7] for record in records),
+            second_corrections=tuple(1.0 - record[8] for record in records),
+        )
+        if accelerated is None:
+            return False
+        (
+            parameter_storages,
+            moment_storages,
+            visible_storages,
+            scale_storages,
+            scaled_storages,
+        ) = accelerated
+        pending = []
+        for record, parameter_storage, moment_storage, visible_storage, scale_storage, scaled_storage in zip(
+            records,
+            parameter_storages,
+            moment_storages,
+            visible_storages,
+            scale_storages,
+            scaled_storages,
+        ):
+            (
+                parameter,
+                gradient,
+                identity,
+                step_count,
+                _,
+                _,
+                _,
+                beta1_product,
+                beta2_product,
+            ) = record
+            state = {
+                "step": step_count,
+                "m": Tensor(
+                    moment_storage,
+                    dtype=gradient.dtype,
+                    shape=gradient.shape,
+                ),
+                "v": Tensor(
+                    visible_storage,
+                    dtype=gradient.dtype,
+                    shape=gradient.shape,
+                ),
+                "v_scale": Tensor(
+                    scale_storage,
+                    dtype=gradient.dtype,
+                    shape=gradient.shape,
+                ),
+                "v_scaled": Tensor(
+                    scaled_storage,
+                    dtype=gradient.dtype,
+                    shape=gradient.shape,
+                ),
+                "beta1_product": beta1_product,
+                "beta2_product": beta2_product,
+            }
+            value = Tensor(
+                parameter_storage,
+                dtype=parameter.dtype,
+                shape=parameter.shape,
+            )
+            pending.append((parameter, identity, value, state))
+        for parameter, identity, value, state in pending:
+            self._state[identity] = state
+            parameter.data = value
+        return True
+
     def step(self) -> None:
         """Apply one Adam update to every managed parameter."""
         b1 = self.beta1
@@ -91,8 +252,18 @@ class Adam(Optimizer):
         lr = self.learning_rate
         eps = self.eps
 
+        prepared = self._prepared_gradients()
+        if self._batched_step(
+            prepared,
+            beta1=b1,
+            beta2=b2,
+            learning_rate=lr,
+            epsilon=eps,
+        ):
+            return
+
         pending = []
-        for param, grad in self._prepared_gradients():
+        for param, grad in prepared:
             sid = id(param)
             state = self._state.get(sid)
             if state is not None:
@@ -109,16 +280,13 @@ class Adam(Optimizer):
                     state = None
 
             if state is None:
+                zero_state = zeros(grad.shape, dtype=grad.dtype)
                 current_state: dict[str, Tensor | int | float] = {
                     "step": 0,
-                    "m": Tensor([0.0] * grad.size, dtype=grad.dtype, shape=grad.shape),
-                    "v": Tensor([0.0] * grad.size, dtype=grad.dtype, shape=grad.shape),
-                    "v_scale": Tensor(
-                        [0.0] * grad.size, dtype=grad.dtype, shape=grad.shape
-                    ),
-                    "v_scaled": Tensor(
-                        [0.0] * grad.size, dtype=grad.dtype, shape=grad.shape
-                    ),
+                    "m": zero_state,
+                    "v": zero_state,
+                    "v_scale": zero_state,
+                    "v_scaled": zero_state,
                     "beta1_product": 1.0,
                     "beta2_product": 1.0,
                 }

@@ -6,7 +6,7 @@ import math
 from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
-from ..backend import execute_reduction
+from ..backend import execute_reduction, execute_reduction_gradient
 from ..dtype import float64
 from ..tensor import Tensor
 from ._reduction import (
@@ -65,18 +65,32 @@ class Variance:
         value = inputs[0]
         axis = kwargs.get("axis")
         keepdims = kwargs.get("keepdims", False)
-        _, output_shape, groups = reduction_groups(
-            value,
-            axis,
-            keepdims,
-            scalar_as_vector=True,
-        )
+        axes = normalize_axes(value.ndim, axis)
+        output_shape = reduction_shape(value.shape, axes, keepdims)
+        if axis is None and not keepdims:
+            output_shape = (1,)
         if grad.shape != output_shape:
             raise ValueError(
                 f"Gradient shape {grad.shape} does not match output shape "
                 f"{output_shape}"
             )
 
+        accelerated = execute_reduction_gradient(
+            "variance",
+            grad,
+            value,
+            axes,
+            keepdims=keepdims,
+        )
+        if accelerated is not None:
+            return [Tensor(accelerated, dtype=grad.dtype, shape=value.shape)]
+
+        _, _, groups = reduction_groups(
+            value,
+            axis,
+            keepdims,
+            scalar_as_vector=True,
+        )
         gradients = [0.0] * value.size
         for output_index, group in enumerate(groups):
             if not group:

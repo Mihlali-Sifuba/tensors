@@ -55,7 +55,7 @@ class Mul:
             ]
         scalar = kwargs.get("scalar", 1.0)
         assert isinstance(scalar, (int, float))
-        return [Tensor([g * scalar for g in grad._data], dtype=grad.dtype, shape=grad.shape)]
+        return [Mul.forward(grad, scalar)]
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
