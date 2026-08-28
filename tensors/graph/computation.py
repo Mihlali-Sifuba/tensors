@@ -186,9 +186,24 @@ class Computation:
             "Sub": "subtract",
             "Mul": "multiply",
             "Div": "divide",
+            "Pow": "power",
             "Neg": "negate",
             "Abs": "abs",
+            "Sqrt": "sqrt",
             "Exp": "exp",
+            "Log": "log",
+            "Sin": "sin",
+            "Cos": "cos",
+            "Tan": "tan",
+            "ArcSin": "arcsin",
+            "ArcCos": "arccos",
+            "ArcTan": "arctan",
+            "Sinh": "sinh",
+            "Cosh": "cosh",
+            "ArcSinh": "arcsinh",
+            "ArcCosh": "arccosh",
+            "ArcTanh": "arctanh",
+            "Sign": "sign",
             "ReLU": "relu",
             "Sigmoid": "sigmoid",
             "Tanh": "tanh",
@@ -209,7 +224,10 @@ class Computation:
         output = instruction.output_variable
         if operation is None or output.dtype.kind != "floating":
             return None
-        unary = operation not in {"add", "subtract", "multiply", "divide"}
+        binary_operations = {
+            "add", "subtract", "multiply", "divide", "power",
+        }
+        unary = operation not in binary_operations
         if unary:
             if (
                 len(instruction.input_slots) != 1
@@ -233,6 +251,7 @@ class Computation:
                 isinstance(scalar, bool)
                 or not isinstance(scalar, (int, float))
                 or not math.isfinite(float(scalar))
+                or (operation == "power" and instruction.reverse and scalar <= 0)
                 or (
                     operation == "divide"
                     and not instruction.reverse
@@ -244,6 +263,12 @@ class Computation:
                 (operation, float(scalar), instruction.reverse, None),
                 [instruction.input_slots[0]],
             )
+
+        # Tensor exponents carry differentiation-domain metadata that is not
+        # represented by the compact fusion step. Scalar powers cover common
+        # chains without weakening Pow's public error contract.
+        if operation == "power":
+            return None
 
         if len(instruction.input_slots) != 2:
             return None
@@ -268,7 +293,10 @@ class Computation:
         operation = cls._fused_operation(instruction)
         if operation is None or instruction.output_variable.dtype.kind != "floating":
             return None
-        unary = operation not in {"add", "subtract", "multiply", "divide"}
+        binary_operations = {
+            "add", "subtract", "multiply", "divide", "power",
+        }
+        unary = operation not in binary_operations
         if unary:
             if (
                 instruction.scalar_operand
@@ -285,6 +313,7 @@ class Computation:
                 isinstance(scalar, bool)
                 or not isinstance(scalar, (int, float))
                 or not math.isfinite(float(scalar))
+                or (operation == "power" and instruction.reverse and scalar <= 0)
                 or (
                     operation == "divide"
                     and not instruction.reverse
@@ -293,6 +322,9 @@ class Computation:
             ):
                 return None
             return operation, float(scalar), instruction.reverse, None
+
+        if operation == "power":
+            return None
 
         if len(instruction.input_slots) != 2:
             return None

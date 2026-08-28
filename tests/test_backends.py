@@ -337,6 +337,266 @@ class CudaBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(ZeroDivisionError, "Division by zero"):
                 computation.forward()
 
+    def test_extended_unary_and_power_chains_fuse_in_both_directions(self):
+        def expression(value):
+            return ts.sin(ts.log(ts.sqrt(value + 2.0))) ** 2.0
+
+        with ts.use_backend("python"):
+            reference_input = ts.Variable(ts.full((4_096,), 0.25))
+            reference_output = expression(reference_input)
+            reference_gradient = ts.grad(
+                reference_output,
+                reference_input,
+                ts.ones((4_096,)),
+            )
+
+        with ts.use_backend("cuda"):
+            value = ts.Variable(ts.full((4_096,), 0.25))
+            output = expression(value)
+            computation = ts.graph.Computation(output)
+            with patch.object(
+                cuda_backend,
+                "fused_elementwise",
+                wraps=cuda_backend.fused_elementwise,
+            ) as forward_fusion:
+                backend_state._clear_backend_kernel_cache()
+                result = computation.forward()
+            with patch.object(
+                cuda_backend,
+                "fused_elementwise_backward",
+                wraps=cuda_backend.fused_elementwise_backward,
+            ) as backward_fusion:
+                backend_state._clear_backend_kernel_cache()
+                computation.backward(ts.ones((4_096,)))
+
+        forward_fusion.assert_called_once()
+        backward_fusion.assert_called_once()
+        self.assertIsInstance(result._storage, CudaStorage)
+        self.assertIsInstance(value.grad._storage, CudaStorage)
+        self.assertAlmostEqual(result[0], reference_output.data[0], places=12)
+        self.assertAlmostEqual(value.grad[0], reference_gradient[0], places=12)
+
+    def test_every_extended_unary_operation_fuses(self):
+        cases = (
+            (ts.sqrt, 2.0),
+            (ts.log, 2.0),
+            (ts.sin, 0.25),
+            (ts.cos, 0.25),
+            (ts.tan, 0.25),
+            (ts.arcsin, 0.25),
+            (ts.arccos, 0.25),
+            (ts.arctan, 0.25),
+            (ts.sinh, 0.25),
+            (ts.cosh, 0.25),
+            (ts.arcsinh, 0.25),
+            (ts.arccosh, 2.0),
+            (ts.arctanh, 0.25),
+            (ts.sign, 0.25),
+        )
+        for operation, input_value in cases:
+            with self.subTest(operation=operation.__name__):
+                with ts.use_backend("python"):
+                    reference = ts.Variable([input_value])
+                    reference_output = operation(reference) + 1.0
+                    reference_gradient = ts.grad(reference_output, reference)
+
+                with ts.use_backend("cuda"):
+                    value = ts.Variable(ts.full((4_096,), input_value))
+                    output = operation(value) + 1.0
+                    computation = ts.graph.Computation(output)
+                    with patch.object(
+                        cuda_backend,
+                        "fused_elementwise",
+                        wraps=cuda_backend.fused_elementwise,
+                    ) as forward_fusion:
+                        backend_state._clear_backend_kernel_cache()
+                        result = computation.forward()
+                    with patch.object(
+                        cuda_backend,
+                        "fused_elementwise_backward",
+                        wraps=cuda_backend.fused_elementwise_backward,
+                    ) as backward_fusion:
+                        backend_state._clear_backend_kernel_cache()
+                        computation.backward(ts.ones((4_096,)))
+
+                forward_fusion.assert_called_once()
+                backward_fusion.assert_called_once()
+                self.assertAlmostEqual(result[0], reference_output.data[0], places=12)
+                self.assertAlmostEqual(value.grad[0], reference_gradient[0], places=12)
+
+    def test_fused_backward_reduces_broadcast_tensor_division_vjps(self):
+        with ts.use_backend("cuda"):
+            numerator = ts.Variable(ts.full((4_096, 1), 2.0))
+            denominator = ts.Variable(ts.Tensor([[1.0, 2.0, 4.0, 8.0]]))
+            quotient = numerator / denominator
+            output = quotient + 1.0
+            computation = ts.graph.Computation(output)
+            with patch.object(
+                cuda_backend,
+                "fused_elementwise_backward",
+                wraps=cuda_backend.fused_elementwise_backward,
+            ) as fused:
+                backend_state._clear_backend_kernel_cache()
+                computation.backward(ts.ones(output.shape))
+
+        fused.assert_called_once()
+        self.assertIsInstance(numerator.grad._storage, CudaStorage)
+        self.assertIsInstance(denominator.grad._storage, CudaStorage)
+        expected_numerator = 1.0 + 0.5 + 0.25 + 0.125
+        self.assertAlmostEqual(numerator.grad[0, 0], expected_numerator)
+        expected_denominator = [-8_192.0, -2_048.0, -512.0, -128.0]
+        self.assertEqual(denominator.grad.tolist(), expected_denominator)
+
+    def test_fused_backward_supports_reverse_division(self):
+        with ts.use_backend("cuda"):
+            value = ts.Variable(ts.full((4_096,), 4.0))
+            reciprocal = 2.0 / value
+            output = reciprocal + 1.0
+            computation = ts.graph.Computation(output)
+            with patch.object(
+                cuda_backend,
+                "fused_elementwise_backward",
+                wraps=cuda_backend.fused_elementwise_backward,
+            ) as fused:
+                backend_state._clear_backend_kernel_cache()
+                computation.backward(ts.ones((4_096,)))
+
+        fused.assert_called_once()
+        self.assertIsInstance(value.grad._storage, CudaStorage)
+        self.assertEqual(value.grad.tolist(), [-0.125] * 4_096)
+
+    def test_fused_extreme_power_and_division_vjps_retain_range(self):
+        with ts.use_backend("cuda"):
+            base = ts.Variable(ts.full((4_096,), 1.0e-200))
+            powered = base ** 3.0
+            power_output = powered + 1.0
+            power_computation = ts.graph.Computation(power_output)
+            with patch.object(
+                cuda_backend,
+                "fused_elementwise_backward",
+                wraps=cuda_backend.fused_elementwise_backward,
+            ) as power_fusion:
+                backend_state._clear_backend_kernel_cache()
+                power_computation.backward(ts.full((4_096,), 1.0e308))
+
+            numerator = ts.Variable(ts.full((4_096,), 1.0e308))
+            denominator = ts.Variable(ts.full((4_096,), 1.0e308))
+            quotient = numerator / denominator
+            division_output = quotient + 1.0
+            division_computation = ts.graph.Computation(division_output)
+            with patch.object(
+                cuda_backend,
+                "fused_elementwise_backward",
+                wraps=cuda_backend.fused_elementwise_backward,
+            ) as division_fusion:
+                backend_state._clear_backend_kernel_cache()
+                division_computation.backward(ts.full((4_096,), 1.0e308))
+
+        power_fusion.assert_called_once()
+        division_fusion.assert_called_once()
+        self.assertIsInstance(base.grad._storage, CudaStorage)
+        self.assertIsInstance(denominator.grad._storage, CudaStorage)
+        self.assertTrue(math.isclose(
+            base.grad[0],
+            3.0e-92,
+            rel_tol=1.0e-12,
+            abs_tol=0.0,
+        ))
+        self.assertEqual(denominator.grad[0], -1.0)
+
+    def test_extreme_vjps_remain_device_resident(self):
+        with ts.use_backend("cuda"):
+            numerator = ts.Variable(ts.full((64,), 1.0e308))
+            denominator = ts.Variable(ts.full((64,), 1.0e308))
+            division_gradient = ts.grad(
+                numerator / denominator,
+                denominator,
+                ts.full((64,), 1.0e308),
+            )
+
+            base = ts.Variable(ts.full((64,), 1.0e-308))
+            base_gradient = ts.grad(
+                base ** 2.0,
+                base,
+                ts.full((64,), 1.0e308),
+            )
+
+            exponent_base = ts.Variable(ts.full((64,), 1.0e-200))
+            exponent = ts.Variable(ts.full((64,), 3.0))
+            exponent_gradient = ts.grad(
+                exponent_base ** exponent,
+                exponent,
+                ts.full((64,), 1.0e308),
+            )
+
+            broadcast_value = ts.Variable([0.0])
+            factor = ts.Variable(
+                [1.0e308, -1.0e308],
+                requires_grad=False,
+            )
+            cancellation = ts.grad(
+                broadcast_value * factor,
+                broadcast_value,
+                ts.Tensor([2.0, 2.0]),
+            )
+
+            reduction = ts.sum(ts.Tensor([
+                1.0e308,
+                1.0e308,
+                -1.0e308,
+                -1.0e308,
+            ]))
+            matrix_product = ts.Tensor([
+                1.0e308,
+                1.0e308,
+                -1.0e308,
+                -1.0e308,
+            ]) @ ts.ones((4,))
+            batched_left = ts.Variable(ts.Tensor(
+                [1.0e308, 1.0e308, -1.0e308, -1.0e308],
+                shape=(4, 1, 1),
+            ))
+            shared_right = ts.Variable([[1.0]])
+            matrix_gradient = ts.grad(
+                batched_left @ shared_right,
+                shared_right,
+                ts.ones((4, 1, 1)),
+            )
+
+        for gradient in (
+            division_gradient,
+            base_gradient,
+            exponent_gradient,
+            cancellation,
+            reduction,
+            matrix_product,
+            matrix_gradient,
+        ):
+            self.assertIsInstance(gradient._storage, CudaStorage)
+        self.assertEqual(division_gradient[0], -1.0)
+        self.assertAlmostEqual(base_gradient[0], 2.0, places=12)
+        self.assertTrue(math.isclose(
+            exponent_gradient[0],
+            -4.605170185988183e-290,
+            rel_tol=1.0e-12,
+            abs_tol=0.0,
+        ))
+        self.assertEqual(cancellation.tolist(), [0.0])
+        self.assertEqual(reduction.tolist(), [0.0])
+        self.assertEqual(matrix_product.item(), 0.0)
+        self.assertEqual(matrix_gradient.tolist(), [0.0])
+
+    def test_fused_replay_preserves_extended_math_domains(self):
+        with ts.use_backend("cuda"):
+            value = ts.Variable(ts.full((4_096,), 1.0), requires_grad=False)
+            root = ts.sqrt(value)
+            output = root + 1.0
+            computation = ts.graph.Computation(output)
+            value.data = ts.full((4_096,), -1.0)
+
+            with self.assertRaisesRegex(ValueError, "sqrt"):
+                computation.forward()
+
     def test_integer_graphs_keep_the_exact_reference_path(self):
         integer_dtypes = (
             ts.int64,
