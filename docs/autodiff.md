@@ -222,9 +222,11 @@ operation callables, scalar metadata, and consumer counts ahead of replay.
 Thread-local workspaces reuse value and gradient slots without sharing mutable
 execution state between threads.
 
-On CUDA, compatible single-consumer float64 scalar chains may execute as one
-fused kernel in both directions. Intermediate `.data` and `.grad` values are
-still published, so fusion changes execution cost rather than graph semantics.
+On CUDA, compatible single-consumer float32 and float64 elementwise chains may
+execute as one fused kernel in both directions. Fusion supports broadcast
+tensor arithmetic, scalar powers, and common unary mathematics. Intermediate
+`.data` and `.grad` values are still published, so fusion changes execution
+cost rather than graph semantics.
 Native backend VJPs are also used for supported reductions and elementwise
 operations; numerically delicate inputs return to the stable Python rules.
 

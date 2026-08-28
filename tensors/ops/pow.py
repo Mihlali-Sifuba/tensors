@@ -261,46 +261,73 @@ class Pow:
                     )
             output = Pow.forward(expanded_base, expanded_exponent)
             if differentiate_base:
-                base_gradients = [
-                    _base_gradient_value(
-                        float(upstream),
-                        float(value),
-                        float(power),
-                        float(result),
+                accelerated_base = execute_power_base_gradient(
+                    grad,
+                    base,
+                    exponent,
+                )
+                if accelerated_base is not None:
+                    base_grad = Tensor(
+                        accelerated_base,
+                        dtype=grad.dtype,
+                        shape=grad.shape,
                     )
-                    for upstream, value, power, result in zip(
-                        grad._data,
-                        expanded_base._data,
-                        expanded_exponent._data,
-                        output._data,
+                else:
+                    base_grad = Tensor(
+                        [
+                            _base_gradient_value(
+                                float(upstream),
+                                float(value),
+                                float(power),
+                                float(result),
+                            )
+                            for upstream, value, power, result in zip(
+                                grad._data,
+                                expanded_base._data,
+                                expanded_exponent._data,
+                                output._data,
+                            )
+                        ],
+                        dtype=grad.dtype,
+                        shape=grad.shape,
                     )
-                ]
             else:
-                base_gradients = [0.0] * grad.size
-            base_grad = Tensor(
-                base_gradients,
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
-            if differentiate_exponent:
-                exponent_grad = Tensor(
-                    [
-                        _exponent_gradient_value(
-                            float(upstream),
-                            float(value),
-                            float(base_value),
-                            float(power),
-                        )
-                        for upstream, value, base_value, power in zip(
-                            grad._data,
-                            output._data,
-                            expanded_base._data,
-                            expanded_exponent._data,
-                        )
-                    ],
+                base_grad = Tensor(
+                    [0.0] * grad.size,
                     dtype=grad.dtype,
                     shape=grad.shape,
                 )
+            if differentiate_exponent:
+                accelerated_exponent = execute_power_exponent_gradient(
+                    grad,
+                    base,
+                    exponent,
+                )
+                if accelerated_exponent is not None:
+                    exponent_grad = Tensor(
+                        accelerated_exponent,
+                        dtype=grad.dtype,
+                        shape=grad.shape,
+                    )
+                else:
+                    exponent_grad = Tensor(
+                        [
+                            _exponent_gradient_value(
+                                float(upstream),
+                                float(value),
+                                float(base_value),
+                                float(power),
+                            )
+                            for upstream, value, base_value, power in zip(
+                                grad._data,
+                                output._data,
+                                expanded_base._data,
+                                expanded_exponent._data,
+                            )
+                        ],
+                        dtype=grad.dtype,
+                        shape=grad.shape,
+                    )
             else:
                 exponent_grad = Tensor(
                     [0.0] * grad.size,

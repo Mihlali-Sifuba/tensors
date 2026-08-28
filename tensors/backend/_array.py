@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import math
 from collections.abc import Sequence
 from contextlib import nullcontext
 from functools import lru_cache
@@ -232,12 +233,27 @@ _FUSED_BINARY_OPERATIONS = frozenset({
     "subtract",
     "multiply",
     "divide",
+    "power",
 })
 _FUSED_UNARY_OPERATIONS = frozenset({
     "identity",
     "negate",
     "abs",
+    "sqrt",
     "exp",
+    "log",
+    "sin",
+    "cos",
+    "tan",
+    "arcsin",
+    "arccos",
+    "arctan",
+    "sinh",
+    "cosh",
+    "arcsinh",
+    "arccosh",
+    "arctanh",
+    "sign",
     "relu",
     "sigmoid",
     "tanh",
@@ -290,7 +306,8 @@ def _fused_operand_expression(
     """Return the scalar, current, or tensor operand expression for a step."""
     _, scalar, _, operand_index = step
     if scalar is not None:
-        return format(float(scalar), ".17g")
+        literal = format(float(scalar), ".17g")
+        return literal if any(marker in literal for marker in ".eE") else f"{literal}.0"
     if operand_index == -1:
         return current
     if operand_index is not None:
@@ -306,8 +323,39 @@ def _fused_unary_expression(operation: str, value: str) -> str:
         return f"-({value})"
     if operation == "abs":
         return f"fabs({value})"
+    if operation == "sqrt":
+        return f"sqrt({value})"
     if operation == "exp":
         return f"exp({value})"
+    if operation == "log":
+        return f"log({value})"
+    if operation == "sin":
+        return f"sin({value})"
+    if operation == "cos":
+        return f"cos({value})"
+    if operation == "tan":
+        return f"tan({value})"
+    if operation == "arcsin":
+        return f"asin({value})"
+    if operation == "arccos":
+        return f"acos({value})"
+    if operation == "arctan":
+        return f"atan({value})"
+    if operation == "sinh":
+        return f"sinh({value})"
+    if operation == "cosh":
+        return f"cosh({value})"
+    if operation == "arcsinh":
+        return f"asinh({value})"
+    if operation == "arccosh":
+        return f"acosh({value})"
+    if operation == "arctanh":
+        return f"atanh({value})"
+    if operation == "sign":
+        return (
+            f"(isnan({value}) ? ({value}) : "
+            f"(({value}) > 0.0 ? 1.0 : (({value}) < 0.0 ? -1.0 : 0.0)))"
+        )
     if operation == "relu":
         return f"(isnan({value}) ? ({value}) : (({value}) > 0.0 ? ({value}) : 0.0))"
     if operation == "sigmoid":
@@ -343,8 +391,74 @@ def _fused_step_expression(
         "multiply": "*",
         "divide": "/",
     }
-    expression = f"({left}) {operators[operation]} ({right})"
+    expression = (
+        f"pow(({left}), ({right}))"
+        if operation == "power"
+        else f"({left}) {operators[operation]} ({right})"
+    )
     return expression, right if operation == "divide" else None
+
+
+def _fused_domain_checks(
+    step: FusedElementwiseStep,
+    value: str,
+    result: str,
+) -> tuple[tuple[str, int], ...]:
+    """Return CUDA predicates that preserve public math-domain errors."""
+    operation, _, reverse, _ = step
+    operand = _fused_operand_expression(step, value)
+    if operation == "sqrt":
+        return ((f"({value}) < 0.0", 2),)
+    if operation == "log":
+        return ((f"({value}) <= 0.0", 3),)
+    if operation in {"arcsin", "arccos"}:
+        return ((f"({value}) < -1.0 || ({value}) > 1.0", 4),)
+    if operation == "arccosh":
+        return ((f"({value}) < 1.0", 5),)
+    if operation == "arctanh":
+        return ((
+            f"!isnan({value}) && (({value}) <= -1.0 || ({value}) >= 1.0)",
+            6,
+        ),)
+    if operation in {"sin", "cos", "tan"}:
+        return ((f"isinf({value})", 7),)
+    if operation == "power" and operand is not None:
+        left, right = (operand, value) if reverse else (value, operand)
+        return (
+            (
+                f"({left}) < 0.0 && trunc({right}) != ({right})",
+                8,
+            ),
+            (f"({left}) == 0.0 && ({right}) < 0.0", 8),
+            (
+                f"isfinite({left}) && isfinite({right}) && isinf({result})",
+                9,
+            ),
+        )
+    return ()
+
+
+def _raise_fused_kernel_error(code: int) -> None:
+    """Raise the public exception represented by a fused-kernel error code."""
+    if code == 1:
+        raise ZeroDivisionError("Division by zero")
+    messages = {
+        2: "sqrt is only defined for non-negative values",
+        3: "log is only defined for positive values",
+        4: "inverse trigonometric function is only defined between -1 and 1",
+        5: "arccosh is only defined for values greater than or equal to 1",
+        6: "arctanh is only defined for values strictly between -1 and 1",
+        7: "trigonometric functions are undefined for infinite values",
+        8: "power is not defined for these real-valued inputs",
+        10: "sqrt derivative is undefined at zero",
+        11: "inverse trigonometric derivative is undefined at -1 and 1",
+        12: "arccosh derivative is undefined at 1",
+        13: "sign derivative is undefined at zero",
+        14: "power derivative is undefined at a zero base",
+    }
+    if code == 9:
+        raise OverflowError("power result is too large to represent")
+    raise ValueError(messages.get(code, "invalid value in fused CUDA operation"))
 
 
 def _fused_value_statements(
@@ -447,6 +561,17 @@ def _cuda_fused_elementwise_kernel(
             expression,
             dtype_name=dtype_name,
         ))
+        checks = _fused_domain_checks(
+            step,
+            f"value_{index}",
+            f"value_{index + 1}",
+        )
+        if checks:
+            validate_division = True
+            for condition, code in checks:
+                body.append(
+                    f"if ({condition}) {{ atomicExch(error, {code}); }}"
+                )
         body.append(_fused_output_statement(
             index,
             f"value_{index + 1}",
@@ -477,6 +602,7 @@ def _cuda_fused_elementwise_kernel(
 def _fused_derivative_expressions(
     step: FusedElementwiseStep,
     value: str,
+    result: str,
 ) -> tuple[str, str | None]:
     """Return derivatives with respect to current and an external operand."""
     operation, scalar, reverse, operand_index = step
@@ -491,8 +617,54 @@ def _fused_derivative_expressions(
             f"(({value}) > 0.0 ? 1.0 : (({value}) < 0.0 ? -1.0 : 0.0)))",
             None,
         )
+    if operation == "sqrt":
+        return f"(0.5 / ({result}))", None
     if operation == "exp":
         return f"exp({value})", None
+    if operation == "log":
+        return f"(1.0 / ({value}))", None
+    if operation == "sin":
+        return f"cos({value})", None
+    if operation == "cos":
+        return f"-sin({value})", None
+    if operation == "tan":
+        cosine = f"cos({value})"
+        return f"(1.0 / (({cosine}) * ({cosine})))", None
+    if operation == "arcsin":
+        return f"(1.0 / sqrt(1.0 - ({value}) * ({value})))", None
+    if operation == "arccos":
+        return f"(-1.0 / sqrt(1.0 - ({value}) * ({value})))", None
+    if operation == "arctan":
+        reciprocal = f"(1.0 / fabs({value}))"
+        return (
+            f"(isinf({value}) ? 0.0 : (fabs({value}) <= 1.0 "
+            f"? 1.0 / (1.0 + ({value}) * ({value})) "
+            f": (({reciprocal}) * ({reciprocal})) / "
+            f"(1.0 + ({reciprocal}) * ({reciprocal}))))",
+            None,
+        )
+    if operation == "sinh":
+        return f"cosh({value})", None
+    if operation == "cosh":
+        return f"sinh({value})", None
+    if operation == "arcsinh":
+        reciprocal = f"(1.0 / fabs({value}))"
+        return (
+            f"(isinf({value}) ? 0.0 : (fabs({value}) <= 1.0 "
+            f"? 1.0 / sqrt(1.0 + ({value}) * ({value})) "
+            f": ({reciprocal}) / sqrt(1.0 + ({reciprocal}) * ({reciprocal}))))",
+            None,
+        )
+    if operation == "arccosh":
+        return (
+            f"(isinf({value}) ? 0.0 : "
+            f"1.0 / (sqrt(({value}) - 1.0) * sqrt(({value}) + 1.0)))",
+            None,
+        )
+    if operation == "arctanh":
+        return f"(1.0 / (1.0 - ({value}) * ({value})))", None
+    if operation == "sign":
+        return f"(isnan({value}) ? ({value}) : 0.0)", None
     if operation == "relu":
         return (
             f"(isnan({value}) ? ({value}) : "
@@ -512,6 +684,13 @@ def _fused_derivative_expressions(
         z = f"exp(-2.0 * fabs({value}))"
         return f"(4.0 * ({z}) / ((1.0 + ({z})) * (1.0 + ({z}))))", None
 
+    if operation == "power" and operand is not None:
+        if reverse:
+            return f"(({result}) * log({operand}))", None
+        if scalar == 0:
+            return "0.0", None
+        return f"(({operand}) * pow(({value}), ({operand}) - 1.0))", None
+
     if operation not in _FUSED_BINARY_OPERATIONS or operand is None:
         raise ValueError(f"Unsupported fused backward operation {operation!r}")
     if operand_index == -1:
@@ -520,9 +699,11 @@ def _fused_derivative_expressions(
             "subtract": "0.0",
             "multiply": f"(2.0 * ({value}))",
         }
+        if operation == "divide":
+            return "0.0", None
         derivative = derivatives.get(operation)
         if derivative is None:
-            raise ValueError("Self-division is not fused in backward")
+            raise ValueError(f"Self-{operation} is not fused in backward")
         return derivative, None
     if operation == "add":
         return "1.0", None if scalar is not None else "1.0"
@@ -533,10 +714,122 @@ def _fused_derivative_expressions(
     if operation == "multiply":
         return operand, None if scalar is not None else value
     if operation == "divide":
-        if scalar is None or reverse:
-            raise ValueError("Tensor and reverse division use the stable VJP path")
-        return f"(1.0 / ({operand}))", None
+        if reverse:
+            current = f"(-({result}) / ({value}))"
+            external = f"(1.0 / ({value}))"
+        else:
+            current = f"(1.0 / ({operand}))"
+            external = f"(-({result}) / ({operand}))"
+        return current, None if scalar is not None else external
     raise ValueError(f"Unsupported fused backward operation {operation!r}")
+
+
+def _fused_backward_checks(
+    step: FusedElementwiseStep,
+    value: str,
+) -> tuple[tuple[str, int], ...]:
+    """Return derivative-domain checks for one fused operation."""
+    operation, scalar, reverse, _ = step
+    if operation == "sqrt":
+        return ((f"({value}) == 0.0", 10),)
+    if operation in {"arcsin", "arccos"}:
+        return ((f"({value}) == -1.0 || ({value}) == 1.0", 11),)
+    if operation == "arccosh":
+        return ((f"({value}) == 1.0", 12),)
+    if operation == "sign":
+        return ((f"({value}) == 0.0", 13),)
+    if operation == "power" and scalar is not None and not reverse:
+        if scalar != 0 and scalar < 1:
+            return ((f"({value}) == 0.0", 14),)
+    return ()
+
+
+def _fused_vjp_expressions(
+    step: FusedElementwiseStep,
+    value: str,
+    result: str,
+    upstream: str,
+) -> tuple[str, str | None]:
+    """Return range-stable VJP contributions for one fused step."""
+    operation, scalar, reverse, operand_index = step
+    operand = _fused_operand_expression(step, value)
+    if operation == "power" and operand is not None:
+        if reverse:
+            logarithm = f"log({operand})"
+            contribution = (
+                f"(({upstream}) == 0.0 || ({logarithm}) == 0.0 ? 0.0 : "
+                f"copysign(exp(log(fabs({upstream})) + ({value}) * ({logarithm}) "
+                f"+ log(fabs({logarithm}))), ({upstream}) * ({logarithm})))"
+            )
+            return contribution, None
+
+        assert scalar is not None
+        if scalar == 0:
+            return "0.0", None
+        if scalar == 1:
+            return upstream, None
+        scalar_literal = _fused_operand_expression(step, value)
+        assert scalar_literal is not None
+        sign = f"({upstream}) * ({scalar_literal})"
+        if float(scalar).is_integer() and (int(scalar) - 1) % 2:
+            sign = f"({sign}) * (({value}) < 0.0 ? -1.0 : 1.0)"
+        contribution = (
+            f"(({upstream}) == 0.0 || ({value}) == 0.0 ? 0.0 : "
+            f"copysign(exp(log(fabs({upstream})) + log(fabs({scalar_literal})) "
+            f"+ (({scalar_literal}) - 1.0) * log(fabs({value}))), {sign})"
+        )
+        contribution += ")"
+        return contribution, None
+
+    if operation == "divide" and operand is not None:
+        if operand_index == -1:
+            return "0.0", None
+        if reverse:
+            zero = f"(({upstream}) == 0.0 || ({operand}) == 0.0)"
+            sign = (
+                f"(signbit({upstream}) != signbit({operand}) ? 1.0 : -1.0)"
+            )
+            stable = (
+                f"({zero} ? 0.0 : ({sign}) * exp(log(fabs({upstream})) "
+                f"+ log(fabs({operand})) - 2.0 * log(fabs({value}))))"
+            )
+            direct = f"(-({upstream}) * ({operand}) / (({value}) * ({value})))"
+            square = f"(({value}) * ({value}))"
+            current = (
+                f"(isfinite({square}) && ({square}) != 0.0 && "
+                f"({zero} || (({direct}) != 0.0 && isfinite({direct}))) "
+                f"? ({direct}) : ({stable}))"
+            )
+            external = f"(({upstream}) / ({value}))"
+        else:
+            current = f"(({upstream}) / ({operand}))"
+            zero = f"(({upstream}) == 0.0 || ({value}) == 0.0)"
+            sign = f"(signbit({upstream}) != signbit({value}) ? 1.0 : -1.0)"
+            stable = (
+                f"({zero} ? 0.0 : ({sign}) * exp(log(fabs({upstream})) "
+                f"+ log(fabs({value})) - 2.0 * log(fabs({operand}))))"
+            )
+            direct = f"(-({upstream}) * ({value}) / (({operand}) * ({operand})))"
+            square = f"(({operand}) * ({operand}))"
+            external = (
+                f"(isfinite({square}) && ({square}) != 0.0 && "
+                f"({zero} || (({direct}) != 0.0 && isfinite({direct}))) "
+                f"? ({direct}) : ({stable}))"
+            )
+        return current, None if scalar is not None else external
+
+    current_derivative, operand_derivative = _fused_derivative_expressions(
+        step,
+        value,
+        result,
+    )
+    current = f"({upstream}) * ({current_derivative})"
+    external = (
+        None
+        if operand_derivative is None
+        else f"({upstream}) * ({operand_derivative})"
+    )
+    return current, external
 
 
 @lru_cache(maxsize=128)
@@ -545,7 +838,7 @@ def _cuda_fused_elementwise_backward_kernel(
     dtype_name: str,
     input_shapes: tuple[tuple[int, ...], ...],
     output_shape: tuple[int, ...],
-) -> Any:
+) -> tuple[Any, bool]:
     """Compile and cache one typed VJP kernel for a fused chain."""
     cupy = importlib.import_module("cupy")
     storage_type = "float" if dtype_name == "float32" else "double"
@@ -568,6 +861,7 @@ def _cuda_fused_elementwise_backward_kernel(
     body.append(
         f"const double upstream_{len(steps)} = (double)gradient[index];"
     )
+    validate_errors = False
     for index in range(len(steps) - 1, -1, -1):
         upstream = f"upstream_{index + 1}"
         body.append(_fused_output_statement(
@@ -575,21 +869,30 @@ def _cuda_fused_elementwise_backward_kernel(
             upstream,
             storage_type=storage_type,
         ))
-        current_derivative, operand_derivative = (
-            _fused_derivative_expressions(
+        current_contribution, operand_contribution = (
+            _fused_vjp_expressions(
                 steps[index],
                 f"value_{index}",
+                f"value_{index + 1}",
+                upstream,
             )
         )
-        if operand_derivative is not None:
+        checks = _fused_backward_checks(steps[index], f"value_{index}")
+        if checks:
+            validate_errors = True
+            for condition, code in checks:
+                body.append(
+                    f"if ({condition}) {{ atomicExch(error, {code}); }}"
+                )
+        if operand_contribution is not None:
             body.append(_fused_output_statement(
                 external_rows[index],
-                f"({upstream}) * ({operand_derivative})",
+                operand_contribution,
                 storage_type=storage_type,
             ))
         body.extend(_fused_value_statements(
             f"upstream_{index}",
-            f"({upstream}) * ({current_derivative})",
+            current_contribution,
             dtype_name=dtype_name,
         ))
     body.append(_fused_output_statement(
@@ -613,10 +916,10 @@ def _cuda_fused_elementwise_backward_kernel(
         output_shape=output_shape,
         storage_type=storage_type,
         body=body,
-        validate_division=False,
+        validate_division=validate_errors,
         include_gradient=True,
     )
-    return cupy.RawKernel(source, name)
+    return cupy.RawKernel(source, name), validate_errors
 
 
 def _fused_arrays(
@@ -673,8 +976,10 @@ def fused_elementwise(
             arguments.append(error)
         arguments.append(cupy.uint64(size))
         kernel((blocks,), (threads,), tuple(arguments))
-        if error is not None and bool(error.item()):
-            raise ZeroDivisionError("Division by zero")
+        if error is not None:
+            error_code = int(error.item())
+            if error_code:
+                _raise_fused_kernel_error(error_code)
     except (TypeError, ValueError):
         return None
     return tuple(
@@ -700,11 +1005,6 @@ def fused_elementwise_backward(
         or not values
         or len(steps) < 2
         or grad.shape != output_shape
-        or any(value.shape != output_shape for value in values)
-        or any(
-            operation == "divide" and (scalar is None or reverse)
-            for operation, scalar, reverse, _ in steps
-        )
     ):
         return None
     cupy = _numpy()
@@ -723,19 +1023,28 @@ def fused_elementwise_backward(
             cupy.dtype(dtype.name),
             copy=False,
         ).reshape(-1)
-        kernel = _cuda_fused_elementwise_backward_kernel(
+        kernel, validate_errors = _cuda_fused_elementwise_backward_kernel(
             steps,
             dtype.name,
             tuple(value.shape for value in values),
             output_shape,
         )
+        error = cupy.zeros((1,), dtype=cupy.int32) if validate_errors else None
         threads = 256
         blocks = (size + threads - 1) // threads
+        arguments = [*arrays, gradient, result]
+        if error is not None:
+            arguments.append(error)
+        arguments.append(cupy.uint64(size))
         kernel(
             (blocks,),
             (threads,),
-            tuple((*arrays, gradient, result, cupy.uint64(size))),
+            tuple(arguments),
         )
+        if error is not None:
+            error_code = int(error.item())
+            if error_code:
+                _raise_fused_kernel_error(error_code)
     except (TypeError, ValueError):
         return None
     return tuple(
@@ -2390,8 +2699,64 @@ def _summation_guard(
         & ~subnormal
     )
     if mixed_signs:
-        valid &= ~((minimum < 0.0) & (maximum > 0.0))
+        absolute = numpy.abs(values)
+        largest = numpy.max(absolute, axis=axes, keepdims=keepdims)
+        smallest = numpy.min(
+            numpy.where(absolute == 0.0, numpy.inf, absolute),
+            axis=axes,
+            keepdims=keepdims,
+        )
+        comparable_magnitudes = (largest == 0.0) | (
+            smallest >= largest * numpy.finfo(numpy.float64).eps
+        )
+        mixed = (minimum < 0.0) & (maximum > 0.0)
+        valid &= ~(mixed & ~comparable_magnitudes)
     return numpy.all(valid)
+
+
+def _scaled_sum(values: Any, axes: tuple[int, ...], numpy: Any) -> Any:
+    """Sum comparable finite values without overflowing intermediates."""
+    if not axes:
+        return values
+    scale = numpy.max(numpy.abs(values), axis=axes, keepdims=True)
+    safe_scale = numpy.where(scale == 0.0, 1.0, scale)
+    with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
+        normalized = values / safe_scale
+        result = numpy.sum(normalized, axis=axes, keepdims=True) * scale
+    return numpy.where(scale == 0.0, 0.0, result)
+
+
+def _scaled_product_sum(
+    left: Any,
+    right: Any,
+    axes: tuple[int, ...],
+    numpy: Any,
+) -> Any:
+    """Evaluate a product reduction through normalized device operands."""
+    reduction_axes: tuple[int, ...] | None = axes if axes else None
+    left_scale = numpy.max(numpy.abs(left), axis=reduction_axes, keepdims=True)
+    right_scale = numpy.max(numpy.abs(right), axis=reduction_axes, keepdims=True)
+    safe_left = numpy.where(left_scale == 0.0, 1.0, left_scale)
+    safe_right = numpy.where(right_scale == 0.0, 1.0, right_scale)
+    with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
+        normalized_terms = (left / safe_left) * (right / safe_right)
+        normalized_sum = (
+            numpy.sum(normalized_terms, axis=axes, keepdims=True)
+            if axes
+            else normalized_terms
+        )
+        log_magnitude = (
+            numpy.log(numpy.abs(normalized_sum))
+            + numpy.log(safe_left)
+            + numpy.log(safe_right)
+        )
+        restored = numpy.copysign(numpy.exp(log_magnitude), normalized_sum)
+    zero = (
+        (left_scale == 0.0)
+        | (right_scale == 0.0)
+        | (normalized_sum == 0.0)
+    )
+    return numpy.where(zero, 0.0, restored)
 
 
 def reduction(
@@ -2429,15 +2794,25 @@ def reduction(
         if operation == "sum" and dtype.kind == "integer":
             return None
         with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
-            if operation == "sum":
-                result = numpy.sum(values, axis=axis, keepdims=keepdims)
-            else:
-                result = numpy.mean(values, axis=axis, keepdims=keepdims)
-        valid = _summation_guard(values, numpy) & numpy.all(
-            numpy.isfinite(result)
+            direct = numpy.sum(values, axis=axis, keepdims=True)
+            scaled = _scaled_sum(values, axis, numpy)
+            if operation == "mean":
+                count = math.prod(value.shape[item] for item in axis)
+                direct = direct / count
+                scaled = scaled / count
+        safe = _summation_guard(
+            values,
+            numpy,
+            axes=axis,
+            keepdims=True,
         )
+        direct_safe = safe & numpy.all(numpy.isfinite(direct))
+        result = numpy.where(direct_safe, direct, scaled)
+        valid = safe & ~numpy.any(numpy.isnan(result))
         if not bool(valid):
             return None
+        if not keepdims and axis:
+            result = numpy.squeeze(result, axis=axis)
     elif operation in {"variance", "std"}:
         with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
             center = numpy.mean(values, axis=axis, keepdims=True)
@@ -2897,9 +3272,8 @@ def sum_to_shape(
     numpy = _numpy()
     values = _view(gradient, numpy).astype(numpy.float64, copy=False)
     safe = _stable_sum_candidate(values, axes, numpy)
-    with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
-        result = numpy.sum(values, axis=axes, keepdims=True) if axes else values
-    valid = safe & numpy.all(numpy.isfinite(result))
+    result = _scaled_sum(values, axes, numpy)
+    valid = safe & ~numpy.any(numpy.isnan(result))
     if not bool(valid):
         return None
     return _storage(
@@ -2930,28 +3304,47 @@ def sum_products_to_shape(
     if layout is None:
         return None
     _, axes = layout
+    finite = numpy.all(numpy.isfinite(left)) & numpy.all(numpy.isfinite(right))
+    nonzero = (left != 0.0) & (right != 0.0)
+    reduction_axes: tuple[int, ...] | None = axes if axes else None
+    with _errstate(numpy, divide="ignore", invalid="ignore"):
+        log_terms = numpy.log(numpy.abs(left)) + numpy.log(numpy.abs(right))
+    largest_log = numpy.max(
+        numpy.where(nonzero, log_terms, -numpy.inf),
+        axis=reduction_axes,
+        keepdims=True,
+    )
+    smallest_log = numpy.min(
+        numpy.where(nonzero, log_terms, numpy.inf),
+        axis=reduction_axes,
+        keepdims=True,
+    )
+    any_nonzero = numpy.any(nonzero, axis=reduction_axes, keepdims=True)
+    comparable = (~any_nonzero) | (
+        largest_log - smallest_log
+        <= -math.log(numpy.finfo(numpy.float64).eps)
+    )
     with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
         products = left * right
-    lost_range = (~numpy.isfinite(products)) | (
-        (products == 0.0) & (left != 0.0) & (right != 0.0)
-    )
-    safe = _stable_sum_candidate(
-        products,
-        axes,
-        numpy,
-    )
-    with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
-        result = (
+        direct = (
             numpy.sum(products, axis=axes, keepdims=True)
             if axes
             else products
         )
+    lost_range = (~numpy.isfinite(products)) | (
+        (products == 0.0) & nonzero
+    )
+    direct_safe = (
+        ~numpy.any(lost_range)
+        & _stable_sum_candidate(products, axes, numpy)
+        & ~numpy.any(numpy.isnan(direct))
+    )
+    stable = _scaled_product_sum(left, right, axes, numpy)
+    result = numpy.where(direct_safe, direct, stable)
     valid = (
-        numpy.all(numpy.isfinite(left))
-        & numpy.all(numpy.isfinite(right))
-        & ~numpy.any(lost_range)
-        & safe
-        & numpy.all(numpy.isfinite(result))
+        finite
+        & (direct_safe | numpy.all(comparable))
+        & ~numpy.any(numpy.isnan(result))
     )
     if not bool(valid):
         return None
@@ -2978,12 +3371,13 @@ def division_denominator_gradient(
         return None
     with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
         squares = numpy.square(divisors)
-    if _finite_operands(
+    finite_inputs = _finite_operands(
         upstream,
         values,
         divisors,
         numpy=numpy,
-    ) and bool(numpy.any((squares == 0.0) | ~numpy.isfinite(squares))):
+    )
+    if not finite_inputs or bool(numpy.any(divisors == 0.0)):
         return None
     with _errstate(
         numpy,
@@ -2992,15 +3386,25 @@ def division_denominator_gradient(
         under="ignore",
         invalid="ignore",
     ):
-        result = -upstream * values / squares
-    if _unsafe_finite_result(
-        result,
-        upstream,
-        values,
-        divisors,
-        numpy=numpy,
-    ):
-        return None
+        direct = -upstream * values / squares
+        zero = (upstream == 0.0) | (values == 0.0)
+        log_magnitude = (
+            numpy.log(numpy.abs(upstream))
+            + numpy.log(numpy.abs(values))
+            - 2.0 * numpy.log(numpy.abs(divisors))
+        )
+        sign = numpy.where(
+            numpy.signbit(upstream) ^ numpy.signbit(values),
+            1.0,
+            -1.0,
+        )
+        stable = numpy.where(zero, 0.0, sign * numpy.exp(log_magnitude))
+    unsafe = (
+        (squares == 0.0)
+        | ~numpy.isfinite(squares)
+        | (~zero & ((direct == 0.0) | ~numpy.isfinite(direct)))
+    )
+    result = numpy.where(unsafe, stable, direct)
     return _storage(
         result,
         dtype=grad.dtype,
@@ -3028,12 +3432,25 @@ def power_base_gradient(
         return None
     with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
         power_term = numpy.power(bases, powers - 1.0)
-    if bool(numpy.any((power_term == 0.0) | ~numpy.isfinite(power_term))):
-        return None
-    with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
-        result = upstream * powers * power_term
-    if not bool(numpy.all(numpy.isfinite(result))):
-        return None
+        direct = upstream * powers * power_term
+        zero = (upstream == 0.0) | (powers == 0.0)
+        log_magnitude = (
+            numpy.log(numpy.abs(upstream))
+            + numpy.log(numpy.abs(powers))
+            + (powers - 1.0) * numpy.log(bases)
+        )
+        stable = numpy.where(
+            zero,
+            0.0,
+            numpy.copysign(numpy.exp(log_magnitude), upstream * powers),
+        )
+    unsafe = ~zero & (
+        (power_term == 0.0)
+        | ~numpy.isfinite(power_term)
+        | (direct == 0.0)
+        | ~numpy.isfinite(direct)
+    )
+    result = numpy.where(unsafe, stable, direct)
     return _storage(
         result,
         dtype=grad.dtype,
@@ -3060,13 +3477,27 @@ def power_exponent_gradient(
     if bool(numpy.any(bases <= 0.0)):
         return None
     with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
+        logarithm = numpy.log(bases)
         outputs = numpy.power(bases, powers)
-    if bool(numpy.any((outputs == 0.0) | ~numpy.isfinite(outputs))):
-        return None
-    with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
-        result = upstream * outputs * numpy.log(bases)
-    if not bool(numpy.all(numpy.isfinite(result))):
-        return None
+        direct = upstream * outputs * logarithm
+        zero = (upstream == 0.0) | (logarithm == 0.0)
+        log_magnitude = (
+            numpy.log(numpy.abs(upstream))
+            + powers * logarithm
+            + numpy.log(numpy.abs(logarithm))
+        )
+        stable = numpy.where(
+            zero,
+            0.0,
+            numpy.copysign(numpy.exp(log_magnitude), upstream * logarithm),
+        )
+    unsafe = ~zero & (
+        (outputs == 0.0)
+        | ~numpy.isfinite(outputs)
+        | (direct == 0.0)
+        | ~numpy.isfinite(direct)
+    )
+    result = numpy.where(unsafe, stable, direct)
     return _storage(
         result,
         dtype=grad.dtype,
@@ -3113,6 +3544,41 @@ def _numpy() -> Any:
     return _import_array_module("cupy" if backend == "cuda" else "numpy")
 
 
+def _comparable_finite_values(values: Any, numpy: Any) -> bool:
+    """Return whether global scaling can retain every nonzero magnitude."""
+    if not bool(numpy.all(numpy.isfinite(values))):
+        return False
+    absolute = numpy.abs(values)
+    largest = numpy.max(absolute)
+    smallest = numpy.min(numpy.where(absolute == 0.0, numpy.inf, absolute))
+    return bool(
+        (largest == 0.0)
+        | (smallest >= largest * numpy.finfo(numpy.float64).eps)
+    )
+
+
+def _scaled_matmul(left: Any, right: Any, numpy: Any) -> Any:
+    """Calculate a matrix product without overflowing temporary products."""
+    left_scale = numpy.max(numpy.abs(left))
+    right_scale = numpy.max(numpy.abs(right))
+    safe_left = numpy.where(left_scale == 0.0, 1.0, left_scale)
+    safe_right = numpy.where(right_scale == 0.0, 1.0, right_scale)
+    with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
+        normalized = numpy.matmul(left / safe_left, right / safe_right)
+        log_magnitude = (
+            numpy.log(numpy.abs(normalized))
+            + numpy.log(safe_left)
+            + numpy.log(safe_right)
+        )
+        restored = numpy.copysign(numpy.exp(log_magnitude), normalized)
+    zero = (
+        (left_scale == 0.0)
+        | (right_scale == 0.0)
+        | (normalized == 0.0)
+    )
+    return numpy.where(zero, 0.0, restored)
+
+
 def matmul(
     left: Tensor,
     right: Tensor,
@@ -3137,12 +3603,17 @@ def matmul(
     with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
         result = numpy.matmul(left_array, right_array)
 
-    # NumPy may overflow an intermediate product that the Python reference can
-    # recover through exact-ratio summation. Preserve those semantics by asking
-    # the caller to use the reference implementation whenever the fast result is
-    # non-finite or cannot be represented by the requested output dtype.
+    # Recover device-side when comparable finite operands overflow temporary
+    # products. Highly disparate magnitudes still use the exact reference path.
     if not bool(numpy.all(numpy.isfinite(result))):
-        return None
+        if not (
+            _comparable_finite_values(left_array, numpy)
+            and _comparable_finite_values(right_array, numpy)
+        ):
+            return None
+        result = _scaled_matmul(left_array, right_array, numpy)
+        if bool(numpy.any(numpy.isnan(result))):
+            return None
     return _storage(
         result,
         dtype=dtype,
@@ -3185,10 +3656,16 @@ def _reduce_matrix_gradient(
     if layout is None:
         return None
     _, axes = layout
-    if not _stable_sum_candidate(values, axes, numpy):
+    safe = _stable_sum_candidate(values, axes, numpy)
+    if not bool(safe):
         return None
     if axes:
-        values = numpy.sum(values, axis=axes, keepdims=True)
+        with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
+            direct = numpy.sum(values, axis=axes, keepdims=True)
+        scaled = _scaled_sum(values, axes, numpy)
+        values = numpy.where(numpy.isfinite(direct), direct, scaled)
+        if bool(numpy.any(numpy.isnan(values))):
+            return None
     return values.reshape(shape)
 
 
@@ -3241,10 +3718,29 @@ def matmul_gradient(
             numpy.swapaxes(left_matrix, -1, -2),
             matrix_grad,
         )
-    if not bool(
-        numpy.all(numpy.isfinite(left_result))
-        & numpy.all(numpy.isfinite(right_result))
-    ):
+    if not bool(numpy.all(numpy.isfinite(left_result))):
+        if not (
+            _comparable_finite_values(matrix_grad, numpy)
+            and _comparable_finite_values(right_matrix, numpy)
+        ):
+            return None
+        left_result = _scaled_matmul(
+            matrix_grad,
+            numpy.swapaxes(right_matrix, -1, -2),
+            numpy,
+        )
+    if not bool(numpy.all(numpy.isfinite(right_result))):
+        if not (
+            _comparable_finite_values(left_matrix, numpy)
+            and _comparable_finite_values(matrix_grad, numpy)
+        ):
+            return None
+        right_result = _scaled_matmul(
+            numpy.swapaxes(left_matrix, -1, -2),
+            matrix_grad,
+            numpy,
+        )
+    if bool(numpy.any(numpy.isnan(left_result)) | numpy.any(numpy.isnan(right_result))):
         return None
 
     left_shape = (1, left.shape[0]) if left_vector else left.shape

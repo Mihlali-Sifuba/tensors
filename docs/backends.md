@@ -121,8 +121,10 @@ inspection inside a training loop can erase the benefit of device execution.
 
 `Computation` resolves graph slots and operation callables once, then reuses
 thread-local execution workspaces on forward and backward replay. Compatible
-float64 scalar chains can be fused into one CUDA launch while retaining the
-intermediate tensor values required by graph semantics. Reduction VJPs execute
+float32 and float64 elementwise chains—including broadcast tensor arithmetic,
+scalar powers, and common unary mathematics—can be fused into one CUDA launch
+while retaining the intermediate tensor values required by graph semantics.
+Reduction VJPs execute
 on the selected optional backend when their stable native path is valid, and
 SGD, Adam, and RMSprop batch compatible parameter updates to reduce repeated
 dispatch and launch overhead.
