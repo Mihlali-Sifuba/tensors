@@ -5,6 +5,11 @@ from typing import Literal
 from typing_extensions import assert_type
 
 import tensors as ts
+from tensors.storage import Storage
+
+
+def tensor_from_storage(storage: Storage) -> ts.Tensor:
+    return ts.Tensor(storage)
 
 
 tensor = ts.Tensor([[1.0, 2.0]])
