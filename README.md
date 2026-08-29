@@ -125,6 +125,7 @@ and CUDA implementations.
 - Class-based and function-based `Graph` models with automatic parameter discovery
 - Linear algebra including matrix multiplication, dot products, outer products, transposes, and norms
 - Runtime-selectable Python, NumPy, and CUDA numerical backends
+- Backend-native seeded random generation and parameter initialization
 - Neural-network functions including ReLU, sigmoid, tanh, softmax, and softplus
 - Stable cross-entropy and binary cross-entropy losses
 - SGD, Adam, and RMSprop optimizers
@@ -261,6 +262,8 @@ for _ in range(100):
 | Core | `Tensor`, `Variable`, dtypes, indexing, slicing, casting, broadcasting |
 | Backends | `available_backends`, `get_backend`, `set_backend`, `use_backend` |
 | Creation | `zeros`, `ones`, `full`, `eye`, `arange`, `linspace` |
+| Random | `ts.random.seed`, `uniform`, `normal`, `randint` |
+| Initialization | `ts.init.variance_scaling`, Xavier, He, LeCun, truncated normal, orthogonal |
 | Autograd | `backward`, `grad`, `gradcheck`, `jacobian`, `hessian` |
 | Graphs | `Graph`, nested models, function decorators, parameter discovery |
 | Linear algebra | `dot`, `matmul`, `outer`, `transpose`, `norm` |
@@ -339,6 +342,8 @@ tensors/
 │   ├── math/              # reductions, activations, losses, and shape operations
 │   ├── ops/               # primitive differentiable operations
 │   ├── optim/             # SGD, Adam, and RMSprop
+│   ├── init/              # functional parameter initializers
+│   ├── random/            # backend-native RNG state and generation
 │   ├── creation.py        # zeros, ones, ranges, and identity matrices
 │   ├── tensor.py          # tensor storage and core behavior
 │   └── variable.py        # differentiable tensor values
