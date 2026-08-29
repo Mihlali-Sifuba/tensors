@@ -112,6 +112,11 @@ tensors/
 │   ├── sgd.py
 │   ├── adam.py
 │   └── rmsprop.py
+├── init/                  # functional parameter initialization
+│   ├── _variance.py
+│   └── _special.py
+├── random/                # backend-native random generation
+│   └── _state.py
 └── graph/                 # tracing, execution, and differentiation
     ├── graph.py           # reusable callable model abstraction
     ├── computation.py     # forward replay and reverse-mode execution
@@ -170,6 +175,11 @@ The folders have deliberately narrow responsibilities:
   workspaces, and eligible CUDA chain fusion; `ts.backward` is a root
   convenience alias.
 - `optim` provides the shared optimizer contract plus SGD, Adam, and RMSprop.
+- `init` provides functional variance-scaling, Xavier, He, LeCun,
+  truncated-normal, and orthogonal parameter initialization. Its functions
+  remain under `ts.init` instead of expanding the root facade.
+- `random` owns seeded Python, NumPy, and CUDA generator state and exposes the
+  minimal `ts.random` facade. It does not modify provider-global RNG state.
 
 Operation classes, `Node`, and `Edge` are implementation or advanced
 inspection details. They should not be part of the everyday root API.
