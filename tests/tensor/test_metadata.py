@@ -59,6 +59,17 @@ class TensorMetadataTests(unittest.TestCase):
         self.assertEqual(empty.size, 0)
         self.assertTrue(empty.is_contiguous)
 
+    def test_zero_sized_layouts_are_contiguous_regardless_of_strides(self):
+        for strides in ((0, 3, 1), (100, -7, 42)):
+            with self.subTest(strides=strides):
+                tensor = synthetic_tensor(
+                    [],
+                    shape=(2, 0, 3),
+                    strides=strides,
+                )
+                self.assertEqual(tensor.size, 0)
+                self.assertTrue(tensor.is_contiguous)
+
     def test_metadata_properties_are_read_only(self):
         tensor = ts.Tensor([[1.0]])
 

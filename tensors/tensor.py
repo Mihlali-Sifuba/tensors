@@ -614,6 +614,9 @@ class Tensor:
     @property
     def is_contiguous(self) -> bool:
         """Whether logical elements occupy contiguous row-major storage."""
+        if self.size == 0:
+            return True
+
         expected_stride = 1
         for dimension, stride in zip(
             reversed(self.shape),
