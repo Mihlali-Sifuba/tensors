@@ -10,7 +10,9 @@ from contextlib import nullcontext
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, cast
 
+from ..shape import Shape
 from ..storage import CudaStorage, NumPyStorage, Storage, StorageKind
+from ..strides import Strides
 
 if TYPE_CHECKING:
     from .._typing import Scalar, TensorIndex
@@ -31,8 +33,14 @@ if TYPE_CHECKING:
 
 
 def _view(tensor: Tensor, numpy: Any) -> Any:
-    """Return a backend-native view of a tensor without repeated transfers."""
-    storage = tensor._storage_for(_array_kind(numpy))
+    """Return compact logical values as a backend-native array.
+
+    Provider kernels operate on compact arrays. Tensor metadata remains the
+    source of truth, so a future non-compact layout is gathered before crossing
+    this boundary rather than being reshaped as if logical and physical
+    positions were identical.
+    """
+    storage = tensor._logical_storage_for(_array_kind(numpy))
     return storage.buffer.reshape(tensor.shape)
 
 
@@ -263,12 +271,7 @@ _FUSED_UNARY_OPERATIONS = frozenset({
 
 def _contiguous_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
     """Return row-major element strides for a shape."""
-    result = [1] * len(shape)
-    stride = 1
-    for index in range(len(shape) - 1, -1, -1):
-        result[index] = stride
-        stride *= shape[index]
-    return tuple(result)
+    return Strides.contiguous(shape)
 
 
 def _broadcast_offset_expression(
@@ -3772,7 +3775,4 @@ def matmul_gradient(
 
 
 def _shape_size(shape: tuple[int, ...]) -> int:
-    size = 1
-    for dimension in shape:
-        size *= dimension
-    return size
+    return Shape.from_iterable(shape).size

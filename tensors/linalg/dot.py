@@ -12,9 +12,10 @@ from ..backend import (
 from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
+from ..shape import Shape
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_shape
-from ..utils.shape import coordinates_to_index, index_to_coordinates, shape_size
+from ..utils.shape import coordinates_to_index, index_to_coordinates
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -161,7 +162,7 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
         return Tensor(accelerated, dtype=dtype, shape=output_shape)
 
     values = []
-    for batch_index in range(shape_size(batch_shape)):
+    for batch_index in range(Shape.from_iterable(batch_shape).size):
         batch_coordinates = index_to_coordinates(batch_index, batch_shape)
         a_batch_coordinates = _batch_coordinates(batch_coordinates, a_batch_shape)
         b_batch_coordinates = _batch_coordinates(batch_coordinates, b_batch_shape)
@@ -272,7 +273,7 @@ class Dot:
 
         a_terms: list[list[tuple[float, float]]] = [[] for _ in range(a.size)]
         b_terms: list[list[tuple[float, float]]] = [[] for _ in range(b.size)]
-        for batch_index in range(shape_size(batch_shape)):
+        for batch_index in range(Shape.from_iterable(batch_shape).size):
             batch_coordinates = index_to_coordinates(batch_index, batch_shape)
             a_batch_coordinates = _batch_coordinates(batch_coordinates, a_batch_shape)
             b_batch_coordinates = _batch_coordinates(batch_coordinates, b_batch_shape)

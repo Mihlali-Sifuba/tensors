@@ -12,9 +12,9 @@ from ..backend import (
 )
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
+from ..shape import Shape
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_shape, broadcast_tensors
-from ..utils.shape import shape_size
 from .cross_entropy import Reduction, _validate_reduction
 from .mean import _stable_float_mean
 from .sigmoid import _sigmoid
@@ -217,7 +217,7 @@ class BinaryCrossEntropy:
         _validate_from_logits(from_logits)
         reduction = kwargs.get("reduction", "mean")
         shape = broadcast_shape(prediction.shape, target.shape)
-        size = shape_size(shape)
+        size = Shape.from_iterable(shape).size
         upstream = grad / size if reduction == "mean" and size else grad
 
         if from_logits:

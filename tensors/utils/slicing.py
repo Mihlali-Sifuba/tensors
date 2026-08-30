@@ -3,6 +3,8 @@
 from itertools import product
 from typing import List, Tuple, Union
 
+from ..strides import Strides
+
 
 def slice_ranges_and_shape_from_key(
     key: Tuple[Union[int, slice], ...],
@@ -41,11 +43,12 @@ def slice_ranges_and_shape_from_key(
 
 def flat_indices_from_ranges(
     ranges: List[range],
-    strides: Tuple[int, ...],
+    strides: Tuple[int, ...] | Strides,
+    offset: int = 0,
 ) -> List[int]:
-    """Return row-major flat indices selected by dimension ranges."""
+    """Return physical storage indices selected by dimension ranges."""
     return [
-        sum(
+        offset + sum(
             coordinate * stride
             for coordinate, stride in zip(coordinates, strides)
         )

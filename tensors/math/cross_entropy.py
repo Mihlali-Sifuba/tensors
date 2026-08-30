@@ -14,12 +14,12 @@ from ..backend import (
 )
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
+from ..shape import Shape
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_shape, broadcast_tensors
 from ..utils.shape import (
     coordinates_to_index,
     index_to_coordinates,
-    shape_size,
 )
 from ._reduction import keepdims_shape, reduction_groups
 from .log_softmax import LogSoftmax, log_softmax
@@ -53,7 +53,7 @@ def _tensor(value: Any) -> Tensor:
 def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:
     """Expand one class index per sample into dense target distributions."""
     sample_shape = logits.shape[:axis] + logits.shape[axis + 1:]
-    sample_count = shape_size(sample_shape)
+    sample_count = Shape.from_iterable(sample_shape).size
     scalar_target = sample_shape == () and targets.size == 1
     if targets.shape != sample_shape and not scalar_target:
         raise ValueError(
@@ -378,7 +378,7 @@ class CrossEntropy:
             upstream = grad
             if reduction == "mean":
                 sample_shape = logits.shape[:axis] + logits.shape[axis + 1:]
-                sample_count = shape_size(sample_shape)
+                sample_count = Shape.from_iterable(sample_shape).size
                 if sample_count:
                     upstream = upstream / sample_count
 

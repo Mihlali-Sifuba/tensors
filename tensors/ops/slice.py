@@ -1,11 +1,12 @@
 """Differentiable tensor indexing and slicing."""
 
-from itertools import product
 from typing import List
 
 from ..backend import execute_slice_scatter
+from ..shape import Shape
+from ..strides import Strides
 from ..tensor import Tensor
-from ..utils.shape import shape_size
+from ..utils.slicing import flat_indices_from_ranges
 
 
 def _flat_indices(tensor: Tensor, key) -> List[int]:
@@ -29,17 +30,12 @@ def _flat_indices(tensor: Tensor, key) -> List[int]:
         else:
             raise TypeError(f"Unsupported index type: {type(part)}")
 
-    strides = []
-    for dim in range(tensor.ndim):
-        stride = 1
-        for trailing in tensor.shape[dim + 1:]:
-            stride *= trailing
-        strides.append(stride)
-
-    return [
-        sum(index * stride for index, stride in zip(indices, strides))
-        for indices in product(*ranges)
-    ]
+    # Gradients are newly allocated compact tensors, so these are canonical
+    # logical positions rather than the source tensor's physical positions.
+    return flat_indices_from_ranges(
+        ranges,
+        Strides.contiguous(tensor.shape),
+    )
 
 
 class Slice:
@@ -72,7 +68,11 @@ class SliceScatter:
 
     @staticmethod
     def forward(grad: Tensor, source_shape: tuple[int, ...], key) -> Tensor:
-        template = Tensor([0.0] * shape_size(source_shape), dtype=grad.dtype, shape=source_shape)
+        template = Tensor(
+            [0.0] * Shape.from_iterable(source_shape).size,
+            dtype=grad.dtype,
+            shape=source_shape,
+        )
         selected = _flat_indices(template, key)
         if len(selected) != grad.size:
             raise ValueError(

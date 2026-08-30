@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from ..shape import Shape
 from ..tensor import Tensor
-from ..utils.shape import coordinates_to_index, index_to_coordinates, shape_size
+from ..utils.shape import coordinates_to_index, index_to_coordinates
 
 
 def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
@@ -26,7 +27,7 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
 
     padded_shape = (1,) * (gradient.ndim - len(shape)) + shape
     groups: list[list[int | float]] = [
-        [] for _ in range(shape_size(shape))
+        [] for _ in range(Shape.from_iterable(shape).size)
     ]
     padding = gradient.ndim - len(shape)
     for index, value in enumerate(gradient._data):
@@ -78,7 +79,7 @@ def sum_products_to_shape(
     padded_shape = (1,) * (expanded_gradient.ndim - len(shape)) + shape
     padding = expanded_gradient.ndim - len(shape)
     groups: list[list[tuple[float, float]]] = [
-        [] for _ in range(shape_size(shape))
+        [] for _ in range(Shape.from_iterable(shape).size)
     ]
     for index, (left, right) in enumerate(
         zip(expanded_gradient._data, expanded_factor._data)
@@ -150,7 +151,7 @@ class ProductSumToShape:
         left, right = inputs
         common_shape = broadcast_shape(left.shape, right.shape)
         ones = Tensor(
-            [1.0] * shape_size(common_shape),
+            [1.0] * Shape.from_iterable(common_shape).size,
             dtype=grad.dtype,
             shape=common_shape,
         )

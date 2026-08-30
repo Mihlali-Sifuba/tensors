@@ -3,8 +3,8 @@
 from typing import Any, List, Tuple, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..shape import Shape
 from ..tensor import Tensor
-from ..utils.shape import shape_size
 
 
 class Reshape:
@@ -12,8 +12,8 @@ class Reshape:
 
     @staticmethod
     def forward(tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
-        current_element_count = shape_size(tensor.shape)
-        requested_element_count = shape_size(shape)
+        current_element_count = tensor.shape.size
+        requested_element_count = Shape.from_iterable(shape).size
         if current_element_count != requested_element_count:
             raise ValueError(
                 f"Cannot reshape tensor of size {current_element_count} "

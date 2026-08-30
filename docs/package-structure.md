@@ -41,6 +41,8 @@ The root package is a small ergonomic facade:
 
 ```text
 ts.Tensor
+ts.Shape
+ts.Strides
 ts.Variable
 ts.Graph
 ts.backward
@@ -85,6 +87,8 @@ tensors/
 │   ├── numpy.py
 │   └── cuda.py
 ├── _typing.py             # shared public type aliases
+├── shape.py               # immutable logical tensor extents
+├── strides.py             # immutable physical storage movement
 ├── tensor.py              # Tensor storage, construction, and indexing
 ├── variable.py            # differentiable value type
 ├── dtype.py               # dtype definitions and promotion
@@ -162,6 +166,10 @@ The folders have deliberately narrow responsibilities:
   points.
 - `storage` owns the internal Python, NumPy, and CUDA representations and their
   lazy conversion cache. Storage classes are not a second public tensor API.
+- `Shape` and `Strides` are root-level value objects because they are the
+  precise immutable types returned by `Tensor.shape` and `Tensor.strides`.
+  Ordinary construction derives them automatically; see
+  [Tensor memory model](memory-model.md).
 - `creation` provides public constructors for mathematically defined tensor
   values, including zeros, ones, ranges, and identity matrices.
 - `ops` contains primitive differentiable operations such as arithmetic,

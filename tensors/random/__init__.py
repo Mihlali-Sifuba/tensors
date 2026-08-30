@@ -13,8 +13,8 @@ from typing import TypeAlias
 from .. import dtype as _dtype
 from ..creation import _resolve_dtype
 from ..dtype import DataType
+from ..shape import Shape as TensorShape
 from ..tensor import Tensor
-from ..utils.shape import normalize_shape, shape_size
 from . import _state
 
 
@@ -61,14 +61,14 @@ def uniform(
     dtype: DType = None,
 ) -> Tensor:
     """Return samples from the continuous uniform distribution [low, high)."""
-    normalized_shape = normalize_shape(shape)
+    normalized_shape = TensorShape.from_iterable(shape)
     resolved_dtype = _floating_dtype(dtype)
     lower = _finite_number("low", low)
     upper = _finite_number("high", high)
     if not lower < upper:
         raise ValueError("low must be less than high")
     storage = _state.uniform(
-        shape_size(normalized_shape), lower, upper, resolved_dtype
+        normalized_shape.size, lower, upper, resolved_dtype
     )
     return Tensor(storage, dtype=resolved_dtype, shape=normalized_shape)
 
@@ -80,14 +80,14 @@ def normal(
     dtype: DType = None,
 ) -> Tensor:
     """Return samples from N(mean, stddev**2)."""
-    normalized_shape = normalize_shape(shape)
+    normalized_shape = TensorShape.from_iterable(shape)
     resolved_dtype = _floating_dtype(dtype)
     center = _finite_number("mean", mean)
     deviation = _finite_number("stddev", stddev)
     if deviation < 0.0:
         raise ValueError("stddev must be non-negative")
     storage = _state.normal(
-        shape_size(normalized_shape), center, deviation, resolved_dtype
+        normalized_shape.size, center, deviation, resolved_dtype
     )
     return Tensor(storage, dtype=resolved_dtype, shape=normalized_shape)
 
@@ -109,7 +109,7 @@ def randint(
 
     If high is omitted, values are drawn from [0, low).
     """
-    normalized_shape = normalize_shape(shape)
+    normalized_shape = TensorShape.from_iterable(shape)
     resolved_dtype = _resolve_dtype(dtype)
     if resolved_dtype.kind != "integer":
         raise TypeError("randint requires an integer dtype")
@@ -128,7 +128,7 @@ def randint(
             f"requested interval is outside the range of {resolved_dtype.name}"
         )
     storage = _state.randint(
-        shape_size(normalized_shape), low, high, resolved_dtype
+        normalized_shape.size, low, high, resolved_dtype
     )
     return Tensor(storage, dtype=resolved_dtype, shape=normalized_shape)
 
@@ -143,7 +143,7 @@ def _truncated_normal(
     dtype: DType,
 ) -> Tensor:
     """Internal backend-native truncated-normal constructor."""
-    normalized_shape = normalize_shape(shape)
+    normalized_shape = TensorShape.from_iterable(shape)
     resolved_dtype = _floating_dtype(dtype)
     center = _finite_number("mean", mean)
     deviation = _finite_number("stddev", stddev)
@@ -162,7 +162,7 @@ def _truncated_normal(
             "truncation bounds retain too little probability to sample safely"
         )
     storage = _state.truncated_normal(
-        shape_size(normalized_shape),
+        normalized_shape.size,
         center,
         deviation,
         minimum,
