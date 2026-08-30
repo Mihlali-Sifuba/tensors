@@ -1,8 +1,9 @@
 # Parameter initialization and random generation
 
 MS-Tensors exposes parameter initializers through `ts.init` and random tensor
-generation through `ts.random`. Both namespaces return ordinary `Tensor`
-objects; they do not introduce layer, module, or stateful initializer classes.
+generation through `ts.random`. Both functional and immutable callable-class
+forms return ordinary `Tensor` objects; neither introduces layer, module, or
+parameter-registration abstractions.
 
 ```python
 import tensors as ts
@@ -13,6 +14,22 @@ weight = ts.Variable(
     requires_grad=True,
 )
 ```
+
+Use a callable class when the same validated configuration initializes several
+parameters:
+
+```python
+initializer = ts.init.HeNormal(dtype=ts.float32)
+
+input_weight = initializer((128, 64))
+output_weight = initializer((64, 10))
+```
+
+All concrete classes implement `ts.init.Initializer`. Configuration is
+validated during construction and is immutable afterward. Calling an instance
+advances the shared `ts.random` stream; initializer objects do not own hidden
+RNG state. Lowercase functions such as `ts.init.he_normal` are one-shot
+facades over the corresponding class and remain the concise default.
 
 ## Fan definitions
 

@@ -113,6 +113,7 @@ tensors/
 │   ├── adam.py
 │   └── rmsprop.py
 ├── init/                  # functional parameter initialization
+│   ├── initializer.py     # callable initializer base contract
 │   ├── variance_scaling.py
 │   ├── xavier_uniform.py, xavier_normal.py
 │   ├── he_uniform.py, he_normal.py
@@ -178,9 +179,10 @@ The folders have deliberately narrow responsibilities:
   workspaces, and eligible CUDA chain fusion; `ts.backward` is a root
   convenience alias.
 - `optim` provides the shared optimizer contract plus SGD, Adam, and RMSprop.
-- `init` provides functional variance-scaling, Xavier, He, LeCun,
-  truncated-normal, and orthogonal parameter initialization. Its functions
-  remain under `ts.init` instead of expanding the root facade.
+- `init` provides immutable callable initializer configurations plus lowercase
+  function facades for variance-scaling, Xavier, He, LeCun, truncated-normal,
+  and orthogonal initialization. Both forms remain under `ts.init` instead of
+  expanding the root facade.
 - `random` owns seeded Python, NumPy, and CUDA generator state and exposes the
   minimal `ts.random` facade. It does not modify provider-global RNG state.
 
