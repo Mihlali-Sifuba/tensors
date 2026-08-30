@@ -82,7 +82,7 @@ class TensorMetadataTests(unittest.TestCase):
         with self.assertRaises(AttributeError):
             tensor.is_contiguous = False
 
-    def test_nonzero_offset_maps_logical_coordinates(self):
+    def test_contiguous_returns_self_for_contiguous_nonzero_offset(self):
         tensor = synthetic_tensor(
             [10.0, 20.0, 30.0],
             shape=(2,),
@@ -94,7 +94,13 @@ class TensorMetadataTests(unittest.TestCase):
         self.assertEqual(tensor[1], 30.0)
         self.assertEqual(tensor.tolist(), [20.0, 30.0])
         self.assertTrue(tensor.is_contiguous)
-        self.assertIs(tensor.contiguous(), tensor)
+        self.assertFalse(tensor._has_compact_storage)
+
+        result = tensor.contiguous()
+
+        self.assertIs(result, tensor)
+        self.assertEqual(result.offset, 1)
+        self.assertEqual(result._storage.size, 3)
 
     def test_zero_stride_repeats_physical_values(self):
         tensor = synthetic_tensor(

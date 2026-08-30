@@ -239,7 +239,11 @@ class Tensor:
 
     @property
     def _has_compact_storage(self) -> bool:
-        """Whether logical row-major positions equal storage positions."""
+        """Whether contiguous values exactly fill storage from offset zero.
+
+        Compact storage is stricter than a contiguous logical layout, which
+        may begin at a non-zero offset.
+        """
         return (
             self.offset == 0
             and self.is_contiguous
@@ -613,7 +617,10 @@ class Tensor:
 
     @property
     def is_contiguous(self) -> bool:
-        """Whether logical elements occupy contiguous row-major storage."""
+        """Whether logical elements occupy contiguous row-major storage.
+
+        The starting offset does not affect logical contiguity.
+        """
         if self.size == 0:
             return True
 
@@ -653,11 +660,13 @@ class Tensor:
         return Tensor(self)
 
     def contiguous(self) -> Tensor:
-        """Return this tensor in canonical row-major layout.
+        """Ensure that this tensor has a contiguous logical layout.
 
-        Contiguous tensors retain their current ownership. Non-contiguous
-        tensors are materialized into independent compact storage without
-        transferring NumPy or CUDA values through the host.
+        An already-contiguous tensor is returned unchanged, including when it
+        begins at a non-zero storage offset. This method does not promise
+        compact storage. Non-contiguous tensors are materialized into
+        independent compact storage without transferring NumPy or CUDA values
+        through the host.
         """
         if self.is_contiguous:
             return self
