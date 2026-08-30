@@ -2,20 +2,24 @@
 
 from typing import Tuple
 
+from ..shape import Shape
 from ..tensor import Tensor
-from .shape import coordinates_to_index, index_to_coordinates, shape_size
+from .shape import coordinates_to_index, index_to_coordinates
 
 
 def broadcast_shape(
     a_shape: Tuple[int, ...],
     b_shape: Tuple[int, ...],
-) -> Tuple[int, ...]:
+) -> Shape:
     """Return the NumPy-style broadcast shape for two tensor shapes."""
-    shape_size(a_shape)
-    shape_size(b_shape)
+    normalized_a = Shape.from_iterable(a_shape)
+    normalized_b = Shape.from_iterable(b_shape)
 
     dimensions = []
-    for a_dimension, b_dimension in zip(reversed(a_shape), reversed(b_shape)):
+    for a_dimension, b_dimension in zip(
+        reversed(normalized_a),
+        reversed(normalized_b),
+    ):
         if a_dimension == b_dimension:
             dimensions.append(a_dimension)
         elif a_dimension == 1:
@@ -23,32 +27,45 @@ def broadcast_shape(
         elif b_dimension == 1:
             dimensions.append(a_dimension)
         else:
-            raise ValueError(f"Shapes {a_shape} and {b_shape} cannot be broadcast")
+            raise ValueError(
+                f"Shapes {normalized_a} and {normalized_b} cannot be broadcast"
+            )
 
-    longer_shape = a_shape if len(a_shape) > len(b_shape) else b_shape
-    matched_dimensions = min(len(a_shape), len(b_shape))
+    longer_shape = (
+        normalized_a
+        if normalized_a.rank > normalized_b.rank
+        else normalized_b
+    )
+    matched_dimensions = min(normalized_a.rank, normalized_b.rank)
     unmatched_dimensions = len(longer_shape) - matched_dimensions
     dimensions.extend(reversed(longer_shape[:unmatched_dimensions]))
-    return tuple(reversed(dimensions))
+    return Shape(*reversed(dimensions))
 
 
 def broadcast_to(tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
     """Materialize ``tensor`` at ``shape`` using singleton dimensions."""
-    output_size = shape_size(shape)
-    if tensor.shape == shape:
+    output_shape = Shape.from_iterable(shape)
+    output_size = output_shape.size
+    if tensor.shape == output_shape:
         return tensor
-    if len(tensor.shape) > len(shape):
-        raise ValueError(f"Shape {tensor.shape} cannot be broadcast to {shape}")
+    if tensor.shape.rank > output_shape.rank:
+        raise ValueError(
+            f"Shape {tensor.shape} cannot be broadcast to {output_shape}"
+        )
 
-    padded_shape = (1,) * (len(shape) - tensor.ndim) + tensor.shape
-    for source_dimension, target_dimension in zip(padded_shape, shape):
+    padded_shape = (
+        (1,) * (output_shape.rank - tensor.ndim) + tensor.shape
+    )
+    for source_dimension, target_dimension in zip(padded_shape, output_shape):
         if source_dimension not in {1, target_dimension}:
-            raise ValueError(f"Shape {tensor.shape} cannot be broadcast to {shape}")
+            raise ValueError(
+                f"Shape {tensor.shape} cannot be broadcast to {output_shape}"
+            )
 
     values = []
-    padding = len(shape) - tensor.ndim
+    padding = output_shape.rank - tensor.ndim
     for output_index in range(output_size):
-        output_coordinates = index_to_coordinates(output_index, shape)
+        output_coordinates = index_to_coordinates(output_index, output_shape)
         source_coordinates = tuple(
             0 if source_dimension == 1 else coordinate
             for source_dimension, coordinate in zip(padded_shape, output_coordinates)
@@ -57,7 +74,7 @@ def broadcast_to(tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
             tensor._data[coordinates_to_index(source_coordinates, tensor.shape)]
         )
 
-    return Tensor(values, dtype=tensor.dtype, shape=shape)
+    return Tensor(values, dtype=tensor.dtype, shape=output_shape)
 
 
 def broadcast_tensors(a: Tensor, b: Tensor) -> Tuple[Tensor, Tensor]:

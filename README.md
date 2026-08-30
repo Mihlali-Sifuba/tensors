@@ -119,7 +119,7 @@ and CUDA implementations.
 
 ## Highlights
 
-- Multidimensional `Tensor` values with shapes, indexing, slicing, broadcasting, and dtypes
+- Multidimensional `Tensor` values with explicit `Shape`, `Strides`, storage offsets, indexing, slicing, broadcasting, and dtypes
 - Trainable `Variable` values and reverse-mode automatic differentiation
 - First-order gradients plus Jacobians, Hessians, and higher-order derivative graphs
 - Class-based and function-based `Graph` models with automatic parameter discovery
@@ -131,6 +131,10 @@ and CUDA implementations.
 - SGD, Adam, and RMSprop optimizers
 - Inline type information distributed through the standard `py.typed` marker
 - A broad `unittest` test suite covering tensors, graphs, autograd, math, and optimizers
+
+Tensor layout is represented independently of the numerical provider. See
+[Tensor memory model](docs/memory-model.md) for the logical-to-physical address
+mapping, contiguity semantics, and the boundary of the future view system.
 
 ## Installation
 

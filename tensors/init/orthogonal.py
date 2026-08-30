@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from ..backend import get_backend
 from ..dtype import DataType
 from ..random import normal
+from ..shape import Shape as TensorShape
 from ..storage import CudaStorage, NumPyStorage, PythonStorage, Storage
 from ..tensor import Tensor
-from ..utils.shape import normalize_shape, shape_size
 from ._utils import DType, Shape, finite_number, floating_dtype
 from .initializer import Initializer
 
@@ -105,7 +105,7 @@ class Orthogonal(Initializer):
 
     def __call__(self, shape: Shape) -> Tensor:
         """Return a tensor whose flattened rows or columns are orthogonal."""
-        normalized_shape = normalize_shape(shape)
+        normalized_shape = TensorShape.from_iterable(shape)
         if len(normalized_shape) < 2:
             raise ValueError(
                 "orthogonal initialization requires at least two dimensions"
@@ -124,7 +124,7 @@ class Orthogonal(Initializer):
             storage = _array_orthogonal(
                 rows, columns, self.dtype, float(self.gain)
             )
-        if storage.size != shape_size(normalized_shape):
+        if storage.size != normalized_shape.size:
             raise RuntimeError(
                 "orthogonal initializer returned an unexpected result size"
             )

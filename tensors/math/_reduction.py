@@ -2,8 +2,9 @@
 
 from typing import Optional, TypeAlias
 
+from ..shape import Shape
 from ..tensor import Tensor
-from ..utils.shape import coordinates_to_index, index_to_coordinates, shape_size
+from ..utils.shape import coordinates_to_index, index_to_coordinates
 
 
 Axis: TypeAlias = Optional[int | tuple[int, ...] | list[int]]
@@ -57,7 +58,7 @@ def reduction_shape(
 
 def reduction_size(shape: tuple[int, ...], axes: tuple[int, ...]) -> int:
     """Return the number of input values contributing to each output value."""
-    return shape_size(tuple(shape[axis] for axis in axes))
+    return Shape(*(shape[axis] for axis in axes)).size
 
 
 def reduction_groups(
@@ -75,7 +76,7 @@ def reduction_groups(
     scalar_output_as_vector = scalar_as_vector and axis is None and not keepdims
     if scalar_output_as_vector:
         output_shape = (1,)
-    groups = [[] for _ in range(shape_size(output_shape))]
+    groups = [[] for _ in range(Shape.from_iterable(output_shape).size)]
     axes_set = set(axes)
 
     for input_index in range(value.size):

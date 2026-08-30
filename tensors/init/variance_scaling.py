@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 from ..random import normal, uniform
 from ..random import _truncated_normal
+from ..shape import Shape as TensorShape
 from ..tensor import Tensor
-from ..utils.shape import normalize_shape
 from ._utils import (
     DType,
     Distribution,
@@ -52,7 +52,7 @@ class VarianceScaling(Initializer):
 
     def __call__(self, shape: Shape) -> Tensor:
         """Initialize a tensor with variance scale / fan."""
-        normalized_shape = normalize_shape(shape)
+        normalized_shape = TensorShape.from_iterable(shape)
         fan_in, fan_out = calculate_fan_in_and_fan_out(normalized_shape)
         if self.mode == "fan_in":
             denominator = float(fan_in)

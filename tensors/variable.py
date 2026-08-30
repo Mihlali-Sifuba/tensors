@@ -22,6 +22,7 @@ from typing import Any
 
 from ._typing import TensorData, TensorIndex, TensorLike, TensorOperand, VariableData
 from .dtype import DataType
+from .shape import Shape
 from .tensor import Tensor
 from .ops import Ops
 from .ops import Add, Sub, Mul, Div, Pow, Neg, Slice, Cast
@@ -132,7 +133,7 @@ class Variable:
         )
 
     @property
-    def shape(self) -> tuple[int, ...]:
+    def shape(self) -> Shape:
         return self.data.shape
 
     @property

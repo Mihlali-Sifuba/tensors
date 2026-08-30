@@ -12,6 +12,7 @@ from contextvars import ContextVar
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
+from ..shape import Shape
 from ..storage import Storage
 
 if TYPE_CHECKING:
@@ -170,10 +171,7 @@ _process_backend = _environment_default()
 
 
 def _shape_size(shape: tuple[int, ...]) -> int:
-    size = 1
-    for dimension in shape:
-        size *= dimension
-    return size
+    return Shape.from_iterable(shape).size
 
 
 def _array_work_is_large_enough(work: int, minimum: int) -> bool:
