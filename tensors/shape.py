@@ -17,11 +17,11 @@ class Shape(tuple[int, ...]):
     def __new__(cls, *dimensions: int) -> Shape:
         normalized = tuple(dimensions)
         for dimension in normalized:
-            if (
-                isinstance(dimension, bool)
-                or not isinstance(dimension, int)
-                or dimension < 0
-            ):
+            if isinstance(dimension, bool) or not isinstance(dimension, int):
+                raise TypeError(
+                    f"Invalid shape {normalized}: dimensions must be integers"
+                )
+            if dimension < 0:
                 raise ValueError(
                     f"Invalid shape {normalized}: "
                     "dimensions must be non-negative integers"
