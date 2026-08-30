@@ -79,6 +79,14 @@ preventing stale backend data.
 These storage classes are internal implementation details, not a second public
 array API. Users continue to write ordinary tensor expressions.
 
+Random tensors follow the same residency contract. `ts.random` dispatches to an
+MS-Tensors-owned `random.Random`, NumPy `Generator`, or CuPy `RandomState` for
+the active backend. Initializers in `ts.init` consume that abstraction, so
+large CUDA parameters are sampled directly into device-resident storage.
+Calling `ts.random.seed` resets independent backend streams without changing
+the provider-global RNGs. See [Parameter initialization](initialization.md) for
+the mathematical definitions and reproducibility contract.
+
 ## Kernel coverage and fallback
 
 NumPy and CUDA share kernels for broadcasting arithmetic, unary mathematics,

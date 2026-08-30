@@ -6,7 +6,7 @@ from .backend import (
     set_backend,
     use_backend,
 )
-from . import creation, graph, linalg, math, ops, optim
+from . import creation, graph, init, linalg, math, ops, optim, random
 from .creation import arange, eye, full, linspace, ones, zeros
 from .ops import Ops, pow
 from .dtype import DataType, float64, float32, int64, int32, int16, int8, uint8
@@ -36,7 +36,7 @@ __all__ = [
     "Tensor", "Variable", "Graph", "GradcheckError", "BackendUnavailableError",
     "available_backends", "get_backend", "set_backend", "use_backend",
     "backward", "grad", "gradcheck", "hessian", "jacobian", "Ops", "DataType",
-    "creation", "graph", "ops", "linalg", "math", "optim",
+    "creation", "graph", "init", "ops", "linalg", "math", "optim", "random",
     "float64", "float32", "int64", "int32", "int16", "int8", "uint8",
     "add", "subtract", "multiply", "divide", "pow",
     "zeros", "ones", "full", "eye", "arange", "linspace",
