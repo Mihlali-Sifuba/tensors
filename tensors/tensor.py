@@ -613,8 +613,18 @@ class Tensor:
 
     @property
     def is_contiguous(self) -> bool:
-        """Whether this tensor uses canonical row-major strides."""
-        return self.strides == Strides.contiguous(self.shape)
+        """Whether logical elements occupy contiguous row-major storage."""
+        expected_stride = 1
+        for dimension, stride in zip(
+            reversed(self.shape),
+            reversed(self.strides),
+        ):
+            if dimension == 1:
+                continue
+            if stride != expected_stride:
+                return False
+            expected_stride *= dimension
+        return True
 
     @property
     def dtype(self) -> _dtype.DataType:
