@@ -111,10 +111,20 @@ addressed storage positions that could contain an observable gap. Contiguity
 is derived from Tensor metadata rather than inferred from the backend
 provider.
 
-`tensor.contiguous()` returns an already-contiguous tensor unchanged. For a
-non-contiguous internal layout, it gathers values in logical row-major order
-into independent compact storage while preserving shape, dtype, and backend
-residency.
+Contiguous layout and compact storage are distinct. Contiguity describes the
+spacing between logical elements and does not require `offset == 0`. Compact
+storage is the stricter internal condition that the layout is contiguous,
+starts at offset zero, and exactly fills its owned storage.
+
+For example, `shape=(2,)`, `strides=(1,)`, and `offset=1` over storage
+`[10, 20, 30]` is contiguous but not compact. Its logical values are the
+adjacent storage values `[20, 30]`.
+
+`tensor.contiguous()` means "ensure a contiguous logical layout." It returns
+an already-contiguous tensor unchanged, including one with a non-zero offset;
+it does not guarantee compact storage or offset zero. For a non-contiguous
+internal layout, it gathers values in logical row-major order into independent
+compact storage while preserving shape, dtype, and backend residency.
 
 NumPy and CUDA kernels currently consume compact provider arrays. Before that
 boundary, Tensor metadata is applied and a non-compact layout is gathered in
