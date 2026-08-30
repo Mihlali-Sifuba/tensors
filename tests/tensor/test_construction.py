@@ -14,7 +14,7 @@ class TensorConstructionTests(unittest.TestCase):
             ts.Tensor([1, 2], shape=(-1, 2))
 
     def test_bool_shape_dimension_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "Invalid shape"):
+        with self.assertRaisesRegex(TypeError, "Invalid shape"):
             ts.Tensor([1, 2], shape=(True, 2))
 
     def test_non_iterable_shape_is_rejected(self):
