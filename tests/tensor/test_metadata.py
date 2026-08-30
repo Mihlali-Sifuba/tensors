@@ -33,6 +33,22 @@ class TensorMetadataTests(unittest.TestCase):
         self.assertEqual(tensor.offset, 0)
         self.assertTrue(tensor.is_contiguous)
 
+    def test_singleton_dimension_strides_do_not_affect_contiguity(self):
+        layouts = (
+            ((1, 3), (100, 1), [1.0, 2.0, 3.0], True),
+            ((2, 3), (3, 1), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], True),
+            ((2, 3), (4, 1), [1.0, 2.0, 3.0, 0.0, 4.0, 5.0, 6.0], False),
+        )
+
+        for shape, strides, values, expected in layouts:
+            with self.subTest(shape=shape, strides=strides):
+                tensor = synthetic_tensor(
+                    values,
+                    shape=shape,
+                    strides=strides,
+                )
+                self.assertIs(tensor.is_contiguous, expected)
+
     def test_scalar_and_zero_sized_tensor_metadata(self):
         scalar = ts.Tensor([7.0], shape=())
         empty = ts.Tensor([], shape=(2, 0, 3))
