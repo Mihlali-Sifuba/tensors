@@ -113,8 +113,11 @@ tensors/
 │   ├── adam.py
 │   └── rmsprop.py
 ├── init/                  # functional parameter initialization
-│   ├── _variance.py
-│   └── _special.py
+│   ├── variance_scaling.py
+│   ├── xavier_uniform.py, xavier_normal.py
+│   ├── he_uniform.py, he_normal.py
+│   ├── lecun_uniform.py, lecun_normal.py
+│   └── truncated_normal.py, orthogonal.py
 ├── random/                # backend-native random generation
 │   └── _state.py
 └── graph/                 # tracing, execution, and differentiation

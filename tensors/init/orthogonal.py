@@ -1,53 +1,17 @@
-"""Truncated-normal and orthogonal parameter initializers."""
+"""Orthogonal parameter initialization."""
 
 from __future__ import annotations
 
 import importlib
 import math
-from collections.abc import Iterable
-from typing import TypeAlias
 
 from ..backend import get_backend
 from ..dtype import DataType
 from ..random import normal
-from ..random import _truncated_normal
 from ..storage import CudaStorage, NumPyStorage, PythonStorage, Storage
 from ..tensor import Tensor
 from ..utils.shape import normalize_shape, shape_size
-from ._variance import _finite_number, _floating_dtype
-
-
-Shape: TypeAlias = Iterable[int]
-DType: TypeAlias = str | DataType | None
-
-
-def truncated_normal(
-    shape: Shape,
-    mean: int | float = 0.0,
-    stddev: int | float = 1.0,
-    lower: int | float | None = None,
-    upper: int | float | None = None,
-    dtype: DType = None,
-) -> Tensor:
-    """Sample a normal distribution subject to inclusive absolute bounds.
-
-    stddev describes the source normal before truncation. Omitted bounds
-    default to two source standard deviations on either side of mean.
-    """
-    center = _finite_number("mean", mean)
-    deviation = _finite_number("stddev", stddev)
-    if deviation <= 0.0:
-        raise ValueError("stddev must be greater than zero")
-    minimum = center - 2.0 * deviation if lower is None else lower
-    maximum = center + 2.0 * deviation if upper is None else upper
-    return _truncated_normal(
-        shape,
-        mean=center,
-        stddev=deviation,
-        lower=minimum,
-        upper=maximum,
-        dtype=dtype,
-    )
+from ._utils import DType, Shape, finite_number, floating_dtype
 
 
 def _python_orthogonal(
@@ -131,11 +95,7 @@ def orthogonal(
     gain: int | float = 1.0,
     dtype: DType = None,
 ) -> Tensor:
-    """Return a tensor whose flattened rows or columns are orthogonal.
-
-    The tensor is viewed as (shape[0], product(shape[1:])). The smaller
-    dimension is a complete orthonormal basis, scaled by gain.
-    """
+    """Return a tensor whose flattened rows or columns are orthogonal."""
     normalized_shape = normalize_shape(shape)
     if len(normalized_shape) < 2:
         raise ValueError(
@@ -145,8 +105,8 @@ def orthogonal(
         raise ValueError(
             "orthogonal initialization requires positive dimensions"
         )
-    multiplier = _finite_number("gain", gain)
-    resolved_dtype = _floating_dtype(dtype)
+    multiplier = finite_number("gain", gain)
+    resolved_dtype = floating_dtype(dtype)
     rows = normalized_shape[0]
     columns = math.prod(normalized_shape[1:])
     if get_backend() == "python":
@@ -164,4 +124,4 @@ def orthogonal(
     return Tensor(storage, dtype=resolved_dtype, shape=normalized_shape)
 
 
-__all__ = ["orthogonal", "truncated_normal"]
+__all__ = ["orthogonal"]

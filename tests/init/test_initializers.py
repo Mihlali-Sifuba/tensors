@@ -2,7 +2,7 @@ import math
 import unittest
 
 import tensors as ts
-from tensors.init._variance import _calculate_fan_in_and_fan_out
+from tensors.init._utils import calculate_fan_in_and_fan_out
 
 
 def _mean(values):
@@ -41,9 +41,9 @@ class InitializerTests(unittest.TestCase):
             self.assertFalse(hasattr(ts, name))
 
     def test_fans_use_matrix_and_channel_last_kernel_conventions(self):
-        self.assertEqual(_calculate_fan_in_and_fan_out((128, 64)), (128, 64))
+        self.assertEqual(calculate_fan_in_and_fan_out((128, 64)), (128, 64))
         self.assertEqual(
-            _calculate_fan_in_and_fan_out((3, 5, 16, 32)),
+            calculate_fan_in_and_fan_out((3, 5, 16, 32)),
             (240, 480),
         )
 
@@ -51,7 +51,7 @@ class InitializerTests(unittest.TestCase):
         for shape in ((), (3,), (2, 0), (0, 2, 3)):
             with self.subTest(shape=shape):
                 with self.assertRaisesRegex(ValueError, "fan_in"):
-                    _calculate_fan_in_and_fan_out(shape)
+                    calculate_fan_in_and_fan_out(shape)
 
     def test_all_initializers_preserve_shape_and_dtype(self):
         initializers = (
