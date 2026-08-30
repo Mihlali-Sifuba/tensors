@@ -71,6 +71,7 @@ class Tensor:
                 Existing dtype is preserved for tensor, storage, and array
                 inputs; otherwise, the default is ``float64``.
             shape: Optional tensor shape. When omitted, inferred from ``data``.
+                Python scalar inputs infer the rank-zero shape ``()``.
 
         Raises:
             TypeError: If ``data`` or ``dtype`` is unsupported, or a storage
@@ -124,7 +125,7 @@ class Tensor:
         elif isinstance(data, (int, float)):
             # Scalar value
             self._set_storage(PythonStorage.from_values([data], self.dtype))
-            inferred_shape = (1,)
+            inferred_shape = ()
 
         elif isinstance(data, list):
             # Flatten the list if it's nested
