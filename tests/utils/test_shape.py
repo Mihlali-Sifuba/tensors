@@ -24,11 +24,15 @@ class ShapeTests(unittest.TestCase):
         shape = ts.Shape(2, 0, 4)
         self.assertEqual((shape.rank, shape.size), (3, 0))
 
-    def test_shape_rejects_invalid_dimensions(self):
-        for dimensions in ((2, -1), (True, 2), (2.0, 3)):
+    def test_shape_rejects_non_integer_dimensions_with_type_error(self):
+        for dimensions in ((2.5, 3), (True, 3)):
             with self.subTest(dimensions=dimensions):
-                with self.assertRaisesRegex(ValueError, "non-negative integers"):
+                with self.assertRaisesRegex(TypeError, "dimensions must be integers"):
                     ts.Shape(*dimensions)
+
+    def test_shape_rejects_negative_dimensions_with_value_error(self):
+        with self.assertRaisesRegex(ValueError, "non-negative integers"):
+            ts.Shape(-1, 3)
 
     def test_shape_from_iterable_accepts_generators(self):
         shape = ts.Shape.from_iterable(value for value in (2, 3))
