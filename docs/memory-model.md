@@ -99,9 +99,17 @@ Tensor construction calculates it automatically.
 
 ## Contiguity
 
-`tensor.is_contiguous` compares the tensor's actual strides with
-`Strides.contiguous(tensor.shape)`. It does not infer contiguity from the
-backend provider.
+`tensor.is_contiguous` determines whether the logical elements occupy
+consecutive storage positions in row-major order. Singleton dimensions are
+ignored because their strides are never used to select a different element.
+For example, `shape=(1, 3)` with `strides=(100, 1)` is contiguous even though
+its strides are not canonical.
+
+Every valid zero-sized layout is also contiguous regardless of its strides.
+A tensor with `shape=(2, 0, 3)` has no logical elements, so there are no
+addressed storage positions that could contain an observable gap. Contiguity
+is derived from Tensor metadata rather than inferred from the backend
+provider.
 
 `tensor.contiguous()` returns an already-contiguous tensor unchanged. For a
 non-contiguous internal layout, it gathers values in logical row-major order
