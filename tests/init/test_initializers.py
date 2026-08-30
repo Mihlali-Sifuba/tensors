@@ -1,5 +1,6 @@
 import math
 import unittest
+from dataclasses import FrozenInstanceError
 
 import tensors as ts
 from tensors.init._utils import calculate_fan_in_and_fan_out
@@ -39,6 +40,81 @@ class InitializerTests(unittest.TestCase):
         for name in names:
             self.assertTrue(callable(getattr(ts.init, name)))
             self.assertFalse(hasattr(ts, name))
+
+    def test_public_facade_contains_callable_initializer_classes(self):
+        classes = (
+            ts.init.VarianceScaling,
+            ts.init.XavierUniform,
+            ts.init.XavierNormal,
+            ts.init.HeUniform,
+            ts.init.HeNormal,
+            ts.init.LecunUniform,
+            ts.init.LecunNormal,
+            ts.init.TruncatedNormal,
+            ts.init.Orthogonal,
+        )
+        for initializer_class in classes:
+            with self.subTest(initializer_class=initializer_class.__name__):
+                self.assertTrue(
+                    issubclass(initializer_class, ts.init.Initializer)
+                )
+                value = initializer_class()((8, 4))
+                self.assertEqual(value.shape, (8, 4))
+
+    def test_class_and_function_facades_have_identical_seeded_behavior(self):
+        cases = (
+            (ts.init.HeNormal(dtype=ts.float32), ts.init.he_normal),
+            (ts.init.XavierUniform(dtype=ts.float32), ts.init.xavier_uniform),
+            (ts.init.LecunNormal(dtype=ts.float32), ts.init.lecun_normal),
+            (ts.init.Orthogonal(gain=1.5, dtype=ts.float32), None),
+        )
+        for initializer, function in cases:
+            with self.subTest(initializer=type(initializer).__name__):
+                ts.random.seed(88)
+                class_values = initializer((8, 4)).tolist()
+                ts.random.seed(88)
+                if function is None:
+                    function_values = ts.init.orthogonal(
+                        (8, 4),
+                        gain=1.5,
+                        dtype=ts.float32,
+                    ).tolist()
+                else:
+                    function_values = function(
+                        (8, 4),
+                        dtype=ts.float32,
+                    ).tolist()
+                self.assertEqual(class_values, function_values)
+
+    def test_initializer_instances_are_immutable_and_reusable(self):
+        initializer = ts.init.TruncatedNormal(
+            mean=1.0,
+            stddev=0.5,
+            dtype=ts.float32,
+        )
+        first = initializer((16,))
+        second = initializer((16,))
+
+        self.assertEqual(first.shape, (16,))
+        self.assertEqual(second.shape, (16,))
+        self.assertNotEqual(first.tolist(), second.tolist())
+        with self.assertRaises(FrozenInstanceError):
+            initializer.mean = 2.0  # type: ignore[misc]
+
+    def test_initializer_classes_validate_configuration_at_construction(self):
+        invalid_constructors = (
+            lambda: ts.init.VarianceScaling(scale=0.0),
+            lambda: ts.init.VarianceScaling(mode="missing"),
+            lambda: ts.init.VarianceScaling(distribution="missing"),
+            lambda: ts.init.HeNormal(dtype=ts.int32),
+            lambda: ts.init.TruncatedNormal(stddev=0.0),
+            lambda: ts.init.TruncatedNormal(lower=1.0, upper=0.0),
+            lambda: ts.init.Orthogonal(gain=float("inf")),
+        )
+        for constructor in invalid_constructors:
+            with self.subTest(constructor=constructor):
+                with self.assertRaises((TypeError, ValueError)):
+                    constructor()
 
     def test_fans_use_matrix_and_channel_last_kernel_conventions(self):
         self.assertEqual(calculate_fan_in_and_fan_out((128, 64)), (128, 64))

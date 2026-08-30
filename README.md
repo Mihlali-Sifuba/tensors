@@ -263,7 +263,7 @@ for _ in range(100):
 | Backends | `available_backends`, `get_backend`, `set_backend`, `use_backend` |
 | Creation | `zeros`, `ones`, `full`, `eye`, `arange`, `linspace` |
 | Random | `ts.random.seed`, `uniform`, `normal`, `randint` |
-| Initialization | `ts.init.variance_scaling`, Xavier, He, LeCun, truncated normal, orthogonal |
+| Initialization | Functional and callable-class variance scaling, Xavier, He, LeCun, truncated normal, orthogonal |
 | Autograd | `backward`, `grad`, `gradcheck`, `jacobian`, `hessian` |
 | Graphs | `Graph`, nested models, function decorators, parameter discovery |
 | Linear algebra | `dot`, `matmul`, `outer`, `transpose`, `norm` |

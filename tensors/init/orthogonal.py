@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import math
+from dataclasses import dataclass
 
 from ..backend import get_backend
 from ..dtype import DataType
@@ -12,6 +13,7 @@ from ..storage import CudaStorage, NumPyStorage, PythonStorage, Storage
 from ..tensor import Tensor
 from ..utils.shape import normalize_shape, shape_size
 from ._utils import DType, Shape, finite_number, floating_dtype
+from .initializer import Initializer
 
 
 def _python_orthogonal(
@@ -90,38 +92,56 @@ def _array_orthogonal(
     return NumPyStorage(values, dtype)
 
 
+@dataclass(frozen=True, slots=True)
+class Orthogonal(Initializer):
+    """Reusable orthogonal initializer configuration."""
+
+    gain: int | float = 1.0
+    dtype: DType = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "gain", finite_number("gain", self.gain))
+        object.__setattr__(self, "dtype", floating_dtype(self.dtype))
+
+    def __call__(self, shape: Shape) -> Tensor:
+        """Return a tensor whose flattened rows or columns are orthogonal."""
+        normalized_shape = normalize_shape(shape)
+        if len(normalized_shape) < 2:
+            raise ValueError(
+                "orthogonal initialization requires at least two dimensions"
+            )
+        if any(dimension == 0 for dimension in normalized_shape):
+            raise ValueError(
+                "orthogonal initialization requires positive dimensions"
+            )
+        rows = normalized_shape[0]
+        columns = math.prod(normalized_shape[1:])
+        if get_backend() == "python":
+            storage = _python_orthogonal(
+                rows, columns, self.dtype, float(self.gain)
+            )
+        else:
+            storage = _array_orthogonal(
+                rows, columns, self.dtype, float(self.gain)
+            )
+        if storage.size != shape_size(normalized_shape):
+            raise RuntimeError(
+                "orthogonal initializer returned an unexpected result size"
+            )
+        return Tensor(
+            storage,
+            dtype=self.dtype,
+            shape=normalized_shape,
+        )
+
+
 def orthogonal(
     shape: Shape,
     gain: int | float = 1.0,
     dtype: DType = None,
 ) -> Tensor:
-    """Return a tensor whose flattened rows or columns are orthogonal."""
-    normalized_shape = normalize_shape(shape)
-    if len(normalized_shape) < 2:
-        raise ValueError(
-            "orthogonal initialization requires at least two dimensions"
-        )
-    if any(dimension == 0 for dimension in normalized_shape):
-        raise ValueError(
-            "orthogonal initialization requires positive dimensions"
-        )
-    multiplier = finite_number("gain", gain)
-    resolved_dtype = floating_dtype(dtype)
-    rows = normalized_shape[0]
-    columns = math.prod(normalized_shape[1:])
-    if get_backend() == "python":
-        storage = _python_orthogonal(
-            rows, columns, resolved_dtype, multiplier
-        )
-    else:
-        storage = _array_orthogonal(
-            rows, columns, resolved_dtype, multiplier
-        )
-    if storage.size != shape_size(normalized_shape):
-        raise RuntimeError(
-            "orthogonal initializer returned an unexpected result size"
-        )
-    return Tensor(storage, dtype=resolved_dtype, shape=normalized_shape)
+    """Initialize using a one-shot Orthogonal configuration."""
+    return Orthogonal(gain, dtype)(shape)
 
 
-__all__ = ["orthogonal"]
+__all__ = ["Orthogonal", "orthogonal"]
