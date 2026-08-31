@@ -4,11 +4,10 @@ from typing import List
 
 from ..backend import execute_slice_scatter
 from ..shape import Shape
-from ..strides import Strides
 from ..tensor import Tensor
 from ..utils.slicing import (
+    logical_linear_indices_from_ranges,
     slice_ranges_and_shape_from_key,
-    storage_indices_from_ranges,
 )
 
 
@@ -23,11 +22,7 @@ def _logical_linear_indices(tensor: Tensor, key) -> tuple[List[int], Shape]:
     # Gradients are newly allocated compact tensors, so these are canonical
     # logical linear indices rather than the source tensor's storage indices.
     return (
-        storage_indices_from_ranges(
-            ranges,
-            tensor.shape,
-            Strides.contiguous(tensor.shape),
-        ),
+        logical_linear_indices_from_ranges(ranges, tensor.shape),
         selection_shape,
     )
 

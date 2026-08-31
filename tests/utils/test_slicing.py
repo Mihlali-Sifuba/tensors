@@ -2,6 +2,7 @@ import unittest
 
 import tensors as ts
 from tensors.utils.slicing import (
+    logical_linear_indices_from_ranges,
     slice_ranges_and_shape_from_key,
     storage_indices_from_ranges,
 )
@@ -67,6 +68,28 @@ class SlicingUtilityTests(unittest.TestCase):
     def test_integer_index_outside_a_dimension_is_rejected(self):
         with self.assertRaisesRegex(IndexError, "out of range"):
             slice_ranges_and_shape_from_key((-3,), (2,))
+
+    def test_logical_linear_indices_follow_selection_order(self):
+        result = logical_linear_indices_from_ranges(
+            [range(0, 2), range(1, 3)],
+            (2, 3),
+        )
+
+        self.assertEqual(result, [1, 2, 4, 5])
+
+    def test_logical_and_storage_indices_use_distinct_index_spaces(self):
+        ranges = [range(1, 2), range(1, 2)]
+        shape = (3, 2)
+
+        logical_indices = logical_linear_indices_from_ranges(ranges, shape)
+        storage_indices = storage_indices_from_ranges(
+            ranges,
+            shape,
+            (1, 3),
+        )
+
+        self.assertEqual(logical_indices, [3])
+        self.assertEqual(storage_indices, [4])
 
     def test_storage_indices_follow_row_major_selection_order(self):
         result = storage_indices_from_ranges(

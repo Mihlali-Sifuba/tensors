@@ -5,6 +5,7 @@ from typing import List, Tuple, Union
 
 from ..shape import Shape
 from ..strides import Strides
+from .coordinates import coordinates_to_linear_index
 from .indexing import coordinates_to_storage_index
 
 
@@ -74,4 +75,22 @@ def storage_indices_from_ranges(
     ]
 
 
-__all__ = ["slice_ranges_and_shape_from_key", "storage_indices_from_ranges"]
+def logical_linear_indices_from_ranges(
+    ranges: List[range],
+    shape: Shape | Tuple[int, ...],
+) -> List[int]:
+    """Return logical linear indices selected by dimension ranges."""
+    normalized_shape = (
+        shape if isinstance(shape, Shape) else Shape.from_iterable(shape)
+    )
+    return [
+        coordinates_to_linear_index(coordinates, normalized_shape)
+        for coordinates in product(*ranges)
+    ]
+
+
+__all__ = [
+    "logical_linear_indices_from_ranges",
+    "slice_ranges_and_shape_from_key",
+    "storage_indices_from_ranges",
+]
