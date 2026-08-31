@@ -131,7 +131,7 @@ class Orthogonal(Initializer):
             raise RuntimeError(
                 "orthogonal initializer returned an unexpected result size"
             )
-        return Tensor(
+        return Tensor._from_owned_storage(
             storage,
             dtype=self.dtype,
             shape=normalized_shape,

@@ -63,7 +63,7 @@ def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:
 
     accelerated = execute_one_hot_targets(logits, targets, axis)
     if accelerated is not None:
-        return Tensor(
+        return Tensor._from_owned_storage(
             accelerated,
             dtype=logits.dtype,
             shape=logits.shape,
@@ -211,7 +211,7 @@ class CrossEntropy:
             output_shape=result_shape,
         )
         if storage is not None:
-            return Tensor(storage, dtype=dtype, shape=result_shape)
+            return Tensor._from_owned_storage(storage, dtype=dtype, shape=result_shape)
         log_probabilities = LogSoftmax.forward(logits, axis=axis)
         _, _, groups = reduction_groups(logits, axis, keepdims=False)
 
@@ -268,7 +268,7 @@ class CrossEntropy:
             expanded_shape = expanded_logits.shape
             return [
                 sum_to_shape(
-                    Tensor(
+                    Tensor._from_owned_storage(
                         logits_storage,
                         dtype=grad.dtype,
                         shape=expanded_shape,
@@ -276,7 +276,7 @@ class CrossEntropy:
                     logits.shape,
                 ),
                 sum_to_shape(
-                    Tensor(
+                    Tensor._from_owned_storage(
                         targets_storage,
                         dtype=grad.dtype,
                         shape=expanded_shape,

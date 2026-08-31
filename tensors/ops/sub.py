@@ -34,7 +34,7 @@ class Sub:
             output_shape=output_shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=output_shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
         if isinstance(b, (int, float)):
             data = [x - b for x in a._data]
             return Tensor(data, dtype=dtype, shape=a.shape)

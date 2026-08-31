@@ -58,7 +58,7 @@ class LogSumExp:
             output_shape=output_shape,
         )
         if storage is not None:
-            return Tensor(storage, dtype=dtype, shape=output_shape)
+            return Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
         _, output_shape, groups = reduction_groups(
             a, axis, keepdims, scalar_as_vector=True
         )
@@ -85,7 +85,7 @@ class LogSumExp:
             keepdims=keepdims,
         )
         if storage is not None:
-            return [Tensor(storage, dtype=grad.dtype, shape=a.shape)]
+            return [Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=a.shape)]
         _, _, groups = reduction_groups(
             a, axis, keepdims, scalar_as_vector=True
         )

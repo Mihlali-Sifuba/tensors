@@ -82,7 +82,7 @@ class Div:
                 output_shape=a.shape,
             )
             if accelerated is not None:
-                return Tensor(accelerated, dtype=dtype, shape=a.shape)
+                return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
             data = [x / b for x in a._data]
             return Tensor(data, dtype=dtype, shape=a.shape)
         if isinstance(b, Tensor):
@@ -95,7 +95,7 @@ class Div:
                 output_shape=shape,
             )
             if accelerated is not None:
-                return Tensor(accelerated, dtype=dtype, shape=shape)
+                return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
             a, b = broadcast_tensors(a, b)
             data = []
             for x, y in zip(a._data, b._data):
@@ -128,7 +128,7 @@ class Div:
             output_shape=a.shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=a.shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
         values = []
         for denominator in a._data:
             if denominator == 0:
@@ -148,7 +148,7 @@ class Div:
                 expanded_b,
             )
             if accelerated is not None:
-                db = Tensor(accelerated, dtype=grad.dtype, shape=grad.shape)
+                db = Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=grad.shape)
             else:
                 db = Tensor(
                     [
@@ -233,7 +233,7 @@ class DivisionDenominatorGradient:
             denominator,
         )
         if accelerated is not None:
-            return Tensor(
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=grad.dtype,
                 shape=grad.shape,

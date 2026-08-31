@@ -198,7 +198,9 @@ whose size exactly matches the Tensor's logical size.
   construction.
 - `offset` identifies the logical tensor's origin within storage.
 - Coordinate utilities convert between logical coordinates and canonical
-  row-major logical linear indices using only `Shape`.
+  row-major logical linear indices using `Shape` and canonical contiguous
+  strides derived from that `Shape`. Arbitrary Tensor strides and `offset`
+  do not participate.
 - Indexing utilities normalize Tensor indices and combine coordinates,
   `Shape`, `Strides`, and `offset` to produce physical storage indices.
 - Slicing utilities own Tensor/Python indexing and slicing semantics, such as
@@ -215,11 +217,13 @@ views or aliasing.
 
 ## Ownership and current limits
 
-This foundation does not introduce shared-storage aliasing. The internal
-explicit-metadata constructor copies storage, and existing public layout
-operations continue to produce independently owned tensors. Mutation
-versioning, backend representation-cache invalidation, and stale-autograd
-detection therefore retain their existing semantics.
+This foundation does not introduce shared-storage aliasing. Public
+`Tensor(Storage)` construction and the internal explicit-metadata constructor
+both copy their supplied storage. A private ownership-transfer path is reserved
+for freshly produced internal backend results that are not shared elsewhere.
+Existing public layout operations therefore continue to produce independently
+owned tensors. Mutation versioning, backend representation-cache invalidation,
+and stale-autograd detection retain their existing semantics.
 
 The metadata model prepares the package for deliberate follow-up work on:
 

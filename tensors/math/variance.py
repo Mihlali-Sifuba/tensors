@@ -42,7 +42,7 @@ class Variance:
             output_shape=output_shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=output_shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
         _, output_shape, groups = reduction_groups(
             value, axis, keepdims, scalar_as_vector=True
         )
@@ -83,7 +83,7 @@ class Variance:
             keepdims=keepdims,
         )
         if accelerated is not None:
-            return [Tensor(accelerated, dtype=grad.dtype, shape=value.shape)]
+            return [Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=value.shape)]
 
         _, _, groups = reduction_groups(
             value,

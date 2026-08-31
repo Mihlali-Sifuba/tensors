@@ -59,7 +59,7 @@ class Clip:
             dtype=dtype,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=value.shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=value.shape)
         values = []
         for item in value._data:
             if min_value is not None and item < min_value:
@@ -102,7 +102,7 @@ class Clip:
             max_value,
         )
         if accelerated is not None:
-            return [Tensor(
+            return [Tensor._from_owned_storage(
                 accelerated,
                 dtype=grad.dtype,
                 shape=value.shape,

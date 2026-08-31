@@ -47,7 +47,7 @@ class Where:
             output_shape=shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
         expanded_condition = broadcast_to(condition, shape)
         expanded_left = broadcast_to(left, shape)
         expanded_right = broadcast_to(right, shape)
@@ -74,12 +74,12 @@ class Where:
         accelerated = execute_where_gradient(grad, condition)
         if accelerated is not None:
             left_storage, right_storage = accelerated
-            left_gradient = Tensor(
+            left_gradient = Tensor._from_owned_storage(
                 left_storage,
                 dtype=grad.dtype,
                 shape=grad.shape,
             )
-            right_gradient = Tensor(
+            right_gradient = Tensor._from_owned_storage(
                 right_storage,
                 dtype=grad.dtype,
                 shape=grad.shape,

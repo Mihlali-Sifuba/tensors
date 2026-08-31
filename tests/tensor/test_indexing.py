@@ -1,6 +1,9 @@
 import unittest
+from unittest.mock import patch
 
 import tensors as ts
+from tensors.utils.indexing import tensor_indices_to_storage_index
+from tensors.utils.slicing import slice_ranges_and_shape_from_key
 
 
 class TensorIndexingTests(unittest.TestCase):
@@ -21,6 +24,30 @@ class TensorIndexingTests(unittest.TestCase):
 
         self.assertEqual(tensor[1, 2], 6.0)
         self.assertEqual(tensor[-1, -2], 5.0)
+
+    def test_complete_integer_read_uses_index_normalization_once(self):
+        tensor = ts.Tensor([[1, 2], [3, 4]])
+
+        with patch(
+            "tensors.tensor.tensor_indices_to_storage_index",
+            wraps=tensor_indices_to_storage_index,
+        ) as normalize:
+            result = tensor[-1, -1]
+
+        self.assertEqual(result, 4.0)
+        normalize.assert_called_once()
+
+    def test_slice_read_uses_slice_normalization_once(self):
+        tensor = ts.Tensor([[1, 2], [3, 4], [5, 6]])
+
+        with patch(
+            "tensors.tensor.slice_ranges_and_shape_from_key",
+            wraps=slice_ranges_and_shape_from_key,
+        ) as normalize:
+            result = tensor[1:, 1]
+
+        self.assertEqual(result.tolist(), [4.0, 6.0])
+        normalize.assert_called_once()
 
     def test_tuple_slice_selects_column(self):
         tensor = ts.Tensor([[1, 2, 3], [4, 5, 6]])

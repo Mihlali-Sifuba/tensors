@@ -35,7 +35,7 @@ class LogSoftmax:
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         storage = execute_normalization("log_softmax", a, axis, dtype=dtype)
         if storage is not None:
-            return Tensor(storage, dtype=dtype, shape=a.shape)
+            return Tensor._from_owned_storage(storage, dtype=dtype, shape=a.shape)
         values = [0.0] * a.size
 
         for group in range(before):
@@ -112,7 +112,7 @@ def _log_softmax_vjp_tensor(
         axis,
     )
     if storage is not None:
-        return Tensor(storage, dtype=grad.dtype, shape=value.shape)
+        return Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=value.shape)
     from .sum import _stable_product_sum
 
     probabilities, complements = _normalization_components(value, axis)

@@ -178,7 +178,9 @@ The folders have deliberately narrow responsibilities:
 - `ops` contains primitive differentiable operations such as arithmetic,
   powers, slicing, and casting.
 - `utils/coordinates.py` converts between logical coordinates and canonical
-  row-major logical linear indices using only `Shape`.
+  row-major logical linear indices using `Shape` and canonical contiguous
+  strides derived from that `Shape`; arbitrary Tensor strides and `offset`
+  do not participate.
   `utils/indexing.py` normalizes Tensor indices and combines `Shape`,
   `Strides`, and `offset` to produce physical storage indices.
   `utils/slicing.py` owns Tensor/Python indexing and slicing semantics (for

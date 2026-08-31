@@ -226,6 +226,48 @@ class TensorMetadataTests(unittest.TestCase):
         self.assertIs(converted.dtype, ts.float32)
         self.assertTrue(converted.is_contiguous)
 
+    def test_public_python_storage_construction_is_independently_owned(self):
+        storage = PythonStorage.from_values([1.0, 2.0], ts.float64)
+        tensor = ts.Tensor(storage)
+
+        tensor[0] = 9.0
+
+        self.assertEqual(list(storage.buffer), [1.0, 2.0])
+        self.assertEqual(tensor.tolist(), [9.0, 2.0])
+        self.assertIsNot(tensor._storage_for("python"), storage)
+
+    def test_tensors_constructed_from_same_storage_do_not_alias(self):
+        storage = PythonStorage.from_values([1.0, 2.0], ts.float64)
+        first = ts.Tensor(storage)
+        second = ts.Tensor(storage)
+
+        first[0] = 9.0
+
+        self.assertEqual(list(storage.buffer), [1.0, 2.0])
+        self.assertEqual(first.tolist(), [9.0, 2.0])
+        self.assertEqual(second.tolist(), [1.0, 2.0])
+
+    def test_tensor_copy_construction_remains_independent(self):
+        source = ts.Tensor([1.0, 2.0])
+        copy = ts.Tensor(source)
+
+        copy[0] = 9.0
+
+        self.assertEqual(source.tolist(), [1.0, 2.0])
+        self.assertEqual(copy.tolist(), [9.0, 2.0])
+
+    def test_owned_storage_factory_transfers_storage_without_copying(self):
+        storage = PythonStorage.from_values([1.0, 2.0], ts.float64)
+
+        tensor = ts.Tensor._from_owned_storage(
+            storage,
+            dtype=ts.float64,
+            shape=ts.Shape(2),
+        )
+
+        self.assertIs(tensor._storage_for("python"), storage)
+        self.assertEqual(tensor.tolist(), [1.0, 2.0])
+
     def test_internal_metadata_constructor_copies_storage(self):
         storage = PythonStorage.from_values([1.0, 2.0], ts.float64)
         tensor = ts.Tensor._from_metadata(
@@ -237,6 +279,8 @@ class TensorMetadataTests(unittest.TestCase):
         storage.buffer[0] = 9.0
 
         self.assertEqual(tensor.tolist(), [1.0, 2.0])
+        tensor[1] = 8.0
+        self.assertEqual(list(storage.buffer), [9.0, 2.0])
 
     def test_invalid_layout_bounds_are_rejected(self):
         storage = PythonStorage.from_values([1.0, 2.0], ts.float64)
@@ -279,6 +323,52 @@ class TensorMetadataTests(unittest.TestCase):
 
 
 class BackendMetadataTests(unittest.TestCase):
+    def test_public_numpy_storage_construction_is_independently_owned(self):
+        if "numpy" not in ts.available_backends():
+            self.skipTest("NumPy backend is unavailable")
+        numpy = importlib.import_module("numpy")
+        storage = NumPyStorage(
+            numpy.asarray([1.0, 2.0], dtype=numpy.float64),
+            ts.float64,
+        )
+        tensor = ts.Tensor(storage)
+
+        tensor[0] = 9.0
+
+        self.assertEqual(storage.buffer.tolist(), [1.0, 2.0])
+        self.assertEqual(tensor.tolist(), [9.0, 2.0])
+
+    def test_accelerated_slice_materializes_independent_numpy_storage(self):
+        if "numpy" not in ts.available_backends():
+            self.skipTest("NumPy backend is unavailable")
+        numpy = importlib.import_module("numpy")
+        source = ts.Tensor([float(value) for value in range(64)])
+
+        with ts.use_backend("numpy"):
+            result = source[8:56]
+
+        source_storage = source._storage_for("numpy")
+        result_storage = result._storage_for("numpy")
+        self.assertFalse(
+            numpy.shares_memory(source_storage.buffer, result_storage.buffer)
+        )
+        self.assertEqual(result.tolist(), [float(value) for value in range(8, 56)])
+
+    def test_public_cuda_storage_construction_is_independently_owned(self):
+        if "cuda" not in ts.available_backends():
+            self.skipTest("CUDA backend is unavailable")
+        cupy = importlib.import_module("cupy")
+        storage = CudaStorage(
+            cupy.asarray([1.0, 2.0], dtype=cupy.float64),
+            ts.float64,
+        )
+        tensor = ts.Tensor(storage)
+
+        tensor[0] = 9.0
+
+        self.assertEqual(cupy.asnumpy(storage.buffer).tolist(), [1.0, 2.0])
+        self.assertEqual(tensor.tolist(), [9.0, 2.0])
+
     def test_numpy_contiguous_materialization_stays_numpy_native(self):
         if "numpy" not in ts.available_backends():
             self.skipTest("NumPy backend is unavailable")

@@ -16,7 +16,7 @@ class Neg:
         dtype = negation_dtype(a.dtype)
         accelerated = execute_negate(a, dtype=dtype)
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=a.shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
         data = [-x for x in a._data]
         return Tensor(data, dtype=dtype, shape=a.shape)
 

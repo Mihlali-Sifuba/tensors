@@ -70,7 +70,7 @@ def uniform(
     storage = _state.uniform(
         normalized_shape.size, lower, upper, resolved_dtype
     )
-    return Tensor(storage, dtype=resolved_dtype, shape=normalized_shape)
+    return Tensor._from_owned_storage(storage, dtype=resolved_dtype, shape=normalized_shape)
 
 
 def normal(
@@ -89,7 +89,7 @@ def normal(
     storage = _state.normal(
         normalized_shape.size, center, deviation, resolved_dtype
     )
-    return Tensor(storage, dtype=resolved_dtype, shape=normalized_shape)
+    return Tensor._from_owned_storage(storage, dtype=resolved_dtype, shape=normalized_shape)
 
 
 def _integer_bounds(dtype: DataType) -> tuple[int, int]:
@@ -130,7 +130,7 @@ def randint(
     storage = _state.randint(
         normalized_shape.size, low, high, resolved_dtype
     )
-    return Tensor(storage, dtype=resolved_dtype, shape=normalized_shape)
+    return Tensor._from_owned_storage(storage, dtype=resolved_dtype, shape=normalized_shape)
 
 
 def _truncated_normal(
@@ -169,7 +169,7 @@ def _truncated_normal(
         maximum,
         resolved_dtype,
     )
-    return Tensor(storage, dtype=resolved_dtype, shape=normalized_shape)
+    return Tensor._from_owned_storage(storage, dtype=resolved_dtype, shape=normalized_shape)
 
 
 __all__ = ["normal", "randint", "seed", "uniform"]
