@@ -73,7 +73,10 @@ def _array_orthogonal(
     backend = get_backend()
     module = importlib.import_module("cupy" if backend == "cuda" else "numpy")
     source = normal((rows, columns), dtype=dtype)
-    matrix = source._storage.buffer.reshape(rows, columns)
+    storage = source._logical_storage_for(
+        "cuda" if backend == "cuda" else "numpy"
+    )
+    matrix = storage.buffer.reshape(rows, columns)
     transposed = rows < columns
     if transposed:
         matrix = matrix.T

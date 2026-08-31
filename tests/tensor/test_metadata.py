@@ -102,6 +102,65 @@ class TensorMetadataTests(unittest.TestCase):
         self.assertEqual(result.offset, 1)
         self.assertEqual(result._storage.size, 3)
 
+    def test_storage_helpers_distinguish_physical_and_logical_order(self):
+        tensor = synthetic_tensor(
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            shape=(3, 2),
+            strides=(1, 3),
+        )
+
+        physical = tensor._storage_for("python")
+        logical = tensor._logical_storage_for("python")
+
+        self.assertIsInstance(physical, PythonStorage)
+        self.assertIsInstance(logical, PythonStorage)
+        self.assertEqual(list(physical.buffer), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+        self.assertEqual(
+            list(tensor._logical_storage_indices()),
+            [0, 3, 1, 4, 2, 5],
+        )
+        self.assertEqual(list(logical.buffer), [0.0, 3.0, 1.0, 4.0, 2.0, 5.0])
+        self.assertEqual(list(tensor._data), list(logical.buffer))
+        self.assertEqual(tensor._value_at_storage_index(1), 1.0)
+        self.assertFalse(tensor._has_compact_storage)
+
+    def test_nonzero_offset_storage_helpers_preserve_index_spaces(self):
+        tensor = synthetic_tensor(
+            [10.0, 20.0, 30.0, 40.0],
+            shape=(2,),
+            strides=(1,),
+            offset=1,
+        )
+
+        physical = tensor._storage_for("python")
+        logical = tensor._logical_storage_for("python")
+
+        self.assertIsInstance(physical, PythonStorage)
+        self.assertIsInstance(logical, PythonStorage)
+        self.assertEqual(list(physical.buffer), [10.0, 20.0, 30.0, 40.0])
+        self.assertEqual(list(tensor._logical_storage_indices()), [1, 2])
+        self.assertEqual(list(logical.buffer), [20.0, 30.0])
+        self.assertEqual(list(tensor._data), [20.0, 30.0])
+        self.assertTrue(tensor.is_contiguous)
+        self.assertFalse(tensor._has_compact_storage)
+
+    def test_mutation_writes_to_physical_storage_index(self):
+        tensor = synthetic_tensor(
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            shape=(3, 2),
+            strides=(1, 3),
+        )
+
+        tensor[1, 1] = 99.0
+
+        storage = tensor._storage_for("python")
+        self.assertIsInstance(storage, PythonStorage)
+        self.assertEqual(
+            list(storage.buffer),
+            [0.0, 1.0, 2.0, 3.0, 99.0, 5.0],
+        )
+        self.assertEqual(tensor.tolist(), [0.0, 3.0, 1.0, 99.0, 2.0, 5.0])
+
     def test_zero_stride_repeats_physical_values(self):
         tensor = synthetic_tensor(
             [1.0, 2.0, 3.0],

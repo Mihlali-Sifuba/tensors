@@ -166,6 +166,30 @@ the same backend. Reference kernels consume logical row-major values. Ordinary
 public tensors already satisfy the compact-storage invariant, so current
 backend behavior and transfer costs are unchanged.
 
+## Internal storage-access boundary
+
+Tensor's internal access helpers distinguish physical Storage from logical
+row-major values:
+
+- `_storage_for(kind)` returns the backend-native representation of the
+  physical Storage, including positions outside the Tensor's logical layout.
+- `_logical_storage_indices()` yields physical storage indices in logical
+  row-major traversal order.
+- `_logical_storage_for(kind)` returns compact backend-native Storage
+  containing only logical Tensor values in canonical row-major order.
+- `_data` exposes those logical row-major values through host/Python storage
+  for reference kernels.
+- `_value_at_storage_index(index)` reads one actual physical storage index.
+- `_mutable_data()` returns the mutable authoritative physical host Storage
+  buffer, so callers must address it with storage indices rather than logical
+  linear indices.
+
+Backend kernels are not stride-aware. The array-backend boundary uses
+`_logical_storage_for(kind)` and reshapes the resulting compact logical values.
+`is_contiguous` continues to describe logical layout, while
+`_has_compact_storage` additionally requires offset zero and physical Storage
+whose size exactly matches the Tensor's logical size.
+
 ## Responsibility boundaries
 
 - `Shape` owns logical dimensions, including rank, size, tuple-like slicing of
