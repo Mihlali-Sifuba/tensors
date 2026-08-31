@@ -17,9 +17,9 @@ from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..shape import Shape
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_tensors
-from ..utils.shape import (
-    coordinates_to_index,
-    index_to_coordinates,
+from ..utils.coordinates import (
+    coordinates_to_linear_index,
+    linear_index_to_coordinates,
 )
 from ._reduction import keepdims_shape, reduction_groups
 from .log_softmax import LogSoftmax, log_softmax
@@ -80,13 +80,18 @@ def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:
             raise ValueError(
                 f"Class index {class_index} is outside [0, {class_count})"
             )
-        sample_coordinates = index_to_coordinates(sample_index, sample_shape)
+        sample_coordinates = linear_index_to_coordinates(
+            sample_index,
+            sample_shape,
+        )
         coordinates = (
             sample_coordinates[:axis]
             + (class_index,)
             + sample_coordinates[axis:]
         )
-        values[coordinates_to_index(coordinates, logits.shape)] = 1.0
+        values[
+            coordinates_to_linear_index(coordinates, logits.shape)
+        ] = 1.0
     return Tensor(values, dtype=logits.dtype, shape=logits.shape)
 
 

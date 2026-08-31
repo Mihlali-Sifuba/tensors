@@ -14,7 +14,10 @@ from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
 from ..shape import Shape
 from ..tensor import Tensor
-from ..utils.shape import coordinates_to_index, index_to_coordinates
+from ..utils.coordinates import (
+    coordinates_to_linear_index,
+    linear_index_to_coordinates,
+)
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -98,7 +101,10 @@ def _a_index(
     """Return the flat index for an element in the left operand."""
     if a_vector:
         return column
-    return coordinates_to_index(batch_coordinates + (row, column), a.shape)
+    return coordinates_to_linear_index(
+        batch_coordinates + (row, column),
+        a.shape,
+    )
 
 
 def _b_index(
@@ -111,7 +117,10 @@ def _b_index(
     """Return the flat index for an element in the right operand."""
     if b_vector:
         return row
-    return coordinates_to_index(batch_coordinates + (row, column), b.shape)
+    return coordinates_to_linear_index(
+        batch_coordinates + (row, column),
+        b.shape,
+    )
 
 
 def _output_gradient(
@@ -131,7 +140,7 @@ def _output_gradient(
         coordinates = batch_coordinates + (row,)
     else:
         coordinates = batch_coordinates + (row, column)
-    return grad._data[coordinates_to_index(coordinates, grad.shape)]
+    return grad._data[coordinates_to_linear_index(coordinates, grad.shape)]
 
 
 def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
@@ -162,7 +171,10 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
 
     values = []
     for batch_index in range(Shape.from_iterable(batch_shape).size):
-        batch_coordinates = index_to_coordinates(batch_index, batch_shape)
+        batch_coordinates = linear_index_to_coordinates(
+            batch_index,
+            batch_shape,
+        )
         a_batch_coordinates = _batch_coordinates(batch_coordinates, a_batch_shape)
         b_batch_coordinates = _batch_coordinates(batch_coordinates, b_batch_shape)
         for row in range(a_rows):
@@ -224,13 +236,15 @@ def _transpose_impl(
         inverse[input_axis] = output_axis
     values = []
     for index in range(tensor.size):
-        output_coordinates = index_to_coordinates(index, shape)
+        output_coordinates = linear_index_to_coordinates(index, shape)
         input_coordinates = tuple(
             output_coordinates[inverse[input_axis]]
             for input_axis in range(tensor.ndim)
         )
         values.append(
-            tensor._data[coordinates_to_index(input_coordinates, tensor.shape)]
+            tensor._data[
+                coordinates_to_linear_index(input_coordinates, tensor.shape)
+            ]
         )
     return Tensor(values, dtype=tensor.dtype, shape=shape)
 
@@ -273,7 +287,10 @@ class Dot:
         a_terms: list[list[tuple[float, float]]] = [[] for _ in range(a.size)]
         b_terms: list[list[tuple[float, float]]] = [[] for _ in range(b.size)]
         for batch_index in range(Shape.from_iterable(batch_shape).size):
-            batch_coordinates = index_to_coordinates(batch_index, batch_shape)
+            batch_coordinates = linear_index_to_coordinates(
+                batch_index,
+                batch_shape,
+            )
             a_batch_coordinates = _batch_coordinates(batch_coordinates, a_batch_shape)
             b_batch_coordinates = _batch_coordinates(batch_coordinates, b_batch_shape)
             for row in range(a_rows):

@@ -97,9 +97,9 @@ tensors/
 ├── py.typed               # marker for inline package typing
 ├── utils/                 # indexing, slicing, and Tensor broadcasting
 │   ├── broadcasting.py
+│   ├── coordinates.py
 │   ├── indexing.py
 │   ├── lists.py
-│   ├── shape.py
 │   └── slicing.py
 ├── ops/                   # primitive differentiable operations
 │   ├── add.py, sub.py, mul.py, div.py, neg.py
@@ -177,11 +177,15 @@ The folders have deliberately narrow responsibilities:
   values, including zeros, ones, ranges, and identity matrices.
 - `ops` contains primitive differentiable operations such as arithmetic,
   powers, slicing, and casting.
-- `utils` combines metadata for row-major coordinate indexing, owns
-  Tensor/Python indexing and slicing semantics (for example,
-  `tensor[1:, :, 2]`), and materializes Tensor broadcasting. Pure
-  broadcast-shape inference lives on `Shape`, while stride construction lives
-  on `Strides`. The package is not re-exported from the root.
+- `utils/coordinates.py` converts between logical coordinates and canonical
+  row-major logical linear indices using only `Shape`.
+  `utils/indexing.py` normalizes Tensor indices and combines `Shape`,
+  `Strides`, and `offset` to produce physical storage indices.
+  `utils/slicing.py` owns Tensor/Python indexing and slicing semantics (for
+  example, `tensor[1:, :, 2]`), while `utils/broadcasting.py` materializes
+  Tensor broadcasting. Pure broadcast-shape inference lives on `Shape`, while
+  stride construction lives on `Strides`. The `utils` package is not
+  re-exported from the root.
 - `linalg` contains linear-algebra operations such as dot products and matrix
   multiplication.
 - `math` contains all mathematical functions, including reductions and

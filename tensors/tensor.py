@@ -29,7 +29,7 @@ from .utils.lists import flatten_nested_list, infer_nested_list_shape
 from .utils.slicing import flat_indices_from_ranges, slice_ranges_and_shape_from_key
 from .utils.indexing import (
     coordinates_to_storage_index,
-    indices_to_storage_index,
+    tensor_indices_to_storage_index,
 )
 
 if TYPE_CHECKING:
@@ -361,7 +361,7 @@ class Tensor:
             if self.ndim != 1:
                 return self._slice_from_key((key,))
             if isinstance(key, int):
-                idx = indices_to_storage_index(
+                idx = tensor_indices_to_storage_index(
                     (key,),
                     self.shape,
                     self.strides,
@@ -376,7 +376,7 @@ class Tensor:
         if isinstance(key, tuple):
             if len(key) == self.ndim and all(isinstance(k, int) for k in key):
                 # All ints — return a scalar
-                idx = indices_to_storage_index(
+                idx = tensor_indices_to_storage_index(
                     key,
                     self.shape,
                     self.strides,
@@ -487,7 +487,7 @@ class Tensor:
                 raise ValueError(
                     f"Cannot assign to {self.ndim}D tensor with single integer"
                 )
-            idx = indices_to_storage_index(
+            idx = tensor_indices_to_storage_index(
                 (key,),
                 self.shape,
                 self.strides,
@@ -504,7 +504,7 @@ class Tensor:
                 self._assign_slice_from_key(key, value)
                 return
 
-            idx = indices_to_storage_index(
+            idx = tensor_indices_to_storage_index(
                 key,
                 self.shape,
                 self.strides,

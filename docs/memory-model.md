@@ -37,6 +37,23 @@ where `o` is the offset and `s_d` is the stride for axis `d`.
 Coordinate validation belongs to the Shape and indexing semantics. Strides only
 represent movement and may therefore be positive, zero, or negative.
 
+## Index spaces
+
+The indexing model uses three precise terms:
+
+- A **coordinate** is a logical n-dimensional position such as `(1, 2)`.
+- A **logical linear index** is the canonical row-major position of that
+  coordinate in logical Tensor order. It depends only on `Shape` and canonical
+  contiguous strides.
+- A **storage index** is the physical position in the underlying flat
+  `Storage`. It depends on `Shape`, `Strides`, and `offset`.
+
+For `Shape(2, 3)`, coordinate `(1, 2)` has logical linear index `5`. A
+non-canonical layout may map that same coordinate to a different storage
+index. The helpers in `utils/coordinates.py` convert between coordinates and
+logical linear indices only; `utils/indexing.py` performs Tensor index
+normalization and physical storage addressing.
+
 ## Shape
 
 `Shape` is an immutable tuple-like value object:
@@ -156,18 +173,21 @@ backend behavior and transfer costs are unchanged.
 - `Strides` owns physical movement metadata and canonical contiguous-stride
   construction.
 - `offset` identifies the logical tensor's origin within storage.
-- Indexing utilities combine coordinates, `Shape`, `Strides`, and `offset` to
-  map logical positions to storage positions.
+- Coordinate utilities convert between logical coordinates and canonical
+  row-major logical linear indices using only `Shape`.
+- Indexing utilities normalize Tensor indices and combine coordinates,
+  `Shape`, `Strides`, and `offset` to produce physical storage indices.
 - Slicing utilities own Tensor/Python indexing and slicing semantics, such as
   `tensor[1:, :, 2]`, and return `Shape` metadata for the resulting logical
   dimensions.
 - Broadcasting utilities own tensor/value expansion and delegate pure
   shape compatibility to `Shape.broadcast_with`.
 
-Coordinate conversion intentionally remains outside `Shape` and `Strides`
-because it combines both metadata objects. Tensor slicing and broadcasting
-remain materializing operations; this responsibility cleanup does not
-introduce views or aliasing.
+Logical coordinate conversion intentionally remains outside `Shape`, while
+physical addressing remains outside `Shape` and `Strides` because it combines
+both metadata objects with `offset`. Tensor slicing and broadcasting remain
+materializing operations; this responsibility cleanup does not introduce
+views or aliasing.
 
 ## Ownership and current limits
 

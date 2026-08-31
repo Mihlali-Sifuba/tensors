@@ -5,7 +5,10 @@ from typing import Tuple
 
 from ..shape import Shape
 from ..tensor import Tensor
-from .shape import coordinates_to_index, index_to_coordinates
+from .coordinates import (
+    coordinates_to_linear_index,
+    linear_index_to_coordinates,
+)
 
 
 def broadcast_to(tensor: Tensor, shape: Shape | Iterable[int]) -> Tensor:
@@ -31,13 +34,18 @@ def broadcast_to(tensor: Tensor, shape: Shape | Iterable[int]) -> Tensor:
     values = []
     padding = output_shape.rank - tensor.ndim
     for output_index in range(output_size):
-        output_coordinates = index_to_coordinates(output_index, output_shape)
+        output_coordinates = linear_index_to_coordinates(
+            output_index,
+            output_shape,
+        )
         source_coordinates = tuple(
             0 if source_dimension == 1 else coordinate
             for source_dimension, coordinate in zip(padded_shape, output_coordinates)
         )[padding:]
         values.append(
-            tensor._data[coordinates_to_index(source_coordinates, tensor.shape)]
+            tensor._data[
+                coordinates_to_linear_index(source_coordinates, tensor.shape)
+            ]
         )
 
     return Tensor(values, dtype=tensor.dtype, shape=output_shape)

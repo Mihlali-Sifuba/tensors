@@ -4,7 +4,10 @@ from typing import Optional, TypeAlias
 
 from ..shape import Shape
 from ..tensor import Tensor
-from ..utils.shape import coordinates_to_index, index_to_coordinates
+from ..utils.coordinates import (
+    coordinates_to_linear_index,
+    linear_index_to_coordinates,
+)
 
 
 Axis: TypeAlias = Optional[int | tuple[int, ...] | list[int]]
@@ -80,7 +83,10 @@ def reduction_groups(
     axes_set = set(axes)
 
     for input_index in range(value.size):
-        input_coordinates = index_to_coordinates(input_index, value.shape)
+        input_coordinates = linear_index_to_coordinates(
+            input_index,
+            value.shape,
+        )
         if keepdims:
             output_coordinates = tuple(
                 0 if dimension in axes_set else coordinate
@@ -94,7 +100,9 @@ def reduction_groups(
             )
             if scalar_output_as_vector:
                 output_coordinates = (0,)
-        groups[coordinates_to_index(output_coordinates, output_shape)].append(input_index)
+        groups[
+            coordinates_to_linear_index(output_coordinates, output_shape)
+        ].append(input_index)
 
     return axes, output_shape, groups
 
