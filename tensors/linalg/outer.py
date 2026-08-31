@@ -26,7 +26,7 @@ class Outer:
         dtype = result_dtype(a.dtype, b)
         accelerated = execute_outer(a, b, dtype=dtype)
         if accelerated is not None:
-            return Tensor(
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=dtype,
                 shape=(a.size, b.size),
@@ -48,8 +48,8 @@ class Outer:
         if accelerated is not None:
             left_storage, right_storage = accelerated
             return [
-                Tensor(left_storage, dtype=grad.dtype, shape=left.shape),
-                Tensor(right_storage, dtype=grad.dtype, shape=right.shape),
+                Tensor._from_owned_storage(left_storage, dtype=grad.dtype, shape=left.shape),
+                Tensor._from_owned_storage(right_storage, dtype=grad.dtype, shape=right.shape),
             ]
 
         left_gradient = [

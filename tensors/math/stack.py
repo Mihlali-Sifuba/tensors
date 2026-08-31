@@ -70,7 +70,7 @@ class Stack:
             output_shape=tuple(out_shape),
         )
         if accelerated is not None:
-            return Tensor(
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=dtype,
                 shape=tuple(out_shape),

@@ -12,9 +12,9 @@ from ..backend import (
 )
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
+from ..shape import Shape
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape, broadcast_tensors
-from ..utils.shape import shape_size
+from ..utils.broadcasting import broadcast_tensors
 from .cross_entropy import Reduction, _validate_reduction
 from .mean import _stable_float_mean
 from .sigmoid import _sigmoid
@@ -94,7 +94,7 @@ class BinaryCrossEntropy:
             output_shape=output_shape,
         )
         if storage is not None:
-            return Tensor(storage, dtype=dtype, shape=output_shape)
+            return Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
 
         values = []
         for raw_prediction, raw_target in zip(prediction._data, target._data):
@@ -148,7 +148,7 @@ class BinaryCrossEntropy:
             expanded_shape = expanded_prediction.shape
             return [
                 sum_to_shape(
-                    Tensor(
+                    Tensor._from_owned_storage(
                         prediction_storage,
                         dtype=grad.dtype,
                         shape=expanded_shape,
@@ -156,7 +156,7 @@ class BinaryCrossEntropy:
                     prediction.shape,
                 ),
                 sum_to_shape(
-                    Tensor(
+                    Tensor._from_owned_storage(
                         target_storage,
                         dtype=grad.dtype,
                         shape=expanded_shape,
@@ -216,8 +216,8 @@ class BinaryCrossEntropy:
         from_logits = kwargs.get("from_logits", False)
         _validate_from_logits(from_logits)
         reduction = kwargs.get("reduction", "mean")
-        shape = broadcast_shape(prediction.shape, target.shape)
-        size = shape_size(shape)
+        shape = prediction.shape.broadcast_with(target.shape)
+        size = shape.size
         upstream = grad / size if reduction == "mean" and size else grad
 
         if from_logits:

@@ -1,45 +1,30 @@
 """Differentiable tensor indexing and slicing."""
 
-from itertools import product
 from typing import List
 
 from ..backend import execute_slice_scatter
+from ..shape import Shape
 from ..tensor import Tensor
-from ..utils.shape import shape_size
+from ..utils.slicing import (
+    logical_linear_indices_from_ranges,
+    slice_ranges_and_shape_from_key,
+)
 
 
-def _flat_indices(tensor: Tensor, key) -> List[int]:
-    """Return source flat indices selected by a supported tensor key."""
+def _logical_linear_indices(tensor: Tensor, key) -> tuple[List[int], Shape]:
+    """Return selected logical linear indices and the selection shape."""
     keys = key if isinstance(key, tuple) else (key,)
-    if len(keys) > tensor.ndim:
-        raise IndexError(f"Too many indices: {len(keys)} for {tensor.ndim}D tensor")
-    keys = keys + (slice(None),) * (tensor.ndim - len(keys))
+    ranges, selection_shape = slice_ranges_and_shape_from_key(
+        keys,
+        tensor.shape,
+    )
 
-    ranges = []
-    for dim, part in enumerate(keys):
-        if isinstance(part, bool):
-            raise TypeError("Boolean tensor indices are not supported")
-        if isinstance(part, int):
-            index = part if part >= 0 else part + tensor.shape[dim]
-            if not 0 <= index < tensor.shape[dim]:
-                raise IndexError("Index out of range")
-            ranges.append(range(index, index + 1))
-        elif isinstance(part, slice):
-            ranges.append(range(*part.indices(tensor.shape[dim])))
-        else:
-            raise TypeError(f"Unsupported index type: {type(part)}")
-
-    strides = []
-    for dim in range(tensor.ndim):
-        stride = 1
-        for trailing in tensor.shape[dim + 1:]:
-            stride *= trailing
-        strides.append(stride)
-
-    return [
-        sum(index * stride for index, stride in zip(indices, strides))
-        for indices in product(*ranges)
-    ]
+    # Gradients are newly allocated compact tensors, so these are canonical
+    # logical linear indices rather than the source tensor's storage indices.
+    return (
+        logical_linear_indices_from_ranges(ranges, tensor.shape),
+        selection_shape,
+    )
 
 
 class Slice:
@@ -55,10 +40,10 @@ class Slice:
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         source = inputs[0]
-        selected = _flat_indices(source, kwargs["key"])
+        selected, _ = _logical_linear_indices(source, kwargs["key"])
         values = [0.0] * source.size
-        for flat_index, grad_value in zip(selected, grad._data):
-            values[flat_index] += grad_value
+        for logical_linear_index, grad_value in zip(selected, grad._data):
+            values[logical_linear_index] += grad_value
         return [Tensor(values, dtype=grad.dtype, shape=source.shape)]
 
     @staticmethod
@@ -72,11 +57,16 @@ class SliceScatter:
 
     @staticmethod
     def forward(grad: Tensor, source_shape: tuple[int, ...], key) -> Tensor:
-        template = Tensor([0.0] * shape_size(source_shape), dtype=grad.dtype, shape=source_shape)
-        selected = _flat_indices(template, key)
-        if len(selected) != grad.size:
+        template = Tensor(
+            [0.0] * Shape.from_iterable(source_shape).size,
+            dtype=grad.dtype,
+            shape=source_shape,
+        )
+        selected, selection_shape = _logical_linear_indices(template, key)
+        if selection_shape.size != grad.size:
             raise ValueError(
-                f"Slice gradient has {grad.size} values; expected {len(selected)}"
+                f"Slice gradient has {grad.size} values; "
+                f"expected {selection_shape.size}"
             )
         accelerated = execute_slice_scatter(
             grad,
@@ -84,14 +74,14 @@ class SliceScatter:
             output_shape=source_shape,
         )
         if accelerated is not None:
-            return Tensor(
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=grad.dtype,
                 shape=source_shape,
             )
         values = [0.0] * template.size
-        for flat_index, grad_value in zip(selected, grad._data):
-            values[flat_index] += grad_value
+        for logical_linear_index, grad_value in zip(selected, grad._data):
+            values[logical_linear_index] += grad_value
         return Tensor(values, dtype=grad.dtype, shape=source_shape)
 
     @staticmethod

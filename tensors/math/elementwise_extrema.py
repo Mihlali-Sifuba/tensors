@@ -10,7 +10,7 @@ from ..backend import execute_extremum, execute_extremum_gradient
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape, broadcast_tensors
+from ..utils.broadcasting import broadcast_tensors
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -40,7 +40,7 @@ class _ElementwiseExtremum:
 
     @classmethod
     def forward(cls, left: Tensor, right: Tensor) -> Tensor:
-        shape = broadcast_shape(left.shape, right.shape)
+        shape = left.shape.broadcast_with(right.shape)
         dtype = result_dtype(left.dtype, right)
         operation = "maximum" if cls.select_maximum else "minimum"
         accelerated = execute_extremum(
@@ -51,7 +51,7 @@ class _ElementwiseExtremum:
             output_shape=shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
         expanded_left, expanded_right = broadcast_tensors(left, right)
         values = []
         for left_value, right_value in zip(
@@ -135,7 +135,7 @@ class _ElementwiseExtremum:
             left_storage, right_storage = accelerated
             return [
                 sum_to_shape(
-                    Tensor(
+                    Tensor._from_owned_storage(
                         left_storage,
                         dtype=grad.dtype,
                         shape=grad.shape,
@@ -143,7 +143,7 @@ class _ElementwiseExtremum:
                     left.shape,
                 ),
                 sum_to_shape(
-                    Tensor(
+                    Tensor._from_owned_storage(
                         right_storage,
                         dtype=grad.dtype,
                         shape=grad.shape,

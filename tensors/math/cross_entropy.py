@@ -14,12 +14,12 @@ from ..backend import (
 )
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
+from ..shape import Shape
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape, broadcast_tensors
-from ..utils.shape import (
-    coordinates_to_index,
-    index_to_coordinates,
-    shape_size,
+from ..utils.broadcasting import broadcast_tensors
+from ..utils.coordinates import (
+    coordinates_to_linear_index,
+    linear_index_to_coordinates,
 )
 from ._reduction import keepdims_shape, reduction_groups
 from .log_softmax import LogSoftmax, log_softmax
@@ -53,7 +53,7 @@ def _tensor(value: Any) -> Tensor:
 def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:
     """Expand one class index per sample into dense target distributions."""
     sample_shape = logits.shape[:axis] + logits.shape[axis + 1:]
-    sample_count = shape_size(sample_shape)
+    sample_count = Shape.from_iterable(sample_shape).size
     scalar_target = sample_shape == () and targets.size == 1
     if targets.shape != sample_shape and not scalar_target:
         raise ValueError(
@@ -63,7 +63,7 @@ def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:
 
     accelerated = execute_one_hot_targets(logits, targets, axis)
     if accelerated is not None:
-        return Tensor(
+        return Tensor._from_owned_storage(
             accelerated,
             dtype=logits.dtype,
             shape=logits.shape,
@@ -80,13 +80,18 @@ def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:
             raise ValueError(
                 f"Class index {class_index} is outside [0, {class_count})"
             )
-        sample_coordinates = index_to_coordinates(sample_index, sample_shape)
+        sample_coordinates = linear_index_to_coordinates(
+            sample_index,
+            sample_shape,
+        )
         coordinates = (
             sample_coordinates[:axis]
             + (class_index,)
             + sample_coordinates[axis:]
         )
-        values[coordinates_to_index(coordinates, logits.shape)] = 1.0
+        values[
+            coordinates_to_linear_index(coordinates, logits.shape)
+        ] = 1.0
     return Tensor(values, dtype=logits.dtype, shape=logits.shape)
 
 
@@ -105,9 +110,8 @@ def _targets_for_logits(logits: Any, targets: Any, axis: int) -> Any:
         dense_target = False
         if target_tensor.dtype.kind == "floating":
             try:
-                target_shape = broadcast_shape(
-                    target_tensor.shape,
-                    logits_tensor.shape,
+                target_shape = target_tensor.shape.broadcast_with(
+                    logits_tensor.shape
                 )
             except ValueError:
                 target_shape = None
@@ -140,9 +144,8 @@ def _targets_for_logits(logits: Any, targets: Any, axis: int) -> Any:
             prepared = _one_hot_targets(logits_tensor, target_tensor, axis)
     else:
         try:
-            target_shape = broadcast_shape(
-                target_tensor.shape,
-                logits_tensor.shape,
+            target_shape = target_tensor.shape.broadcast_with(
+                logits_tensor.shape
             )
         except ValueError as exc:
             raise ValueError(
@@ -208,7 +211,7 @@ class CrossEntropy:
             output_shape=result_shape,
         )
         if storage is not None:
-            return Tensor(storage, dtype=dtype, shape=result_shape)
+            return Tensor._from_owned_storage(storage, dtype=dtype, shape=result_shape)
         log_probabilities = LogSoftmax.forward(logits, axis=axis)
         _, _, groups = reduction_groups(logits, axis, keepdims=False)
 
@@ -265,7 +268,7 @@ class CrossEntropy:
             expanded_shape = expanded_logits.shape
             return [
                 sum_to_shape(
-                    Tensor(
+                    Tensor._from_owned_storage(
                         logits_storage,
                         dtype=grad.dtype,
                         shape=expanded_shape,
@@ -273,7 +276,7 @@ class CrossEntropy:
                     logits.shape,
                 ),
                 sum_to_shape(
-                    Tensor(
+                    Tensor._from_owned_storage(
                         targets_storage,
                         dtype=grad.dtype,
                         shape=expanded_shape,
@@ -378,7 +381,7 @@ class CrossEntropy:
             upstream = grad
             if reduction == "mean":
                 sample_shape = logits.shape[:axis] + logits.shape[axis + 1:]
-                sample_count = shape_size(sample_shape)
+                sample_count = Shape.from_iterable(sample_shape).size
                 if sample_count:
                     upstream = upstream / sample_count
 

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from ..shape import Shape
 from ..tensor import Tensor
-from ..utils.shape import coordinates_to_index, index_to_coordinates, shape_size
+from ..utils.coordinates import (
+    coordinates_to_linear_index,
+    linear_index_to_coordinates,
+)
 
 
 def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
@@ -22,20 +26,25 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
 
     accelerated = execute_sum_to_shape(gradient, shape)
     if accelerated is not None:
-        return Tensor(accelerated, dtype=gradient.dtype, shape=shape)
+        return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
 
     padded_shape = (1,) * (gradient.ndim - len(shape)) + shape
     groups: list[list[int | float]] = [
-        [] for _ in range(shape_size(shape))
+        [] for _ in range(Shape.from_iterable(shape).size)
     ]
     padding = gradient.ndim - len(shape)
     for index, value in enumerate(gradient._data):
-        gradient_coordinates = index_to_coordinates(index, gradient.shape)
+        gradient_coordinates = linear_index_to_coordinates(
+            index,
+            gradient.shape,
+        )
         source_coordinates = tuple(
             0 if source_dimension == 1 else coordinate
             for source_dimension, coordinate in zip(padded_shape, gradient_coordinates)
         )[padding:]
-        groups[coordinates_to_index(source_coordinates, shape)].append(value)
+        groups[
+            coordinates_to_linear_index(source_coordinates, shape)
+        ].append(value)
 
     if gradient.dtype.kind == "floating":
         from ..math.sum import _stable_float_sum
@@ -67,7 +76,7 @@ def sum_products_to_shape(
 
     accelerated = execute_sum_products_to_shape(gradient, factor, shape)
     if accelerated is not None:
-        return Tensor(accelerated, dtype=gradient.dtype, shape=shape)
+        return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
 
     expanded_gradient, expanded_factor = broadcast_tensors(gradient, factor)
     if len(shape) > expanded_gradient.ndim:
@@ -78,17 +87,20 @@ def sum_products_to_shape(
     padded_shape = (1,) * (expanded_gradient.ndim - len(shape)) + shape
     padding = expanded_gradient.ndim - len(shape)
     groups: list[list[tuple[float, float]]] = [
-        [] for _ in range(shape_size(shape))
+        [] for _ in range(Shape.from_iterable(shape).size)
     ]
     for index, (left, right) in enumerate(
         zip(expanded_gradient._data, expanded_factor._data)
     ):
-        coordinates = index_to_coordinates(index, expanded_gradient.shape)
+        coordinates = linear_index_to_coordinates(
+            index,
+            expanded_gradient.shape,
+        )
         source_coordinates = tuple(
             0 if source_dimension == 1 else coordinate
             for source_dimension, coordinate in zip(padded_shape, coordinates)
         )[padding:]
-        source_index = coordinates_to_index(source_coordinates, shape)
+        source_index = coordinates_to_linear_index(source_coordinates, shape)
         groups[source_index].append((float(left), float(right)))
 
     values = [_stable_product_sum(group) for group in groups]
@@ -133,10 +145,10 @@ class ProductSumToShape:
         *inputs: Tensor,
         **kwargs: object,
     ) -> list[Tensor]:
-        from ..utils.broadcasting import broadcast_shape, broadcast_to
+        from ..utils.broadcasting import broadcast_to
 
         left, right = inputs
-        common_shape = broadcast_shape(left.shape, right.shape)
+        common_shape = left.shape.broadcast_with(right.shape)
         expanded_grad = broadcast_to(grad, common_shape)
         return [
             sum_products_to_shape(expanded_grad, right, left.shape),
@@ -145,12 +157,10 @@ class ProductSumToShape:
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
-        from ..utils.broadcasting import broadcast_shape
-
         left, right = inputs
-        common_shape = broadcast_shape(left.shape, right.shape)
+        common_shape = left.shape.broadcast_with(right.shape)
         ones = Tensor(
-            [1.0] * shape_size(common_shape),
+            [1.0] * common_shape.size,
             dtype=grad.dtype,
             shape=common_shape,
         )
@@ -267,10 +277,9 @@ class MaskedValue:
 
 def masked_value_graph(value, mask: Tensor):
     """Select graph values using a constant zero-one mask."""
-    from ..utils.broadcasting import broadcast_shape
     from ..variable import Variable
 
-    if broadcast_shape(value.shape, mask.shape) != mask.shape:
+    if value.shape.broadcast_with(mask.shape) != mask.shape:
         raise ValueError(
             f"Value shape {value.shape} cannot broadcast to mask shape "
             f"{mask.shape}"

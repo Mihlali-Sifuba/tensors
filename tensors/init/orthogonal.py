@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from ..backend import get_backend
 from ..dtype import DataType
 from ..random import normal
+from ..shape import Shape as TensorShape
 from ..storage import CudaStorage, NumPyStorage, PythonStorage, Storage
 from ..tensor import Tensor
-from ..utils.shape import normalize_shape, shape_size
 from ._utils import DType, Shape, finite_number, floating_dtype
 from .initializer import Initializer
 
@@ -73,7 +73,10 @@ def _array_orthogonal(
     backend = get_backend()
     module = importlib.import_module("cupy" if backend == "cuda" else "numpy")
     source = normal((rows, columns), dtype=dtype)
-    matrix = source._storage.buffer.reshape(rows, columns)
+    storage = source._logical_storage_for(
+        "cuda" if backend == "cuda" else "numpy"
+    )
+    matrix = storage.buffer.reshape(rows, columns)
     transposed = rows < columns
     if transposed:
         matrix = matrix.T
@@ -105,7 +108,7 @@ class Orthogonal(Initializer):
 
     def __call__(self, shape: Shape) -> Tensor:
         """Return a tensor whose flattened rows or columns are orthogonal."""
-        normalized_shape = normalize_shape(shape)
+        normalized_shape = TensorShape.from_iterable(shape)
         if len(normalized_shape) < 2:
             raise ValueError(
                 "orthogonal initialization requires at least two dimensions"
@@ -115,7 +118,7 @@ class Orthogonal(Initializer):
                 "orthogonal initialization requires positive dimensions"
             )
         rows = normalized_shape[0]
-        columns = math.prod(normalized_shape[1:])
+        columns = normalized_shape[1:].size
         if get_backend() == "python":
             storage = _python_orthogonal(
                 rows, columns, self.dtype, float(self.gain)
@@ -124,11 +127,11 @@ class Orthogonal(Initializer):
             storage = _array_orthogonal(
                 rows, columns, self.dtype, float(self.gain)
             )
-        if storage.size != shape_size(normalized_shape):
+        if storage.size != normalized_shape.size:
             raise RuntimeError(
                 "orthogonal initializer returned an unexpected result size"
             )
-        return Tensor(
+        return Tensor._from_owned_storage(
             storage,
             dtype=self.dtype,
             shape=normalized_shape,

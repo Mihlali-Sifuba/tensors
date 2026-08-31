@@ -41,6 +41,8 @@ The root package is a small ergonomic facade:
 
 ```text
 ts.Tensor
+ts.Shape
+ts.Strides
 ts.Variable
 ts.Graph
 ts.backward
@@ -85,17 +87,19 @@ tensors/
 │   ├── numpy.py
 │   └── cuda.py
 ├── _typing.py             # shared public type aliases
+├── shape.py               # immutable logical tensor extents
+├── strides.py             # immutable physical storage movement
 ├── tensor.py              # Tensor storage, construction, and indexing
 ├── variable.py            # differentiable value type
 ├── dtype.py               # dtype definitions and promotion
 ├── casting.py             # storage conversion helpers
 ├── creation.py            # tensor-value constructors
 ├── py.typed               # marker for inline package typing
-├── utils/                 # internal shape and broadcasting helpers
+├── utils/                 # indexing, slicing, and Tensor broadcasting
 │   ├── broadcasting.py
+│   ├── coordinates.py
 │   ├── indexing.py
 │   ├── lists.py
-│   ├── shape.py
 │   └── slicing.py
 ├── ops/                   # primitive differentiable operations
 │   ├── add.py, sub.py, mul.py, div.py, neg.py
@@ -162,12 +166,28 @@ The folders have deliberately narrow responsibilities:
   points.
 - `storage` owns the internal Python, NumPy, and CUDA representations and their
   lazy conversion cache. Storage classes are not a second public tensor API.
+- `Shape` owns logical dimensions, rank, size, tuple-like slicing of its
+  dimension values (for example, `Shape(2, 3, 4)[1:]`), and pure
+  broadcast-shape inference. `Strides` owns physical traversal metadata and
+  canonical contiguous-stride construction. Both are root-level immutable
+  value objects returned by `Tensor.shape` and `Tensor.strides`. Ordinary
+  construction derives them automatically; see
+  [Tensor memory model](memory-model.md).
 - `creation` provides public constructors for mathematically defined tensor
   values, including zeros, ones, ranges, and identity matrices.
 - `ops` contains primitive differentiable operations such as arithmetic,
   powers, slicing, and casting.
-- `utils` contains internal shape, row-major indexing, and broadcasting helpers.
-  It is not re-exported from the root package.
+- `utils/coordinates.py` converts between logical coordinates and canonical
+  row-major logical linear indices using `Shape` and canonical contiguous
+  strides derived from that `Shape`; arbitrary Tensor strides and `offset`
+  do not participate.
+  `utils/indexing.py` normalizes Tensor indices and combines `Shape`,
+  `Strides`, and `offset` to produce physical storage indices.
+  `utils/slicing.py` owns Tensor/Python indexing and slicing semantics (for
+  example, `tensor[1:, :, 2]`), while `utils/broadcasting.py` materializes
+  Tensor broadcasting. Pure broadcast-shape inference lives on `Shape`, while
+  stride construction lives on `Strides`. The `utils` package is not
+  re-exported from the root.
 - `linalg` contains linear-algebra operations such as dot products and matrix
   multiplication.
 - `math` contains all mathematical functions, including reductions and

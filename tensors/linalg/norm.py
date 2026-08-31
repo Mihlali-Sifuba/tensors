@@ -58,7 +58,7 @@ class Norm:
             output_shape=output_shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=output_shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
         _, output_shape, groups = reduction_groups(value, axis, keepdims)
         results = []
         for group in groups:

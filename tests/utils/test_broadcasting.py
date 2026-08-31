@@ -2,28 +2,12 @@ import unittest
 
 import tensors as ts
 from tensors.utils.broadcasting import (
-    broadcast_shape,
     broadcast_tensors,
     broadcast_to,
 )
 
 
 class BroadcastingUtilityTests(unittest.TestCase):
-    def test_broadcast_shape_combines_leading_and_singleton_dimensions(self):
-        self.assertEqual(broadcast_shape((3, 1), (1, 4)), (3, 4))
-        self.assertEqual(broadcast_shape((5, 1, 4), (3, 4)), (5, 3, 4))
-
-    def test_scalar_shape_broadcasts_to_any_valid_shape(self):
-        self.assertEqual(broadcast_shape((), (2, 3)), (2, 3))
-
-    def test_broadcast_shape_rejects_incompatible_dimensions(self):
-        with self.assertRaisesRegex(ValueError, "cannot be broadcast"):
-            broadcast_shape((2, 3), (2, 4))
-
-    def test_broadcast_shape_validates_dimensions(self):
-        with self.assertRaisesRegex(ValueError, "non-negative integers"):
-            broadcast_shape((2, -1), (1, 1))
-
     def test_broadcast_to_returns_the_original_tensor_for_the_same_shape(self):
         tensor = ts.Tensor([[1.0, 2.0]])
 

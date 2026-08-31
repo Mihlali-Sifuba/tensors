@@ -10,7 +10,9 @@ from contextlib import nullcontext
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, cast
 
+from ..shape import Shape
 from ..storage import CudaStorage, NumPyStorage, Storage, StorageKind
+from ..strides import Strides
 
 if TYPE_CHECKING:
     from .._typing import Scalar, TensorIndex
@@ -31,8 +33,14 @@ if TYPE_CHECKING:
 
 
 def _view(tensor: Tensor, numpy: Any) -> Any:
-    """Return a backend-native view of a tensor without repeated transfers."""
-    storage = tensor._storage_for(_array_kind(numpy))
+    """Return compact logical values as a backend-native array.
+
+    Provider kernels operate on compact arrays. Tensor metadata remains the
+    source of truth, so a future non-compact layout is gathered before crossing
+    this boundary rather than being reshaped as if logical and physical
+    positions were identical.
+    """
+    storage = tensor._logical_storage_for(_array_kind(numpy))
     return storage.buffer.reshape(tensor.shape)
 
 
@@ -263,12 +271,7 @@ _FUSED_UNARY_OPERATIONS = frozenset({
 
 def _contiguous_strides(shape: tuple[int, ...]) -> tuple[int, ...]:
     """Return row-major element strides for a shape."""
-    result = [1] * len(shape)
-    stride = 1
-    for index in range(len(shape) - 1, -1, -1):
-        result[index] = stride
-        stride *= shape[index]
-    return tuple(result)
+    return Strides.contiguous(shape)
 
 
 def _broadcast_offset_expression(
@@ -1829,7 +1832,9 @@ def slice_tensor(
     """Run a NumPy slicing kernel after caller-side key validation."""
     numpy = _numpy()
     try:
-        result = _view(value, numpy)[key]
+        # Provider slicing can return a view into the input Tensor. Backend
+        # results transferred into a new Tensor must own independent storage.
+        result = _view(value, numpy)[key].copy()
     except ValueError:
         return None
     return _storage(
@@ -1883,7 +1888,8 @@ def cast_tensor(value: Tensor, *, dtype: DataType) -> Storage | None:
         converter = numpy.frompyfunc(int, 1, 1)
         result = converter(source)
     else:
-        result = source.astype(numpy.float64, copy=False)
+        # Same-dtype casts would otherwise retain the source buffer.
+        result = source.astype(numpy.float64, copy=True)
     return _storage(
         result,
         dtype=dtype,
@@ -2002,7 +2008,12 @@ def transpose(
 ) -> Storage | None:
     """Permute tensor axes into canonical contiguous storage."""
     numpy = _numpy()
-    result = numpy.transpose(_view(value, numpy), axes=permutation)
+    # Transpose is a provider view operation, while the public Tensor result is
+    # materialized and independently owned.
+    result = numpy.transpose(
+        _view(value, numpy),
+        axes=permutation,
+    ).copy()
     return _storage(
         result,
         dtype=value.dtype,
@@ -2909,7 +2920,8 @@ def reduction_gradient(
         invalid="ignore",
     ):
         if operation == "sum":
-            result = numpy.broadcast_to(expanded, value.shape)
+            # `broadcast_to` returns a view of the upstream gradient.
+            result = numpy.broadcast_to(expanded, value.shape).copy()
         elif operation == "mean":
             if count == 0:
                 return None
@@ -3772,7 +3784,4 @@ def matmul_gradient(
 
 
 def _shape_size(shape: tuple[int, ...]) -> int:
-    size = 1
-    for dimension in shape:
-        size *= dimension
-    return size
+    return Shape.from_iterable(shape).size

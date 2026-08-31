@@ -1,4 +1,6 @@
 from .tensor import Tensor
+from .shape import Shape
+from .strides import Strides
 from .backend import (
     BackendUnavailableError,
     available_backends,
@@ -33,7 +35,7 @@ multiply = Ops.multiply
 divide = Ops.divide
 
 __all__ = [
-    "Tensor", "Variable", "Graph", "GradcheckError", "BackendUnavailableError",
+    "Tensor", "Shape", "Strides", "Variable", "Graph", "GradcheckError",
     "available_backends", "get_backend", "set_backend", "use_backend",
     "backward", "grad", "gradcheck", "hessian", "jacobian", "Ops", "DataType",
     "creation", "graph", "init", "ops", "linalg", "math", "optim", "random",

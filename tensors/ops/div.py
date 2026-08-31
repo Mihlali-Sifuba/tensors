@@ -5,7 +5,7 @@ from typing import List, Union
 from ..backend import execute_binary, execute_division_denominator_gradient
 from ..dtype import result_dtype
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape, broadcast_to, broadcast_tensors
+from ..utils.broadcasting import broadcast_to, broadcast_tensors
 from ._utils import sum_to_shape
 
 
@@ -82,11 +82,11 @@ class Div:
                 output_shape=a.shape,
             )
             if accelerated is not None:
-                return Tensor(accelerated, dtype=dtype, shape=a.shape)
+                return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
             data = [x / b for x in a._data]
             return Tensor(data, dtype=dtype, shape=a.shape)
         if isinstance(b, Tensor):
-            shape = broadcast_shape(a.shape, b.shape)
+            shape = a.shape.broadcast_with(b.shape)
             accelerated = execute_binary(
                 "divide",
                 a,
@@ -95,7 +95,7 @@ class Div:
                 output_shape=shape,
             )
             if accelerated is not None:
-                return Tensor(accelerated, dtype=dtype, shape=shape)
+                return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
             a, b = broadcast_tensors(a, b)
             data = []
             for x, y in zip(a._data, b._data):
@@ -128,7 +128,7 @@ class Div:
             output_shape=a.shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=a.shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
         values = []
         for denominator in a._data:
             if denominator == 0:
@@ -148,7 +148,7 @@ class Div:
                 expanded_b,
             )
             if accelerated is not None:
-                db = Tensor(accelerated, dtype=grad.dtype, shape=grad.shape)
+                db = Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=grad.shape)
             else:
                 db = Tensor(
                     [
@@ -201,9 +201,8 @@ def _expanded_division_inputs(
     numerator: Tensor,
     denominator: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor]:
-    shape = broadcast_shape(
-        broadcast_shape(grad.shape, numerator.shape),
-        denominator.shape,
+    shape = grad.shape.broadcast_with(numerator.shape).broadcast_with(
+        denominator.shape
     )
     return (
         broadcast_to(grad, shape),
@@ -234,7 +233,7 @@ class DivisionDenominatorGradient:
             denominator,
         )
         if accelerated is not None:
-            return Tensor(
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=grad.dtype,
                 shape=grad.shape,

@@ -9,7 +9,7 @@ from .._typing import TensorLike
 from ..backend import execute_arg_extremum
 from ..dtype import int64
 from ..tensor import Tensor
-from ..utils.shape import index_to_coordinates
+from ..utils.coordinates import linear_index_to_coordinates
 from ._reduction import normalize_axes, reduction_groups, reduction_shape
 
 
@@ -50,7 +50,7 @@ class _ArgExtremum:
             output_shape=output_shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=int64, shape=output_shape)
+            return Tensor._from_owned_storage(accelerated, dtype=int64, shape=output_shape)
         _, output_shape, groups = reduction_groups(
             value,
             axis,
@@ -85,7 +85,7 @@ class _ArgExtremum:
             indices.append(
                 selected
                 if axis is None
-                else index_to_coordinates(selected, value.shape)[axis]
+                else linear_index_to_coordinates(selected, value.shape)[axis]
             )
         return Tensor(indices, dtype=int64, shape=output_shape)
 
