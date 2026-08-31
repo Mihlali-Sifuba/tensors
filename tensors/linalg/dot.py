@@ -98,7 +98,7 @@ def _a_index(
     row: int,
     column: int,
 ) -> int:
-    """Return the flat index for an element in the left operand."""
+    """Return the logical linear index of an element in the left operand."""
     if a_vector:
         return column
     return coordinates_to_linear_index(
@@ -114,7 +114,7 @@ def _b_index(
     row: int,
     column: int,
 ) -> int:
-    """Return the flat index for an element in the right operand."""
+    """Return the logical linear index of an element in the right operand."""
     if b_vector:
         return row
     return coordinates_to_linear_index(

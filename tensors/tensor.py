@@ -26,7 +26,10 @@ from .storage import (
 )
 from .strides import Strides
 from .utils.lists import flatten_nested_list, infer_nested_list_shape
-from .utils.slicing import flat_indices_from_ranges, slice_ranges_and_shape_from_key
+from .utils.slicing import (
+    slice_ranges_and_shape_from_key,
+    storage_indices_from_ranges,
+)
 from .utils.indexing import (
     coordinates_to_storage_index,
     tensor_indices_to_storage_index,
@@ -446,7 +449,7 @@ class Tensor:
     ) -> None:
         """Assign a scalar or broadcast-compatible values to a tensor slice."""
         ranges, selection_shape = slice_ranges_and_shape_from_key(key, self.shape)
-        physical_indices = flat_indices_from_ranges(
+        physical_indices = storage_indices_from_ranges(
             ranges,
             self.shape,
             self.strides,

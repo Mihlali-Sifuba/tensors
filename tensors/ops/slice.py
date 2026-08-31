@@ -6,36 +6,29 @@ from ..backend import execute_slice_scatter
 from ..shape import Shape
 from ..strides import Strides
 from ..tensor import Tensor
-from ..utils.slicing import flat_indices_from_ranges
+from ..utils.slicing import (
+    slice_ranges_and_shape_from_key,
+    storage_indices_from_ranges,
+)
 
 
-def _flat_indices(tensor: Tensor, key) -> List[int]:
-    """Return source flat indices selected by a supported tensor key."""
+def _logical_linear_indices(tensor: Tensor, key) -> tuple[List[int], Shape]:
+    """Return selected logical linear indices and the selection shape."""
     keys = key if isinstance(key, tuple) else (key,)
-    if len(keys) > tensor.ndim:
-        raise IndexError(f"Too many indices: {len(keys)} for {tensor.ndim}D tensor")
-    keys = keys + (slice(None),) * (tensor.ndim - len(keys))
-
-    ranges = []
-    for dim, part in enumerate(keys):
-        if isinstance(part, bool):
-            raise TypeError("Boolean tensor indices are not supported")
-        if isinstance(part, int):
-            index = part if part >= 0 else part + tensor.shape[dim]
-            if not 0 <= index < tensor.shape[dim]:
-                raise IndexError("Index out of range")
-            ranges.append(range(index, index + 1))
-        elif isinstance(part, slice):
-            ranges.append(range(*part.indices(tensor.shape[dim])))
-        else:
-            raise TypeError(f"Unsupported index type: {type(part)}")
+    ranges, selection_shape = slice_ranges_and_shape_from_key(
+        keys,
+        tensor.shape,
+    )
 
     # Gradients are newly allocated compact tensors, so these are canonical
-    # logical positions rather than the source tensor's physical positions.
-    return flat_indices_from_ranges(
-        ranges,
-        tensor.shape,
-        Strides.contiguous(tensor.shape),
+    # logical linear indices rather than the source tensor's storage indices.
+    return (
+        storage_indices_from_ranges(
+            ranges,
+            tensor.shape,
+            Strides.contiguous(tensor.shape),
+        ),
+        selection_shape,
     )
 
 
@@ -52,10 +45,10 @@ class Slice:
     @staticmethod
     def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
         source = inputs[0]
-        selected = _flat_indices(source, kwargs["key"])
+        selected, _ = _logical_linear_indices(source, kwargs["key"])
         values = [0.0] * source.size
-        for flat_index, grad_value in zip(selected, grad._data):
-            values[flat_index] += grad_value
+        for logical_linear_index, grad_value in zip(selected, grad._data):
+            values[logical_linear_index] += grad_value
         return [Tensor(values, dtype=grad.dtype, shape=source.shape)]
 
     @staticmethod
@@ -74,10 +67,11 @@ class SliceScatter:
             dtype=grad.dtype,
             shape=source_shape,
         )
-        selected = _flat_indices(template, key)
-        if len(selected) != grad.size:
+        selected, selection_shape = _logical_linear_indices(template, key)
+        if selection_shape.size != grad.size:
             raise ValueError(
-                f"Slice gradient has {grad.size} values; expected {len(selected)}"
+                f"Slice gradient has {grad.size} values; "
+                f"expected {selection_shape.size}"
             )
         accelerated = execute_slice_scatter(
             grad,
@@ -91,8 +85,8 @@ class SliceScatter:
                 shape=source_shape,
             )
         values = [0.0] * template.size
-        for flat_index, grad_value in zip(selected, grad._data):
-            values[flat_index] += grad_value
+        for logical_linear_index, grad_value in zip(selected, grad._data):
+            values[logical_linear_index] += grad_value
         return Tensor(values, dtype=grad.dtype, shape=source_shape)
 
     @staticmethod

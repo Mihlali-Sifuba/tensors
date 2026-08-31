@@ -18,7 +18,9 @@ def linear_index_to_coordinates(
     normalized_shape = Shape.from_iterable(shape)
     size = normalized_shape.size
     if not 0 <= index < size:
-        raise IndexError(f"Flat index {index} is out of range for shape {shape}")
+        raise IndexError(
+            f"Logical linear index {index} is out of range for shape {shape}"
+        )
 
     coordinates = []
     for stride in Strides.contiguous(normalized_shape):
