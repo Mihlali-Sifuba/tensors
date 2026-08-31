@@ -51,6 +51,14 @@ class ShapeTests(unittest.TestCase):
         with self.assertRaises(AttributeError):
             shape.rank = 5
 
+    def test_shape_integer_index_returns_int_and_slice_returns_shape(self):
+        shape = ts.Shape(2, 3, 4)
+
+        self.assertIs(type(shape[1]), int)
+        self.assertEqual(shape[1], 3)
+        self.assertIsInstance(shape[1:], ts.Shape)
+        self.assertEqual(shape[1:], ts.Shape(3, 4))
+
 
 class StridesTests(unittest.TestCase):
     def test_contiguous_vector_matrix_and_higher_rank_strides(self):
@@ -90,6 +98,14 @@ class StridesTests(unittest.TestCase):
         strides = ts.Strides(3, 1)
         with self.assertRaises(TypeError):
             strides[0] = 1
+
+    def test_strides_integer_index_returns_int_and_slice_returns_strides(self):
+        strides = ts.Strides(12, 4, 1)
+
+        self.assertIs(type(strides[1]), int)
+        self.assertEqual(strides[1], 4)
+        self.assertIsInstance(strides[1:], ts.Strides)
+        self.assertEqual(strides[1:], ts.Strides(4, 1))
 
 
 class CoordinateConversionTests(unittest.TestCase):

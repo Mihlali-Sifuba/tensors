@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import SupportsIndex, overload
 
 from .shape import Shape
 
@@ -31,6 +32,18 @@ class Strides(tuple[int, ...]):
         except TypeError as exc:
             raise TypeError("strides must be an iterable of integers") from exc
         return cls(*normalized)
+
+    @overload
+    def __getitem__(self, key: SupportsIndex) -> int: ...
+
+    @overload
+    def __getitem__(self, key: slice) -> Strides: ...
+
+    def __getitem__(self, key: SupportsIndex | slice) -> int | Strides:
+        """Return one stride or Strides containing a stride slice."""
+        if isinstance(key, slice):
+            return Strides.from_iterable(tuple.__getitem__(self, key))
+        return tuple.__getitem__(self, key)
 
     @classmethod
     def contiguous(cls, shape: Shape | Iterable[int]) -> Strides:
