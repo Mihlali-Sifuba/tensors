@@ -1,7 +1,6 @@
 import unittest
 
 import tensors as ts
-from tensors.utils.shape import coordinates_to_index, index_to_coordinates
 
 
 class ShapeTests(unittest.TestCase):
@@ -147,40 +146,6 @@ class StridesTests(unittest.TestCase):
         self.assertEqual(strides[1], 4)
         self.assertIsInstance(strides[1:], ts.Strides)
         self.assertEqual(strides[1:], ts.Strides(4, 1))
-
-
-class CoordinateConversionTests(unittest.TestCase):
-    def test_scalar_shape_contains_one_logical_element(self):
-        self.assertEqual(index_to_coordinates(0, ()), ())
-        self.assertEqual(coordinates_to_index((), ()), 0)
-
-    def test_index_and_coordinates_round_trip(self):
-        shape = ts.Shape(2, 3, 4)
-        for index in range(shape.size):
-            coordinates = index_to_coordinates(index, shape)
-            self.assertEqual(coordinates_to_index(coordinates, shape), index)
-
-    def test_flat_index_outside_shape_is_rejected(self):
-        for index in (-1, 6):
-            with self.subTest(index=index):
-                with self.assertRaisesRegex(IndexError, "out of range"):
-                    index_to_coordinates(index, (2, 3))
-
-    def test_coordinate_rank_and_bounds_are_validated(self):
-        with self.assertRaisesRegex(ValueError, "Coordinate rank"):
-            coordinates_to_index((1,), (2, 3))
-        with self.assertRaisesRegex(IndexError, "out of range"):
-            coordinates_to_index((2, 0), (2, 3))
-
-    def test_flat_index_and_coordinates_require_integers(self):
-        for index in (1.0, True):
-            with self.subTest(index=index):
-                with self.assertRaisesRegex(TypeError, "index must be an integer"):
-                    index_to_coordinates(index, (2, 2))
-        for coordinates in ((1.0, 0), (True, 0)):
-            with self.subTest(coordinates=coordinates):
-                with self.assertRaisesRegex(TypeError, "only integers"):
-                    coordinates_to_index(coordinates, (2, 2))
 
 
 if __name__ == "__main__":

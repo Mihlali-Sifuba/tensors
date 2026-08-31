@@ -39,7 +39,7 @@ def coordinates_to_storage_index(
     )
 
 
-def indices_to_storage_index(
+def tensor_indices_to_storage_index(
     indices: Tuple[int, ...],
     shape: Tuple[int, ...] | Shape,
     strides: Tuple[int, ...] | Strides | None = None,
@@ -80,4 +80,7 @@ def indices_to_storage_index(
     )
 
 
-__all__ = ["coordinates_to_storage_index", "indices_to_storage_index"]
+__all__ = [
+    "coordinates_to_storage_index",
+    "tensor_indices_to_storage_index",
+]

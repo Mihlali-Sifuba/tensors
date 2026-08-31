@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from ..shape import Shape
 from ..tensor import Tensor
-from ..utils.shape import coordinates_to_index, index_to_coordinates
+from ..utils.coordinates import (
+    coordinates_to_linear_index,
+    linear_index_to_coordinates,
+)
 
 
 def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
@@ -31,12 +34,17 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
     ]
     padding = gradient.ndim - len(shape)
     for index, value in enumerate(gradient._data):
-        gradient_coordinates = index_to_coordinates(index, gradient.shape)
+        gradient_coordinates = linear_index_to_coordinates(
+            index,
+            gradient.shape,
+        )
         source_coordinates = tuple(
             0 if source_dimension == 1 else coordinate
             for source_dimension, coordinate in zip(padded_shape, gradient_coordinates)
         )[padding:]
-        groups[coordinates_to_index(source_coordinates, shape)].append(value)
+        groups[
+            coordinates_to_linear_index(source_coordinates, shape)
+        ].append(value)
 
     if gradient.dtype.kind == "floating":
         from ..math.sum import _stable_float_sum
@@ -84,12 +92,15 @@ def sum_products_to_shape(
     for index, (left, right) in enumerate(
         zip(expanded_gradient._data, expanded_factor._data)
     ):
-        coordinates = index_to_coordinates(index, expanded_gradient.shape)
+        coordinates = linear_index_to_coordinates(
+            index,
+            expanded_gradient.shape,
+        )
         source_coordinates = tuple(
             0 if source_dimension == 1 else coordinate
             for source_dimension, coordinate in zip(padded_shape, coordinates)
         )[padding:]
-        source_index = coordinates_to_index(source_coordinates, shape)
+        source_index = coordinates_to_linear_index(source_coordinates, shape)
         groups[source_index].append((float(left), float(right)))
 
     values = [_stable_product_sum(group) for group in groups]

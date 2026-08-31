@@ -1,4 +1,4 @@
-"""Canonical row-major coordinate conversion helpers."""
+"""Canonical row-major logical coordinate conversion helpers."""
 
 from typing import Tuple
 
@@ -7,8 +7,11 @@ from ..strides import Strides
 from .indexing import coordinates_to_storage_index
 
 
-def index_to_coordinates(index: int, shape: Tuple[int, ...]) -> Tuple[int, ...]:
-    """Convert a valid row-major flat index to coordinates for ``shape``."""
+def linear_index_to_coordinates(
+    index: int,
+    shape: Tuple[int, ...],
+) -> Tuple[int, ...]:
+    """Convert a valid logical row-major linear index to coordinates."""
     if isinstance(index, bool) or not isinstance(index, int):
         raise TypeError("index must be an integer")
 
@@ -25,11 +28,11 @@ def index_to_coordinates(index: int, shape: Tuple[int, ...]) -> Tuple[int, ...]:
     return tuple(coordinates)
 
 
-def coordinates_to_index(
+def coordinates_to_linear_index(
     coordinates: Tuple[int, ...],
     shape: Tuple[int, ...],
 ) -> int:
-    """Convert valid row-major coordinates to a flat index."""
+    """Convert valid coordinates to a logical row-major linear index."""
     normalized_shape = Shape.from_iterable(shape)
     return coordinates_to_storage_index(
         coordinates,
@@ -39,6 +42,6 @@ def coordinates_to_index(
 
 
 __all__ = [
-    "index_to_coordinates",
-    "coordinates_to_index",
+    "coordinates_to_linear_index",
+    "linear_index_to_coordinates",
 ]
