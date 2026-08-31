@@ -46,7 +46,7 @@ class Mean:
             output_shape=output_shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=output_shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
         _, output_shape, groups = reduction_groups(
             a, axis, keepdims, scalar_as_vector=True
         )
@@ -83,7 +83,7 @@ class Mean:
             keepdims=keepdims,
         )
         if accelerated is not None:
-            return [Tensor(accelerated, dtype=grad.dtype, shape=a.shape)]
+            return [Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=a.shape)]
         summed = Sum.backward(grad, a, axis=axis, keepdims=keepdims)[0]
         return [Tensor(
             [float(item) / count for item in summed._data],

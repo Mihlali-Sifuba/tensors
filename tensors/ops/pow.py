@@ -13,7 +13,7 @@ from ..backend import (
 from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import float64, result_dtype
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape, broadcast_to, broadcast_tensors
+from ..utils.broadcasting import broadcast_to, broadcast_tensors
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -193,7 +193,7 @@ class Pow:
             raise TypeError(f"Unsupported exponent type: {type(exponent)}")
         dtype = _power_dtype(base, exponent)
         output_shape = (
-            broadcast_shape(base.shape, exponent.shape)
+            base.shape.broadcast_with(exponent.shape)
             if isinstance(exponent, Tensor)
             else base.shape
         )
@@ -205,7 +205,7 @@ class Pow:
             output_shape=output_shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=output_shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
         if isinstance(exponent, (int, float)):
             values = [_power(value, exponent) for value in base._data]
             return Tensor(values, dtype=dtype, shape=base.shape)
@@ -230,7 +230,7 @@ class Pow:
             output_shape=exponent.shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=exponent.shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=exponent.shape)
         base_tensor = Tensor([base] * exponent.size, dtype=dtype, shape=exponent.shape)
         return Pow.forward(base_tensor, exponent)
 
@@ -267,7 +267,7 @@ class Pow:
                     exponent,
                 )
                 if accelerated_base is not None:
-                    base_grad = Tensor(
+                    base_grad = Tensor._from_owned_storage(
                         accelerated_base,
                         dtype=grad.dtype,
                         shape=grad.shape,
@@ -304,7 +304,7 @@ class Pow:
                     exponent,
                 )
                 if accelerated_exponent is not None:
-                    exponent_grad = Tensor(
+                    exponent_grad = Tensor._from_owned_storage(
                         accelerated_exponent,
                         dtype=grad.dtype,
                         shape=grad.shape,
@@ -370,7 +370,7 @@ class Pow:
             )
             if accelerated is not None:
                 return [
-                    Tensor(
+                    Tensor._from_owned_storage(
                         accelerated,
                         dtype=grad.dtype,
                         shape=value.shape,
@@ -403,7 +403,7 @@ class Pow:
             )
             if accelerated is not None:
                 return [
-                    Tensor(
+                    Tensor._from_owned_storage(
                         accelerated,
                         dtype=grad.dtype,
                         shape=value.shape,
@@ -520,7 +520,7 @@ def _expanded_power_inputs(
     base: Tensor,
     exponent: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor]:
-    shape = broadcast_shape(broadcast_shape(grad.shape, base.shape), exponent.shape)
+    shape = grad.shape.broadcast_with(base.shape).broadcast_with(exponent.shape)
     return (
         broadcast_to(grad, shape),
         broadcast_to(base, shape),
@@ -542,7 +542,7 @@ class PowerBaseGradient:
         grad, base, exponent = _expanded_power_inputs(grad, base, exponent)
         accelerated = execute_power_base_gradient(grad, base, exponent)
         if accelerated is not None:
-            return Tensor(
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=grad.dtype,
                 shape=grad.shape,
@@ -684,7 +684,7 @@ class PowerExponentGradient:
             exponent,
         )
         if accelerated is not None:
-            return Tensor(
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=grad.dtype,
                 shape=grad.shape,

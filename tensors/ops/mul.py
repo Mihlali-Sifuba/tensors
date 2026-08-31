@@ -5,7 +5,7 @@ from typing import List, Union
 from ..backend import execute_binary
 from ..dtype import result_dtype
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape, broadcast_tensors
+from ..utils.broadcasting import broadcast_tensors
 from ._utils import sum_products_to_shape
 
 
@@ -22,7 +22,7 @@ class Mul:
             raise TypeError(f"Unsupported: {type(b)}")
         dtype = result_dtype(a.dtype, b)
         output_shape = (
-            broadcast_shape(a.shape, b.shape)
+            a.shape.broadcast_with(b.shape)
             if isinstance(b, Tensor)
             else a.shape
         )
@@ -34,7 +34,7 @@ class Mul:
             output_shape=output_shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=output_shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
         if isinstance(b, (int, float)):
             data = [x * b for x in a._data]
             return Tensor(data, dtype=dtype, shape=a.shape)

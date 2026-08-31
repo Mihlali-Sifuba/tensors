@@ -8,8 +8,8 @@ from typing import Iterable, TypeAlias
 from . import dtype as _dtype
 from .backend import execute_arange, execute_eye, execute_full, execute_linspace
 from .dtype import DataType
+from .shape import Shape as TensorShape
 from .tensor import Tensor
-from .utils.shape import normalize_shape, shape_size
 
 
 Shape: TypeAlias = Iterable[int]
@@ -34,7 +34,7 @@ def full(shape: Shape, fill_value: Scalar, dtype: DType = None) -> Tensor:
     """Return a Tensor of ``shape`` filled with one constant value."""
     if isinstance(fill_value, bool) or not isinstance(fill_value, (int, float)):
         raise TypeError("fill_value must be an int or float")
-    normalized_shape = normalize_shape(shape)
+    normalized_shape = TensorShape.from_iterable(shape)
     resolved_dtype = _resolve_dtype(dtype)
     accelerated = execute_full(
         normalized_shape,
@@ -42,13 +42,13 @@ def full(shape: Shape, fill_value: Scalar, dtype: DType = None) -> Tensor:
         dtype=resolved_dtype,
     )
     if accelerated is not None:
-        return Tensor(
+        return Tensor._from_owned_storage(
             accelerated,
             dtype=resolved_dtype,
             shape=normalized_shape,
         )
     return Tensor(
-        [fill_value] * shape_size(normalized_shape),
+        [fill_value] * normalized_shape.size,
         dtype=resolved_dtype,
         shape=normalized_shape,
     )
@@ -92,7 +92,7 @@ def eye(
         dtype=resolved_dtype,
     )
     if accelerated is not None:
-        return Tensor(
+        return Tensor._from_owned_storage(
             accelerated,
             dtype=resolved_dtype,
             shape=(rows, columns),
@@ -139,7 +139,7 @@ def arange(
             dtype=resolved_dtype,
         )
         if accelerated is not None:
-            return Tensor(
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=resolved_dtype,
                 shape=(count,),
@@ -174,7 +174,7 @@ def arange(
                 dtype=resolved_dtype,
             )
             if accelerated is not None:
-                return Tensor(
+                return Tensor._from_owned_storage(
                     accelerated,
                     dtype=resolved_dtype,
                     shape=(count,),
@@ -217,7 +217,7 @@ def linspace(
         dtype=resolved_dtype,
     )
     if accelerated is not None:
-        return Tensor(
+        return Tensor._from_owned_storage(
             accelerated,
             dtype=resolved_dtype,
             shape=(count,),

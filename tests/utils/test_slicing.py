@@ -1,8 +1,10 @@
 import unittest
 
+import tensors as ts
 from tensors.utils.slicing import (
-    flat_indices_from_ranges,
+    logical_linear_indices_from_ranges,
     slice_ranges_and_shape_from_key,
+    storage_indices_from_ranges,
 )
 
 
@@ -14,13 +16,21 @@ class SlicingUtilityTests(unittest.TestCase):
         )
 
         self.assertEqual([list(values) for values in ranges], [[1], [0, 2], [0, 1]])
+        self.assertIsInstance(result_shape, ts.Shape)
         self.assertEqual(result_shape, (2, 2))
 
     def test_integer_dimensions_are_collapsed_from_the_output_shape(self):
         ranges, result_shape = slice_ranges_and_shape_from_key((1, 2), (3, 4))
 
         self.assertEqual([list(values) for values in ranges], [[1], [2]])
+        self.assertIsInstance(result_shape, ts.Shape)
         self.assertEqual(result_shape, ())
+
+    def test_tuple_shape_is_validated_as_shape_metadata(self):
+        with self.assertRaisesRegex(TypeError, "dimensions must be integers"):
+            slice_ranges_and_shape_from_key((slice(None),), (True,))
+        with self.assertRaisesRegex(ValueError, "non-negative integers"):
+            slice_ranges_and_shape_from_key((slice(None),), (-1,))
 
     def test_negative_integer_index_is_normalized(self):
         ranges, result_shape = slice_ranges_and_shape_from_key((-1,), (3, 2))
@@ -59,21 +69,75 @@ class SlicingUtilityTests(unittest.TestCase):
         with self.assertRaisesRegex(IndexError, "out of range"):
             slice_ranges_and_shape_from_key((-3,), (2,))
 
-    def test_flat_indices_follow_row_major_selection_order(self):
-        result = flat_indices_from_ranges(
+    def test_logical_linear_indices_follow_selection_order(self):
+        result = logical_linear_indices_from_ranges(
             [range(0, 2), range(1, 3)],
+            (2, 3),
+        )
+
+        self.assertEqual(result, [1, 2, 4, 5])
+
+    def test_logical_and_storage_indices_use_distinct_index_spaces(self):
+        ranges = [range(1, 2), range(1, 2)]
+        shape = (3, 2)
+
+        logical_indices = logical_linear_indices_from_ranges(ranges, shape)
+        storage_indices = storage_indices_from_ranges(
+            ranges,
+            shape,
+            (1, 3),
+        )
+
+        self.assertEqual(logical_indices, [3])
+        self.assertEqual(storage_indices, [4])
+
+    def test_storage_indices_follow_row_major_selection_order(self):
+        result = storage_indices_from_ranges(
+            [range(0, 2), range(1, 3)],
+            (2, 3),
             (3, 1),
         )
 
         self.assertEqual(result, [1, 2, 4, 5])
 
-    def test_flat_indices_preserve_reversed_range_order(self):
-        result = flat_indices_from_ranges([range(2, -1, -1)], (1,))
+    def test_storage_indices_preserve_reversed_range_order(self):
+        result = storage_indices_from_ranges(
+            [range(2, -1, -1)],
+            (3,),
+            (1,),
+        )
 
         self.assertEqual(result, [2, 1, 0])
 
-    def test_flat_indices_are_empty_when_any_range_is_empty(self):
-        self.assertEqual(flat_indices_from_ranges([range(2), range(0)], (1, 1)), [])
+    def test_storage_indices_support_non_contiguous_strides_and_offset(self):
+        result = storage_indices_from_ranges(
+            [range(3), range(2)],
+            (3, 2),
+            (1, 3),
+            offset=1,
+        )
+
+        self.assertEqual(result, [1, 4, 2, 5, 3, 6])
+
+    def test_storage_indices_support_negative_strides(self):
+        result = storage_indices_from_ranges(
+            [range(3)],
+            (3,),
+            (-1,),
+            offset=2,
+        )
+
+        self.assertEqual(result, [2, 1, 0])
+
+    def test_storage_indices_are_empty_when_any_range_is_empty(self):
+        self.assertEqual(
+            storage_indices_from_ranges(
+                [range(2), range(0)],
+                (2, 0),
+                (1, 1),
+            ),
+            [],
+        )
 
 
 if __name__ == "__main__":

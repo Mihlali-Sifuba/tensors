@@ -8,7 +8,7 @@ from typing import Literal, TypeAlias
 
 from ..creation import _resolve_dtype
 from ..dtype import DataType
-from ..utils.shape import normalize_shape
+from ..shape import Shape as TensorShape
 
 
 Shape: TypeAlias = Iterable[int]
@@ -42,7 +42,7 @@ def calculate_fan_in_and_fan_out(shape: Shape) -> tuple[int, int]:
     dimensions form the receptive field and the final dimensions are
     (in_channels, out_channels).
     """
-    normalized = normalize_shape(shape)
+    normalized = TensorShape.from_iterable(shape)
     if len(normalized) < 2:
         raise ValueError(
             "fan_in and fan_out require a shape with at least two dimensions"
@@ -51,7 +51,7 @@ def calculate_fan_in_and_fan_out(shape: Shape) -> tuple[int, int]:
         raise ValueError(
             "fan_in and fan_out require all dimensions to be positive"
         )
-    receptive_field = math.prod(normalized[:-2])
+    receptive_field = normalized[:-2].size
     return (
         receptive_field * normalized[-2],
         receptive_field * normalized[-1],

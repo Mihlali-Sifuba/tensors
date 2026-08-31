@@ -9,7 +9,7 @@ from ..backend import execute_where, execute_where_gradient
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape, broadcast_to
+from ..utils.broadcasting import broadcast_to
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -35,9 +35,8 @@ class Where:
 
     @staticmethod
     def forward(condition: Tensor, left: Tensor, right: Tensor) -> Tensor:
-        shape = broadcast_shape(
-            broadcast_shape(condition.shape, left.shape),
-            right.shape,
+        shape = condition.shape.broadcast_with(left.shape).broadcast_with(
+            right.shape
         )
         dtype = result_dtype(left.dtype, right)
         accelerated = execute_where(
@@ -48,7 +47,7 @@ class Where:
             output_shape=shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
         expanded_condition = broadcast_to(condition, shape)
         expanded_left = broadcast_to(left, shape)
         expanded_right = broadcast_to(right, shape)
@@ -75,12 +74,12 @@ class Where:
         accelerated = execute_where_gradient(grad, condition)
         if accelerated is not None:
             left_storage, right_storage = accelerated
-            left_gradient = Tensor(
+            left_gradient = Tensor._from_owned_storage(
                 left_storage,
                 dtype=grad.dtype,
                 shape=grad.shape,
             )
-            right_gradient = Tensor(
+            right_gradient = Tensor._from_owned_storage(
                 right_storage,
                 dtype=grad.dtype,
                 shape=grad.shape,

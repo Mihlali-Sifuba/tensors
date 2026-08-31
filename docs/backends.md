@@ -79,6 +79,15 @@ preventing stale backend data.
 These storage classes are internal implementation details, not a second public
 array API. Users continue to write ordinary tensor expressions.
 
+Tensor layout metadata remains MS-Tensors' semantic source of truth:
+`Shape` defines logical extents, `Strides` and `offset` map logical coordinates
+to physical storage, and `Storage` owns the flat provider buffer. Optional
+backend kernels currently operate on compact arrays. A non-compact internal
+layout is gathered in logical order within the same backend before crossing
+that boundary, avoiding an unnecessary CUDA-to-host value transfer. Public
+layout operations still materialize independent tensors; shared-storage views
+are intentionally deferred. See [Tensor memory model](memory-model.md).
+
 Random tensors follow the same residency contract. `ts.random` dispatches to an
 MS-Tensors-owned `random.Random`, NumPy `Generator`, or CuPy `RandomState` for
 the active backend. Initializers in `ts.init` consume that abstraction, so

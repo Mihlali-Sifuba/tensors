@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from array import array
 from itertools import product
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, Any, overload
 
 from . import dtype as _dtype
@@ -15,15 +15,25 @@ from ._typing import (
     TensorResult,
 )
 from .casting import cast_values
-from .storage import PythonStorage, Storage, StorageKind, convert_storage
-from .utils.lists import flatten_nested_list, infer_nested_list_shape
-from .utils.shape import (
-    normalize_shape,
-    row_major_strides,
-    shape_size,
+from .shape import Shape
+from .storage import (
+    CudaStorage,
+    NumPyStorage,
+    PythonStorage,
+    Storage,
+    StorageKind,
+    convert_storage,
 )
-from .utils.slicing import flat_indices_from_ranges, slice_ranges_and_shape_from_key
-from .utils.indexing import indices_to_flat_index
+from .strides import Strides
+from .utils.lists import flatten_nested_list, infer_nested_list_shape
+from .utils.slicing import (
+    slice_ranges_and_shape_from_key,
+    storage_indices_from_ranges,
+)
+from .utils.indexing import (
+    coordinates_to_storage_index,
+    tensor_indices_to_storage_index,
+)
 
 if TYPE_CHECKING:
     from .variable import Variable
@@ -37,6 +47,7 @@ class Tensor:
     backend and preserve native storage where possible.
 
     Supports:
+    - Explicit shape, strides, offset, and storage metadata
     - Broadcasting and scalar arithmetic
     - Matrix multiplication
     - Reshaping and transposition
@@ -51,7 +62,7 @@ class Tensor:
         self,
         data: TensorData,
         dtype: str | _dtype.DataType | None = None,
-        shape: tuple[int, ...] | None = None,
+        shape: Iterable[int] | None = None,
     ) -> None:
         """
         Initialize a tensor.
@@ -63,6 +74,7 @@ class Tensor:
                 Existing dtype is preserved for tensor, storage, and array
                 inputs; otherwise, the default is ``float64``.
             shape: Optional tensor shape. When omitted, inferred from ``data``.
+                Python scalar inputs infer the rank-zero shape ``()``.
 
         Raises:
             TypeError: If ``data`` or ``dtype`` is unsupported, or a storage
@@ -95,7 +107,9 @@ class Tensor:
             # Preserve native storage for same-dtype copies. An explicitly
             # requested dtype still follows Tensor's normal cast semantics.
             if data.dtype == self.dtype:
-                self._set_storage(data._storage.copy())
+                self._set_storage(
+                    data._logical_storage_for(data._storage.kind).copy()
+                )
             else:
                 self._set_storage(
                     PythonStorage.from_values(data._data, self.dtype)
@@ -108,13 +122,16 @@ class Tensor:
                     f"storage dtype {data.dtype.name!r} does not match "
                     f"tensor dtype {self.dtype.name!r}"
                 )
-            self._set_storage(data)
+            # Public construction always establishes independent ownership.
+            # Internal producers that can transfer exclusive ownership use
+            # ``_from_owned_storage`` instead.
+            self._set_storage(data.copy())
             inferred_shape = (data.size,)
 
         elif isinstance(data, (int, float)):
             # Scalar value
             self._set_storage(PythonStorage.from_values([data], self.dtype))
-            inferred_shape = (1,)
+            inferred_shape = ()
 
         elif isinstance(data, list):
             # Flatten the list if it's nested
@@ -131,10 +148,11 @@ class Tensor:
         else:
             raise TypeError(f"Unsupported data type: {type(data)}")
 
-        self._shape = normalize_shape(
+        self._shape = Shape.from_iterable(
             inferred_shape if shape is None else shape
         )
-        self._ndim = len(self.shape)
+        self._strides = Strides.contiguous(self._shape)
+        self._offset = 0
 
         # Public in-place mutations increment this counter. Computation nodes
         # remember the counter observed during their forward pass so backward
@@ -143,11 +161,114 @@ class Tensor:
         self._version = 0
 
         # Verify total elements match shape
-        expected_element_count = shape_size(self.shape)
+        expected_element_count = self.shape.size
         if self._storage.size != expected_element_count:
             raise ValueError(
                 f"Data size {self._storage.size} does not match shape {self.shape} "
                 f"(expected {expected_element_count} elements)"
+            )
+
+    @classmethod
+    def _from_owned_storage(
+        cls,
+        storage: Storage,
+        *,
+        dtype: str | _dtype.DataType | None = None,
+        shape: Shape | Iterable[int],
+    ) -> Tensor:
+        """Adopt exclusively owned internal Storage without copying.
+
+        This private constructor is reserved for freshly produced backend
+        results whose ownership is transferred to the returned Tensor. Public
+        ``Tensor(Storage)`` construction copies its input instead.
+        """
+        expected_dtype = (
+            _dtype.from_typecode(dtype)
+            if isinstance(dtype, str)
+            else dtype
+        )
+        if expected_dtype is not None and storage.dtype != expected_dtype:
+            raise TypeError(
+                f"storage dtype {storage.dtype.name!r} does not match "
+                f"tensor dtype {expected_dtype.name!r}"
+            )
+
+        tensor = cls.__new__(cls)
+        tensor._dtype = storage.dtype
+        tensor._set_storage(storage)
+        tensor._shape = (
+            shape if isinstance(shape, Shape) else Shape.from_iterable(shape)
+        )
+        tensor._strides = Strides.contiguous(tensor._shape)
+        tensor._offset = 0
+        tensor._version = 0
+
+        expected_element_count = tensor.shape.size
+        if storage.size != expected_element_count:
+            raise ValueError(
+                f"Data size {storage.size} does not match shape {tensor.shape} "
+                f"(expected {expected_element_count} elements)"
+            )
+        return tensor
+
+    @classmethod
+    def _from_metadata(
+        cls,
+        storage: Storage,
+        *,
+        shape: Shape | Iterable[int],
+        strides: Strides | Iterable[int],
+        offset: int = 0,
+    ) -> Tensor:
+        """Build an owning Tensor with explicit layout metadata.
+
+        Storage is copied deliberately. This internal constructor establishes
+        and tests the future view representation without introducing shared
+        storage or mutation aliasing.
+        """
+        tensor = cls.__new__(cls)
+        tensor._dtype = storage.dtype
+        tensor._set_storage(storage.copy())
+        tensor._shape = (
+            shape if isinstance(shape, Shape) else Shape.from_iterable(shape)
+        )
+        tensor._strides = (
+            strides
+            if isinstance(strides, Strides)
+            else Strides.from_iterable(strides)
+        )
+        tensor._offset = offset
+        tensor._version = 0
+        tensor._validate_layout()
+        return tensor
+
+    def _validate_layout(self) -> None:
+        """Validate that all logical coordinates address owned storage."""
+        if len(self.strides) != self.shape.rank:
+            raise ValueError(
+                f"Stride rank {len(self.strides)} does not match "
+                f"shape rank {self.shape.rank}"
+            )
+        if isinstance(self.offset, bool) or not isinstance(self.offset, int):
+            raise TypeError("offset must be an integer")
+
+        if self.size == 0:
+            if not 0 <= self.offset <= self._storage.size:
+                raise ValueError("empty tensor offset is outside storage")
+            return
+
+        minimum = self.offset
+        maximum = self.offset
+        for dimension, stride in zip(self.shape, self.strides):
+            extent = (dimension - 1) * stride
+            if extent < 0:
+                minimum += extent
+            else:
+                maximum += extent
+        if minimum < 0 or maximum >= self._storage.size:
+            raise ValueError(
+                f"Tensor layout addresses storage range [{minimum}, {maximum}] "
+                f"outside buffer of size {self._storage.size}"
             )
 
     def _set_storage(self, storage: Storage) -> None:
@@ -158,7 +279,7 @@ class Tensor:
         }
 
     def _storage_for(self, kind: StorageKind) -> Storage:
-        """Return a cached native representation, converting only once."""
+        """Return the backend-native physical Storage representation."""
         cached = self._storage_cache.get(kind)
         if cached is not None:
             return cached
@@ -166,8 +287,56 @@ class Tensor:
         self._storage_cache[kind] = converted
         return converted
 
+    @property
+    def _has_compact_storage(self) -> bool:
+        """Whether contiguous values exactly fill storage from offset zero.
+
+        Compact storage is stricter than a contiguous logical layout, which
+        may begin at a non-zero offset.
+        """
+        return (
+            self.offset == 0
+            and self.is_contiguous
+            and self._storage.size == self.size
+        )
+
+    def _logical_storage_indices(self) -> Iterator[int]:
+        """Yield physical positions in logical row-major order."""
+        ranges = (range(dimension) for dimension in self.shape)
+        for coordinates in product(*ranges):
+            yield coordinates_to_storage_index(
+                coordinates,
+                self.shape,
+                self.strides,
+                self.offset,
+            )
+
+    def _logical_storage_for(self, kind: StorageKind) -> Storage:
+        """Return compact logical values in one backend-native storage kind."""
+        storage = self._storage_for(kind)
+        if self._has_compact_storage:
+            return storage
+
+        indices = list(self._logical_storage_indices())
+        if kind == "python":
+            if not isinstance(storage, PythonStorage):
+                raise TypeError("Python storage conversion returned an invalid buffer")
+            return PythonStorage.from_values(
+                (storage.buffer[index] for index in indices),
+                self.dtype,
+            )
+
+        selected = (
+            storage.buffer[indices]
+            if indices
+            else storage.buffer[:0]
+        )
+        if kind == "numpy":
+            return NumPyStorage(selected, self.dtype)
+        return CudaStorage(selected, self.dtype)
+
     def _mutable_data(self) -> array:
-        """Return authoritative host storage for an in-place mutation."""
+        """Return the mutable authoritative physical host Storage buffer."""
         storage = self._storage_for("python")
         if not isinstance(storage, PythonStorage):
             raise TypeError("Python storage conversion returned an invalid buffer")
@@ -176,11 +345,18 @@ class Tensor:
 
     @property
     def _data(self) -> array:
-        """Compatibility view for reference kernels that read host values."""
-        storage = self._storage_for("python")
+        """Logical row-major host values for reference kernels."""
+        storage = self._logical_storage_for("python")
         if not isinstance(storage, PythonStorage):
             raise TypeError("Python storage conversion returned an invalid buffer")
         return storage.buffer
+
+    def _value_at_storage_index(self, index: int) -> Scalar:
+        """Read one physical position from authoritative host storage."""
+        storage = self._storage_for("python")
+        if not isinstance(storage, PythonStorage):
+            raise TypeError("Python storage conversion returned an invalid buffer")
+        return storage.buffer[index]
 
     def _create_storage(self, values: Iterable[Scalar]) -> array:
         """Create this tensor's backing storage."""
@@ -208,64 +384,63 @@ class Tensor:
         if not isinstance(key, (int, slice, tuple)):
             raise TypeError(f"Unsupported index type: {type(key)}")
 
-        keys = key if isinstance(key, tuple) else (key,)
-        _, output_shape = slice_ranges_and_shape_from_key(keys, self.shape)
         from .backend import execute_slice
 
-        accelerated = execute_slice(
-            self,
-            key,
-            output_shape=output_shape,
+        keys = key if isinstance(key, tuple) else (key,)
+        complete_integer_index = (
+            len(keys) == self.ndim
+            and all(
+                isinstance(index, int) and not isinstance(index, bool)
+                for index in keys
+            )
         )
-        if accelerated is not None:
-            if output_shape == ():
-                return Tensor(
+        if complete_integer_index:
+            integer_keys = tuple(
+                index for index in keys if isinstance(index, int)
+            )
+            storage_index = tensor_indices_to_storage_index(
+                integer_keys,
+                self.shape,
+                self.strides,
+                self.offset,
+            )
+            accelerated = execute_slice(self, key, output_shape=Shape())
+            if accelerated is not None:
+                return Tensor._from_owned_storage(
                     accelerated,
                     dtype=self.dtype,
-                    shape=output_shape,
+                    shape=Shape(),
                 ).item()
-            return Tensor(
+            return self._value_at_storage_index(storage_index)
+
+        ranges, output_shape = slice_ranges_and_shape_from_key(keys, self.shape)
+        accelerated = execute_slice(self, key, output_shape=output_shape)
+        if accelerated is not None:
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=self.dtype,
                 shape=output_shape,
             )
+        return self._slice_from_ranges(ranges, output_shape)
 
-        if isinstance(key, (int, slice)):
-            if self.ndim != 1:
-                return self._slice_from_key((key,))
-            if isinstance(key, int):
-                idx = indices_to_flat_index((key,), self.shape)
-                return self._data[idx]
-            indices = range(*key.indices(self.shape[0]))
-            values = [self._data[i] for i in indices]
-            return Tensor(values, dtype=self.dtype, shape=(len(indices),))
-
-        # Tuple of indices/slices — N-dimensional
-        if isinstance(key, tuple):
-            if len(key) == self.ndim and all(isinstance(k, int) for k in key):
-                # All ints — return a scalar
-                idx = indices_to_flat_index(key, self.shape)
-                return self._data[idx]
-
-            # Mixed ints and slices — return a sub-tensor
-            return self._slice_from_key(key)
-
-        raise TypeError(f"Unsupported index type: {type(key)}")
-
-    def _slice_from_key(
+    def _slice_from_ranges(
         self,
-        key: tuple[int | slice, ...],
+        ranges: list[range],
+        new_shape: Shape,
     ) -> Tensor:
-        """Return an N-dimensional slice selected by mixed ints and slices."""
-        ranges, new_shape = slice_ranges_and_shape_from_key(key, self.shape)
-        strides = row_major_strides(self.shape)
-
+        """Materialize a slice from normalized dimension ranges."""
+        storage = self._storage_for("python")
+        if not isinstance(storage, PythonStorage):
+            raise TypeError("Python storage conversion returned an invalid buffer")
+        storage_indices = storage_indices_from_ranges(
+            ranges,
+            self.shape,
+            self.strides,
+            self.offset,
+        )
         result_data = self._create_storage(
-            self._data[sum(
-                coordinate * stride
-                for coordinate, stride in zip(coordinates, strides)
-            )]
-            for coordinates in product(*ranges)
+            storage.buffer[storage_index]
+            for storage_index in storage_indices
         )
 
         return Tensor(result_data, dtype=self.dtype, shape=new_shape)
@@ -276,7 +451,7 @@ class Tensor:
         selection_shape: tuple[int, ...],
     ) -> array:
         """Validate and materialize values for an in-place slice assignment."""
-        selection_size = shape_size(selection_shape)
+        selection_size = Shape.from_iterable(selection_shape).size
         if isinstance(value, (int, float)):
             return self._create_storage([value] * selection_size)
 
@@ -306,24 +481,29 @@ class Tensor:
     ) -> None:
         """Assign a scalar or broadcast-compatible values to a tensor slice."""
         ranges, selection_shape = slice_ranges_and_shape_from_key(key, self.shape)
-        flat_indices = flat_indices_from_ranges(
+        physical_indices = storage_indices_from_ranges(
             ranges,
-            row_major_strides(self.shape),
+            self.shape,
+            self.strides,
+            self.offset,
         )
         assignment_values = self._slice_assignment_values(
             value,
             selection_shape,
         )
 
-        if len(assignment_values) != len(flat_indices):
+        if len(assignment_values) != len(physical_indices):
             raise ValueError(
                 f"Slice assignment has {len(assignment_values)} values; "
-                f"expected {len(flat_indices)}"
+                f"expected {len(physical_indices)}"
             )
 
         mutable_data = self._mutable_data()
-        for flat_index, assignment_value in zip(flat_indices, assignment_values):
-            mutable_data[flat_index] = assignment_value
+        for physical_index, assignment_value in zip(
+            physical_indices,
+            assignment_values,
+        ):
+            mutable_data[physical_index] = assignment_value
         self._version += 1
 
     def __setitem__(
@@ -343,7 +523,12 @@ class Tensor:
                 raise ValueError(
                     f"Cannot assign to {self.ndim}D tensor with single integer"
                 )
-            idx = indices_to_flat_index((key,), self.shape)
+            idx = tensor_indices_to_storage_index(
+                (key,),
+                self.shape,
+                self.strides,
+                self.offset,
+            )
             self._mutable_data()[idx] = self._assignment_scalar(value)
             self._version += 1
             return
@@ -355,7 +540,12 @@ class Tensor:
                 self._assign_slice_from_key(key, value)
                 return
 
-            idx = indices_to_flat_index(key, self.shape)
+            idx = tensor_indices_to_storage_index(
+                key,
+                self.shape,
+                self.strides,
+                self.offset,
+            )
             self._mutable_data()[idx] = self._assignment_scalar(value)
             self._version += 1
             return
@@ -440,17 +630,48 @@ class Tensor:
     @property
     def size(self) -> int:
         """Total number of elements."""
-        return self._storage.size
+        return self.shape.size
 
     @property
-    def shape(self) -> tuple[int, ...]:
+    def shape(self) -> Shape:
         """Immutable dimensions of this tensor."""
         return self._shape
 
     @property
+    def strides(self) -> Strides:
+        """Immutable physical movement for each logical axis."""
+        return self._strides
+
+    @property
+    def offset(self) -> int:
+        """Storage position corresponding to logical coordinate zero."""
+        return self._offset
+
+    @property
     def ndim(self) -> int:
         """Number of tensor dimensions."""
-        return self._ndim
+        return self.shape.rank
+
+    @property
+    def is_contiguous(self) -> bool:
+        """Whether logical elements occupy contiguous row-major storage.
+
+        The starting offset does not affect logical contiguity.
+        """
+        if self.size == 0:
+            return True
+
+        expected_stride = 1
+        for dimension, stride in zip(
+            reversed(self.shape),
+            reversed(self.strides),
+        ):
+            if dimension == 1:
+                continue
+            if stride != expected_stride:
+                return False
+            expected_stride *= dimension
+        return True
 
     @property
     def dtype(self) -> _dtype.DataType:
@@ -475,6 +696,24 @@ class Tensor:
         """Return a copy with the same data and dtype."""
         return Tensor(self)
 
+    def contiguous(self) -> Tensor:
+        """Ensure that this tensor has a contiguous logical layout.
+
+        An already-contiguous tensor is returned unchanged, including when it
+        begins at a non-zero storage offset. This method does not promise
+        compact storage. Non-contiguous tensors are materialized into
+        independent compact storage without transferring NumPy or CUDA values
+        through the host.
+        """
+        if self.is_contiguous:
+            return self
+        storage = self._logical_storage_for(self._storage.kind)
+        return Tensor._from_owned_storage(
+            storage,
+            dtype=self.dtype,
+            shape=self.shape,
+        )
+
     def astype(self, dtype: str | _dtype.DataType) -> Tensor:
         """Return a copy converted to a new dtype."""
         if isinstance(dtype, str):
@@ -489,7 +728,11 @@ class Tensor:
 
         accelerated = execute_cast(self, dtype=dtype)
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=self.shape)
+            return Tensor._from_owned_storage(
+                accelerated,
+                dtype=dtype,
+                shape=self.shape,
+            )
 
         values = cast_values(
             self._data,
