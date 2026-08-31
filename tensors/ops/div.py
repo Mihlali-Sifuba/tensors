@@ -5,7 +5,7 @@ from typing import List, Union
 from ..backend import execute_binary, execute_division_denominator_gradient
 from ..dtype import result_dtype
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape, broadcast_to, broadcast_tensors
+from ..utils.broadcasting import broadcast_to, broadcast_tensors
 from ._utils import sum_to_shape
 
 
@@ -86,7 +86,7 @@ class Div:
             data = [x / b for x in a._data]
             return Tensor(data, dtype=dtype, shape=a.shape)
         if isinstance(b, Tensor):
-            shape = broadcast_shape(a.shape, b.shape)
+            shape = a.shape.broadcast_with(b.shape)
             accelerated = execute_binary(
                 "divide",
                 a,
@@ -201,9 +201,8 @@ def _expanded_division_inputs(
     numerator: Tensor,
     denominator: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor]:
-    shape = broadcast_shape(
-        broadcast_shape(grad.shape, numerator.shape),
-        denominator.shape,
+    shape = grad.shape.broadcast_with(numerator.shape).broadcast_with(
+        denominator.shape
     )
     return (
         broadcast_to(grad, shape),

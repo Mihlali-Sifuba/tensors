@@ -40,6 +40,35 @@ class Shape(tuple[int, ...]):
             ) from exc
         return cls(*normalized)
 
+    def broadcast_with(self, other: Shape | Iterable[int]) -> Shape:
+        """Return the shared shape produced by NumPy-style broadcasting."""
+        normalized_other = (
+            other if isinstance(other, Shape) else Shape.from_iterable(other)
+        )
+        dimensions: list[int] = []
+        for dimension, other_dimension in zip(
+            reversed(self),
+            reversed(normalized_other),
+        ):
+            if dimension == other_dimension:
+                dimensions.append(dimension)
+            elif dimension == 1:
+                dimensions.append(other_dimension)
+            elif other_dimension == 1:
+                dimensions.append(dimension)
+            else:
+                raise ValueError(
+                    f"Shapes {self} and {normalized_other} cannot be broadcast"
+                )
+
+        longer_shape = (
+            self if self.rank > normalized_other.rank else normalized_other
+        )
+        matched_dimensions = min(self.rank, normalized_other.rank)
+        unmatched_dimensions = longer_shape.rank - matched_dimensions
+        dimensions.extend(reversed(longer_shape[:unmatched_dimensions]))
+        return Shape(*reversed(dimensions))
+
     @overload
     def __getitem__(self, key: SupportsIndex) -> int: ...
 

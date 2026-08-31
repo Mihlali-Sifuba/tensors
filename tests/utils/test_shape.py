@@ -59,6 +59,47 @@ class ShapeTests(unittest.TestCase):
         self.assertIsInstance(shape[1:], ts.Shape)
         self.assertEqual(shape[1:], ts.Shape(3, 4))
 
+    def test_shape_broadcast_with_returns_shape_for_compatible_dimensions(self):
+        cases = (
+            (ts.Shape(3, 1), ts.Shape(1, 4), ts.Shape(3, 4)),
+            (ts.Shape(5, 1, 7), ts.Shape(3, 7), ts.Shape(5, 3, 7)),
+            (ts.Shape(), ts.Shape(2, 3), ts.Shape(2, 3)),
+            (ts.Shape(2, 3), ts.Shape(2, 3), ts.Shape(2, 3)),
+            (ts.Shape(1, 3), ts.Shape(2, 1), ts.Shape(2, 3)),
+            (ts.Shape(1, 0), ts.Shape(3, 1), ts.Shape(3, 0)),
+        )
+
+        for left, right, expected in cases:
+            with self.subTest(left=left, right=right):
+                result = left.broadcast_with(right)
+                self.assertIsInstance(result, ts.Shape)
+                self.assertEqual(result, expected)
+
+    def test_shape_broadcast_with_accepts_an_iterable(self):
+        result = ts.Shape(3, 1).broadcast_with(value for value in (1, 4))
+
+        self.assertIsInstance(result, ts.Shape)
+        self.assertEqual(result, ts.Shape(3, 4))
+
+    def test_shape_broadcast_with_validates_iterable_dimensions(self):
+        with self.assertRaisesRegex(TypeError, "dimensions must be integers"):
+            ts.Shape(2, 3).broadcast_with((True, 3))
+        with self.assertRaisesRegex(ValueError, "non-negative integers"):
+            ts.Shape(2, 3).broadcast_with((-1, 3))
+
+    def test_shape_broadcast_with_rejects_incompatible_dimensions(self):
+        with self.assertRaisesRegex(ValueError, "cannot be broadcast"):
+            ts.Shape(2, 3).broadcast_with(ts.Shape(2, 4))
+
+    def test_shape_broadcast_with_does_not_mutate_inputs(self):
+        left = ts.Shape(3, 1)
+        right = ts.Shape(1, 4)
+
+        left.broadcast_with(right)
+
+        self.assertEqual(left, ts.Shape(3, 1))
+        self.assertEqual(right, ts.Shape(1, 4))
+
 
 class StridesTests(unittest.TestCase):
     def test_contiguous_vector_matrix_and_higher_rank_strides(self):

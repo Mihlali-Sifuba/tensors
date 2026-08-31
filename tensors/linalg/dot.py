@@ -14,7 +14,6 @@ from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
 from ..shape import Shape
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape
 from ..utils.shape import coordinates_to_index, index_to_coordinates
 
 if TYPE_CHECKING:
@@ -55,8 +54,8 @@ def _matmul_metadata(
 
     a_vector = a.ndim == 1
     b_vector = b.ndim == 1
-    a_batch_shape = () if a_vector else a.shape[:-2]
-    b_batch_shape = () if b_vector else b.shape[:-2]
+    a_batch_shape = Shape() if a_vector else a.shape[:-2]
+    b_batch_shape = Shape() if b_vector else b.shape[:-2]
     a_rows = 1 if a_vector else a.shape[-2]
     a_columns = a.shape[-1]
     b_rows = b.shape[0] if b_vector else b.shape[-2]
@@ -67,7 +66,7 @@ def _matmul_metadata(
             f"Cannot multiply {a.shape} with {b.shape}: inner dimensions must match"
         )
 
-    batch_shape = broadcast_shape(a_batch_shape, b_batch_shape)
+    batch_shape = a_batch_shape.broadcast_with(b_batch_shape)
     if a_vector and b_vector:
         output_shape = ()
     elif a_vector:

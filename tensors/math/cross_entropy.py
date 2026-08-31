@@ -16,7 +16,7 @@ from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..shape import Shape
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape, broadcast_tensors
+from ..utils.broadcasting import broadcast_tensors
 from ..utils.shape import (
     coordinates_to_index,
     index_to_coordinates,
@@ -105,9 +105,8 @@ def _targets_for_logits(logits: Any, targets: Any, axis: int) -> Any:
         dense_target = False
         if target_tensor.dtype.kind == "floating":
             try:
-                target_shape = broadcast_shape(
-                    target_tensor.shape,
-                    logits_tensor.shape,
+                target_shape = target_tensor.shape.broadcast_with(
+                    logits_tensor.shape
                 )
             except ValueError:
                 target_shape = None
@@ -140,9 +139,8 @@ def _targets_for_logits(logits: Any, targets: Any, axis: int) -> Any:
             prepared = _one_hot_targets(logits_tensor, target_tensor, axis)
     else:
         try:
-            target_shape = broadcast_shape(
-                target_tensor.shape,
-                logits_tensor.shape,
+            target_shape = target_tensor.shape.broadcast_with(
+                logits_tensor.shape
             )
         except ValueError as exc:
             raise ValueError(

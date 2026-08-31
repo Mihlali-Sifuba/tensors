@@ -3,15 +3,19 @@
 from itertools import product
 from typing import List, Tuple, Union
 
+from ..shape import Shape
 from ..strides import Strides
 
 
 def slice_ranges_and_shape_from_key(
     key: Tuple[Union[int, slice], ...],
-    shape: Tuple[int, ...],
-) -> Tuple[List[range], Tuple[int, ...]]:
+    shape: Shape | Tuple[int, ...],
+) -> Tuple[List[range], Shape]:
     """Normalize a slice key into dimension ranges and its result shape."""
-    ndim = len(shape)
+    normalized_shape = (
+        shape if isinstance(shape, Shape) else Shape.from_iterable(shape)
+    )
+    ndim = len(normalized_shape)
     if len(key) > ndim:
         raise IndexError(f"Too many indices: {len(key)} for {ndim}D tensor")
 
@@ -21,12 +25,14 @@ def slice_ranges_and_shape_from_key(
         if isinstance(index, bool):
             raise TypeError("Boolean tensor indices are not supported")
         if isinstance(index, int):
-            normalized_index = index if index >= 0 else index + shape[dimension]
-            if not 0 <= normalized_index < shape[dimension]:
+            normalized_index = (
+                index if index >= 0 else index + normalized_shape[dimension]
+            )
+            if not 0 <= normalized_index < normalized_shape[dimension]:
                 raise IndexError("Index out of range")
             ranges.append(range(normalized_index, normalized_index + 1))
         elif isinstance(index, slice):
-            dimension_range = range(*index.indices(shape[dimension]))
+            dimension_range = range(*index.indices(normalized_shape[dimension]))
             ranges.append(dimension_range)
             new_shape.append(len(dimension_range))
         else:
@@ -34,11 +40,11 @@ def slice_ranges_and_shape_from_key(
 
     while len(ranges) < ndim:
         dimension = len(ranges)
-        dimension_range = range(shape[dimension])
+        dimension_range = range(normalized_shape[dimension])
         ranges.append(dimension_range)
-        new_shape.append(shape[dimension])
+        new_shape.append(normalized_shape[dimension])
 
-    return ranges, tuple(new_shape)
+    return ranges, Shape(*new_shape)
 
 
 def flat_indices_from_ranges(

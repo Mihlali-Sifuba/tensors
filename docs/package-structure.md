@@ -95,7 +95,7 @@ tensors/
 ├── casting.py             # storage conversion helpers
 ├── creation.py            # tensor-value constructors
 ├── py.typed               # marker for inline package typing
-├── utils/                 # internal shape and broadcasting helpers
+├── utils/                 # indexing, slicing, and Tensor broadcasting
 │   ├── broadcasting.py
 │   ├── indexing.py
 │   ├── lists.py
@@ -166,16 +166,22 @@ The folders have deliberately narrow responsibilities:
   points.
 - `storage` owns the internal Python, NumPy, and CUDA representations and their
   lazy conversion cache. Storage classes are not a second public tensor API.
-- `Shape` and `Strides` are root-level value objects because they are the
-  precise immutable types returned by `Tensor.shape` and `Tensor.strides`.
-  Ordinary construction derives them automatically; see
+- `Shape` owns logical dimensions, rank, size, tuple-like slicing of its
+  dimension values (for example, `Shape(2, 3, 4)[1:]`), and pure
+  broadcast-shape inference. `Strides` owns physical traversal metadata and
+  canonical contiguous-stride construction. Both are root-level immutable
+  value objects returned by `Tensor.shape` and `Tensor.strides`. Ordinary
+  construction derives them automatically; see
   [Tensor memory model](memory-model.md).
 - `creation` provides public constructors for mathematically defined tensor
   values, including zeros, ones, ranges, and identity matrices.
 - `ops` contains primitive differentiable operations such as arithmetic,
   powers, slicing, and casting.
-- `utils` contains internal shape, row-major indexing, and broadcasting helpers.
-  It is not re-exported from the root package.
+- `utils` combines metadata for row-major coordinate indexing, owns
+  Tensor/Python indexing and slicing semantics (for example,
+  `tensor[1:, :, 2]`), and materializes Tensor broadcasting. Pure
+  broadcast-shape inference lives on `Shape`, while stride construction lives
+  on `Strides`. The package is not re-exported from the root.
 - `linalg` contains linear-algebra operations such as dot products and matrix
   multiplication.
 - `math` contains all mathematical functions, including reductions and
