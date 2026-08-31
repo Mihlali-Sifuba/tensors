@@ -448,6 +448,7 @@ class Tensor:
         ranges, selection_shape = slice_ranges_and_shape_from_key(key, self.shape)
         physical_indices = flat_indices_from_ranges(
             ranges,
+            self.shape,
             self.strides,
             self.offset,
         )

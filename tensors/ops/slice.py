@@ -34,6 +34,7 @@ def _flat_indices(tensor: Tensor, key) -> List[int]:
     # logical positions rather than the source tensor's physical positions.
     return flat_indices_from_ranges(
         ranges,
+        tensor.shape,
         Strides.contiguous(tensor.shape),
     )
 

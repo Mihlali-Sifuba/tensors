@@ -5,6 +5,7 @@ from typing import List, Tuple, Union
 
 from ..shape import Shape
 from ..strides import Strides
+from .indexing import coordinates_to_storage_index
 
 
 def slice_ranges_and_shape_from_key(
@@ -49,14 +50,25 @@ def slice_ranges_and_shape_from_key(
 
 def flat_indices_from_ranges(
     ranges: List[range],
+    shape: Shape | Tuple[int, ...],
     strides: Tuple[int, ...] | Strides,
     offset: int = 0,
 ) -> List[int]:
     """Return physical storage indices selected by dimension ranges."""
+    normalized_shape = (
+        shape if isinstance(shape, Shape) else Shape.from_iterable(shape)
+    )
+    normalized_strides = (
+        strides
+        if isinstance(strides, Strides)
+        else Strides.from_iterable(strides)
+    )
     return [
-        offset + sum(
-            coordinate * stride
-            for coordinate, stride in zip(coordinates, strides)
+        coordinates_to_storage_index(
+            coordinates,
+            normalized_shape,
+            normalized_strides,
+            offset,
         )
         for coordinates in product(*ranges)
     ]

@@ -51,7 +51,7 @@ def calculate_fan_in_and_fan_out(shape: Shape) -> tuple[int, int]:
         raise ValueError(
             "fan_in and fan_out require all dimensions to be positive"
         )
-    receptive_field = math.prod(normalized[:-2])
+    receptive_field = normalized[:-2].size
     return (
         receptive_field * normalized[-2],
         receptive_field * normalized[-1],
