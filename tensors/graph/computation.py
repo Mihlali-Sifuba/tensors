@@ -497,7 +497,7 @@ class Computation:
                 "Fused elementwise kernel returned an unexpected output count"
             )
         for instruction, storage in zip(group.instructions, storages):
-            tensor = Tensor(
+            tensor = Tensor._from_owned_storage(
                 storage,
                 dtype=instruction.output_variable.dtype,
                 shape=output_shape,
@@ -792,7 +792,7 @@ class Computation:
             )
 
         for instruction, storage in zip(instructions, storages):
-            gradients[instruction.output_slot] = Tensor(
+            gradients[instruction.output_slot] = Tensor._from_owned_storage(
                 storage,
                 dtype=dtype,
                 shape=output_shape,
@@ -803,7 +803,7 @@ class Computation:
             variable = self._variables[slot]
             if not variable.requires_grad:
                 return
-            gradient = Tensor(storage, dtype=dtype, shape=output_shape)
+            gradient = Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
             if gradient.shape != variable.shape:
                 from ..ops._utils import sum_to_shape
 

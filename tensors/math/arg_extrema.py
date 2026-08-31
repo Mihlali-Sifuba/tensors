@@ -50,7 +50,7 @@ class _ArgExtremum:
             output_shape=output_shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=int64, shape=output_shape)
+            return Tensor._from_owned_storage(accelerated, dtype=int64, shape=output_shape)
         _, output_shape, groups = reduction_groups(
             value,
             axis,

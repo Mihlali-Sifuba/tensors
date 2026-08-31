@@ -42,7 +42,7 @@ def full(shape: Shape, fill_value: Scalar, dtype: DType = None) -> Tensor:
         dtype=resolved_dtype,
     )
     if accelerated is not None:
-        return Tensor(
+        return Tensor._from_owned_storage(
             accelerated,
             dtype=resolved_dtype,
             shape=normalized_shape,
@@ -92,7 +92,7 @@ def eye(
         dtype=resolved_dtype,
     )
     if accelerated is not None:
-        return Tensor(
+        return Tensor._from_owned_storage(
             accelerated,
             dtype=resolved_dtype,
             shape=(rows, columns),
@@ -139,7 +139,7 @@ def arange(
             dtype=resolved_dtype,
         )
         if accelerated is not None:
-            return Tensor(
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=resolved_dtype,
                 shape=(count,),
@@ -174,7 +174,7 @@ def arange(
                 dtype=resolved_dtype,
             )
             if accelerated is not None:
-                return Tensor(
+                return Tensor._from_owned_storage(
                     accelerated,
                     dtype=resolved_dtype,
                     shape=(count,),
@@ -217,7 +217,7 @@ def linspace(
         dtype=resolved_dtype,
     )
     if accelerated is not None:
-        return Tensor(
+        return Tensor._from_owned_storage(
             accelerated,
             dtype=resolved_dtype,
             shape=(count,),

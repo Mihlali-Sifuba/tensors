@@ -45,7 +45,7 @@ def _compare(
         output_shape=output_shape,
     )
     if accelerated is not None:
-        return Tensor(accelerated, dtype=uint8, shape=output_shape)
+        return Tensor._from_owned_storage(accelerated, dtype=uint8, shape=output_shape)
     expanded_left, expanded_right = broadcast_tensors(left_tensor, right_tensor)
     return Tensor(
         [

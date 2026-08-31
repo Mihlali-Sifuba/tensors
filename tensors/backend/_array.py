@@ -1832,7 +1832,9 @@ def slice_tensor(
     """Run a NumPy slicing kernel after caller-side key validation."""
     numpy = _numpy()
     try:
-        result = _view(value, numpy)[key]
+        # Provider slicing can return a view into the input Tensor. Backend
+        # results transferred into a new Tensor must own independent storage.
+        result = _view(value, numpy)[key].copy()
     except ValueError:
         return None
     return _storage(
@@ -1886,7 +1888,8 @@ def cast_tensor(value: Tensor, *, dtype: DataType) -> Storage | None:
         converter = numpy.frompyfunc(int, 1, 1)
         result = converter(source)
     else:
-        result = source.astype(numpy.float64, copy=False)
+        # Same-dtype casts would otherwise retain the source buffer.
+        result = source.astype(numpy.float64, copy=True)
     return _storage(
         result,
         dtype=dtype,
@@ -2005,7 +2008,12 @@ def transpose(
 ) -> Storage | None:
     """Permute tensor axes into canonical contiguous storage."""
     numpy = _numpy()
-    result = numpy.transpose(_view(value, numpy), axes=permutation)
+    # Transpose is a provider view operation, while the public Tensor result is
+    # materialized and independently owned.
+    result = numpy.transpose(
+        _view(value, numpy),
+        axes=permutation,
+    ).copy()
     return _storage(
         result,
         dtype=value.dtype,
@@ -2912,7 +2920,8 @@ def reduction_gradient(
         invalid="ignore",
     ):
         if operation == "sum":
-            result = numpy.broadcast_to(expanded, value.shape)
+            # `broadcast_to` returns a view of the upstream gradient.
+            result = numpy.broadcast_to(expanded, value.shape).copy()
         elif operation == "mean":
             if count == 0:
                 return None

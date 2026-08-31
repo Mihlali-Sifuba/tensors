@@ -95,7 +95,7 @@ class Concat:
             output_shape=tuple(output_shape),
         )
         if accelerated is not None:
-            return Tensor(
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=dtype,
                 shape=tuple(output_shape),

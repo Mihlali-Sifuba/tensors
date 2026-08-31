@@ -98,7 +98,7 @@ def _sum_impl(a: Tensor, axis: Axis = None,
         output_shape=output_shape,
     )
     if accelerated is not None:
-        return Tensor(accelerated, dtype=a.dtype, shape=output_shape)
+        return Tensor._from_owned_storage(accelerated, dtype=a.dtype, shape=output_shape)
     _, output_shape, groups = reduction_groups(
         a, axis, keepdims, scalar_as_vector=True
     )
@@ -144,7 +144,7 @@ class Sum:
             keepdims=keepdims,
         )
         if accelerated is not None:
-            return [Tensor(accelerated, dtype=grad.dtype, shape=a.shape)]
+            return [Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=a.shape)]
         _, _, groups = reduction_groups(
             a, axis, keepdims, scalar_as_vector=True
         )

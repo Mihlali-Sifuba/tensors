@@ -51,7 +51,7 @@ class _ElementwiseExtremum:
             output_shape=shape,
         )
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
         expanded_left, expanded_right = broadcast_tensors(left, right)
         values = []
         for left_value, right_value in zip(
@@ -135,7 +135,7 @@ class _ElementwiseExtremum:
             left_storage, right_storage = accelerated
             return [
                 sum_to_shape(
-                    Tensor(
+                    Tensor._from_owned_storage(
                         left_storage,
                         dtype=grad.dtype,
                         shape=grad.shape,
@@ -143,7 +143,7 @@ class _ElementwiseExtremum:
                     left.shape,
                 ),
                 sum_to_shape(
-                    Tensor(
+                    Tensor._from_owned_storage(
                         right_storage,
                         dtype=grad.dtype,
                         shape=grad.shape,

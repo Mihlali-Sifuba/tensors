@@ -94,7 +94,7 @@ class BinaryCrossEntropy:
             output_shape=output_shape,
         )
         if storage is not None:
-            return Tensor(storage, dtype=dtype, shape=output_shape)
+            return Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
 
         values = []
         for raw_prediction, raw_target in zip(prediction._data, target._data):
@@ -148,7 +148,7 @@ class BinaryCrossEntropy:
             expanded_shape = expanded_prediction.shape
             return [
                 sum_to_shape(
-                    Tensor(
+                    Tensor._from_owned_storage(
                         prediction_storage,
                         dtype=grad.dtype,
                         shape=expanded_shape,
@@ -156,7 +156,7 @@ class BinaryCrossEntropy:
                     prediction.shape,
                 ),
                 sum_to_shape(
-                    Tensor(
+                    Tensor._from_owned_storage(
                         target_storage,
                         dtype=grad.dtype,
                         shape=expanded_shape,

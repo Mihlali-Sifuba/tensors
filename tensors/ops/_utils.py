@@ -26,7 +26,7 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
 
     accelerated = execute_sum_to_shape(gradient, shape)
     if accelerated is not None:
-        return Tensor(accelerated, dtype=gradient.dtype, shape=shape)
+        return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
 
     padded_shape = (1,) * (gradient.ndim - len(shape)) + shape
     groups: list[list[int | float]] = [
@@ -76,7 +76,7 @@ def sum_products_to_shape(
 
     accelerated = execute_sum_products_to_shape(gradient, factor, shape)
     if accelerated is not None:
-        return Tensor(accelerated, dtype=gradient.dtype, shape=shape)
+        return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
 
     expanded_gradient, expanded_factor = broadcast_tensors(gradient, factor)
     if len(shape) > expanded_gradient.ndim:

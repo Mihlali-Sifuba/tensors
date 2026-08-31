@@ -211,22 +211,22 @@ class Adam(Optimizer):
             ) = record
             state = {
                 "step": step_count,
-                "m": Tensor(
+                "m": Tensor._from_owned_storage(
                     moment_storage,
                     dtype=gradient.dtype,
                     shape=gradient.shape,
                 ),
-                "v": Tensor(
+                "v": Tensor._from_owned_storage(
                     visible_storage,
                     dtype=gradient.dtype,
                     shape=gradient.shape,
                 ),
-                "v_scale": Tensor(
+                "v_scale": Tensor._from_owned_storage(
                     scale_storage,
                     dtype=gradient.dtype,
                     shape=gradient.shape,
                 ),
-                "v_scaled": Tensor(
+                "v_scaled": Tensor._from_owned_storage(
                     scaled_storage,
                     dtype=gradient.dtype,
                     shape=gradient.shape,
@@ -234,7 +234,7 @@ class Adam(Optimizer):
                 "beta1_product": beta1_product,
                 "beta2_product": beta2_product,
             }
-            value = Tensor(
+            value = Tensor._from_owned_storage(
                 parameter_storage,
                 dtype=parameter.dtype,
                 shape=parameter.shape,
@@ -337,22 +337,22 @@ class Adam(Optimizer):
                 ) = accelerated
                 accelerated_state: dict[str, Tensor | int | float] = {
                     "step": step_count,
-                    "m": Tensor(
+                    "m": Tensor._from_owned_storage(
                         moment_storage,
                         dtype=grad.dtype,
                         shape=grad.shape,
                     ),
-                    "v": Tensor(
+                    "v": Tensor._from_owned_storage(
                         visible_storage,
                         dtype=grad.dtype,
                         shape=grad.shape,
                     ),
-                    "v_scale": Tensor(
+                    "v_scale": Tensor._from_owned_storage(
                         scale_storage,
                         dtype=grad.dtype,
                         shape=grad.shape,
                     ),
-                    "v_scaled": Tensor(
+                    "v_scaled": Tensor._from_owned_storage(
                         scaled_storage,
                         dtype=grad.dtype,
                         shape=grad.shape,
@@ -360,7 +360,7 @@ class Adam(Optimizer):
                     "beta1_product": beta1_product,
                     "beta2_product": beta2_product,
                 }
-                new_parameter = Tensor(
+                new_parameter = Tensor._from_owned_storage(
                     parameter_storage,
                     dtype=param.dtype,
                     shape=param.shape,

@@ -74,7 +74,7 @@ class SliceScatter:
             output_shape=source_shape,
         )
         if accelerated is not None:
-            return Tensor(
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=grad.dtype,
                 shape=source_shape,

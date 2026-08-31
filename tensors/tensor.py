@@ -122,7 +122,10 @@ class Tensor:
                     f"storage dtype {data.dtype.name!r} does not match "
                     f"tensor dtype {self.dtype.name!r}"
                 )
-            self._set_storage(data)
+            # Public construction always establishes independent ownership.
+            # Internal producers that can transfer exclusive ownership use
+            # ``_from_owned_storage`` instead.
+            self._set_storage(data.copy())
             inferred_shape = (data.size,)
 
         elif isinstance(data, (int, float)):
@@ -164,6 +167,49 @@ class Tensor:
                 f"Data size {self._storage.size} does not match shape {self.shape} "
                 f"(expected {expected_element_count} elements)"
             )
+
+    @classmethod
+    def _from_owned_storage(
+        cls,
+        storage: Storage,
+        *,
+        dtype: str | _dtype.DataType | None = None,
+        shape: Shape | Iterable[int],
+    ) -> Tensor:
+        """Adopt exclusively owned internal Storage without copying.
+
+        This private constructor is reserved for freshly produced backend
+        results whose ownership is transferred to the returned Tensor. Public
+        ``Tensor(Storage)`` construction copies its input instead.
+        """
+        expected_dtype = (
+            _dtype.from_typecode(dtype)
+            if isinstance(dtype, str)
+            else dtype
+        )
+        if expected_dtype is not None and storage.dtype != expected_dtype:
+            raise TypeError(
+                f"storage dtype {storage.dtype.name!r} does not match "
+                f"tensor dtype {expected_dtype.name!r}"
+            )
+
+        tensor = cls.__new__(cls)
+        tensor._dtype = storage.dtype
+        tensor._set_storage(storage)
+        tensor._shape = (
+            shape if isinstance(shape, Shape) else Shape.from_iterable(shape)
+        )
+        tensor._strides = Strides.contiguous(tensor._shape)
+        tensor._offset = 0
+        tensor._version = 0
+
+        expected_element_count = tensor.shape.size
+        if storage.size != expected_element_count:
+            raise ValueError(
+                f"Data size {storage.size} does not match shape {tensor.shape} "
+                f"(expected {expected_element_count} elements)"
+            )
+        return tensor
 
     @classmethod
     def _from_metadata(
@@ -338,77 +384,63 @@ class Tensor:
         if not isinstance(key, (int, slice, tuple)):
             raise TypeError(f"Unsupported index type: {type(key)}")
 
-        keys = key if isinstance(key, tuple) else (key,)
-        _, output_shape = slice_ranges_and_shape_from_key(keys, self.shape)
         from .backend import execute_slice
 
-        accelerated = execute_slice(
-            self,
-            key,
-            output_shape=output_shape,
+        keys = key if isinstance(key, tuple) else (key,)
+        complete_integer_index = (
+            len(keys) == self.ndim
+            and all(
+                isinstance(index, int) and not isinstance(index, bool)
+                for index in keys
+            )
         )
-        if accelerated is not None:
-            if output_shape == ():
-                return Tensor(
+        if complete_integer_index:
+            integer_keys = tuple(
+                index for index in keys if isinstance(index, int)
+            )
+            storage_index = tensor_indices_to_storage_index(
+                integer_keys,
+                self.shape,
+                self.strides,
+                self.offset,
+            )
+            accelerated = execute_slice(self, key, output_shape=Shape())
+            if accelerated is not None:
+                return Tensor._from_owned_storage(
                     accelerated,
                     dtype=self.dtype,
-                    shape=output_shape,
+                    shape=Shape(),
                 ).item()
-            return Tensor(
+            return self._value_at_storage_index(storage_index)
+
+        ranges, output_shape = slice_ranges_and_shape_from_key(keys, self.shape)
+        accelerated = execute_slice(self, key, output_shape=output_shape)
+        if accelerated is not None:
+            return Tensor._from_owned_storage(
                 accelerated,
                 dtype=self.dtype,
                 shape=output_shape,
             )
+        return self._slice_from_ranges(ranges, output_shape)
 
-        if isinstance(key, (int, slice)):
-            if self.ndim != 1:
-                return self._slice_from_key((key,))
-            if isinstance(key, int):
-                idx = tensor_indices_to_storage_index(
-                    (key,),
-                    self.shape,
-                    self.strides,
-                    self.offset,
-                )
-                return self._value_at_storage_index(idx)
-            indices = range(*key.indices(self.shape[0]))
-            values = [self._data[i] for i in indices]
-            return Tensor(values, dtype=self.dtype, shape=(len(indices),))
-
-        # Tuple of indices/slices — N-dimensional
-        if isinstance(key, tuple):
-            if len(key) == self.ndim and all(isinstance(k, int) for k in key):
-                # All ints — return a scalar
-                idx = tensor_indices_to_storage_index(
-                    key,
-                    self.shape,
-                    self.strides,
-                    self.offset,
-                )
-                return self._value_at_storage_index(idx)
-
-            # Mixed ints and slices — return a sub-tensor
-            return self._slice_from_key(key)
-
-        raise TypeError(f"Unsupported index type: {type(key)}")
-
-    def _slice_from_key(
+    def _slice_from_ranges(
         self,
-        key: tuple[int | slice, ...],
+        ranges: list[range],
+        new_shape: Shape,
     ) -> Tensor:
-        """Return an N-dimensional slice selected by mixed ints and slices."""
-        ranges, new_shape = slice_ranges_and_shape_from_key(key, self.shape)
+        """Materialize a slice from normalized dimension ranges."""
         storage = self._storage_for("python")
         if not isinstance(storage, PythonStorage):
             raise TypeError("Python storage conversion returned an invalid buffer")
+        storage_indices = storage_indices_from_ranges(
+            ranges,
+            self.shape,
+            self.strides,
+            self.offset,
+        )
         result_data = self._create_storage(
-            storage.buffer[coordinates_to_storage_index(
-                coordinates,
-                self.shape,
-                self.strides,
-                self.offset,
-            )]
-            for coordinates in product(*ranges)
+            storage.buffer[storage_index]
+            for storage_index in storage_indices
         )
 
         return Tensor(result_data, dtype=self.dtype, shape=new_shape)
@@ -676,7 +708,11 @@ class Tensor:
         if self.is_contiguous:
             return self
         storage = self._logical_storage_for(self._storage.kind)
-        return Tensor(storage, dtype=self.dtype, shape=self.shape)
+        return Tensor._from_owned_storage(
+            storage,
+            dtype=self.dtype,
+            shape=self.shape,
+        )
 
     def astype(self, dtype: str | _dtype.DataType) -> Tensor:
         """Return a copy converted to a new dtype."""
@@ -692,7 +728,11 @@ class Tensor:
 
         accelerated = execute_cast(self, dtype=dtype)
         if accelerated is not None:
-            return Tensor(accelerated, dtype=dtype, shape=self.shape)
+            return Tensor._from_owned_storage(
+                accelerated,
+                dtype=dtype,
+                shape=self.shape,
+            )
 
         values = cast_values(
             self._data,

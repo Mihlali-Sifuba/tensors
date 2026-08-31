@@ -167,7 +167,7 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
         output_shape=output_shape,
     )
     if accelerated is not None:
-        return Tensor(accelerated, dtype=dtype, shape=output_shape)
+        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
 
     values = []
     for batch_index in range(Shape.from_iterable(batch_shape).size):
@@ -230,7 +230,7 @@ def _transpose_impl(
         output_shape=shape,
     )
     if accelerated is not None:
-        return Tensor(accelerated, dtype=tensor.dtype, shape=shape)
+        return Tensor._from_owned_storage(accelerated, dtype=tensor.dtype, shape=shape)
     inverse = [0] * tensor.ndim
     for output_axis, input_axis in enumerate(permutation):
         inverse[input_axis] = output_axis
@@ -280,8 +280,8 @@ class Dot:
         if accelerated is not None:
             a_storage, b_storage = accelerated
             return [
-                Tensor(a_storage, dtype=grad.dtype, shape=a.shape),
-                Tensor(b_storage, dtype=grad.dtype, shape=b.shape),
+                Tensor._from_owned_storage(a_storage, dtype=grad.dtype, shape=a.shape),
+                Tensor._from_owned_storage(b_storage, dtype=grad.dtype, shape=b.shape),
             ]
 
         a_terms: list[list[tuple[float, float]]] = [[] for _ in range(a.size)]

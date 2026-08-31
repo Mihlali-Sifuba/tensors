@@ -33,7 +33,7 @@ class SGD(Optimizer):
                 pending = tuple(
                     (
                         parameter,
-                        Tensor(
+                        Tensor._from_owned_storage(
                             storage,
                             dtype=parameter.dtype,
                             shape=parameter.shape,
@@ -55,7 +55,7 @@ class SGD(Optimizer):
             if storage is None:
                 value = parameter.data - self.learning_rate * gradient
             else:
-                value = Tensor(
+                value = Tensor._from_owned_storage(
                     storage,
                     dtype=parameter.dtype,
                     shape=parameter.shape,
