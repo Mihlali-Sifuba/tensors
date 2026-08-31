@@ -43,7 +43,10 @@ class LogicalCoordinateConversionTests(unittest.TestCase):
     def test_linear_index_outside_shape_is_rejected(self):
         for index in (-1, 6):
             with self.subTest(index=index):
-                with self.assertRaisesRegex(IndexError, "out of range"):
+                with self.assertRaisesRegex(
+                    IndexError,
+                    "Logical linear index .* out of range",
+                ):
                     linear_index_to_coordinates(index, (2, 3))
 
     def test_coordinate_rank_and_bounds_are_validated(self):

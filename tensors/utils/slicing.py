@@ -48,7 +48,7 @@ def slice_ranges_and_shape_from_key(
     return ranges, Shape(*new_shape)
 
 
-def flat_indices_from_ranges(
+def storage_indices_from_ranges(
     ranges: List[range],
     shape: Shape | Tuple[int, ...],
     strides: Tuple[int, ...] | Strides,
@@ -74,4 +74,4 @@ def flat_indices_from_ranges(
     ]
 
 
-__all__ = ["flat_indices_from_ranges", "slice_ranges_and_shape_from_key"]
+__all__ = ["slice_ranges_and_shape_from_key", "storage_indices_from_ranges"]

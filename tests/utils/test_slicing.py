@@ -2,8 +2,8 @@ import unittest
 
 import tensors as ts
 from tensors.utils.slicing import (
-    flat_indices_from_ranges,
     slice_ranges_and_shape_from_key,
+    storage_indices_from_ranges,
 )
 
 
@@ -68,8 +68,8 @@ class SlicingUtilityTests(unittest.TestCase):
         with self.assertRaisesRegex(IndexError, "out of range"):
             slice_ranges_and_shape_from_key((-3,), (2,))
 
-    def test_flat_indices_follow_row_major_selection_order(self):
-        result = flat_indices_from_ranges(
+    def test_storage_indices_follow_row_major_selection_order(self):
+        result = storage_indices_from_ranges(
             [range(0, 2), range(1, 3)],
             (2, 3),
             (3, 1),
@@ -77,8 +77,8 @@ class SlicingUtilityTests(unittest.TestCase):
 
         self.assertEqual(result, [1, 2, 4, 5])
 
-    def test_flat_indices_preserve_reversed_range_order(self):
-        result = flat_indices_from_ranges(
+    def test_storage_indices_preserve_reversed_range_order(self):
+        result = storage_indices_from_ranges(
             [range(2, -1, -1)],
             (3,),
             (1,),
@@ -86,8 +86,8 @@ class SlicingUtilityTests(unittest.TestCase):
 
         self.assertEqual(result, [2, 1, 0])
 
-    def test_flat_indices_support_non_contiguous_strides_and_offset(self):
-        result = flat_indices_from_ranges(
+    def test_storage_indices_support_non_contiguous_strides_and_offset(self):
+        result = storage_indices_from_ranges(
             [range(3), range(2)],
             (3, 2),
             (1, 3),
@@ -96,8 +96,8 @@ class SlicingUtilityTests(unittest.TestCase):
 
         self.assertEqual(result, [1, 4, 2, 5, 3, 6])
 
-    def test_flat_indices_support_negative_strides(self):
-        result = flat_indices_from_ranges(
+    def test_storage_indices_support_negative_strides(self):
+        result = storage_indices_from_ranges(
             [range(3)],
             (3,),
             (-1,),
@@ -106,9 +106,9 @@ class SlicingUtilityTests(unittest.TestCase):
 
         self.assertEqual(result, [2, 1, 0])
 
-    def test_flat_indices_are_empty_when_any_range_is_empty(self):
+    def test_storage_indices_are_empty_when_any_range_is_empty(self):
         self.assertEqual(
-            flat_indices_from_ranges(
+            storage_indices_from_ranges(
                 [range(2), range(0)],
                 (2, 0),
                 (1, 1),
