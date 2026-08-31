@@ -134,10 +134,10 @@ class ProductSumToShape:
         *inputs: Tensor,
         **kwargs: object,
     ) -> list[Tensor]:
-        from ..utils.broadcasting import broadcast_shape, broadcast_to
+        from ..utils.broadcasting import broadcast_to
 
         left, right = inputs
-        common_shape = broadcast_shape(left.shape, right.shape)
+        common_shape = left.shape.broadcast_with(right.shape)
         expanded_grad = broadcast_to(grad, common_shape)
         return [
             sum_products_to_shape(expanded_grad, right, left.shape),
@@ -146,12 +146,10 @@ class ProductSumToShape:
 
     @staticmethod
     def backward_graph(grad, *inputs, **kwargs: object):
-        from ..utils.broadcasting import broadcast_shape
-
         left, right = inputs
-        common_shape = broadcast_shape(left.shape, right.shape)
+        common_shape = left.shape.broadcast_with(right.shape)
         ones = Tensor(
-            [1.0] * Shape.from_iterable(common_shape).size,
+            [1.0] * common_shape.size,
             dtype=grad.dtype,
             shape=common_shape,
         )
@@ -268,10 +266,9 @@ class MaskedValue:
 
 def masked_value_graph(value, mask: Tensor):
     """Select graph values using a constant zero-one mask."""
-    from ..utils.broadcasting import broadcast_shape
     from ..variable import Variable
 
-    if broadcast_shape(value.shape, mask.shape) != mask.shape:
+    if value.shape.broadcast_with(mask.shape) != mask.shape:
         raise ValueError(
             f"Value shape {value.shape} cannot broadcast to mask shape "
             f"{mask.shape}"

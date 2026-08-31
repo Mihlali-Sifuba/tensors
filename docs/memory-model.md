@@ -50,6 +50,14 @@ shape.rank       # 3
 shape.size       # 24
 shape[0]         # 2
 tuple(shape)     # (2, 3, 4)
+
+sliced = shape[1:]
+type(sliced) is ts.Shape  # True
+sliced == (3, 4)          # True
+
+broadcast = shape.broadcast_with((1, 3, 1))
+type(broadcast) is ts.Shape  # True
+broadcast == (2, 3, 4)       # True
 ```
 
 Dimensions are non-negative integers. A scalar uses `Shape()`, has rank zero,
@@ -57,8 +65,17 @@ and contains one logical value. Zero-sized dimensions are valid; for example,
 `Shape(2, 0, 4)` has size zero.
 
 `Shape` is exposed at the root because it is the precise public type returned
-by `tensor.shape`. It remains interoperable with tuples, so existing equality,
-iteration, indexing, slicing, and concatenation behavior is preserved.
+by `tensor.shape`. It remains interoperable with tuples: equality and iteration
+retain normal tuple behavior, integer indexing returns an `int`, and slicing
+of its logical dimensions preserves the `Shape` type. Tuple concatenation still
+follows tuple semantics and returns a plain tuple. This tuple-like
+`Shape(2, 3, 4)[1:]` operation is distinct from Tensor/Python indexing such as
+`tensor[1:, :, 2]`, which belongs to the slicing utilities.
+
+Pure broadcast compatibility belongs to `Shape`.
+`shape.broadcast_with(other)` is the authoritative `Shape × Shape → Shape`
+operation. It accepts another `Shape` or an iterable of dimensions, returns a
+new `Shape`, and does not mutate either input.
 
 ## Strides and offset
 
@@ -131,6 +148,26 @@ boundary, Tensor metadata is applied and a non-compact layout is gathered in
 the same backend. Reference kernels consume logical row-major values. Ordinary
 public tensors already satisfy the compact-storage invariant, so current
 backend behavior and transfer costs are unchanged.
+
+## Responsibility boundaries
+
+- `Shape` owns logical dimensions, including rank, size, tuple-like slicing of
+  its dimension values, and pure broadcast-shape inference.
+- `Strides` owns physical movement metadata and canonical contiguous-stride
+  construction.
+- `offset` identifies the logical tensor's origin within storage.
+- Indexing utilities combine coordinates, `Shape`, `Strides`, and `offset` to
+  map logical positions to storage positions.
+- Slicing utilities own Tensor/Python indexing and slicing semantics, such as
+  `tensor[1:, :, 2]`, and return `Shape` metadata for the resulting logical
+  dimensions.
+- Broadcasting utilities own tensor/value expansion and delegate pure
+  shape compatibility to `Shape.broadcast_with`.
+
+Coordinate conversion intentionally remains outside `Shape` and `Strides`
+because it combines both metadata objects. Tensor slicing and broadcasting
+remain materializing operations; this responsibility cleanup does not
+introduce views or aliasing.
 
 ## Ownership and current limits
 

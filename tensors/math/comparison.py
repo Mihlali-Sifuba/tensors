@@ -9,7 +9,7 @@ from .._typing import TensorLike
 from ..backend import ComparisonOperation, execute_comparison
 from ..dtype import result_dtype, uint8
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape, broadcast_tensors
+from ..utils.broadcasting import broadcast_tensors
 
 
 def _tensor(value: Any, *, reference_dtype=None) -> Tensor:
@@ -37,7 +37,7 @@ def _compare(
     right_tensor = _tensor(right, reference_dtype=left_tensor.dtype)
     if isinstance(left, (int, float)):
         left_tensor = _tensor(left, reference_dtype=right_tensor.dtype)
-    output_shape = broadcast_shape(left_tensor.shape, right_tensor.shape)
+    output_shape = left_tensor.shape.broadcast_with(right_tensor.shape)
     accelerated = execute_comparison(
         operation,
         left_tensor,

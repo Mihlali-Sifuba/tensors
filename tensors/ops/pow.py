@@ -13,7 +13,7 @@ from ..backend import (
 from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import float64, result_dtype
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape, broadcast_to, broadcast_tensors
+from ..utils.broadcasting import broadcast_to, broadcast_tensors
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -193,7 +193,7 @@ class Pow:
             raise TypeError(f"Unsupported exponent type: {type(exponent)}")
         dtype = _power_dtype(base, exponent)
         output_shape = (
-            broadcast_shape(base.shape, exponent.shape)
+            base.shape.broadcast_with(exponent.shape)
             if isinstance(exponent, Tensor)
             else base.shape
         )
@@ -520,7 +520,7 @@ def _expanded_power_inputs(
     base: Tensor,
     exponent: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor]:
-    shape = broadcast_shape(broadcast_shape(grad.shape, base.shape), exponent.shape)
+    shape = grad.shape.broadcast_with(base.shape).broadcast_with(exponent.shape)
     return (
         broadcast_to(grad, shape),
         broadcast_to(base, shape),

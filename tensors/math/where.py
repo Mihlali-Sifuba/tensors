@@ -9,7 +9,7 @@ from ..backend import execute_where, execute_where_gradient
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_shape, broadcast_to
+from ..utils.broadcasting import broadcast_to
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -35,9 +35,8 @@ class Where:
 
     @staticmethod
     def forward(condition: Tensor, left: Tensor, right: Tensor) -> Tensor:
-        shape = broadcast_shape(
-            broadcast_shape(condition.shape, left.shape),
-            right.shape,
+        shape = condition.shape.broadcast_with(left.shape).broadcast_with(
+            right.shape
         )
         dtype = result_dtype(left.dtype, right)
         accelerated = execute_where(

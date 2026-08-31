@@ -1,5 +1,6 @@
 import unittest
 
+import tensors as ts
 from tensors.utils.slicing import (
     flat_indices_from_ranges,
     slice_ranges_and_shape_from_key,
@@ -14,13 +15,21 @@ class SlicingUtilityTests(unittest.TestCase):
         )
 
         self.assertEqual([list(values) for values in ranges], [[1], [0, 2], [0, 1]])
+        self.assertIsInstance(result_shape, ts.Shape)
         self.assertEqual(result_shape, (2, 2))
 
     def test_integer_dimensions_are_collapsed_from_the_output_shape(self):
         ranges, result_shape = slice_ranges_and_shape_from_key((1, 2), (3, 4))
 
         self.assertEqual([list(values) for values in ranges], [[1], [2]])
+        self.assertIsInstance(result_shape, ts.Shape)
         self.assertEqual(result_shape, ())
+
+    def test_tuple_shape_is_validated_as_shape_metadata(self):
+        with self.assertRaisesRegex(TypeError, "dimensions must be integers"):
+            slice_ranges_and_shape_from_key((slice(None),), (True,))
+        with self.assertRaisesRegex(ValueError, "non-negative integers"):
+            slice_ranges_and_shape_from_key((slice(None),), (-1,))
 
     def test_negative_integer_index_is_normalized(self):
         ranges, result_shape = slice_ranges_and_shape_from_key((-1,), (3, 2))
