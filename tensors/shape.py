@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import SupportsIndex, overload
 
 
 class Shape(tuple[int, ...]):
@@ -38,6 +39,18 @@ class Shape(tuple[int, ...]):
                 "shape must be an iterable of non-negative integers"
             ) from exc
         return cls(*normalized)
+
+    @overload
+    def __getitem__(self, key: SupportsIndex) -> int: ...
+
+    @overload
+    def __getitem__(self, key: slice) -> Shape: ...
+
+    def __getitem__(self, key: SupportsIndex | slice) -> int | Shape:
+        """Return one dimension or a Shape containing a dimension slice."""
+        if isinstance(key, slice):
+            return Shape.from_iterable(tuple.__getitem__(self, key))
+        return tuple.__getitem__(self, key)
 
     @property
     def rank(self) -> int:
