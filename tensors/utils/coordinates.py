@@ -4,7 +4,6 @@ from typing import Tuple
 
 from ..shape import Shape
 from ..strides import Strides
-from .indexing import coordinates_to_storage_index
 
 
 def linear_index_to_coordinates(
@@ -36,10 +35,27 @@ def coordinates_to_linear_index(
 ) -> int:
     """Convert valid coordinates to a logical row-major linear index."""
     normalized_shape = Shape.from_iterable(shape)
-    return coordinates_to_storage_index(
-        coordinates,
-        normalized_shape,
-        Strides.contiguous(normalized_shape),
+    if len(coordinates) != normalized_shape.rank:
+        raise ValueError(
+            f"Coordinate rank {len(coordinates)} does not match "
+            f"shape rank {normalized_shape.rank}"
+        )
+
+    for coordinate, dimension in zip(coordinates, normalized_shape):
+        if isinstance(coordinate, bool) or not isinstance(coordinate, int):
+            raise TypeError("coordinates must contain only integers")
+        if not 0 <= coordinate < dimension:
+            raise IndexError(
+                f"Coordinate {coordinates} is out of range for shape "
+                f"{normalized_shape}"
+            )
+
+    return sum(
+        coordinate * stride
+        for coordinate, stride in zip(
+            coordinates,
+            Strides.contiguous(normalized_shape),
+        )
     )
 
 
