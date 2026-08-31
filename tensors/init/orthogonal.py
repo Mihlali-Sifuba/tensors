@@ -118,7 +118,7 @@ class Orthogonal(Initializer):
                 "orthogonal initialization requires positive dimensions"
             )
         rows = normalized_shape[0]
-        columns = math.prod(normalized_shape[1:])
+        columns = normalized_shape[1:].size
         if get_backend() == "python":
             storage = _python_orthogonal(
                 rows, columns, self.dtype, float(self.gain)
