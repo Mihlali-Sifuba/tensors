@@ -230,7 +230,7 @@ class Tensor:
         }
 
     def _storage_for(self, kind: StorageKind) -> Storage:
-        """Return a cached native representation, converting only once."""
+        """Return the backend-native physical Storage representation."""
         cached = self._storage_cache.get(kind)
         if cached is not None:
             return cached
@@ -287,7 +287,7 @@ class Tensor:
         return CudaStorage(selected, self.dtype)
 
     def _mutable_data(self) -> array:
-        """Return authoritative host storage for an in-place mutation."""
+        """Return the mutable authoritative physical host Storage buffer."""
         storage = self._storage_for("python")
         if not isinstance(storage, PythonStorage):
             raise TypeError("Python storage conversion returned an invalid buffer")
