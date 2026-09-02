@@ -2,19 +2,51 @@
 
 from __future__ import annotations
 
+from functools import cache
 from typing import TYPE_CHECKING, Any
+from weakref import ReferenceType, ref
 
-from ._weak_registry import WeakRegistry
 from .protocols import Operation
 
 if TYPE_CHECKING:
     from .edge import Edge
 
 
+@cache
+def operation_methods(op_cls: type[Operation]) -> tuple[Any, Any, Any, Any]:
+    """Validate and resolve an operation protocol once per operation class."""
+    forward = getattr(op_cls, "forward", None)
+    backward = getattr(op_cls, "backward", None)
+    if not callable(forward) or not callable(backward):
+        raise TypeError(
+            "op_cls must provide callable forward() and backward() methods"
+        )
+    return (
+        forward,
+        getattr(op_cls, "forward_reverse", None),
+        backward,
+        getattr(op_cls, "backward_graph", None),
+    )
+
+
 class Node:
     """A leaf value or operation in a computational graph."""
 
     _next_id = 0
+
+    __slots__ = (
+        "id",
+        "label",
+        "output_var",
+        "op_cls",
+        "_scalar_operand",
+        "args",
+        "_in_edges",
+        "_out_edge_references",
+        "_input_states",
+        "_output_state",
+        "__weakref__",
+    )
 
     def __init__(
         self,
@@ -27,13 +59,8 @@ class Node:
         self.id = Node._next_id
         Node._next_id += 1
 
-        if op_cls is not None and (
-            not callable(getattr(op_cls, "forward", None))
-            or not callable(getattr(op_cls, "backward", None))
-        ):
-            raise TypeError(
-                "op_cls must provide callable forward() and backward() methods"
-            )
+        if op_cls is not None:
+            operation_methods(op_cls)
 
         self.label = label
         self.output_var = output_var
@@ -44,12 +71,16 @@ class Node:
         # Incoming edges are owned strongly because an output must retain all
         # of its dependencies. Outgoing edges are weak so a persistent leaf
         # (for example, a model parameter) does not retain every old result.
-        self._out_edge_registry: WeakRegistry[Edge] = WeakRegistry()
+        self._out_edge_references: list[ReferenceType[Edge]] = []
         self._input_states: tuple[Any, ...] = ()
         self._output_state: Any = None
 
     def capture_states(self) -> None:
         """Remember the eager input and output states of this operation."""
+        if self.output_var is None or not self.output_var.requires_grad:
+            self._input_states = ()
+            self._output_state = None
+            return
         self._input_states = tuple(
             (
                 edge.source.output_var._mutation_state()
@@ -88,18 +119,25 @@ class Node:
 
     def _add_out_edge(self, edge: Edge) -> None:
         """Register an outgoing edge without owning its target computation."""
-        self._out_edge_registry.add(edge)
+        self._out_edge_references.append(ref(edge))
 
     def _replace_out_edges(self, edges: list[Edge] | tuple[Edge, ...]) -> None:
         """Restore the live outgoing edges used by an isolated trace."""
-        self._out_edge_registry.clear()
-        for edge in edges:
-            self._out_edge_registry.add(edge)
+        self._out_edge_references = [ref(edge) for edge in edges]
 
     @property
     def _out_edges(self) -> list[Edge]:
         """Return live outgoing edges while pruning collected references."""
-        return self._out_edge_registry.values()
+        live = []
+        references = []
+        for reference in self._out_edge_references:
+            edge = reference()
+            if edge is not None:
+                live.append(edge)
+                references.append(reference)
+        if len(references) != len(self._out_edge_references):
+            self._out_edge_references = references
+        return live
 
     @property
     def inputs(self) -> list[Node]:
@@ -121,4 +159,4 @@ class Node:
         return isinstance(other, Node) and self.id == other.id
 
 
-__all__ = ["Node"]
+__all__ = ["Node", "operation_methods"]

@@ -77,6 +77,27 @@ class NestedGraphTests(unittest.TestCase):
         self.assertIs(parent.computation.output, second)
         self.assertIs(child.computation.output, second.node.inputs[0].output_var)
 
+    def test_nested_child_computation_stops_at_its_explicit_input(self):
+        @ts.Graph
+        def child(x):
+            return x * 2.0 + 1.0
+
+        @ts.Graph
+        def parent(x):
+            upstream = x - 3.0
+            return child(upstream)
+
+        parent(ts.Tensor([5.0]))
+
+        self.assertEqual(
+            [node.label for node in child.nodes],
+            ["sub", "mul", "add"],
+        )
+        self.assertEqual(
+            [node.label for node in parent.nodes],
+            ["var", "sub", "mul", "add"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

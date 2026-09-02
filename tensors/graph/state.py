@@ -21,11 +21,12 @@ class GraphState:
     ``GraphState`` remains active.
     """
 
-    __slots__ = ("_nodes", "_edges")
+    __slots__ = ("_nodes", "_edges", "_record_registries")
 
-    def __init__(self) -> None:
+    def __init__(self, *, record_registries: bool = True) -> None:
         self._nodes: WeakRegistry[Node] = WeakRegistry()
         self._edges: WeakRegistry[Edge] = WeakRegistry()
+        self._record_registries = record_registries
 
     @property
     def nodes(self) -> list[Node]:
@@ -52,7 +53,8 @@ class GraphState:
             _scalar_operand=_scalar_operand,
             **kwargs,
         )
-        self._nodes.add(node)
+        if self._record_registries:
+            self._nodes.add(node)
         return node
 
     def add_edge(
@@ -61,12 +63,14 @@ class GraphState:
         target: Node,
         label: str | None = None,
     ) -> Edge:
-        if source not in self._nodes:
-            self._nodes.add(source)
-        if target not in self._nodes:
-            self._nodes.add(target)
+        if self._record_registries:
+            if source not in self._nodes:
+                self._nodes.add(source)
+            if target not in self._nodes:
+                self._nodes.add(target)
         edge = Edge(source, target, label=label)
-        self._edges.add(edge)
+        if self._record_registries:
+            self._edges.add(edge)
         return edge
 
     def clear(self) -> None:
@@ -85,7 +89,7 @@ class TraceScope:
         depth = getattr(_local, "trace_depth", 0)
         self.outermost = depth == 0
         if self.outermost:
-            reset_graph_state()
+            reset_graph_state(record_registries=False)
         _local.trace_depth = depth + 1
         self._closed = False
 
@@ -95,6 +99,8 @@ class TraceScope:
             return
         depth = getattr(_local, "trace_depth", 0)
         _local.trace_depth = max(depth - 1, 0)
+        if self.outermost:
+            _local.graph = GraphState()
         self._closed = True
 
 
@@ -105,9 +111,9 @@ def get_graph_state() -> GraphState:
     return _local.graph
 
 
-def reset_graph_state() -> None:
+def reset_graph_state(*, record_registries: bool = True) -> None:
     """Replace the current thread's eager graph state."""
-    _local.graph = GraphState()
+    _local.graph = GraphState(record_registries=record_registries)
 
 
 @contextmanager

@@ -10,13 +10,13 @@ from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorLike
 from ..tensor import Tensor
-from .node import Node
+from .node import Node, operation_methods
 
 if TYPE_CHECKING:
     from ..variable import Variable
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _ForwardInstruction:
     """One pre-resolved operation in a computation replay plan."""
 
@@ -35,7 +35,7 @@ class _ForwardInstruction:
     reverse: bool
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _ForwardGroup:
     """One instruction or a CUDA-fusible elementwise chain."""
 
@@ -46,7 +46,7 @@ class _ForwardGroup:
     fused_input_slots: tuple[int, ...] = ()
 
 
-@dataclass
+@dataclass(slots=True)
 class _ExecutionWorkspace:
     """Thread-local reusable slot buffers for forward and backward execution."""
 
@@ -59,28 +59,124 @@ class Computation:
     """A concrete computation that owns its forward and backward passes."""
 
     def __init__(self, output: Variable) -> None:
-        if getattr(output, "node", None) is None:
-            raise TypeError("Computation output must have a graph node")
+        outputs = self._validate_outputs((output,))
+        nodes, node_masks, boundary_nodes = self._dependency_plan(outputs, ())
+        self._initialize_plan(
+            outputs[0],
+            nodes,
+            node_masks,
+            boundary_nodes,
+            1,
+        )
+
+    @classmethod
+    def from_outputs(
+        cls,
+        outputs: Iterable[Variable],
+        *,
+        boundaries: Iterable[Variable] = (),
+    ) -> tuple[Computation, ...]:
+        """Build output views over one shared multi-root execution plan."""
+        output_tuple = cls._validate_outputs(tuple(outputs))
+        boundary_tuple = tuple(boundaries)
+        nodes, node_masks, boundary_nodes = cls._dependency_plan(
+            output_tuple,
+            boundary_tuple,
+        )
+
+        first = cls.__new__(cls)
+        first._initialize_plan(
+            output_tuple[0],
+            nodes,
+            node_masks,
+            boundary_nodes,
+            1,
+        )
+        computations = [first]
+        for index, output in enumerate(output_tuple[1:], 1):
+            computation = cls.__new__(cls)
+            computation._initialize_shared_view(output, first, 1 << index)
+            computations.append(computation)
+        return tuple(computations)
+
+    @staticmethod
+    def _validate_outputs(outputs: tuple[Variable, ...]) -> tuple[Variable, ...]:
+        if not outputs:
+            raise ValueError("Computation requires at least one output")
+        for output in outputs:
+            if getattr(output, "node", None) is None:
+                raise TypeError("Computation output must have a graph node")
+        return outputs
+
+    def _initialize_plan(
+        self,
+        output: Variable,
+        nodes: tuple[Node, ...],
+        node_masks: tuple[int, ...],
+        boundary_nodes: frozenset[Node],
+        output_bit: int,
+    ) -> None:
+        """Initialize the owner of a new shared execution plan."""
         self.output = output
-        self._nodes = self._dependency_order(output.node)
+        self._all_nodes = nodes
+        self._node_masks = node_masks
+        self._boundary_nodes = boundary_nodes
+        self._output_bit = output_bit
+        self._nodes = tuple(
+            node
+            for node, mask in zip(nodes, node_masks)
+            if mask & output_bit
+        )
         self._compile_execution_plan()
+        self._workspace_state = threading.local()
+        self._released = False
+
+    def _initialize_shared_view(
+        self,
+        output: Variable,
+        owner: Computation,
+        output_bit: int,
+    ) -> None:
+        """Initialize another output view without rebuilding the shared plan."""
+        self.output = output
+        self._all_nodes = owner._all_nodes
+        self._node_masks = owner._node_masks
+        self._boundary_nodes = owner._boundary_nodes
+        self._output_bit = output_bit
+        self._nodes = tuple(
+            node
+            for node, mask in zip(self._all_nodes, self._node_masks)
+            if mask & output_bit
+        )
+        self._variables = owner._variables
+        self._variable_slots = owner._variable_slots
+        self._leaf_slots = owner._leaf_slots
+        self._forward_instructions = owner._forward_instructions
+        self._forward_plan = owner._forward_plan
+        self._backward_plan = owner._backward_plan
+        self._output_slot = self._variable_slots[output]
         self._workspace_state = threading.local()
         self._released = False
 
     def _compile_execution_plan(self) -> None:
         """Resolve graph edges and operation methods once at construction."""
-        variables = tuple(node.output_var for node in self._nodes)
+        variables = tuple(node.output_var for node in self._all_nodes)
         slots = {variable: index for index, variable in enumerate(variables)}
         instructions: list[_ForwardInstruction] = []
         leaf_slots: list[tuple[int, Any]] = []
-        for node in self._nodes:
+        resolved_operations: dict[type[Any], tuple[Any, Any, Any, Any]] = {}
+        for node in self._all_nodes:
             output = node.output_var
             output_slot = slots[output]
-            if node.op_cls is None:
+            if node.op_cls is None or node in self._boundary_nodes:
                 leaf_slots.append((output_slot, output))
                 continue
             inputs = tuple(edge.source.output_var for edge in node._in_edges)
-            reverse_forward = getattr(node.op_cls, "forward_reverse", None)
+            methods = resolved_operations.get(node.op_cls)
+            if methods is None:
+                methods = operation_methods(node.op_cls)
+                resolved_operations[node.op_cls] = methods
+            forward, reverse_forward, backward, backward_graph = methods
             instructions.append(
                 _ForwardInstruction(
                     node=node,
@@ -88,14 +184,10 @@ class Computation:
                     output_variable=output,
                     input_slots=tuple(slots[value] for value in inputs),
                     input_variables=inputs,
-                    forward=node.op_cls.forward,
+                    forward=forward,
                     reverse_forward=reverse_forward,
-                    backward=node.op_cls.backward,
-                    backward_graph=getattr(
-                        node.op_cls,
-                        "backward_graph",
-                        None,
-                    ),
+                    backward=backward,
+                    backward_graph=backward_graph,
                     arguments=node.args,
                     scalar_operand=node._scalar_operand,
                     scalar=node.args.get("scalar"),
@@ -104,6 +196,7 @@ class Computation:
             )
 
         self._variables = variables
+        self._variable_slots = slots
         self._leaf_slots = tuple(leaf_slots)
         self._forward_instructions = tuple(instructions)
         consumer_counts = [0] * len(variables)
@@ -360,25 +453,54 @@ class Computation:
             self._workspace_state.workspace = workspace
         return workspace
 
-    @staticmethod
-    def _dependency_order(output_node: Node) -> tuple[Node, ...]:
-        """Calculate and cache the dependency-first traversal for an output."""
+    @classmethod
+    def _dependency_plan(
+        cls,
+        outputs: tuple[Variable, ...],
+        boundaries: tuple[Variable, ...],
+    ) -> tuple[tuple[Node, ...], tuple[int, ...], frozenset[Node]]:
+        """Return one traversal and per-output reachability masks."""
+        boundary_nodes = frozenset(
+            variable.node
+            for variable in boundaries
+            if getattr(variable, "node", None) is not None
+        )
         order: list[Node] = []
         visited: set[Node] = set()
-        stack = [(output_node, False)]
-        while stack:
-            node, expanded = stack.pop()
-            if expanded:
-                order.append(node)
+        for output in outputs:
+            stack = [(output.node, False)]
+            while stack:
+                node, expanded = stack.pop()
+                if expanded:
+                    order.append(node)
+                    continue
+                if node in visited:
+                    continue
+                visited.add(node)
+                stack.append((node, True))
+                if node in boundary_nodes:
+                    continue
+                for edge in reversed(node._in_edges):
+                    if edge.source not in visited:
+                        stack.append((edge.source, False))
+
+        masks = {node: 0 for node in order}
+        for index, output in enumerate(outputs):
+            masks[output.node] |= 1 << index
+        for node in reversed(order):
+            mask = masks[node]
+            if not mask or node in boundary_nodes:
                 continue
-            if node in visited:
-                continue
-            visited.add(node)
-            stack.append((node, True))
-            for edge in reversed(node._in_edges):
-                if edge.source not in visited:
-                    stack.append((edge.source, False))
-        return tuple(order)
+            for edge in node._in_edges:
+                masks[edge.source] |= mask
+        return tuple(order), tuple(masks[node] for node in order), boundary_nodes
+
+    @classmethod
+    def _dependency_order(cls, output_node: Node) -> tuple[Node, ...]:
+        """Calculate and cache the dependency-first traversal for an output."""
+        output = output_node.output_var
+        nodes, _, _ = cls._dependency_plan((output,), ())
+        return nodes
 
     def _require_active(self) -> None:
         """Reject work after this object has released its graph references."""
@@ -401,8 +523,12 @@ class Computation:
         if self._released:
             return
         self.output = None
+        self._all_nodes = ()
+        self._node_masks = ()
+        self._boundary_nodes = frozenset()
         self._nodes = ()
         self._variables = ()
+        self._variable_slots = {}
         self._leaf_slots = ()
         self._forward_instructions = ()
         self._forward_plan = ()
@@ -511,7 +637,7 @@ class Computation:
         """Reject a backward pass whose recorded forward values changed."""
         self._require_active()
         for node in self._nodes:
-            if node.op_cls is None:
+            if node.op_cls is None or node._output_state is None:
                 continue
             if node.output_changed():
                 operation = node.label or getattr(
