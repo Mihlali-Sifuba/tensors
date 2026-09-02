@@ -15,15 +15,28 @@ def _optimizer_case(
     optimizer_type: Callable[..., ts.optim.Optimizer],
 ) -> BenchmarkCase:
     size = 10_000
-    parameter = ts.Variable(ts.full((size,), 1.0))
-    parameter.grad = ts.full((size,), 0.5)
-    optimizer = optimizer_type([parameter], learning_rate=1e-3)
+    def state():
+        parameter = ts.Variable(ts.full((size,), 1.0))
+        parameter.grad = ts.full((size,), 0.5)
+        optimizer = optimizer_type([parameter], learning_rate=1e-3)
+        return parameter, optimizer
+
+    parameter = None
+    optimizer = None
+
+    def reset() -> None:
+        nonlocal parameter, optimizer
+        parameter, optimizer = state()
 
     def run() -> None:
+        if optimizer is None:
+            reset()
+        assert optimizer is not None
         optimizer.step()
 
     def validate() -> None:
         run()
+        assert parameter is not None
         assert math.isfinite(float(parameter.data[0]))
         assert parameter.data[-1] == parameter.data[0]
 
@@ -33,6 +46,7 @@ def _optimizer_case(
         validate=validate,
         work_items=size,
         description=f"one fused {name} update over {size} parameters",
+        reset=reset,
     )
 
 
@@ -193,5 +207,37 @@ def cases() -> list[BenchmarkCase]:
         _optimizer_case("sgd", ts.optim.SGD),
         _optimizer_case("adam", ts.optim.Adam),
         _optimizer_case("rmsprop", ts.optim.RMSprop),
+    ))
+
+    def current_backend() -> str:
+        return ts.get_backend()
+
+    def validate_current_backend() -> None:
+        assert current_backend() in {"python", "numpy", "cuda"}
+
+    benchmarks.append(BenchmarkCase(
+        name="backend.get_backend/overhead",
+        run=current_backend,
+        validate=validate_current_backend,
+        work_items=1,
+        description="dispatch-layer backend lookup used by every execute_* call",
+    ))
+
+    active_backend = ts.get_backend()
+
+    def switch_backend() -> None:
+        with ts.use_backend(active_backend):
+            pass
+
+    def validate_switch_backend() -> None:
+        switch_backend()
+        assert ts.get_backend() == active_backend
+
+    benchmarks.append(BenchmarkCase(
+        name="backend.switch/context",
+        run=switch_backend,
+        validate=validate_switch_backend,
+        work_items=1,
+        description="ContextVar backend override enter and exit",
     ))
     return benchmarks

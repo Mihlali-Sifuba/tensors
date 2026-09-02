@@ -253,4 +253,33 @@ def cases() -> list[BenchmarkCase]:
             _matmul_case(128, 256, 64, _ACCELERATED),
             _matmul_case(512, 1024, 256, _ACCELERATED),
         ))
+
+    batch_sizes = [8]
+    if backend != "python":
+        batch_sizes.append(64)
+    for batch in batch_sizes:
+        restriction = _ACCELERATED if batch > 8 else None
+        batched_left = ts.full((batch, 16, 16), 0.25)
+        batched_right = ts.full((batch, 16, 16), 0.5)
+
+        def batched_matmul(a=batched_left, b=batched_right) -> ts.Tensor:
+            return ts.matmul(a, b)
+
+        def validate_batched_matmul(
+            run=batched_matmul,
+            expected_batch=batch,
+            expected_value=16 * 0.125,
+        ) -> None:
+            result = run()
+            assert result.shape == (expected_batch, 16, 16)
+            assert math.isclose(float(result[0, 0, 0]), expected_value)
+
+        benchmarks.append(BenchmarkCase(
+            name=f"scaling.batched_matmul/{batch}x16x16",
+            run=batched_matmul,
+            validate=validate_batched_matmul,
+            work_items=batch * 16 ** 3,
+            description="public broadcast-batched matrix multiplication curve",
+            backends=restriction,
+        ))
     return benchmarks

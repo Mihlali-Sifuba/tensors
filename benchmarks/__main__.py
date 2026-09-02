@@ -14,12 +14,15 @@ from . import (
     backend_cases,
     chain_cases,
     graph_cases,
+    init_cases,
     loss_cases,
     optimizer_cases,
     provider_cases,
+    random_cases,
     scaling_cases,
     startup_cases,
     storage_cases,
+    system_cases,
     tensor_cases,
     training_cases,
 )
@@ -47,6 +50,30 @@ SUITES: dict[str, CaseFactory] = {
     "loss": loss_cases.cases,
     "optimizer": optimizer_cases.cases,
     "startup": startup_cases.cases,
+    "init": init_cases.cases,
+    "random": random_cases.cases,
+    "system": system_cases.cases,
+}
+
+SUITE_PREFIXES: dict[str, frozenset[str]] = {
+    "tensor": frozenset({"tensor", "reduction", "linalg"}),
+    "backend": frozenset({
+        "unary", "normalization", "loss", "reduction", "selection",
+        "layout", "creation", "optimizer", "backend",
+    }),
+    "graph": frozenset({"graph"}),
+    "autograd": frozenset({"autograd"}),
+    "training": frozenset({"training"}),
+    "provider": frozenset({"provider", "kernel"}),
+    "scaling": frozenset({"scaling"}),
+    "storage": frozenset({"storage"}),
+    "chain": frozenset({"chain"}),
+    "loss": frozenset({"loss", "kernel"}),
+    "optimizer": frozenset({"optimizer"}),
+    "startup": frozenset({"startup"}),
+    "init": frozenset({"init"}),
+    "random": frozenset({"random"}),
+    "system": frozenset({"system", "threading"}),
 }
 
 CORE_FACTORIES: tuple[CaseFactory, ...] = (
@@ -58,16 +85,39 @@ CORE_FACTORIES: tuple[CaseFactory, ...] = (
 )
 
 
-def _cases(suite: str) -> list[BenchmarkCase]:
+def _matches(case: BenchmarkCase, match: str | None) -> bool:
+    return match is None or match.casefold() in case.name.casefold()
+
+
+def _cases(suite: str, match: str | None = None) -> list[BenchmarkCase]:
     if suite == "core":
-        return [case for factory in CORE_FACTORIES for case in factory()]
+        cases = [case for factory in CORE_FACTORIES for case in factory()]
+        return [case for case in cases if _matches(case, match)]
     if suite == "all":
+        factories = SUITES.items()
+        if match:
+            requested_prefix = match.casefold().split(".", 1)[0]
+            matching_suites = {
+                name
+                for name, prefixes in SUITE_PREFIXES.items()
+                if requested_prefix in prefixes
+            }
+            if matching_suites:
+                factories = (
+                    (name, factory)
+                    for name, factory in factories
+                    if name in matching_suites
+                )
         return [
             case
-            for factory in SUITES.values()
+            for _, factory in factories
             for case in factory()
+            if _matches(case, match)
         ]
-    return SUITES[suite]()
+    return [
+        case for case in SUITES[suite]()
+        if _matches(case, match)
+    ]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -142,12 +192,8 @@ def main() -> int:
         listed: dict[str, list[str]] = {}
         for backend in backends:
             with ts.use_backend(backend):
-                for case in _cases(arguments.suite):
+                for case in _cases(arguments.suite, arguments.match):
                     if not case.supports_backend(backend):
-                        continue
-                    if arguments.match and (
-                        arguments.match.casefold() not in case.name.casefold()
-                    ):
                         continue
                     listed.setdefault(case.name, []).append(backend)
         if not listed:
@@ -171,12 +217,7 @@ def main() -> int:
     reports: dict[str, dict[str, Any]] = {}
     for backend in backends:
         with ts.use_backend(backend):
-            backend_cases = _cases(arguments.suite)
-            if arguments.match:
-                backend_cases = [
-                    case for case in backend_cases
-                    if arguments.match.casefold() in case.name.casefold()
-                ]
+            backend_cases = _cases(arguments.suite, arguments.match)
             backend_cases = [
                 case
                 for case in backend_cases

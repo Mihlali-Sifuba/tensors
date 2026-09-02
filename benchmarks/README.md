@@ -90,6 +90,9 @@ python -m benchmarks --backend accelerated --suite scaling --output after.json
 | `optimizer` | first-step state creation, steady updates, and many-small-parameter batching for SGD, Adam, and RMSprop |
 | `training` | complete MLP steps and separate forward, replay, loss, backward, and optimizer phases |
 | `startup` | optional-provider import and first tensor operation in fresh interpreters |
+| `init` | parameter-initialization families and fan-in/fan-out calculations |
+| `random` | seeded and backend-native uniform, normal, and integer generation |
+| `system` | deep-graph bookkeeping, thread-local graph isolation, equality, and scalar extraction |
 | `all` | every suite above; intended for deliberate, long-running investigations |
 
 ## Reading the layers
@@ -124,6 +127,12 @@ that fresh storage, model, or optimizer state is created inside each timed call;
 only the `startup` suite measures a genuinely fresh interpreter. Optimizer
 `steady` cases reuse initialized state.
 
+Cases with a `reset` callback begin validation and every measured sample from
+the same state. They run exactly one timed invocation per sample so calibration
+cannot make model or optimizer state depend on backend speed. A case that needs
+several state transitions per sample, such as a 100-step training run, performs
+that batch explicitly inside its timed callable.
+
 CUDA operations are asynchronous, so the active CuPy stream is synchronized after
 every timed iteration. CUDA durations therefore include completed device work,
 not just Python-side kernel launch time.
@@ -144,6 +153,9 @@ outside the timed callable, provide a validation callback, assign the closest
 `layer`, and restrict `backends` when a case is accelerator-specific. Use a size
 curve rather than one arbitrary size when looking for a crossover point, and split
 end-to-end work into phases when attribution matters.
+
+Use `setup` and `teardown` for resources owned by the case. Supply `reset`
+when the timed callable mutates model, optimizer, gradient, or storage state.
 
 Set `work_items` only when its unit is meaningful as throughput. Enable garbage
 collection when each invocation creates cyclic graph structures. The runner uses

@@ -6,8 +6,10 @@ import io
 import unittest
 from contextlib import redirect_stdout
 from typing import Any
+from unittest.mock import patch
 
-from benchmarks.__main__ import _parser
+import tensors as ts
+from benchmarks.__main__ import _cases, _parser
 from benchmarks.runner import (
     BenchmarkCase,
     combine_backend_reports,
@@ -135,6 +137,90 @@ class BackendBenchmarkTests(unittest.TestCase):
             print_report(_report("python", 0.004))
 
         self.assertIn("Backend: python", output.getvalue())
+
+    def test_measure_resets_samples_and_always_tears_down(self) -> None:
+        events: list[str] = []
+        case = BenchmarkCase(
+            name="lifecycle",
+            run=lambda: events.append("run"),
+            validate=lambda: events.append("validate"),
+            setup=lambda: events.append("setup"),
+            reset=lambda: events.append("reset"),
+            teardown=lambda: events.append("teardown"),
+        )
+
+        measure(case, repeats=1, target_seconds=1e-9)
+
+        self.assertEqual(events[0], "setup")
+        self.assertEqual(events[-1], "teardown")
+        self.assertEqual(events.count("validate"), 1)
+        self.assertEqual(events.count("reset"), 2)
+
+    def test_measure_tears_down_after_validation_failure(self) -> None:
+        events: list[str] = []
+
+        def fail() -> None:
+            raise RuntimeError("invalid case")
+
+        case = BenchmarkCase(
+            name="invalid",
+            run=lambda: None,
+            validate=fail,
+            teardown=lambda: events.append("teardown"),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "invalid case"):
+            measure(case, repeats=1, target_seconds=1e-9)
+
+        self.assertEqual(events, ["teardown"])
+
+    def test_all_suite_match_skips_unrelated_factories(self) -> None:
+        calls: list[str] = []
+
+        def autograd_factory() -> list[BenchmarkCase]:
+            calls.append("autograd")
+            return [BenchmarkCase("autograd.grad/1", lambda: None)]
+
+        def training_factory() -> list[BenchmarkCase]:
+            calls.append("training")
+            return [BenchmarkCase("training.step/1", lambda: None)]
+
+        with (
+            patch(
+                "benchmarks.__main__.SUITES",
+                {"autograd": autograd_factory, "training": training_factory},
+            ),
+            patch(
+                "benchmarks.__main__.SUITE_PREFIXES",
+                {
+                    "autograd": frozenset({"autograd"}),
+                    "training": frozenset({"training"}),
+                },
+            ),
+        ):
+            selected = _cases("all", "autograd.grad")
+
+        self.assertEqual([case.name for case in selected], ["autograd.grad/1"])
+        self.assertEqual(calls, ["autograd"])
+
+    def test_every_python_benchmark_case_validates(self) -> None:
+        with ts.use_backend("python"):
+            cases = [
+                case for case in _cases("all")
+                if case.supports_backend("python")
+            ]
+            for case in cases:
+                with self.subTest(case=case.name):
+                    if case.setup is not None:
+                        case.setup()
+                    try:
+                        if case.reset is not None:
+                            case.reset()
+                        if case.validate is not None:
+                            case.validate()
+                    finally:
+                        if case.teardown is not None:
+                            case.teardown()
 
 
 if __name__ == "__main__":
