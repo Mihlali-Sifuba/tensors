@@ -2173,7 +2173,7 @@ def adam_update(
     first_correction: float,
     second_correction: float,
 ) -> tuple[Storage, Storage, Storage, Storage, Storage] | None:
-    """Apply one fused Adam update on finite, non-cancelling state."""
+    """Apply one fused Adam update on finite optimizer state."""
     numpy = _numpy()
     tensors = (parameter, gradient, moment, scale, scaled)
     values = [
@@ -2185,10 +2185,6 @@ def adam_update(
         return None
     left_term = beta1 * moments
     right_term = (1.0 - beta1) * gradients
-    if bool(numpy.any((left_term > 0.0) & (right_term < 0.0))) or bool(
-        numpy.any((left_term < 0.0) & (right_term > 0.0))
-    ):
-        return None
     with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
         new_moments = left_term + right_term
         new_scales = numpy.maximum(scales, numpy.abs(gradients))
@@ -2400,8 +2396,6 @@ def _cuda_adam_batch_kernel() -> Any:
             || !isfinite(moment)
             || !isfinite(scale)
             || !isfinite(normalized)
-            || (left > 0.0 && right < 0.0)
-            || (left < 0.0 && right > 0.0)
             || !isfinite(updated)
             || !isfinite(new_moment)
             || !isfinite(new_scale)
@@ -2570,10 +2564,6 @@ def adam_updates(
             finite_inputs &= numpy.all(numpy.isfinite(array))
         valid = (
             finite_inputs
-            & ~numpy.any(
-                ((left_term > 0.0) & (right_term < 0.0))
-                | ((left_term < 0.0) & (right_term > 0.0))
-            )
             & numpy.all(numpy.isfinite(new_moments))
             & numpy.all(numpy.isfinite(new_scales))
             & numpy.all(numpy.isfinite(new_scaled))
