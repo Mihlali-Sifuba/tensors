@@ -8,6 +8,7 @@ from typing import Any
 
 from .._typing import TensorResult
 from ..tensor import Tensor
+from ..utils.coordinates import linear_index_to_coordinates
 from ..variable import Variable
 from .computation import grad
 from .state import isolated_graph_state, reset_graph_state
@@ -100,14 +101,20 @@ def gradcheck(
             for element_index in range(original.size):
                 positive = [value.clone() for value in originals]
                 negative = [value.clone() for value in originals]
-                positive[input_index]._data[element_index] += eps
-                negative[input_index]._data[element_index] -= eps
+                positive_value = positive[input_index]._data[element_index]
+                negative_value = negative[input_index]._data[element_index]
+                coordinates = linear_index_to_coordinates(
+                    element_index,
+                    original.shape,
+                )
+                positive[input_index][coordinates] = positive_value + eps
+                negative[input_index][coordinates] = negative_value - eps
 
                 reset_graph_state()
-                positive_value = _scalar_output(function, tuple(positive))
+                positive_output = _scalar_output(function, tuple(positive))
                 reset_graph_state()
-                negative_value = _scalar_output(function, tuple(negative))
-                numerical = (positive_value - negative_value) / (2.0 * eps)
+                negative_output = _scalar_output(function, tuple(negative))
+                numerical = (positive_output - negative_output) / (2.0 * eps)
                 actual = analytical_values[input_index][element_index]
 
                 if not math.isclose(actual, numerical, abs_tol=atol, rel_tol=rtol):

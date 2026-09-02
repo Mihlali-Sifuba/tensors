@@ -5,7 +5,11 @@ from typing import List, Union
 from ..backend import execute_binary, execute_division_denominator_gradient
 from ..dtype import result_dtype
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_to, broadcast_tensors
+from ..utils.broadcasting import (
+    broadcast_binary_values,
+    broadcast_to,
+    broadcast_tensors,
+)
 from ._utils import sum_to_shape
 
 
@@ -96,13 +100,13 @@ class Div:
             )
             if accelerated is not None:
                 return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
-            a, b = broadcast_tensors(a, b)
-            data = []
-            for x, y in zip(a._data, b._data):
+            def divide(x, y):
                 if y == 0:
                     raise ZeroDivisionError("Division by zero")
-                data.append(x / y)
-            return Tensor(data, dtype=dtype, shape=a.shape)
+                return x / y
+
+            data = broadcast_binary_values(a, b, shape, divide)
+            return Tensor(data, dtype=dtype, shape=shape)
         raise TypeError(f"Unsupported: {type(b)}")
 
     @staticmethod

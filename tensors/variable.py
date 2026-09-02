@@ -129,6 +129,11 @@ class Variable:
         self._data = tensor
         self._data_generation += 1
 
+    def _replace_data_from_replay(self, tensor: Tensor) -> None:
+        """Adopt a validated internal replay result without public coercion."""
+        self._data = tensor
+        self._data_generation += 1
+
     def _mutation_state(self):
         """Return the value state recorded by operation nodes."""
         return (
