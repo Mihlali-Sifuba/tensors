@@ -100,7 +100,11 @@ the mathematical definitions and reproducibility contract.
 
 NumPy and CUDA share kernels for broadcasting arithmetic, unary mathematics,
 reductions, normalization, losses, selection, layout operations, tensor
-construction, linear algebra, gradients, and fused optimizer updates.
+construction, linear algebra, convolution, gradients, and fused optimizer
+updates. Convolution and its VJPs use bounded matrix-product tiles, so grouped
+and dilated kernels stay device-resident without materializing an unbounded
+receptive-field matrix. Float32 convolution remains float32 on accelerated
+providers; mixed inputs use the public result dtype.
 
 The Python implementation defines shape, dtype, error, and differentiation
 semantics. Optional kernels return to that implementation for edge cases that
@@ -158,6 +162,7 @@ python -m benchmarks --backend accelerated --suite scaling
 python -m benchmarks --backend accelerated --suite storage
 python -m benchmarks --backend accelerated --suite graph --match width-100000
 python -m benchmarks --backend accelerated --suite optimizer
+python -m benchmarks --backend accelerated --suite convolution
 ```
 
 The `provider` suite separates NumPy or CuPy time from internal kernel guards,

@@ -33,6 +33,7 @@ from .variance import Variance, variance
 from .reshape import Reshape, reshape
 from .stack import Stack, stack
 from .concat import Concat, concat
+from .convolution import conv1d, conv2d, conv3d
 from .abs import Abs, abs
 from .prod import Prod, prod
 from .clip import Clip, clip
@@ -50,6 +51,7 @@ __all__ = [
     "ReLU", "Sigmoid", "Tanh", "Softplus", "Softmax", "LogSumExp",
     "LogSoftmax", "CrossEntropy", "BinaryCrossEntropy", "Std", "Variance",
     "Reshape",
+
     "Stack", "Concat", "Abs", "Prod", "Clip", "ArgMax", "ArgMin",
     "Where", "Maximum", "Minimum",
     "sum", "mean", "min", "max", "prod", "abs", "clip",
@@ -60,6 +62,7 @@ __all__ = [
     "relu", "sigmoid", "tanh", "softplus", "softmax",
     "logsumexp", "log_softmax", "cross_entropy", "binary_cross_entropy",
     "std", "variance", "reshape", "stack", "concat",
+    "conv1d", "conv2d", "conv3d",
     "equal", "not_equal", "less", "less_equal", "greater",
     "greater_equal", "where", "maximum", "minimum",
 ]

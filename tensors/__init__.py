@@ -24,6 +24,7 @@ from .math import (
     relu, sigmoid, tanh, softplus, softmax,
     logsumexp, log_softmax, cross_entropy, binary_cross_entropy,
     std, variance, reshape, stack, concat, abs, prod, clip, argmax, argmin,
+    conv1d, conv2d, conv3d,
     equal, not_equal, less, less_equal, greater, greater_equal,
     where, maximum, minimum,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "sinh", "cosh", "arcsinh", "arccosh", "arctanh", "sign",
     "relu", "sigmoid", "tanh", "softplus", "softmax",
     "logsumexp", "log_softmax", "cross_entropy", "binary_cross_entropy",
+    "conv1d", "conv2d", "conv3d",
     "std", "variance",
     "equal", "not_equal", "less", "less_equal", "greater", "greater_equal",
     "where", "maximum", "minimum",

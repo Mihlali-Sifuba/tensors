@@ -95,3 +95,65 @@ assert_type(ts.init.LecunUniform()((128, 64)), ts.Tensor)
 assert_type(ts.init.LecunNormal()((128, 64)), ts.Tensor)
 assert_type(ts.init.TruncatedNormal()((128, 64)), ts.Tensor)
 assert_type(ts.init.Orthogonal()((128, 64)), ts.Tensor)
+
+signal = ts.Tensor([[[1.0, 2.0, 3.0, 4.0]]])
+filters = ts.Tensor([[[1.0, -1.0]]])
+offsets = ts.Tensor([0.0])
+signal_variable = ts.Variable([[[1.0, 2.0, 3.0, 4.0]]])
+filters_variable = ts.Variable([[[1.0, -1.0]]])
+offsets_variable = ts.Variable([0.0])
+
+assert_type(ts.conv1d(signal, filters), ts.Tensor)
+assert_type(ts.conv1d(signal, filters, offsets), ts.Tensor)
+assert_type(ts.conv1d(signal_variable, filters), ts.Variable)
+assert_type(ts.conv1d(signal, filters_variable), ts.Variable)
+assert_type(ts.conv1d(signal, filters, offsets_variable), ts.Variable)
+assert_type(
+    ts.conv1d(signal, filters, stride=2, padding=1, dilation=2, groups=1),
+    ts.Tensor,
+)
+
+image = ts.Tensor([[[[1.0, 2.0], [3.0, 4.0]]]])
+window = ts.Tensor([[[[1.0, 0.0], [0.0, 1.0]]]])
+image_variable = ts.Variable([[[[1.0, 2.0], [3.0, 4.0]]]])
+window_variable = ts.Variable([[[[1.0, 0.0], [0.0, 1.0]]]])
+
+assert_type(ts.conv2d(image, window), ts.Tensor)
+assert_type(ts.conv2d(image, window, offsets), ts.Tensor)
+assert_type(ts.conv2d(image_variable, window), ts.Variable)
+assert_type(ts.conv2d(image, window_variable), ts.Variable)
+assert_type(ts.conv2d(image, window, offsets_variable), ts.Variable)
+assert_type(ts.math.conv2d(image, window), ts.Tensor)
+assert_type(
+    ts.conv2d(
+        image,
+        window,
+        stride=(1, 2),
+        padding=(1, 0),
+        dilation=(2, 1),
+        groups=1,
+    ),
+    ts.Tensor,
+)
+
+volume = ts.ones((1, 1, 3, 3, 3))
+volume_kernel = ts.ones((1, 1, 2, 2, 2))
+volume_variable = ts.Variable(volume)
+volume_kernel_variable = ts.Variable(volume_kernel)
+
+assert_type(ts.conv3d(volume, volume_kernel), ts.Tensor)
+assert_type(ts.conv3d(volume_variable, volume_kernel), ts.Variable)
+assert_type(ts.conv3d(volume, volume_kernel_variable), ts.Variable)
+assert_type(ts.conv3d(volume, volume_kernel, offsets_variable), ts.Variable)
+assert_type(ts.math.conv3d(volume, volume_kernel), ts.Tensor)
+assert_type(
+    ts.conv3d(
+        volume,
+        volume_kernel,
+        stride=(1, 2, 1),
+        padding=(1, 0, 1),
+        dilation=(1, 1, 2),
+        groups=1,
+    ),
+    ts.Tensor,
+)
