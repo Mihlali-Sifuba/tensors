@@ -283,6 +283,112 @@ class CudaBackendTests(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_grouped_optimizers_use_scalar_cuda_validation_flags(self):
+        import cupy
+
+        for optimizer_type in (
+            ts.optim.SGD,
+            ts.optim.Adam,
+            ts.optim.RMSprop,
+        ):
+            with self.subTest(optimizer=optimizer_type.__name__):
+                with ts.use_backend("cuda"):
+                    parameters = [
+                        ts.Variable(ts.full((64,), 1.0)) for _ in range(2)
+                    ]
+                    for parameter in parameters:
+                        parameter.grad = ts.full((64,), 0.5)
+                    optimizer = optimizer_type(parameters, learning_rate=0.01)
+                    with patch.object(cupy, "any", wraps=cupy.any) as any_call:
+                        optimizer.step()
+
+                any_call.assert_not_called()
+
+    def test_mixed_dtype_optimizers_use_grouped_cuda_updates(self):
+        optimizers = (
+            (ts.optim.SGD, "sgd_updates", "sgd_update"),
+            (ts.optim.Adam, "adam_updates", "adam_update"),
+            (ts.optim.RMSprop, "rmsprop_updates", "rmsprop_update"),
+        )
+        for optimizer_type, grouped_name, single_name in optimizers:
+            with self.subTest(optimizer=optimizer_type.__name__):
+                with ts.use_backend("python"):
+                    reference_parameters = [
+                        ts.Variable(ts.full(
+                            (64,),
+                            1.0,
+                            dtype=(
+                                ts.float32 if index % 2 == 0 else ts.float64
+                            ),
+                        ))
+                        for index in range(4)
+                    ]
+                    for parameter in reference_parameters:
+                        parameter.grad = ts.full(
+                            (64,),
+                            0.5,
+                            dtype=parameter.dtype,
+                        )
+                    optimizer_type(
+                        reference_parameters,
+                        learning_rate=0.01,
+                    ).step()
+                    expected = tuple(
+                        parameter.data.tolist()
+                        for parameter in reference_parameters
+                    )
+
+                with ts.use_backend("cuda"):
+                    parameters = [
+                        ts.Variable(ts.full(
+                            (64,),
+                            1.0,
+                            dtype=(ts.float32 if index % 2 == 0 else ts.float64),
+                        ))
+                        for index in range(4)
+                    ]
+                    for parameter in parameters:
+                        parameter.grad = ts.full(
+                            (64,),
+                            0.5,
+                            dtype=parameter.dtype,
+                        )
+                    optimizer = optimizer_type(parameters, learning_rate=0.01)
+                    grouped = getattr(cuda_backend, grouped_name)
+                    single = getattr(cuda_backend, single_name)
+                    with (
+                        patch.object(
+                            cuda_backend,
+                            grouped_name,
+                            wraps=grouped,
+                        ) as grouped_call,
+                        patch.object(
+                            cuda_backend,
+                            single_name,
+                            wraps=single,
+                        ) as single_call,
+                    ):
+                        backend_state._clear_backend_kernel_cache()
+                        optimizer.step()
+
+                grouped_call.assert_called_once()
+                single_call.assert_not_called()
+                self.assertTrue(all(
+                    isinstance(parameter.data._storage, CudaStorage)
+                    for parameter in parameters
+                ))
+                for parameter, expected_values in zip(parameters, expected):
+                    for actual, reference in zip(
+                        parameter.data.tolist(),
+                        expected_values,
+                    ):
+                        self.assertTrue(math.isclose(
+                            actual,
+                            reference,
+                            rel_tol=1.0e-6,
+                            abs_tol=1.0e-7,
+                        ))
+
     def test_graph_replay_fuses_scalar_elementwise_chains(self):
         with ts.use_backend("cuda"):
             value = ts.Variable(ts.full((4_096,), 1.0), requires_grad=False)
@@ -998,6 +1104,112 @@ class NumPyBackendTests(unittest.TestCase):
             )
 
         self.assertIsNone(overflowing)
+
+    def test_grouped_optimizer_packing_reuses_native_buffers(self):
+        import numpy
+
+        with ts.use_backend("numpy"):
+            parameters = [ts.Variable(ts.full((64,), 1.0)) for _ in range(4)]
+            for parameter in parameters:
+                parameter.grad = ts.full((64,), 0.5)
+            optimizer = ts.optim.SGD(parameters, learning_rate=0.01)
+            with patch.object(
+                numpy,
+                "concatenate",
+                wraps=numpy.concatenate,
+            ) as concatenate:
+                optimizer.step()
+                optimizer.step()
+
+        self.assertEqual(concatenate.call_count, 4)
+        outputs = [call.kwargs["out"] for call in concatenate.call_args_list]
+        self.assertIs(outputs[0], outputs[2])
+        self.assertIs(outputs[1], outputs[3])
+
+    def test_mixed_dtype_optimizers_use_grouped_numpy_updates(self):
+        optimizers = (
+            (ts.optim.SGD, "sgd_updates", "sgd_update"),
+            (ts.optim.Adam, "adam_updates", "adam_update"),
+            (ts.optim.RMSprop, "rmsprop_updates", "rmsprop_update"),
+        )
+        for optimizer_type, grouped_name, single_name in optimizers:
+            with self.subTest(optimizer=optimizer_type.__name__):
+                with ts.use_backend("python"):
+                    reference_parameters = [
+                        ts.Variable(ts.full(
+                            (64,),
+                            1.0,
+                            dtype=(
+                                ts.float32 if index % 2 == 0 else ts.float64
+                            ),
+                        ))
+                        for index in range(4)
+                    ]
+                    for parameter in reference_parameters:
+                        parameter.grad = ts.full(
+                            (64,),
+                            0.5,
+                            dtype=parameter.dtype,
+                        )
+                    optimizer_type(
+                        reference_parameters,
+                        learning_rate=0.01,
+                    ).step()
+                    expected = tuple(
+                        parameter.data.tolist()
+                        for parameter in reference_parameters
+                    )
+
+                with ts.use_backend("numpy"):
+                    parameters = [
+                        ts.Variable(ts.full(
+                            (64,),
+                            1.0,
+                            dtype=(ts.float32 if index % 2 == 0 else ts.float64),
+                        ))
+                        for index in range(4)
+                    ]
+                    for parameter in parameters:
+                        parameter.grad = ts.full(
+                            (64,),
+                            0.5,
+                            dtype=parameter.dtype,
+                        )
+                    optimizer = optimizer_type(parameters, learning_rate=0.01)
+                    grouped = getattr(numpy_backend, grouped_name)
+                    single = getattr(numpy_backend, single_name)
+                    with (
+                        patch.object(
+                            numpy_backend,
+                            grouped_name,
+                            wraps=grouped,
+                        ) as grouped_call,
+                        patch.object(
+                            numpy_backend,
+                            single_name,
+                            wraps=single,
+                        ) as single_call,
+                    ):
+                        backend_state._clear_backend_kernel_cache()
+                        optimizer.step()
+
+                grouped_call.assert_called_once()
+                single_call.assert_not_called()
+                self.assertTrue(all(
+                    isinstance(parameter.data._storage, NumPyStorage)
+                    for parameter in parameters
+                ))
+                for parameter, expected_values in zip(parameters, expected):
+                    for actual, reference in zip(
+                        parameter.data.tolist(),
+                        expected_values,
+                    ):
+                        self.assertTrue(math.isclose(
+                            actual,
+                            reference,
+                            rel_tol=1.0e-6,
+                            abs_tol=1.0e-7,
+                        ))
 
     def test_every_binary_operation_dispatches_to_numpy(self):
         left = ts.full((32, 1), 2.0)

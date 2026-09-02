@@ -745,7 +745,7 @@ def execute_rmsprop_update(
     rho: float,
     learning_rate: float,
     epsilon: float,
-) -> tuple[Storage, Storage, Storage, Storage] | None:
+) -> tuple[Storage, Storage, Storage] | None:
     """Run a fused RMSprop update on ordinary finite optimizer state."""
     if not _array_work_is_large_enough(
         parameter.size,
