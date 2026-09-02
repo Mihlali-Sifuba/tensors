@@ -240,9 +240,21 @@ print(prediction.data.tolist())
 print([parameter.name for parameter in model.parameters()])
 ```
 
-Each call executes `forward` eagerly and records a fresh computation. The
-latest outputs, nodes, edges, and computations are available for inspection on
-the calling thread; `Graph` does not replay a cached trace on later calls.
+By default, each call executes `forward` eagerly and records a fresh
+computation. The latest outputs, nodes, edges, and computations are available
+for inspection on the calling thread. Stable Tensor-input workloads can opt
+into guarded replay:
+
+```python
+prediction = model.compile(inputs)  # trace and enable replay
+prediction = model(inputs)          # rebind and replay on a guard hit
+model.uncompile()                    # return to fresh tracing
+```
+
+The guard includes the backend, Tensor shapes and dtypes, keyword layout, and
+static configuration arguments. Guard misses retrace automatically;
+`model.rebuild(...)` always retraces explicitly. Variable inputs continue to
+use fresh tracing so their autograd identity is preserved.
 
 Training follows a familiar loop:
 

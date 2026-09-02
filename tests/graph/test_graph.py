@@ -174,6 +174,40 @@ class GraphTests(unittest.TestCase):
 
         self.assertEqual(model.parameters(), [model._weight])
 
+    def test_parameter_cache_tracks_attributes_and_gradient_flags(self):
+        class Model(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.weight = ts.Variable([2.0])
+
+            def forward(self, value):
+                return value * self.weight
+
+        model = Model()
+        self.assertEqual(model.parameters(), [model.weight])
+        self.assertIsNotNone(model._parameter_cache)
+
+        model.weight.requires_grad = False
+        self.assertEqual(model.parameters(), [])
+        model.bias = ts.Variable([1.0])
+        self.assertEqual(model.parameters(), [model.bias])
+
+    def test_mutable_parameter_containers_remain_dynamically_discovered(self):
+        class Model(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.layers = [ts.Variable([2.0])]
+
+            def forward(self, value):
+                return value * self.layers[0]
+
+        model = Model()
+        self.assertEqual(model.parameters(), [model.layers[0]])
+        self.assertIsNone(model._parameter_cache)
+
+        model.layers.append(ts.Variable([3.0]))
+        self.assertEqual(model.parameters(), model.layers)
+
     def test_graph_allows_input_shape_changes_on_fresh_trace(self):
         @ts.Graph
         def model(x):
@@ -187,6 +221,110 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(second.shape, (2,))
         self.assertEqual(second.data.tolist(), [2.0, 4.0])
         self.assertIs(model.computation.output, second)
+
+    def test_compile_replays_matching_tensor_inputs_without_retracing(self):
+        calls = 0
+
+        @ts.Graph
+        def model(x):
+            nonlocal calls
+            calls += 1
+            return x * 2.0 + 1.0
+
+        first = model.compile(ts.Tensor([2.0]))
+        second = model(ts.Tensor([4.0]))
+
+        self.assertIs(first, second)
+        self.assertEqual(second.data.tolist(), [9.0])
+        self.assertEqual(calls, 1)
+
+    def test_compile_guard_retraces_shape_and_static_argument_changes(self):
+        calls = 0
+
+        @ts.Graph
+        def model(x, *, scale=1.0):
+            nonlocal calls
+            calls += 1
+            return x * scale
+
+        model.compile(ts.Tensor([2.0]), scale=2.0)
+        same = model(ts.Tensor([3.0]), scale=2.0)
+        resized = model(ts.Tensor([3.0, 4.0]), scale=2.0)
+        reconfigured = model(ts.Tensor([3.0, 4.0]), scale=3.0)
+
+        self.assertEqual(same.data.tolist(), [6.0])
+        self.assertEqual(resized.data.tolist(), [6.0, 8.0])
+        self.assertEqual(reconfigured.data.tolist(), [9.0, 12.0])
+        self.assertEqual(calls, 3)
+
+    def test_compile_rejects_variable_inputs_and_uncompile_restores_tracing(self):
+        calls = 0
+
+        @ts.Graph
+        def model(x):
+            nonlocal calls
+            calls += 1
+            return x + 1.0
+
+        with self.assertRaisesRegex(TypeError, "Variable inputs"):
+            model.compile(ts.Variable([1.0]))
+
+        model.compile(ts.Tensor([1.0]))
+        model(ts.Tensor([2.0]))
+        model.uncompile()
+        model(ts.Tensor([3.0]))
+
+        self.assertEqual(calls, 2)
+
+    def test_rebuild_bypasses_a_matching_compiled_trace(self):
+        calls = 0
+
+        @ts.Graph
+        def model(x):
+            nonlocal calls
+            calls += 1
+            return x * 2.0
+
+        model.compile(ts.Tensor([1.0]))
+        rebuilt = model.rebuild(ts.Tensor([3.0]))
+
+        self.assertEqual(rebuilt.data.tolist(), [6.0])
+        self.assertEqual(calls, 2)
+
+    def test_compiled_trace_rebuilds_after_parameter_replacement(self):
+        class Model(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.weight = ts.Variable([2.0])
+                self.calls = 0
+
+            def forward(self, value):
+                self.calls += 1
+                return value * self.weight
+
+        model = Model()
+        model.compile(ts.Tensor([3.0]))
+        model.weight = ts.Variable([4.0])
+        result = model(ts.Tensor([3.0]))
+
+        self.assertEqual(result.data.tolist(), [12.0])
+        self.assertEqual(model.calls, 2)
+
+    def test_compiled_trace_rebuilds_after_its_computation_is_released(self):
+        calls = 0
+
+        @ts.Graph
+        def model(value):
+            nonlocal calls
+            calls += 1
+            return value + 1.0
+
+        model.compile(ts.Tensor([1.0]))
+        model.computation.release()
+        result = model(ts.Tensor([2.0]))
+
+        self.assertEqual(result.data.tolist(), [3.0])
+        self.assertEqual(calls, 2)
 
     def test_new_call_does_not_retain_the_previous_computation(self):
         class Scale(ts.Graph):
