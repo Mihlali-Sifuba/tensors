@@ -178,6 +178,111 @@ class CudaBackendTests(unittest.TestCase):
         self.assertIsInstance(parameter.data._storage, CudaStorage)
         self.assertAlmostEqual(parameter.data[0], 0.95)
 
+    def test_grouped_adam_remains_accelerated_across_sign_changes(self):
+        with ts.use_backend("python"):
+            reference_parameters = [
+                ts.Variable(ts.full((64,), 1.0)) for _ in range(2)
+            ]
+            reference_optimizer = ts.optim.Adam(reference_parameters)
+            for parameter, gradient in zip(
+                reference_parameters,
+                (1.0, -1.0),
+            ):
+                parameter.grad = ts.full((64,), gradient)
+            reference_optimizer.step()
+            for parameter, gradient in zip(
+                reference_parameters,
+                (-1.0, 1.0),
+            ):
+                parameter.grad = ts.full((64,), gradient)
+            reference_optimizer.step()
+            expected = tuple(
+                (
+                    parameter.data.tolist(),
+                    reference_optimizer._state[id(parameter)]["m"].tolist(),
+                    reference_optimizer._state[id(parameter)]["v"].tolist(),
+                )
+                for parameter in reference_parameters
+            )
+
+        accelerated_results = []
+        with ts.use_backend("cuda"):
+            parameters = [ts.Variable(ts.full((64,), 1.0)) for _ in range(2)]
+            optimizer = ts.optim.Adam(parameters)
+            for parameter, gradient in zip(parameters, (1.0, -1.0)):
+                parameter.grad = ts.full((64,), gradient)
+            optimizer.step()
+            for parameter, gradient in zip(parameters, (-1.0, 1.0)):
+                parameter.grad = ts.full((64,), gradient)
+
+            kernel = cuda_backend.adam_updates
+
+            def observed(*args, **kwargs):
+                result = kernel(*args, **kwargs)
+                accelerated_results.append(result)
+                return result
+
+            with patch.object(
+                cuda_backend,
+                "adam_updates",
+                side_effect=observed,
+            ):
+                backend_state._clear_backend_kernel_cache()
+                optimizer.step()
+
+        self.assertEqual(len(accelerated_results), 1)
+        self.assertIsNotNone(accelerated_results[0])
+        for parameter, expected_values in zip(parameters, expected):
+            state = optimizer._state[id(parameter)]
+            moment = state["m"]
+            second_moment = state["v"]
+            self.assertIsInstance(moment, ts.Tensor)
+            self.assertIsInstance(second_moment, ts.Tensor)
+            self.assertIsInstance(parameter.data._storage, CudaStorage)
+            self.assertIsInstance(moment._storage, CudaStorage)
+            self.assertIsInstance(second_moment._storage, CudaStorage)
+            for actual, reference in zip(
+                (
+                    parameter.data.tolist(),
+                    moment.tolist(),
+                    second_moment.tolist(),
+                ),
+                expected_values,
+            ):
+                for actual_value, expected_value in zip(actual, reference):
+                    self.assertTrue(math.isclose(
+                        actual_value,
+                        expected_value,
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    ))
+
+    def test_grouped_adam_still_rejects_nonfinite_state(self):
+        with ts.use_backend("cuda"):
+            parameters = tuple(ts.full((64,), 1.0) for _ in range(2))
+            gradients = tuple(ts.full((64,), 1.0) for _ in range(2))
+            moments = (
+                ts.full((64,), float("inf")),
+                ts.zeros((64,)),
+            )
+            scales = tuple(ts.zeros((64,)) for _ in range(2))
+            normalized = tuple(ts.zeros((64,)) for _ in range(2))
+            result = cuda_backend.adam_updates(
+                parameters,
+                gradients,
+                moments,
+                scales,
+                normalized,
+                beta1=0.9,
+                beta2=0.999,
+                learning_rate=0.001,
+                epsilon=1.0e-8,
+                first_corrections=(0.1, 0.1),
+                second_corrections=(0.001, 0.001),
+            )
+
+        self.assertIsNone(result)
+
     def test_graph_replay_fuses_scalar_elementwise_chains(self):
         with ts.use_backend("cuda"):
             value = ts.Variable(ts.full((4_096,), 1.0), requires_grad=False)
@@ -747,6 +852,152 @@ class NumPyBackendTests(unittest.TestCase):
                         actual_values,
                     ):
                         self.assertAlmostEqual(actual_value, expected_value)
+
+    def test_adam_sign_changes_keep_native_updates_accelerated(self):
+        for parameter_count, kernel_name in (
+            (1, "adam_update"),
+            (2, "adam_updates"),
+        ):
+            with self.subTest(kernel=kernel_name):
+                with ts.use_backend("python"):
+                    reference_parameters = [
+                        ts.Variable(ts.full((64,), 1.0))
+                        for _ in range(parameter_count)
+                    ]
+                    reference_optimizer = ts.optim.Adam(reference_parameters)
+                    first_gradients = tuple(
+                        1.0 if index % 2 == 0 else -1.0
+                        for index in range(parameter_count)
+                    )
+                    second_gradients = tuple(
+                        -gradient for gradient in first_gradients
+                    )
+                    for parameter, gradient in zip(
+                        reference_parameters,
+                        first_gradients,
+                    ):
+                        parameter.grad = ts.full((64,), gradient)
+                    reference_optimizer.step()
+                    for parameter, gradient in zip(
+                        reference_parameters,
+                        second_gradients,
+                    ):
+                        parameter.grad = ts.full((64,), gradient)
+                    reference_optimizer.step()
+                    expected = tuple(
+                        (
+                            parameter.data.tolist(),
+                            reference_optimizer._state[id(parameter)][
+                                "m"
+                            ].tolist(),
+                            reference_optimizer._state[id(parameter)][
+                                "v"
+                            ].tolist(),
+                        )
+                        for parameter in reference_parameters
+                    )
+
+                accelerated_results = []
+                with ts.use_backend("numpy"):
+                    parameters = [
+                        ts.Variable(ts.full((64,), 1.0))
+                        for _ in range(parameter_count)
+                    ]
+                    optimizer = ts.optim.Adam(parameters)
+                    for parameter, gradient in zip(
+                        parameters,
+                        first_gradients,
+                    ):
+                        parameter.grad = ts.full((64,), gradient)
+                    optimizer.step()
+                    for parameter, gradient in zip(
+                        parameters,
+                        second_gradients,
+                    ):
+                        parameter.grad = ts.full((64,), gradient)
+
+                    kernel = getattr(numpy_backend, kernel_name)
+
+                    def observed(*args, **kwargs):
+                        result = kernel(*args, **kwargs)
+                        accelerated_results.append(result)
+                        return result
+
+                    with patch.object(
+                        numpy_backend,
+                        kernel_name,
+                        side_effect=observed,
+                    ):
+                        backend_state._clear_backend_kernel_cache()
+                        optimizer.step()
+
+                self.assertEqual(len(accelerated_results), 1)
+                self.assertIsNotNone(accelerated_results[0])
+                for parameter, expected_values in zip(parameters, expected):
+                    state = optimizer._state[id(parameter)]
+                    moment = state["m"]
+                    second_moment = state["v"]
+                    self.assertIsInstance(moment, ts.Tensor)
+                    self.assertIsInstance(second_moment, ts.Tensor)
+                    self.assertIsInstance(parameter.data._storage, NumPyStorage)
+                    self.assertIsInstance(moment._storage, NumPyStorage)
+                    self.assertIsInstance(second_moment._storage, NumPyStorage)
+                    for actual, reference in zip(
+                        (
+                            parameter.data.tolist(),
+                            moment.tolist(),
+                            second_moment.tolist(),
+                        ),
+                        expected_values,
+                    ):
+                        for actual_value, expected_value in zip(actual, reference):
+                            self.assertTrue(math.isclose(
+                                actual_value,
+                                expected_value,
+                                rel_tol=1.0e-12,
+                                abs_tol=1.0e-12,
+                            ))
+
+    def test_adam_acceleration_still_rejects_nonfinite_values(self):
+        with ts.use_backend("numpy"):
+            finite = ts.full((64,), 1.0)
+            zero = ts.zeros((64,))
+            nonfinite = ts.full((64,), float("inf"))
+            cases = (
+                (nonfinite, finite, zero, zero, zero),
+                (finite, nonfinite, zero, zero, zero),
+                (finite, finite, nonfinite, zero, zero),
+                (finite, finite, zero, nonfinite, zero),
+                (finite, finite, zero, zero, nonfinite),
+            )
+            for index, tensors in enumerate(cases):
+                with self.subTest(nonfinite_input=index):
+                    result = numpy_backend.adam_update(
+                        *tensors,
+                        beta1=0.9,
+                        beta2=0.999,
+                        learning_rate=0.001,
+                        epsilon=1.0e-8,
+                        first_correction=0.1,
+                        second_correction=0.001,
+                    )
+                    self.assertIsNone(result)
+
+            overflowing = numpy_backend.adam_update(
+                ts.full((64,), 1.0e308),
+                ts.full((64,), -1.0),
+                zero,
+                zero,
+                zero,
+                beta1=0.9,
+                beta2=0.999,
+                learning_rate=1.0e308,
+                epsilon=1.0e-8,
+                first_correction=0.1,
+                second_correction=0.001,
+            )
+
+        self.assertIsNone(overflowing)
 
     def test_every_binary_operation_dispatches_to_numpy(self):
         left = ts.full((32, 1), 2.0)

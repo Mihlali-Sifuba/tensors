@@ -14,6 +14,75 @@ class AdamTests(unittest.TestCase):
 
         self.assertAlmostEqual(parameter.data.item(), 0.9)
 
+    def test_moment_updates_allow_gradient_sign_changes(self):
+        beta1 = 0.9
+        beta2 = 0.999
+        learning_rate = 0.1
+        epsilon = 1.0e-8
+        for first_gradient, second_gradient in ((2.0, -1.0), (-2.0, 1.0)):
+            with self.subTest(
+                first_gradient=first_gradient,
+                second_gradient=second_gradient,
+            ):
+                parameter_value = 1.0
+                first_moment = (1.0 - beta1) * first_gradient
+                second_moment = (1.0 - beta2) * first_gradient * first_gradient
+                parameter_value -= learning_rate * (
+                    first_moment / (1.0 - beta1)
+                ) / (
+                    math.sqrt(second_moment / (1.0 - beta2)) + epsilon
+                )
+                first_moment = (
+                    beta1 * first_moment
+                    + (1.0 - beta1) * second_gradient
+                )
+                second_moment = (
+                    beta2 * second_moment
+                    + (1.0 - beta2) * second_gradient * second_gradient
+                )
+                parameter_value -= learning_rate * (
+                    first_moment / (1.0 - beta1**2)
+                ) / (
+                    math.sqrt(second_moment / (1.0 - beta2**2)) + epsilon
+                )
+
+                with ts.use_backend("python"):
+                    parameter = ts.Variable([1.0])
+                    optimizer = ts.optim.Adam(
+                        [parameter],
+                        learning_rate=learning_rate,
+                        betas=(beta1, beta2),
+                        eps=epsilon,
+                    )
+                    parameter.grad = ts.Tensor([first_gradient])
+                    optimizer.step()
+                    parameter.grad = ts.Tensor([second_gradient])
+                    optimizer.step()
+
+                state = optimizer._state[id(parameter)]
+                actual_moment = state["m"]
+                actual_second_moment = state["v"]
+                self.assertIsInstance(actual_moment, ts.Tensor)
+                self.assertIsInstance(actual_second_moment, ts.Tensor)
+                self.assertTrue(math.isclose(
+                    parameter.data.item(),
+                    parameter_value,
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-12,
+                ))
+                self.assertTrue(math.isclose(
+                    actual_moment.item(),
+                    first_moment,
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-12,
+                ))
+                self.assertTrue(math.isclose(
+                    actual_second_moment.item(),
+                    second_moment,
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-12,
+                ))
+
     def test_parameter_uses_its_own_first_gradient_step(self):
         first = ts.Variable([1.0])
         second = ts.Variable([1.0])
