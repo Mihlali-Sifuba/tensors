@@ -185,6 +185,78 @@ def core_cases() -> list[BenchmarkCase]:
     ]
 
 
+def _replay_new_inputs_case(
+    depth: int,
+    width: int,
+) -> BenchmarkCase:
+    """Measure compiled replay after swapping a leaf's value each call."""
+    @ts.Graph
+    def model(value):
+        result = value
+        for _ in range(depth):
+            result = result * 1.0001 + 0.1
+        return result
+
+    value = ts.Variable(ts.full((width,), 1.0), name="replay_input")
+    model(value)
+    computation = model.computation
+    new_data = ts.full((width,), 2.0)
+    expected = 2.0
+    for _ in range(depth):
+        expected = expected * 1.0001 + 0.1
+
+    def run() -> ts.Tensor:
+        value.data = new_data
+        return computation.forward()
+
+    def validate() -> None:
+        result = run()
+        assert result.shape == (width,)
+        assert math.isclose(float(result[0]), expected)
+
+    return BenchmarkCase(
+        name=f"graph.replay/new_inputs/depth-{depth}/width-{width}",
+        run=run,
+        validate=validate,
+        work_items=2 * depth * width,
+        gc_enabled=True,
+        description="compiled replay after replacing a leaf value",
+        layer="graph",
+    )
+
+
+def _release_cleanup_case(
+    depth: int,
+    width: int,
+) -> BenchmarkCase:
+    """Measure the trace-and-release lifecycle of a fresh computation."""
+    @ts.Graph
+    def model(value):
+        result = value
+        for _ in range(depth):
+            result = result * 1.0001 + 0.1
+        return result
+
+    value = ts.full((width,), 1.0)
+
+    def run() -> None:
+        model(value)
+        model.computation.release()
+
+    def validate() -> None:
+        run()
+
+    return BenchmarkCase(
+        name=f"graph.release/depth-{depth}/width-{width}",
+        run=run,
+        validate=validate,
+        work_items=2 * depth * width,
+        gc_enabled=True,
+        description="fresh graph trace followed by computation release",
+        layer="graph",
+    )
+
+
 def cases() -> list[BenchmarkCase]:
     """Return graph cases spanning chain, branch, and matrix topologies."""
     backend = ts.get_backend()
@@ -202,4 +274,6 @@ def cases() -> list[BenchmarkCase]:
     benchmarks.extend(_matrix_cases(4, 32, None))
     if backend != "python":
         benchmarks.extend(_matrix_cases(8, 128, _ACCELERATED))
+    benchmarks.append(_replay_new_inputs_case(10, 1_024))
+    benchmarks.append(_release_cleanup_case(10, 1_024))
     return benchmarks

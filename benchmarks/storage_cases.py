@@ -175,4 +175,95 @@ def cases() -> list[BenchmarkCase]:
             backends=_ACCELERATED,
         ))
 
+        def conversion_roundtrip(
+            source=host,
+            target_kind=native_kind,
+        ):
+            native = convert_storage(source, target_kind)
+            return convert_storage(native, "python")
+
+        def validate_conversion_roundtrip(
+            run=conversion_roundtrip,
+            expected_size=size,
+        ) -> None:
+            storage = run()
+            assert storage.size == expected_size
+            assert storage.buffer[-1] == 1.25
+
+        benchmarks.append(BenchmarkCase(
+            name=f"storage.conversion_roundtrip/{size}",
+            run=conversion_roundtrip,
+            validate=validate_conversion_roundtrip,
+            work_items=2 * size,
+            description="uncached host-to-native-to-host storage conversion cycle",
+            layer="storage",
+            backends=selected,
+        ))
+
+        def persistent_state(
+            expected_size=size,
+            kind=native_kind,
+        ):
+            value = ts.full((expected_size,), 1.25)
+            value._storage_for(kind)
+            return value
+
+        persistent_holder = [persistent_state()]
+
+        def reset_persistent(
+            holder=persistent_holder,
+            create=persistent_state,
+        ) -> None:
+            holder[0] = create()
+
+        def mutation_invalidation(
+            holder=persistent_holder,
+            kind=native_kind,
+        ):
+            value = holder[0]
+            value[0] = value[0] + 1.0
+            return value._storage_for(kind)
+
+        def validate_mutation_invalidation(
+            run=mutation_invalidation,
+            expected_size=size,
+        ) -> None:
+            storage = run()
+            assert storage.size == expected_size
+            assert float(storage.buffer[-1]) == 1.25
+
+        benchmarks.append(BenchmarkCase(
+            name=f"storage.mutation_invalidation/{size}",
+            run=mutation_invalidation,
+            validate=validate_mutation_invalidation,
+            work_items=size,
+            description="in-place mutation followed by a fresh native conversion",
+            layer="storage",
+            backends=selected,
+            reset=reset_persistent,
+        ))
+
+        if backend == "cuda":
+            def host_device_roundtrip(value=native_tensor):
+                host_view = convert_storage(value._storage, "python")
+                return convert_storage(host_view, "cuda")
+
+            def validate_host_device_roundtrip(
+                run=host_device_roundtrip,
+                expected_size=size,
+            ) -> None:
+                storage = run()
+                assert storage.size == expected_size
+                assert float(storage.buffer[-1]) == 1.25
+
+            benchmarks.append(BenchmarkCase(
+                name=f"storage.host_device_roundtrip/{size}",
+                run=host_device_roundtrip,
+                validate=validate_host_device_roundtrip,
+                work_items=2 * size,
+                description="uncached device-to-host-to-device transfer cycle",
+                layer="storage",
+                backends=_CUDA,
+            ))
+
     return benchmarks

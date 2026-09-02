@@ -54,6 +54,9 @@ def _backward_case(size: int) -> BenchmarkCase:
         assert value.grad.shape == value.shape
         assert math.isclose(float(value.grad[0]), 5.0)
 
+    def reset() -> None:
+        value.grad = None
+
     return BenchmarkCase(
         name=f"autograd.backward/{size}",
         run=run,
@@ -61,6 +64,7 @@ def _backward_case(size: int) -> BenchmarkCase:
         work_items=size,
         layer="autograd",
         description="reverse pass that publishes gradients on Variables",
+        reset=reset,
     )
 
 
@@ -211,6 +215,9 @@ def _accumulation_case(size: int) -> BenchmarkCase:
         assert isinstance(value.grad, ts.Tensor)
         assert value.grad.shape == (size,)
 
+    def reset() -> None:
+        value.grad = ts.zeros((size,))
+
     return BenchmarkCase(
         name=f"autograd.accumulate/{size}",
         run=run,
@@ -218,6 +225,7 @@ def _accumulation_case(size: int) -> BenchmarkCase:
         work_items=size,
         description="reverse pass accumulated into an existing gradient",
         layer="autograd",
+        reset=reset,
     )
 
 
@@ -276,6 +284,9 @@ def _planned_chain_backward_case(
         assert result.shape == (width,)
         assert math.isclose(float(result[0]), expected)
 
+    def reset() -> None:
+        value.grad = None
+
     return BenchmarkCase(
         name=f"autograd.planned_chain/depth-{depth}/width-{width}",
         run=run,
@@ -284,6 +295,7 @@ def _planned_chain_backward_case(
         description="reused compiled reverse plan for a scalar elementwise chain",
         layer="autograd",
         backends=backends,
+        reset=reset,
     )
 
 
@@ -298,6 +310,112 @@ def core_cases() -> list[BenchmarkCase]:
     ]
 
 
+def _jacobian_case(size: int) -> BenchmarkCase:
+    value = ts.Variable(ts.linspace(1.0, 2.0, size), name="jacobian_x")
+    output = value ** 2.0
+
+    def run():
+        return ts.jacobian(output, value)
+
+    def validate() -> None:
+        result = run()
+        assert isinstance(result, ts.Tensor)
+        assert result.shape == (size, size)
+        assert math.isclose(float(result[0, 0]), 2.0)
+        assert result[0, 1] == 0.0
+
+    return BenchmarkCase(
+        name=f"autograd.jacobian/{size}",
+        run=run,
+        validate=validate,
+        work_items=size * size,
+        gc_enabled=True,
+        layer="autograd",
+        description="complete Jacobian of an elementwise vector expression",
+    )
+
+
+def _third_derivative_case() -> BenchmarkCase:
+    def run():
+        value = ts.Variable([2.0], name="third_x")
+        output = value ** 3.0
+        first = ts.grad(output, value, create_graph=True)
+        second = ts.grad(first, value, create_graph=True)
+        return ts.grad(second, value)
+
+    def validate() -> None:
+        result = run()
+        assert isinstance(result, ts.Tensor)
+        assert math.isclose(float(result.item()), 6.0)
+
+    return BenchmarkCase(
+        name="autograd.third_derivative/scalar",
+        run=run,
+        validate=validate,
+        work_items=1,
+        gc_enabled=True,
+        layer="autograd",
+        description="fresh scalar expression and three reverse-mode passes",
+    )
+
+
+def _gradcheck_case(size: int) -> BenchmarkCase:
+    value = ts.Variable(ts.linspace(1.0, 2.0, size), name="gradcheck_x")
+
+    def objective(v):
+        return ts.sum(v ** 2.0 + v * 3.0)
+
+    def run() -> bool:
+        return ts.gradcheck(objective, value)
+
+    def validate() -> None:
+        assert run() is True
+
+    return BenchmarkCase(
+        name=f"autograd.gradcheck/{size}",
+        run=run,
+        validate=validate,
+        work_items=size,
+        gc_enabled=True,
+        layer="autograd",
+        description="reverse-mode gradients verified by finite differences",
+    )
+
+
+def _broadcast_backward_case(
+    size: int,
+    backends: frozenset[BenchmarkBackend] | None,
+) -> BenchmarkCase:
+    left = ts.Variable(ts.full((size, 1), 1.0), name="broadcast_left")
+    right = ts.Variable(ts.full((1, size), 2.0), name="broadcast_right")
+    output = left + right
+
+    def run() -> None:
+        left.grad = None
+        right.grad = None
+        ts.backward(output)
+
+    def validate() -> None:
+        run()
+        assert isinstance(left.grad, ts.Tensor)
+        assert isinstance(right.grad, ts.Tensor)
+        assert left.grad.shape == left.shape
+        assert right.grad.shape == right.shape
+        assert math.isclose(float(left.grad[0, 0]), size)
+        assert math.isclose(float(right.grad[0, 0]), size)
+
+    return BenchmarkCase(
+        name=f"autograd.broadcast_backward/{size}x{size}",
+        run=run,
+        validate=validate,
+        work_items=2 * size * size,
+        gc_enabled=True,
+        description="reverse pass that reduces a broadcasted addition gradient",
+        layer="autograd",
+        backends=backends,
+    )
+
+
 def cases() -> list[BenchmarkCase]:
     """Return phase, topology, accumulation, and higher-order benchmarks."""
     backend = ts.get_backend()
@@ -309,6 +427,10 @@ def cases() -> list[BenchmarkCase]:
         _matrix_backward_case(16, None),
         _planned_chain_backward_case(10, 1_024, None),
         _planned_chain_backward_case(100, 1_024, None),
+        _jacobian_case(8),
+        _third_derivative_case(),
+        _gradcheck_case(8),
+        _broadcast_backward_case(64, None),
     ))
     if backend != "python":
         benchmarks.extend((
@@ -320,5 +442,6 @@ def cases() -> list[BenchmarkCase]:
                 100_000,
                 _ACCELERATED,
             ),
+            _broadcast_backward_case(256, _ACCELERATED),
         ))
     return benchmarks

@@ -44,6 +44,9 @@ class BenchmarkCase:
     description: str = ""
     layer: BenchmarkLayer = "public"
     backends: frozenset[BenchmarkBackend] | None = None
+    setup: Callable[[], None] | None = None
+    reset: Callable[[], None] | None = None
+    teardown: Callable[[], None] | None = None
 
     def supports_backend(self, backend: str) -> bool:
         """Return whether this case is meaningful for ``backend``."""
@@ -67,14 +70,18 @@ def _calibrate(timer: timeit.Timer, target_seconds: float) -> int:
 
 def _timer(case: BenchmarkCase) -> timeit.Timer:
     """Create a Timer with consistent garbage-collection behavior."""
-    setup = gc.enable if case.gc_enabled else (lambda: None)
+    def prepare_sample() -> None:
+        if case.gc_enabled:
+            gc.enable()
+        if case.reset is not None:
+            case.reset()
 
     def run_and_synchronize() -> object:
         result = case.run()
         _synchronize_backend()
         return result
 
-    return timeit.Timer(run_and_synchronize, setup=setup)
+    return timeit.Timer(run_and_synchronize, setup=prepare_sample)
 
 
 def _synchronize_backend() -> None:
@@ -93,18 +100,33 @@ def measure(
     target_seconds: float,
 ) -> dict[str, Any]:
     """Validate, calibrate, and measure one benchmark case."""
-    if case.validate is not None:
-        case.validate()
-    _synchronize_backend()
+    if case.setup is not None:
+        case.setup()
+    try:
+        if case.reset is not None:
+            case.reset()
+        if case.validate is not None:
+            case.validate()
+        _synchronize_backend()
 
-    gc.collect()
-    timer = _timer(case)
-    loops = _calibrate(timer, target_seconds)
-
-    samples = []
-    for _ in range(repeats):
         gc.collect()
-        samples.append(timer.timeit(number=loops) / loops)
+        timer = _timer(case)
+        # A resettable case represents one isolated state transition. Running
+        # several transitions inside one calibrated sample would make its
+        # inputs depend on backend speed and loop calibration.
+        loops = (
+            1
+            if case.reset is not None
+            else _calibrate(timer, target_seconds)
+        )
+
+        samples = []
+        for _ in range(repeats):
+            gc.collect()
+            samples.append(timer.timeit(number=loops) / loops)
+    finally:
+        if case.teardown is not None:
+            case.teardown()
 
     median_seconds = statistics.median(samples)
     deviations = [abs(sample - median_seconds) for sample in samples]
