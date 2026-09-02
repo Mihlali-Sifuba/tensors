@@ -148,7 +148,11 @@ class Graph:
             return self._trace(
                 args,
                 kwargs,
-                lazy=not scope.outermost,
+                # Ordinary eager calls only need the output-owned incoming
+                # edges. Building the reusable execution plan is deferred
+                # until graph metadata is inspected. Explicit compilation
+                # still materializes immediately because replay needs it.
+                lazy=signature is None,
                 compiled_signature=signature,
             )
         finally:

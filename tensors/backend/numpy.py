@@ -25,6 +25,7 @@ from ._array import (
     extremum_gradient,
     eye,
     full,
+    fused_elementwise,
     linspace,
     logsumexp,
     logsumexp_gradient,

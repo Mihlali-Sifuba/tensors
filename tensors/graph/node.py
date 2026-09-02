@@ -45,6 +45,7 @@ class Node:
         "_out_edge_references",
         "_input_states",
         "_output_state",
+        "_autograd_computation",
         "__weakref__",
     )
 
@@ -74,6 +75,10 @@ class Node:
         self._out_edge_references: list[ReferenceType[Edge]] = []
         self._input_states: tuple[Any, ...] = ()
         self._output_state: Any = None
+        # Created on the first functional backward/grad call. The graph
+        # topology is immutable, so later calls can reuse the pre-resolved
+        # plan. Execution workspaces remain thread-local in Computation.
+        self._autograd_computation: Any = None
 
     def capture_states(self) -> None:
         """Remember the eager input and output states of this operation."""

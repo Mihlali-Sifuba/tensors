@@ -945,15 +945,24 @@ def fused_elementwise(
     dtype: DataType,
     output_shape: tuple[int, ...],
 ) -> tuple[Storage, ...] | None:
-    """Evaluate a typed broadcast-aware expression chain in one CUDA launch."""
+    """Evaluate a typed expression chain without public Tensor dispatch."""
     from . import get_backend
 
+    backend = get_backend()
     if (
-        get_backend() != "cuda"
-        or dtype.kind != "floating"
+        dtype.kind != "floating"
         or not values
         or len(steps) < 2
     ):
+        return None
+    if backend == "numpy":
+        return _numpy_fused_elementwise(
+            values,
+            steps,
+            dtype=dtype,
+            output_shape=output_shape,
+        )
+    if backend != "cuda":
         return None
     cupy = _numpy()
     size = 1
@@ -989,6 +998,55 @@ def fused_elementwise(
         CudaStorage(result[index], dtype)
         for index in range(len(steps))
     )
+
+
+def _numpy_fused_elementwise(
+    values: tuple[Tensor, ...],
+    steps: tuple[FusedElementwiseStep, ...],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> tuple[Storage, ...] | None:
+    """Evaluate a simple same-shape chain directly on NumPy arrays."""
+    supported = {"add", "subtract", "multiply", "negate"}
+    if (
+        any(step[0] not in supported for step in steps)
+        or any(value.shape != output_shape for value in values)
+    ):
+        return None
+    numpy = _numpy()
+    provider_dtype = numpy.dtype(dtype.name)
+    sources = tuple(
+        _view(value, numpy).astype(provider_dtype, copy=False)
+        for value in values
+    )
+    current = sources[0]
+    storages: list[Storage] = []
+    functions = {
+        "add": numpy.add,
+        "subtract": numpy.subtract,
+        "multiply": numpy.multiply,
+        "negate": numpy.negative,
+    }
+    with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
+        for operation, scalar, reverse, operand_index in steps:
+            if operation == "negate":
+                result = functions[operation](current)
+            else:
+                operand = (
+                    scalar
+                    if scalar is not None
+                    else current
+                    if operand_index == -1
+                    else sources[operand_index]
+                )
+                left, right = (operand, current) if reverse else (current, operand)
+                result = functions[operation](left, right)
+            current = numpy.asarray(result, dtype=provider_dtype)
+            storage = NumPyStorage(current.reshape(-1), dtype)
+            storages.append(storage)
+            current = storage.buffer.reshape(output_shape)
+    return tuple(storages)
 
 
 def fused_elementwise_backward(
@@ -2806,22 +2864,50 @@ def reduction(
             return None
         with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
             direct = numpy.sum(values, axis=axis, keepdims=True)
-            scaled = _scaled_sum(values, axis, numpy)
             if operation == "mean":
                 count = math.prod(value.shape[item] for item in axis)
                 direct = direct / count
-                scaled = scaled / count
-        safe = _summation_guard(
-            values,
-            numpy,
-            axes=axis,
-            keepdims=True,
-        )
-        direct_safe = safe & numpy.all(numpy.isfinite(direct))
-        result = numpy.where(direct_safe, direct, scaled)
-        valid = safe & ~numpy.any(numpy.isnan(result))
-        if not bool(valid):
-            return None
+
+        # A finite same-sign reduction cannot lose values through
+        # cancellation, and a finite direct result proves that no partial
+        # overflow escaped the provider.  This common NumPy case only needs
+        # min/max plus the sum; mixed-sign or extreme data retains the full
+        # scaled guard below.
+        from . import get_backend
+
+        ordinary = False
+        if get_backend() == "numpy":
+            minimum = numpy.min(values, axis=axis, keepdims=True)
+            maximum = numpy.max(values, axis=axis, keepdims=True)
+            ordinary = bool(numpy.all(
+                numpy.isfinite(minimum)
+                & numpy.isfinite(maximum)
+                & numpy.isfinite(direct)
+                & ((minimum >= 0.0) | (maximum <= 0.0))
+            ))
+        if ordinary:
+            result = direct
+        else:
+            with _errstate(
+                numpy,
+                over="ignore",
+                under="ignore",
+                invalid="ignore",
+            ):
+                scaled = _scaled_sum(values, axis, numpy)
+                if operation == "mean":
+                    scaled = scaled / count
+            safe = _summation_guard(
+                values,
+                numpy,
+                axes=axis,
+                keepdims=True,
+            )
+            direct_safe = safe & numpy.all(numpy.isfinite(direct))
+            result = numpy.where(direct_safe, direct, scaled)
+            valid = safe & ~numpy.any(numpy.isnan(result))
+            if not bool(valid):
+                return None
         if not keepdims and axis:
             result = numpy.squeeze(result, axis=axis)
     elif operation in {"variance", "std"}:

@@ -13,6 +13,7 @@ from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
 from ..shape import Shape
+from ..storage import PythonStorage
 from ..tensor import Tensor
 from ..utils.coordinates import (
     coordinates_to_linear_index,
@@ -254,6 +255,22 @@ def _transpose_impl(
     )
     if accelerated is not None:
         return Tensor._from_owned_storage(accelerated, dtype=tensor.dtype, shape=shape)
+    if tensor.ndim == 2 and permutation == (1, 0):
+        rows, columns = tensor.shape
+        source = tensor._data
+        storage = PythonStorage.from_values(
+            (
+                source[row * columns + column]
+                for column in range(columns)
+                for row in range(rows)
+            ),
+            tensor.dtype,
+        )
+        return Tensor._from_owned_storage(
+            storage,
+            dtype=tensor.dtype,
+            shape=shape,
+        )
     inverse = [0] * tensor.ndim
     for output_axis, input_axis in enumerate(permutation):
         inverse[input_axis] = output_axis

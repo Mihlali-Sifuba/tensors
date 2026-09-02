@@ -70,6 +70,17 @@ class Computation:
         )
 
     @classmethod
+    def _for_autograd(cls, output: Variable) -> Computation:
+        """Return the reusable reverse plan owned by an output node."""
+        cls._validate_outputs((output,))
+        node = output.node
+        computation = node._autograd_computation
+        if computation is None or computation._released:
+            computation = cls(output)
+            node._autograd_computation = computation
+        return computation
+
+    @classmethod
     def from_outputs(
         cls,
         outputs: Iterable[Variable],
@@ -589,7 +600,7 @@ class Computation:
             result = instruction.forward(*args, **instruction.arguments)
 
         tensor = result if isinstance(result, Tensor) else Tensor([result])
-        instruction.output_variable.data = tensor
+        instruction.output_variable._replace_data_from_replay(tensor)
         instruction.node.capture_states()
         values[instruction.output_slot] = tensor
 
@@ -628,7 +639,7 @@ class Computation:
                 dtype=instruction.output_variable.dtype,
                 shape=output_shape,
             )
-            instruction.output_variable.data = tensor
+            instruction.output_variable._replace_data_from_replay(tensor)
             instruction.node.capture_states()
             values[instruction.output_slot] = tensor
         return True
@@ -1033,7 +1044,10 @@ def backward(
     """Differentiate an output through its recorded Computation."""
     if not isinstance(create_graph, bool):
         raise TypeError("create_graph must be a bool")
-    Computation(output).backward(grad, create_graph=create_graph)
+    Computation._for_autograd(output).backward(
+        grad,
+        create_graph=create_graph,
+    )
 
 
 @overload
@@ -1090,7 +1104,7 @@ def grad(
                 f"grad input {index} must be a Variable, got "
                 f"{type(variable).__name__}"
             )
-    computation = Computation(output)
+    computation = Computation._for_autograd(output)
     computation._validate_recorded_states()
     if create_graph:
         seed = computation._gradient_seed(grad_outputs, create_graph=True)
