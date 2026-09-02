@@ -134,6 +134,29 @@ _NAME_MAP = {
     "uint8": uint8,
 }
 
+_INTEGER_LIMITS = {
+    "B": (0, 2 ** 8 - 1),
+    "b": (-(2 ** 7), 2 ** 7 - 1),
+    "h": (-(2 ** 15), 2 ** 15 - 1),
+    "i": (-(2 ** 31), 2 ** 31 - 1),
+    "q": (-(2 ** 63), 2 ** 63 - 1),
+}
+
+
+def _integer_scalar_result_dtype(a_dtype: DataType, value: int) -> DataType:
+    """Promote an integer dtype enough to represent its domain and value."""
+    lower, upper = _INTEGER_LIMITS[a_dtype.typecode]
+    required_lower = min(lower, value)
+    required_upper = max(upper, value)
+    for candidate in (uint8, int8, int16, int32, int64):
+        candidate_lower, candidate_upper = _INTEGER_LIMITS[candidate.typecode]
+        if (
+            candidate_lower <= required_lower
+            and required_upper <= candidate_upper
+        ):
+            return candidate
+    return float64
+
 
 def from_typecode(code: str) -> DataType:
     """Look up a :class:`DataType` by its typecode or human-readable name."""
@@ -184,8 +207,11 @@ def result_dtype(
             return int16 if signed_dtype.typecode == "b" else signed_dtype
         return a_dtype if a_dtype.size >= b_dtype.size else b_dtype
 
-    if isinstance(b, float) and a_dtype.typecode in _INTEGER_CODES:
-        return float64
+    if a_dtype.typecode in _INTEGER_CODES:
+        if isinstance(b, float):
+            return float64
+        if isinstance(b, int) and not isinstance(b, bool):
+            return _integer_scalar_result_dtype(a_dtype, b)
     return a_dtype
 
 
