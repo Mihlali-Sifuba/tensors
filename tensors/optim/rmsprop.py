@@ -42,8 +42,25 @@ class RMSprop(Optimizer):
         self.rho = rho
         self.eps = eps
         super().__init__(parameters)
-        self._state: dict[int, Tensor] = {}
         self._scaled_state: dict[int, tuple[Tensor, Tensor]] = {}
+
+    @property
+    def _state(self) -> dict[int, Tensor]:
+        """Materialize the conventional second moment for inspection."""
+        return {
+            identity: Tensor(
+                [
+                    _visible_second_moment(float(scale), float(normalized))
+                    for scale, normalized in zip(
+                        scales._data,
+                        scaled_values._data,
+                    )
+                ],
+                dtype=scales.dtype,
+                shape=scales.shape,
+            )
+            for identity, (scales, scaled_values) in self._scaled_state.items()
+        }
 
     @property
     def rho(self) -> float:
@@ -79,37 +96,20 @@ class RMSprop(Optimizer):
         records = []
         for parameter, gradient in prepared:
             identity = id(parameter)
-            visible = self._state.get(identity)
+            scaled_state = self._scaled_state.get(identity)
             if (
-                visible is None
-                or visible.shape != gradient.shape
-                or visible.dtype != gradient.dtype
+                scaled_state is None
+                or any(
+                    value.shape != gradient.shape
+                    or value.dtype != gradient.dtype
+                    for value in scaled_state
+                )
             ):
                 zero_state = zeros(gradient.shape, dtype=gradient.dtype)
                 scales = zero_state
                 scaled_values = zero_state
             else:
-                scaled_state = self._scaled_state.get(identity)
-                if (
-                    scaled_state is None
-                    or scaled_state[0].shape != gradient.shape
-                    or scaled_state[0].dtype != gradient.dtype
-                ):
-                    scale_data = [
-                        math.sqrt(float(value)) for value in visible._data
-                    ]
-                    scales = Tensor(
-                        scale_data,
-                        dtype=gradient.dtype,
-                        shape=gradient.shape,
-                    )
-                    scaled_values = Tensor(
-                        [1.0 if value else 0.0 for value in scale_data],
-                        dtype=gradient.dtype,
-                        shape=gradient.shape,
-                    )
-                else:
-                    scales, scaled_values = scaled_state
+                scales, scaled_values = scaled_state
             records.append((
                 parameter,
                 gradient,
@@ -131,24 +131,17 @@ class RMSprop(Optimizer):
             return False
         (
             parameter_storages,
-            visible_storages,
             scale_storages,
             scaled_storages,
         ) = accelerated
         pending = []
-        for record, parameter_storage, visible_storage, scale_storage, scaled_storage in zip(
+        for record, parameter_storage, scale_storage, scaled_storage in zip(
             records,
             parameter_storages,
-            visible_storages,
             scale_storages,
             scaled_storages,
         ):
             parameter, gradient, identity, _, _ = record
-            visible_state = Tensor._from_owned_storage(
-                visible_storage,
-                dtype=gradient.dtype,
-                shape=gradient.shape,
-            )
             scaled_state = (
                 Tensor._from_owned_storage(
                     scale_storage,
@@ -170,11 +163,9 @@ class RMSprop(Optimizer):
                 parameter,
                 identity,
                 value,
-                visible_state,
                 scaled_state,
             ))
-        for parameter, identity, value, visible, scaled in pending:
-            self._state[identity] = visible
+        for parameter, identity, value, scaled in pending:
             self._scaled_state[identity] = scaled
             parameter.data = value
         return True
@@ -188,34 +179,19 @@ class RMSprop(Optimizer):
         pending = []
         for param, grad in prepared:
             sid = id(param)
-            v = self._state.get(sid)
+            scaled_state = self._scaled_state.get(sid)
             if (
-                v is None
-                or v.shape != grad.shape
-                or v.dtype != grad.dtype
+                scaled_state is None
+                or any(
+                    value.shape != grad.shape or value.dtype != grad.dtype
+                    for value in scaled_state
+                )
             ):
                 zero_state = zeros(grad.shape, dtype=grad.dtype)
-                v = zero_state
                 scales = zero_state
                 scaled_values = zero_state
             else:
-                scaled_state = self._scaled_state.get(sid)
-                if (
-                    scaled_state is None
-                    or scaled_state[0].shape != grad.shape
-                    or scaled_state[0].dtype != grad.dtype
-                ):
-                    scale_data = [math.sqrt(float(value)) for value in v._data]
-                    scales = Tensor(
-                        scale_data, dtype=grad.dtype, shape=grad.shape
-                    )
-                    scaled_values = Tensor(
-                        [1.0 if value else 0.0 for value in scale_data],
-                        dtype=grad.dtype,
-                        shape=grad.shape,
-                    )
-                else:
-                    scales, scaled_values = scaled_state
+                scales, scaled_values = scaled_state
 
             accelerated = execute_rmsprop_update(
                 param.data,
@@ -229,15 +205,9 @@ class RMSprop(Optimizer):
             if accelerated is not None:
                 (
                     parameter_storage,
-                    visible_storage,
                     scale_storage,
                     scaled_storage,
                 ) = accelerated
-                visible_state = Tensor._from_owned_storage(
-                    visible_storage,
-                    dtype=grad.dtype,
-                    shape=grad.shape,
-                )
                 scaled_state = (
                     Tensor._from_owned_storage(
                         scale_storage,
@@ -256,13 +226,12 @@ class RMSprop(Optimizer):
                     shape=param.shape,
                 )
                 pending.append(
-                    (param, sid, new_parameter, visible_state, scaled_state)
+                    (param, sid, new_parameter, scaled_state)
                 )
                 continue
 
             new_scales = []
             new_scaled_values = []
-            visible_values = []
             parameter_values = []
             for parameter_value, gradient_value, scale, scaled in zip(
                 param.data._data,
@@ -280,14 +249,8 @@ class RMSprop(Optimizer):
                 )
                 new_scales.append(new_scale)
                 new_scaled_values.append(new_scaled)
-                visible_values.append(
-                    _visible_second_moment(new_scale, new_scaled)
-                )
                 parameter_values.append(float(parameter_value) - update)
 
-            visible_state = Tensor(
-                visible_values, dtype=grad.dtype, shape=grad.shape
-            )
             scaled_state = (
                 Tensor(new_scales, dtype=grad.dtype, shape=grad.shape),
                 Tensor(new_scaled_values, dtype=grad.dtype, shape=grad.shape),
@@ -295,10 +258,9 @@ class RMSprop(Optimizer):
             new_parameter = Tensor(
                 parameter_values, dtype=param.dtype, shape=param.shape
             )
-            pending.append((param, sid, new_parameter, visible_state, scaled_state))
+            pending.append((param, sid, new_parameter, scaled_state))
 
-        for param, sid, new_parameter, visible_state, scaled_state in pending:
-            self._state[sid] = visible_state
+        for param, sid, new_parameter, scaled_state in pending:
             self._scaled_state[sid] = scaled_state
             param.data = new_parameter
 

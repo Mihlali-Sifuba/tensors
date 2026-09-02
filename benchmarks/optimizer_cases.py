@@ -86,15 +86,29 @@ def _many_parameter_case(
     optimizer_type: Callable[..., ts.optim.Optimizer],
     parameter_count: int,
     width: int,
+    *,
+    mixed_dtypes: bool = False,
 ) -> BenchmarkCase:
     """Measure grouped updates where launch overhead dominates each tensor."""
     def steady_state():
         parameters = [
-            ts.Variable(ts.full((width,), 1.0 + index * 0.01))
+            ts.Variable(ts.full(
+                (width,),
+                1.0 + index * 0.01,
+                dtype=(
+                    ts.float32
+                    if mixed_dtypes and index % 2 == 0
+                    else ts.float64
+                ),
+            ))
             for index in range(parameter_count)
         ]
         for index, parameter in enumerate(parameters):
-            parameter.grad = ts.full((width,), 0.1 + index * 0.001)
+            parameter.grad = ts.full(
+                (width,),
+                0.1 + index * 0.001,
+                dtype=parameter.dtype,
+            )
         optimizer = optimizer_type(parameters, learning_rate=1e-3)
         optimizer.step()
         return parameters, optimizer
@@ -121,16 +135,18 @@ def _many_parameter_case(
 
     return BenchmarkCase(
         name=(
-            f"optimizer.{name}_many/"
+            f"optimizer.{name}{'_mixed_dtype' if mixed_dtypes else ''}_many/"
             f"parameters-{parameter_count}/width-{width}"
         ),
         run=run,
         validate=validate,
         work_items=parameter_count * width,
         description=(
-            f"{name} steady update across many small parameter tensors"
+            f"{name} steady update across many small "
+            f"{'mixed-dtype ' if mixed_dtypes else ''}parameter tensors"
         ),
         layer="optimizer",
+        backends=_ACCELERATED if mixed_dtypes else None,
         reset=reset,
     )
 
@@ -159,5 +175,14 @@ def cases() -> list[BenchmarkCase]:
     for name, optimizer_type in optimizers:
         benchmarks.append(
             _many_parameter_case(name, optimizer_type, 64, 256)
+        )
+        benchmarks.append(
+            _many_parameter_case(
+                name,
+                optimizer_type,
+                64,
+                256,
+                mixed_dtypes=True,
+            )
         )
     return benchmarks
