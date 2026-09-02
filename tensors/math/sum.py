@@ -99,17 +99,24 @@ def _sum_impl(a: Tensor, axis: Axis = None,
     )
     if accelerated is not None:
         return Tensor._from_owned_storage(accelerated, dtype=a.dtype, shape=output_shape)
+    data = a._data
+    if axes == tuple(range(a.ndim)):
+        if a.dtype.kind == "floating":
+            total = _stable_float_sum([float(value) for value in data])
+        else:
+            total = builtins.sum(data)
+        return Tensor([total], dtype=a.dtype, shape=output_shape)
     _, output_shape, groups = reduction_groups(
         a, axis, keepdims, scalar_as_vector=True
     )
     if a.dtype.kind == "floating":
         values = [
-            _stable_float_sum([float(a._data[index]) for index in group])
+            _stable_float_sum([float(data[index]) for index in group])
             for group in groups
         ]
     else:
         values = [
-            builtins.sum(a._data[index] for index in group)
+            builtins.sum(data[index] for index in group)
             for group in groups
         ]
     return Tensor(values, dtype=a.dtype, shape=output_shape)

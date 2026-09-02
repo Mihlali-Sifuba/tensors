@@ -1,20 +1,17 @@
 """Helpers for NumPy-style tensor broadcasting."""
 
 from collections.abc import Iterable
+from itertools import product
 from typing import Tuple
 
 from ..shape import Shape
+from ..strides import Strides
 from ..tensor import Tensor
-from .coordinates import (
-    coordinates_to_linear_index,
-    linear_index_to_coordinates,
-)
 
 
 def broadcast_to(tensor: Tensor, shape: Shape | Iterable[int]) -> Tensor:
     """Materialize ``tensor`` at ``shape`` using singleton dimensions."""
     output_shape = Shape.from_iterable(shape)
-    output_size = output_shape.size
     if tensor.shape == output_shape:
         return tensor
     if tensor.shape.rank > output_shape.rank:
@@ -31,22 +28,20 @@ def broadcast_to(tensor: Tensor, shape: Shape | Iterable[int]) -> Tensor:
                 f"Shape {tensor.shape} cannot be broadcast to {output_shape}"
             )
 
-    values = []
     padding = output_shape.rank - tensor.ndim
-    for output_index in range(output_size):
-        output_coordinates = linear_index_to_coordinates(
-            output_index,
-            output_shape,
-        )
-        source_coordinates = tuple(
-            0 if source_dimension == 1 else coordinate
-            for source_dimension, coordinate in zip(padded_shape, output_coordinates)
-        )[padding:]
-        values.append(
-            tensor._data[
-                coordinates_to_linear_index(source_coordinates, tensor.shape)
-            ]
-        )
+    source_data = tensor._data
+    source_strides = (0,) * padding + tuple(Strides.contiguous(tensor.shape))
+    broadcast_strides = tuple(
+        0 if source_dimension == 1 else stride
+        for source_dimension, stride in zip(padded_shape, source_strides)
+    )
+    values = [
+        source_data[sum(
+            coordinate * stride
+            for coordinate, stride in zip(coordinates, broadcast_strides)
+        )]
+        for coordinates in product(*(range(dimension) for dimension in output_shape))
+    ]
 
     return Tensor(values, dtype=tensor.dtype, shape=output_shape)
 

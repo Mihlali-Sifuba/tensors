@@ -47,12 +47,19 @@ class Mean:
         )
         if accelerated is not None:
             return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
+        data = a._data
+        if axes == tuple(range(a.ndim)):
+            return Tensor(
+                [_stable_float_mean([float(value) for value in data])],
+                dtype=dtype,
+                shape=output_shape,
+            )
         _, output_shape, groups = reduction_groups(
             a, axis, keepdims, scalar_as_vector=True
         )
         values = [
             _stable_float_mean([
-                float(a._data[index]) for index in group
+                float(data[index]) for index in group
             ])
             for group in groups
         ]

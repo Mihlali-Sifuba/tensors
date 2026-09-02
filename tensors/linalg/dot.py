@@ -169,7 +169,30 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
     if accelerated is not None:
         return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
 
+    a_data = a._data
+    b_data = b._data
     values = []
+    if not batch_shape:
+        for row in range(a_rows):
+            a_row_offset = 0 if a_vector else row * a_columns
+            for column in range(b_columns):
+                factors = [
+                    (
+                        a_data[inner if a_vector else a_row_offset + inner],
+                        b_data[inner if b_vector else inner * b_columns + column],
+                    )
+                    for inner in range(a_columns)
+                ]
+                if dtype.kind == "floating":
+                    total = _stable_product_sum([
+                        (float(left), float(right))
+                        for left, right in factors
+                    ])
+                else:
+                    total = sum(left * right for left, right in factors)
+                values.append(total)
+        return Tensor(values, dtype=dtype, shape=output_shape)
+
     for batch_index in range(Shape.from_iterable(batch_shape).size):
         batch_coordinates = linear_index_to_coordinates(
             batch_index,
@@ -181,10 +204,10 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
             for column in range(b_columns):
                 factors: list[tuple[int | float, int | float]] = []
                 for inner in range(a_columns):
-                    left = a._data[
+                    left = a_data[
                         _a_index(a, a_vector, a_batch_coordinates, row, inner)
                     ]
-                    right = b._data[
+                    right = b_data[
                         _b_index(b, b_vector, b_batch_coordinates, inner, column)
                     ]
                     factors.append((left, right))
