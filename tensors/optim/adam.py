@@ -263,6 +263,7 @@ class Adam(Optimizer):
             return
 
         pending = []
+        reusable_pending = []
         for param, grad in prepared:
             sid = id(param)
             state = self._state.get(sid)
@@ -335,6 +336,29 @@ class Adam(Optimizer):
                     scale_storage,
                     scaled_storage,
                 ) = accelerated
+                if state is not None and len({
+                    id(m),
+                    id(v),
+                    id(scales),
+                    id(scaled_values),
+                }) == 4:
+                    reusable_pending.append((
+                        param,
+                        current_state,
+                        m,
+                        v,
+                        scales,
+                        scaled_values,
+                        parameter_storage,
+                        moment_storage,
+                        visible_storage,
+                        scale_storage,
+                        scaled_storage,
+                        step_count,
+                        beta1_product,
+                        beta2_product,
+                    ))
+                    continue
                 accelerated_state: dict[str, Tensor | int | float] = {
                     "step": step_count,
                     "m": Tensor._from_owned_storage(
@@ -427,6 +451,30 @@ class Adam(Optimizer):
         for param, sid, new_parameter, new_state in pending:
             self._state[sid] = new_state
             param.data = new_parameter
+        for (
+            param,
+            state,
+            moment,
+            visible,
+            scales,
+            scaled_values,
+            parameter_storage,
+            moment_storage,
+            visible_storage,
+            scale_storage,
+            scaled_storage,
+            step_count,
+            beta1_product,
+            beta2_product,
+        ) in reusable_pending:
+            param.data._replace_owned_storage(parameter_storage)
+            moment._replace_owned_storage(moment_storage)
+            visible._replace_owned_storage(visible_storage)
+            scales._replace_owned_storage(scale_storage)
+            scaled_values._replace_owned_storage(scaled_storage)
+            state["step"] = step_count
+            state["beta1_product"] = beta1_product
+            state["beta2_product"] = beta2_product
 
 
 def _stable_weighted_sum(

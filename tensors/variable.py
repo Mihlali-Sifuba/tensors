@@ -29,6 +29,9 @@ from .ops import Add, Sub, Mul, Div, Pow, Neg, Slice, Cast
 from .graph.state import get_graph_state
 
 
+_INPUT_LABELS = ("input_0", "input_1", "input_2", "input_3")
+
+
 class Variable:
     """A differentiable variable backed by a :class:`~tensors.Tensor`.
 
@@ -82,7 +85,12 @@ class Variable:
         )
         out.node = node
         for index, var in enumerate(inputs):
-            graph.add_edge(var.node, node, label=f"input_{index}")
+            label = (
+                _INPUT_LABELS[index]
+                if index < len(_INPUT_LABELS)
+                else f"input_{index}"
+            )
+            graph.add_edge(var.node, node, label=label)
         node.capture_states()
         return out
 
@@ -121,14 +129,16 @@ class Variable:
         self._data = tensor
         self._data_generation += 1
 
+    def _replace_data_from_replay(self, tensor: Tensor) -> None:
+        """Adopt a validated internal replay result without public coercion."""
+        self._data = tensor
+        self._data_generation += 1
+
     def _mutation_state(self):
         """Return the value state recorded by operation nodes."""
         return (
             self._data_generation,
             self.data.version,
-            self.data.shape,
-            self.data.ndim,
-            self.data.dtype.typecode,
             self.requires_grad,
         )
 

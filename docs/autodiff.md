@@ -204,12 +204,13 @@ contract.
 
 ## Graph lifetime and traversal
 
-Graph state is a non-owning, thread-local registry used for tracing and
-inspection. It stores weak references, and operation inputs store weak
-references to their outgoing edges. Consequently, a persistent leaf such as a
-model parameter does not keep every discarded forward result alive. A live
-output still owns its incoming edges and therefore retains everything required
-for recomputation and differentiation.
+Graph state is a non-owning, thread-local registry used for eager inspection.
+It stores callback-free weak references, while nodes keep lightweight weak
+references to outgoing edges. Active `Graph` traces derive their structure
+directly from output-owned incoming edges and skip the redundant registry.
+Consequently, a persistent leaf such as a model parameter does not keep every
+discarded forward result alive. A live output still owns its incoming edges and
+therefore retains everything required for recomputation and differentiation.
 
 `GraphState.clear()` forgets its current registrations without invalidating
 any live output. `Graph.release()` drops a reusable Graph object's references

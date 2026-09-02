@@ -8,6 +8,8 @@ from .node import Node
 class Edge:
     """A data-flow connection from a source node to a target node."""
 
+    __slots__ = ("source", "target", "label", "__weakref__")
+
     def __init__(
         self,
         source: Node,

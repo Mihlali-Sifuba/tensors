@@ -257,6 +257,104 @@ def _release_cleanup_case(
     )
 
 
+def _nested_trace_case(depth: int, width: int) -> BenchmarkCase:
+    """Measure hierarchical tracing without repeated upstream planning."""
+    @ts.Graph
+    def block(value):
+        return value * 1.0001 + 0.1
+
+    @ts.Graph
+    def model(value):
+        result = value
+        for _ in range(depth):
+            result = block(result)
+        return result
+
+    value = ts.full((width,), 1.0)
+    expected = _expected(depth, "chain")
+
+    def run():
+        return model(value)
+
+    def validate() -> None:
+        result = run()
+        assert result.shape == (width,)
+        assert math.isclose(float(result.data[0]), expected)
+
+    return BenchmarkCase(
+        name=f"graph.trace/nested/depth-{depth}/width-{width}",
+        run=run,
+        validate=validate,
+        work_items=2 * depth * width,
+        gc_enabled=True,
+        description="fresh hierarchical graph trace",
+        layer="graph",
+    )
+
+
+def _multi_output_trace_case(
+    depth: int,
+    width: int,
+    output_count: int,
+) -> BenchmarkCase:
+    """Measure one shared plan built from several output roots."""
+    @ts.Graph
+    def model(value):
+        result = value
+        for _ in range(depth):
+            result = result * 1.0001 + 0.1
+        return tuple(result + index for index in range(output_count))
+
+    value = ts.full((width,), 1.0)
+    expected = _expected(depth, "chain")
+
+    def run():
+        return model(value)
+
+    def validate() -> None:
+        results = run()
+        assert len(results) == output_count
+        assert math.isclose(float(results[-1].data[0]), expected + output_count - 1)
+
+    return BenchmarkCase(
+        name=(
+            f"graph.trace/multi_output/depth-{depth}/width-{width}/"
+            f"outputs-{output_count}"
+        ),
+        run=run,
+        validate=validate,
+        work_items=(2 * depth + output_count) * width,
+        gc_enabled=True,
+        description="fresh shared-trunk multi-output graph trace",
+        layer="graph",
+    )
+
+
+def _compiled_call_case(depth: int, width: int) -> BenchmarkCase:
+    """Measure guarded Graph invocation with Tensor input rebinding."""
+    model = _elementwise_model(depth, "chain")
+    value = ts.full((width,), 1.0)
+    expected = _expected(depth, "chain")
+    model.compile(value)
+
+    def run():
+        return model(value)
+
+    def validate() -> None:
+        result = run()
+        assert result.shape == (width,)
+        assert math.isclose(float(result.data[0]), expected)
+
+    return BenchmarkCase(
+        name=f"graph.compiled/depth-{depth}/width-{width}",
+        run=run,
+        validate=validate,
+        work_items=2 * depth * width,
+        description="guarded graph call with compiled replay",
+        layer="graph",
+    )
+
+
 def cases() -> list[BenchmarkCase]:
     """Return graph cases spanning chain, branch, and matrix topologies."""
     backend = ts.get_backend()
@@ -276,4 +374,7 @@ def cases() -> list[BenchmarkCase]:
         benchmarks.extend(_matrix_cases(8, 128, _ACCELERATED))
     benchmarks.append(_replay_new_inputs_case(10, 1_024))
     benchmarks.append(_release_cleanup_case(10, 1_024))
+    benchmarks.append(_nested_trace_case(100, 1))
+    benchmarks.append(_multi_output_trace_case(100, 1, 32))
+    benchmarks.append(_compiled_call_case(100, 1))
     return benchmarks
