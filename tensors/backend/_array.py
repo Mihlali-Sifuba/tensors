@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import itertools
 import math
+import threading
 from collections.abc import Sequence
 from contextlib import nullcontext
 from functools import lru_cache
@@ -122,11 +123,37 @@ def _storage(
     return storage
 
 
+_optimizer_workspace = threading.local()
+
+
+def _optimizer_workspace_buffer(
+    numpy: Any,
+    *,
+    slot: str,
+    size: int,
+    dtype: Any,
+) -> Any:
+    """Return one thread-local temporary buffer for optimizer execution."""
+    buffers = getattr(_optimizer_workspace, "buffers", None)
+    if buffers is None:
+        buffers = {}
+        _optimizer_workspace.buffers = buffers
+    provider_dtype = numpy.dtype(dtype)
+    key = (_array_kind(numpy), slot, provider_dtype.str)
+    buffer = buffers.get(key)
+    if buffer is None or buffer.size != size:
+        buffer = numpy.empty((size,), dtype=provider_dtype)
+        buffers[key] = buffer
+    return buffer
+
+
 def _optimizer_batch_values(
     tensors: Sequence[Tensor],
     numpy: Any,
+    *,
+    slot: str,
 ) -> Any | None:
-    """Concatenate compatible optimizer tensors into one native flat buffer."""
+    """Pack compatible optimizer tensors into reusable native storage."""
     if not tensors:
         return None
     dtype = tensors[0].dtype
@@ -136,27 +163,56 @@ def _optimizer_batch_values(
         _view(tensor, numpy).astype(numpy.float64, copy=False).reshape(-1)
         for tensor in tensors
     )
-    return numpy.concatenate(arrays)
+    buffer = _optimizer_workspace_buffer(
+        numpy,
+        slot=slot,
+        size=sum(tensor.size for tensor in tensors),
+        dtype=numpy.float64,
+    )
+    numpy.concatenate(arrays, out=buffer)
+    return buffer
 
 
-def _optimizer_batch_compatible(
+def _optimizer_batch_partitions(
     *groups: Sequence[Tensor],
-) -> bool:
-    """Return whether optimizer tensor groups can share one native update."""
+) -> tuple[tuple[int, ...], ...] | None:
+    """Group structurally compatible optimizer records by dtype."""
     if not groups or not groups[0]:
-        return False
+        return None
     count = len(groups[0])
     if any(len(group) != count for group in groups):
-        return False
-    dtype = groups[0][0].dtype
-    for tensors in zip(*groups):
+        return None
+    partitions: dict[Any, list[int]] = {}
+    for index, tensors in enumerate(zip(*groups)):
         shape = tensors[0].shape
+        dtype = tensors[0].dtype
         if any(
             tensor.shape != shape or tensor.dtype != dtype
             for tensor in tensors
         ):
-            return False
-    return True
+            return None
+        partitions.setdefault(dtype, []).append(index)
+    return tuple(tuple(indices) for indices in partitions.values())
+
+
+def _optimizer_partition(
+    values: Sequence[Any],
+    indices: tuple[int, ...],
+) -> tuple[Any, ...]:
+    """Select one optimizer batch partition while preserving record order."""
+    return tuple(values[index] for index in indices)
+
+
+def _optimizer_invalid_flag(numpy: Any) -> Any:
+    """Return a cleared scalar device flag for fused optimizer validation."""
+    flag = _optimizer_workspace_buffer(
+        numpy,
+        slot="invalid",
+        size=1,
+        dtype=numpy.uint32,
+    )
+    flag.fill(0)
+    return flag
 
 
 def _split_optimizer_storage(
@@ -2605,7 +2661,7 @@ def adam_update(
     first_correction: float,
     second_correction: float,
 ) -> tuple[Storage, Storage, Storage, Storage, Storage] | None:
-    """Apply one fused Adam update on finite, non-cancelling state."""
+    """Apply one fused Adam update on finite optimizer state."""
     numpy = _numpy()
     tensors = (parameter, gradient, moment, scale, scaled)
     values = [
@@ -2617,10 +2673,6 @@ def adam_update(
         return None
     left_term = beta1 * moments
     right_term = (1.0 - beta1) * gradients
-    if bool(numpy.any((left_term > 0.0) & (right_term < 0.0))) or bool(
-        numpy.any((left_term < 0.0) & (right_term > 0.0))
-    ):
-        return None
     with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
         new_moments = left_term + right_term
         new_scales = numpy.maximum(scales, numpy.abs(gradients))
@@ -2681,7 +2733,7 @@ def rmsprop_update(
     rho: float,
     learning_rate: float,
     epsilon: float,
-) -> tuple[Storage, Storage, Storage, Storage] | None:
+) -> tuple[Storage, Storage, Storage] | None:
     """Apply one fused RMSprop update on finite optimizer state."""
     numpy = _numpy()
     tensors = (parameter, gradient, scale, scaled)
@@ -2706,7 +2758,6 @@ def rmsprop_update(
         parameter_result = parameter_values - (
             learning_rate * gradients / (root_moment + epsilon)
         )
-        visible = new_scales * new_scales * new_scaled
     if not _finite_operands(
         new_scales,
         new_scaled,
@@ -2716,7 +2767,6 @@ def rmsprop_update(
         return None
     specifications = (
         (parameter_result, parameter.dtype),
-        (visible, gradient.dtype),
         (new_scales, gradient.dtype),
         (new_scaled, gradient.dtype),
     )
@@ -2732,7 +2782,7 @@ def rmsprop_update(
     if any(storage is None for storage in storages):
         return None
     return cast(
-        "tuple[Storage, Storage, Storage, Storage]",
+        "tuple[Storage, Storage, Storage]",
         storages,
     )
 
@@ -2743,20 +2793,42 @@ def sgd_updates(
     learning_rate: float,
 ) -> tuple[Storage, ...] | None:
     """Apply one native SGD update to several compatible parameters."""
-    if not _optimizer_batch_compatible(parameters, gradients):
+    partitions = _optimizer_batch_partitions(parameters, gradients)
+    if partitions is None:
         return None
+    if len(partitions) > 1:
+        merged: list[Storage | None] = [None] * len(parameters)
+        for indices in partitions:
+            result = sgd_updates(
+                _optimizer_partition(parameters, indices),
+                _optimizer_partition(gradients, indices),
+                learning_rate,
+            )
+            if result is None:
+                return None
+            for index, storage in zip(indices, result):
+                merged[index] = storage
+        return tuple(cast(Storage, storage) for storage in merged)
     numpy = _numpy()
-    values = _optimizer_batch_values(parameters, numpy)
-    gradient_values = _optimizer_batch_values(gradients, numpy)
+    values = _optimizer_batch_values(parameters, numpy, slot="input:0")
+    gradient_values = _optimizer_batch_values(
+        gradients,
+        numpy,
+        slot="input:1",
+    )
     if values is None or gradient_values is None:
         return None
     if _array_kind(numpy) == "cuda":
-        result, invalid = _cuda_sgd_batch_kernel()(
+        result = numpy.empty_like(values)
+        invalid = _optimizer_invalid_flag(numpy)
+        _cuda_sgd_batch_kernel()(
             values,
             gradient_values,
             learning_rate,
+            result,
+            invalid,
         )
-        if bool(numpy.any(invalid)):
+        if bool(invalid[0]):
             return None
     else:
         with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
@@ -2777,14 +2849,14 @@ def _cuda_sgd_batch_kernel() -> Any:
     cupy = importlib.import_module("cupy")
     return cupy.ElementwiseKernel(
         "float64 parameter, float64 gradient, float64 learning_rate",
-        "float64 updated, uint8 invalid",
+        "float64 updated, raw uint32 invalid",
         """
         updated = parameter - learning_rate * gradient;
-        invalid = (
+        if (
             !isfinite(parameter)
             || !isfinite(gradient)
             || !isfinite(updated)
-        );
+        ) atomicExch(&invalid[0], 1U);
         """,
         "tensors_sgd_batch",
     )
@@ -2803,7 +2875,7 @@ def _cuda_adam_batch_kernel() -> Any:
         """,
         """
         float64 updated, float64 new_moment, float64 visible,
-        float64 new_scale, float64 new_normalized, uint8 invalid
+        float64 new_scale, float64 new_normalized, raw uint32 invalid
         """,
         """
         double left = beta1 * moment;
@@ -2826,19 +2898,17 @@ def _cuda_adam_batch_kernel() -> Any:
         double ratio = new_moment * root_correction / denominator;
         updated = parameter - learning_rate * ratio;
         visible = new_scale * new_scale * new_normalized;
-        invalid = (
+        if (
             !isfinite(parameter)
             || !isfinite(gradient)
             || !isfinite(moment)
             || !isfinite(scale)
             || !isfinite(normalized)
-            || (left > 0.0 && right < 0.0)
-            || (left < 0.0 && right > 0.0)
             || !isfinite(updated)
             || !isfinite(new_moment)
             || !isfinite(new_scale)
             || !isfinite(new_normalized)
-        );
+        ) atomicExch(&invalid[0], 1U);
         """,
         "tensors_adam_batch",
     )
@@ -2855,8 +2925,8 @@ def _cuda_rmsprop_batch_kernel() -> Any:
         float64 epsilon
         """,
         """
-        float64 updated, float64 visible, float64 new_scale,
-        float64 new_normalized, uint8 invalid
+        float64 updated, float64 new_scale, float64 new_normalized,
+        raw uint32 invalid
         """,
         """
         new_scale = fmax(scale, fabs(gradient));
@@ -2872,8 +2942,7 @@ def _cuda_rmsprop_batch_kernel() -> Any:
         updated = parameter - (
             learning_rate * gradient / (root_moment + epsilon)
         );
-        visible = new_scale * new_scale * new_normalized;
-        invalid = (
+        if (
             !isfinite(parameter)
             || !isfinite(gradient)
             || !isfinite(scale)
@@ -2881,7 +2950,7 @@ def _cuda_rmsprop_batch_kernel() -> Any:
             || !isfinite(updated)
             || !isfinite(new_scale)
             || !isfinite(new_normalized)
-        );
+        ) atomicExch(&invalid[0], 1U);
         """,
         "tensors_rmsprop_batch",
     )
@@ -2918,18 +2987,52 @@ def adam_updates(
     second_corrections: Sequence[float],
 ) -> tuple[tuple[Storage, ...], ...] | None:
     """Apply Adam to several parameters with one group of array operations."""
-    if not _optimizer_batch_compatible(
+    groups = (parameters, gradients, moments, scales, scaled_values)
+    partitions = _optimizer_batch_partitions(
         parameters,
         gradients,
         moments,
         scales,
         scaled_values,
-    ):
+    )
+    if partitions is None:
         return None
+    if len(partitions) > 1:
+        merged: list[list[Storage | None]] = [
+            [None] * len(parameters) for _ in range(5)
+        ]
+        for indices in partitions:
+            result = adam_updates(
+                *(
+                    _optimizer_partition(group, indices)
+                    for group in groups
+                ),
+                beta1=beta1,
+                beta2=beta2,
+                learning_rate=learning_rate,
+                epsilon=epsilon,
+                first_corrections=_optimizer_partition(
+                    first_corrections,
+                    indices,
+                ),
+                second_corrections=_optimizer_partition(
+                    second_corrections,
+                    indices,
+                ),
+            )
+            if result is None:
+                return None
+            for merged_group, result_group in zip(merged, result):
+                for index, storage in zip(indices, result_group):
+                    merged_group[index] = storage
+        return tuple(
+            tuple(cast(Storage, storage) for storage in group)
+            for group in merged
+        )
     numpy = _numpy()
-    groups = (parameters, gradients, moments, scales, scaled_values)
     optional_arrays = tuple(
-        _optimizer_batch_values(group, numpy) for group in groups
+        _optimizer_batch_values(group, numpy, slot=f"input:{index}")
+        for index, group in enumerate(groups)
     )
     if any(array is None for array in optional_arrays):
         return None
@@ -2944,14 +3047,13 @@ def adam_updates(
     first = _optimizer_scalar_batch(first_corrections, parameters, numpy)
     second = _optimizer_scalar_batch(second_corrections, parameters, numpy)
     if _array_kind(numpy) == "cuda":
-        (
-            parameter_result,
-            new_moments,
-            visible,
-            new_scales,
-            new_scaled,
-            invalid,
-        ) = _cuda_adam_batch_kernel()(
+        parameter_result = numpy.empty_like(parameter_values)
+        new_moments = numpy.empty_like(moment_values)
+        visible = numpy.empty_like(moment_values)
+        new_scales = numpy.empty_like(scale_values)
+        new_scaled = numpy.empty_like(normalized_values)
+        invalid = _optimizer_invalid_flag(numpy)
+        _cuda_adam_batch_kernel()(
             parameter_values,
             gradient_values,
             moment_values,
@@ -2963,8 +3065,14 @@ def adam_updates(
             epsilon,
             first,
             second,
+            parameter_result,
+            new_moments,
+            visible,
+            new_scales,
+            new_scaled,
+            invalid,
         )
-        if bool(numpy.any(invalid)):
+        if bool(invalid[0]):
             return None
     else:
         left_term = beta1 * moment_values
@@ -3002,10 +3110,6 @@ def adam_updates(
             finite_inputs &= numpy.all(numpy.isfinite(array))
         valid = (
             finite_inputs
-            & ~numpy.any(
-                ((left_term > 0.0) & (right_term < 0.0))
-                | ((left_term < 0.0) & (right_term > 0.0))
-            )
             & numpy.all(numpy.isfinite(new_moments))
             & numpy.all(numpy.isfinite(new_scales))
             & numpy.all(numpy.isfinite(new_scaled))
@@ -3036,30 +3140,53 @@ def rmsprop_updates(
     epsilon: float,
 ) -> tuple[tuple[Storage, ...], ...] | None:
     """Apply RMSprop to several parameters with one group of array operations."""
-    if not _optimizer_batch_compatible(
+    groups = (parameters, gradients, scales, scaled_values)
+    partitions = _optimizer_batch_partitions(
         parameters,
         gradients,
         scales,
         scaled_values,
-    ):
+    )
+    if partitions is None:
         return None
+    if len(partitions) > 1:
+        merged: list[list[Storage | None]] = [
+            [None] * len(parameters) for _ in range(3)
+        ]
+        for indices in partitions:
+            result = rmsprop_updates(
+                *(
+                    _optimizer_partition(group, indices)
+                    for group in groups
+                ),
+                rho=rho,
+                learning_rate=learning_rate,
+                epsilon=epsilon,
+            )
+            if result is None:
+                return None
+            for merged_group, result_group in zip(merged, result):
+                for index, storage in zip(indices, result_group):
+                    merged_group[index] = storage
+        return tuple(
+            tuple(cast(Storage, storage) for storage in group)
+            for group in merged
+        )
     numpy = _numpy()
-    groups = (parameters, gradients, scales, scaled_values)
     optional_arrays = tuple(
-        _optimizer_batch_values(group, numpy) for group in groups
+        _optimizer_batch_values(group, numpy, slot=f"input:{index}")
+        for index, group in enumerate(groups)
     )
     if any(array is None for array in optional_arrays):
         return None
     arrays = cast("tuple[Any, ...]", optional_arrays)
     parameter_values, gradient_values, scale_values, normalized_values = arrays
     if _array_kind(numpy) == "cuda":
-        (
-            parameter_result,
-            visible,
-            new_scales,
-            new_scaled,
-            invalid,
-        ) = _cuda_rmsprop_batch_kernel()(
+        parameter_result = numpy.empty_like(parameter_values)
+        new_scales = numpy.empty_like(scale_values)
+        new_scaled = numpy.empty_like(normalized_values)
+        invalid = _optimizer_invalid_flag(numpy)
+        _cuda_rmsprop_batch_kernel()(
             parameter_values,
             gradient_values,
             scale_values,
@@ -3067,8 +3194,12 @@ def rmsprop_updates(
             rho,
             learning_rate,
             epsilon,
+            parameter_result,
+            new_scales,
+            new_scaled,
+            invalid,
         )
-        if bool(numpy.any(invalid)):
+        if bool(invalid[0]):
             return None
     else:
         with _errstate(
@@ -3094,7 +3225,6 @@ def rmsprop_updates(
             parameter_result = parameter_values - (
                 learning_rate * gradient_values / (root_moment + epsilon)
             )
-            visible = new_scales * new_scales * new_scaled
         finite_inputs = numpy.asarray(True)
         for array in arrays:
             finite_inputs &= numpy.all(numpy.isfinite(array))
@@ -3108,7 +3238,6 @@ def rmsprop_updates(
             return None
     results = (
         _split_optimizer_storage(parameter_result, parameters, numpy),
-        _split_optimizer_storage(visible, gradients, numpy),
         _split_optimizer_storage(new_scales, gradients, numpy),
         _split_optimizer_storage(new_scaled, gradients, numpy),
     )

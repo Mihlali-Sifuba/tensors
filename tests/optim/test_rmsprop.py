@@ -58,6 +58,7 @@ class RMSpropTests(unittest.TestCase):
                 optimizer.step()
 
                 state = optimizer._state[id(parameter)]
+                self.assertNotIn("_state", optimizer.__dict__)
                 self.assertEqual(state.shape, replacement.shape)
                 self.assertIs(state.dtype, replacement.dtype)
                 for value in state.tolist():
