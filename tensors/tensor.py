@@ -211,6 +211,17 @@ class Tensor:
             )
         return tensor
 
+    def _replace_owned_storage(self, storage: Storage) -> None:
+        """Adopt a same-shaped internal result while retaining Tensor identity."""
+        if storage.dtype != self.dtype or storage.size != self.size:
+            raise RuntimeError(
+                "Internal storage replacement changed tensor size or dtype"
+            )
+        self._set_storage(storage)
+        self._strides = Strides.contiguous(self._shape)
+        self._offset = 0
+        self._version += 1
+
     @classmethod
     def _from_metadata(
         cls,
@@ -432,18 +443,39 @@ class Tensor:
         storage = self._storage_for("python")
         if not isinstance(storage, PythonStorage):
             raise TypeError("Python storage conversion returned an invalid buffer")
+        if self.ndim == 1:
+            selected = ranges[0]
+            stride = self.strides[0]
+            result_storage = PythonStorage.from_values(
+                (
+                    storage.buffer[self.offset + index * stride]
+                    for index in selected
+                ),
+                self.dtype,
+            )
+            return Tensor._from_owned_storage(
+                result_storage,
+                dtype=self.dtype,
+                shape=new_shape,
+            )
         storage_indices = storage_indices_from_ranges(
             ranges,
             self.shape,
             self.strides,
             self.offset,
         )
-        result_data = self._create_storage(
-            storage.buffer[storage_index]
-            for storage_index in storage_indices
+        result_storage = PythonStorage.from_values(
+            (
+                storage.buffer[storage_index]
+                for storage_index in storage_indices
+            ),
+            self.dtype,
         )
-
-        return Tensor(result_data, dtype=self.dtype, shape=new_shape)
+        return Tensor._from_owned_storage(
+            result_storage,
+            dtype=self.dtype,
+            shape=new_shape,
+        )
 
     def _slice_assignment_values(
         self,

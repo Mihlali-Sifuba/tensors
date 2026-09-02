@@ -100,6 +100,18 @@ class GraphStateTests(unittest.TestCase):
         self.assertEqual(state.edges, [])
         self.assertEqual(ts.grad(result, value).tolist(), [3.0])
 
+    def test_eager_recording_resumes_after_a_graph_trace(self):
+        @ts.Graph
+        def model(value):
+            return value * 2.0
+
+        model(ts.Tensor([3.0]))
+        eager = ts.Variable([4.0]) + 1.0
+        state = get_graph_state()
+
+        self.assertIn(eager.node, state.nodes)
+        self.assertIn(eager.node._in_edges[0], state.edges)
+
 
 if __name__ == "__main__":
     unittest.main()

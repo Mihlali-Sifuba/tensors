@@ -12,10 +12,13 @@ T = TypeVar("T")
 class WeakRegistry(Generic[T]):
     """Keep insertion order without extending the lifetime of registered objects."""
 
-    __slots__ = ("_references", "__weakref__")
+    __slots__ = ("_references", "_additions", "__weakref__")
+
+    _PRUNE_INTERVAL = 256
 
     def __init__(self) -> None:
         self._references: dict[int, ReferenceType[T]] = {}
+        self._additions = 0
 
     def add(self, value: T) -> None:
         """Register ``value`` without taking ownership of it."""
@@ -25,17 +28,10 @@ class WeakRegistry(Generic[T]):
             return
         if existing is not None:
             del self._references[identity]
-        owner_reference = ref(self)
-
-        def discard(reference: ReferenceType[T]) -> None:
-            owner = owner_reference()
-            if owner is None:
-                return
-            if owner._references.get(identity) is reference:
-                del owner._references[identity]
-
-        reference = ref(value, discard)
-        self._references[identity] = reference
+        self._references[identity] = ref(value)
+        self._additions += 1
+        if self._additions >= self._PRUNE_INTERVAL:
+            self._prune()
 
     def __contains__(self, value: object) -> bool:
         """Return whether the identical live object is registered."""
@@ -46,7 +42,7 @@ class WeakRegistry(Generic[T]):
         """Return live values and discard dead weak references."""
         live = []
         dead = []
-        for identity, reference in tuple(self._references.items()):
+        for identity, reference in self._references.items():
             value = reference()
             if value is not None:
                 live.append(value)
@@ -56,6 +52,18 @@ class WeakRegistry(Generic[T]):
             self._references.pop(identity, None)
         return live
 
+    def _prune(self) -> None:
+        """Periodically discard dead entries without per-value callbacks."""
+        dead = [
+            identity
+            for identity, reference in self._references.items()
+            if reference() is None
+        ]
+        for identity in dead:
+            self._references.pop(identity, None)
+        self._additions = 0
+
     def clear(self) -> None:
         """Forget every registration without modifying the registered objects."""
         self._references.clear()
+        self._additions = 0

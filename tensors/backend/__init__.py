@@ -305,14 +305,25 @@ def execute_fused_elementwise(
     dtype: DataType,
     output_shape: tuple[int, ...],
 ) -> tuple[Storage, ...] | None:
-    """Run a compatible floating-point expression chain in one CUDA kernel."""
+    """Run a compatible floating-point expression chain as one backend plan."""
     work = _shape_size(output_shape)
+    backend = get_backend()
     if (
-        get_backend() != "cuda"
-        or not values
+        not values
         or len(steps) < 2
         or dtype.kind != "floating"
-        or (
+    ):
+        return None
+    if backend == "python":
+        return _execute_python_fused_elementwise(
+            values,
+            steps,
+            dtype=dtype,
+            output_shape=output_shape,
+        )
+    if (
+        backend == "cuda"
+        and (
             work * len(steps) < _CUDA_FUSION_MIN_WORK
             and len(steps) < 64
         )
@@ -325,6 +336,61 @@ def execute_fused_elementwise(
         dtype=dtype,
         output_shape=output_shape,
     )
+
+
+def _execute_python_fused_elementwise(
+    values: Sequence[Tensor],
+    steps: Sequence[FusedElementwiseStep],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> tuple[Storage, ...] | None:
+    """Interpret a simple same-shape chain without intermediate Tensors."""
+    from array import array
+    import operator
+
+    from ..storage import PythonStorage
+
+    supported = {"add", "subtract", "multiply", "negate"}
+    if (
+        any(step[0] not in supported for step in steps)
+        or any(value.shape != output_shape for value in values)
+    ):
+        return None
+    sources = tuple(value._data for value in values)
+    current = sources[0]
+    storages: list[Storage] = []
+    functions = {
+        "add": operator.add,
+        "subtract": operator.sub,
+        "multiply": operator.mul,
+    }
+    for operation, scalar, reverse, operand_index in steps:
+        if operation == "negate":
+            converted = array(dtype.typecode, (-item for item in current))
+        else:
+            operand = (
+                scalar
+                if scalar is not None
+                else current
+                if operand_index == -1
+                else sources[operand_index]
+            )
+            if isinstance(operand, (int, float)):
+                pairs = ((item, operand) for item in current)
+            else:
+                pairs = zip(current, operand)
+            if reverse:
+                pairs = ((right, left) for left, right in pairs)
+            function = functions[operation]
+            converted = array(
+                dtype.typecode,
+                (function(left, right) for left, right in pairs),
+            )
+        storage = PythonStorage(converted, dtype)
+        storages.append(storage)
+        current = storage.buffer
+    return tuple(storages)
 
 
 def execute_fused_elementwise_backward(

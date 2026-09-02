@@ -96,6 +96,26 @@ class ComputationTests(unittest.TestCase):
         self.assertEqual(outputs[1].data.tolist(), [6.0])
         self.assertEqual(len(model.computations), 2)
 
+    def test_multi_output_computations_share_one_execution_plan(self):
+        @ts.Graph
+        def model(x):
+            trunk = x * 2.0
+            return trunk + 1.0, trunk - 1.0
+
+        model(ts.Tensor([3.0]))
+        first, second = model.computations
+
+        self.assertIs(first._forward_instructions, second._forward_instructions)
+        self.assertIs(first._forward_plan, second._forward_plan)
+        self.assertEqual(
+            [node.label for node in first.nodes],
+            ["var", "mul", "add"],
+        )
+        self.assertEqual(
+            [node.label for node in second.nodes],
+            ["var", "mul", "sub"],
+        )
+
     def test_single_computation_property_rejects_multi_output_graph(self):
         @ts.Graph
         def model(x):

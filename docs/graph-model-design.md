@@ -142,12 +142,19 @@ The lifecycle is:
 4. Store the outputs and computations as the calling thread's latest Graph
    execution metadata.
 
-Calling the model again records a new computation; it does not bind values into
-or replay a cached graph. `rebuild(*args, **kwargs)` currently has the same
-behavior as a normal call and exists as an explicit retracing entry point.
-Previously returned Variables retain their own computation history when kept
-by the caller. `release()` only drops the Graph object's references to its
-latest execution on the calling thread.
+Calling the model normally records a new computation. `compile(*args,
+**kwargs)` explicitly enables guarded replay for Tensor inputs on the calling
+thread. Matching backend, shape, dtype, keyword layout, and static-argument
+guards rebind the recorded input Variables and execute the existing plan.
+Guard misses retrace and replace the cached plan. Variable inputs always trace
+freshly so their autograd identity is preserved.
+
+`rebuild(*args, **kwargs)` bypasses a matching compiled trace and refreshes it;
+`uncompile()` restores ordinary fresh tracing. Compiled calls reuse their
+returned Variable objects and update their Tensor values. Previously returned
+Variables from fresh traces retain their own computation history when kept by
+the caller. `release()` drops both the latest execution and any compiled trace
+on the calling thread.
 
 ## Training Is External
 
@@ -212,6 +219,9 @@ class Network(Graph):
 `Network.parameters()` recursively returns parameters from child graphs,
 allowing an optimiser to update the complete model. Parameter discovery also
 traverses common containers and values captured by functional Graph closures.
+Nested calls treat their explicit inputs as local traversal boundaries and
+defer child-plan compilation until child metadata is requested. The outer
+Graph still records one complete plan, avoiding repeated upstream traversal.
 
 ## Design Principles
 
@@ -219,7 +229,8 @@ traverses common containers and values captured by functional Graph closures.
 - Model code uses normal Python expressions.
 - Trainable state consists of `Variable` attributes discovered without manual
   parameter registration.
-- Eager execution and fresh graph recording coexist in every graph call.
+- Eager execution and fresh graph recording are the default; guarded replay is
+  explicit through `compile()`.
 - Reusable model capture is opt-in through `Graph`; eager `Variable`
   operations record their own autograd history independently.
 - A graph is a function representation, not a training loop.

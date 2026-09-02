@@ -5,7 +5,7 @@ from typing import List, Union
 from ..backend import execute_binary
 from ..dtype import result_dtype
 from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_tensors
+from ..utils.broadcasting import broadcast_binary_values
 from ._utils import sum_to_shape
 
 
@@ -39,9 +39,8 @@ class Sub:
             data = [x - b for x in a._data]
             return Tensor(data, dtype=dtype, shape=a.shape)
         if isinstance(b, Tensor):
-            a, b = broadcast_tensors(a, b)
-            data = [x - y for x, y in zip(a._data, b._data)]
-            return Tensor(data, dtype=dtype, shape=a.shape)
+            data = broadcast_binary_values(a, b, output_shape, lambda x, y: x - y)
+            return Tensor(data, dtype=dtype, shape=output_shape)
         raise TypeError(f"Unsupported: {type(b)}")
 
     @staticmethod
