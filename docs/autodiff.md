@@ -123,6 +123,7 @@ First-order gradients are implemented and numerically checked for:
   `logsumexp`, and `log_softmax`;
 - stable multiclass and binary cross-entropy losses;
 - `dot`, `matmul`, `outer`, and `transpose`;
+- `conv1d`, `conv2d`, and `conv3d`, including input, kernel, and bias gradients;
 - `reshape`, slicing, `concat`, and `stack`.
 
 Higher-order gradients are supported for the smooth operations above,
@@ -161,6 +162,9 @@ Production behavior includes explicit domain rules:
 - `min` and `max` divide the first-order gradient equally among tied extrema.
   Higher-order derivatives are not provided because selection changes are
   nondifferentiable.
+- `conv1d`, `conv2d`, and `conv3d` are cross-correlations: the kernel is not
+  reversed. Their input, kernel, and bias VJPs remain differentiable when
+  `create_graph=True`.
 - Higher-order `dot`/`matmul` supports vector-vector, matrix-vector,
   vector-matrix, batched matrix products, and broadcast batch dimensions.
 - Higher-order differentiation of empty `mean` and `std` reductions is not

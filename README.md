@@ -127,6 +127,7 @@ and CUDA implementations.
 - Runtime-selectable Python, NumPy, and CUDA numerical backends
 - Backend-native seeded random generation and parameter initialization
 - Neural-network functions including ReLU, sigmoid, tanh, softmax, and softplus
+- Batched and unbatched 1D, 2D, and 3D convolution with stride, padding, dilation, groups, and bias
 - Stable cross-entropy and binary cross-entropy losses
 - SGD, Adam, and RMSprop optimizers
 - Inline type information distributed through the standard `py.typed` marker
@@ -276,6 +277,7 @@ for _ in range(100):
 | Trigonometry | `sin`, `cos`, `tan`, `arcsin`, `arccos`, `arctan` |
 | Hyperbolic | `sinh`, `cosh`, `tanh`, `arcsinh`, `arccosh`, `arctanh` |
 | Activations | `relu`, `sigmoid`, `softplus`, `softmax`, `log_softmax` |
+| Convolution | `conv1d`, `conv2d`, `conv3d` with stride, padding, dilation, groups, and bias |
 | Shape operations | `reshape`, `stack`, `concat` |
 | Losses | `cross_entropy`, `binary_cross_entropy` |
 | Optimizers | `SGD`, `Adam`, `RMSprop` |
@@ -325,7 +327,7 @@ python -m benchmarks --quick
 The core cases are intentionally small regression baselines. They are useful
 for tracking latency and framework overhead, but they should not be used alone
 to rank NumPy and CUDA: small operations usually favour NumPy because CUDA must
-launch and complete device work. Use the scaling, graph, and optimizer suites
+launch and complete device work. Use the scaling, convolution, graph, and optimizer suites
 to find the crossover for a particular machine and workload.
 
 Use `python -m benchmarks` for a longer core run, or target an attribution suite

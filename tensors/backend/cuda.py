@@ -13,6 +13,8 @@ from ._array import (
     clip_gradient,
     comparison,
     concat,
+    convolution,
+    convolution_gradient,
     cross_entropy,
     cross_entropy_gradient,
     distributions_valid,

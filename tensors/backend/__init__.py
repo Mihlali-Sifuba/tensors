@@ -613,6 +613,72 @@ def execute_outer_gradient(
     return outer_gradient(grad, left, right)
 
 
+def execute_convolution(
+    inputs: Tensor,
+    kernel: Tensor,
+    bias: Tensor | None,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+    stride: tuple[int, ...],
+    padding: tuple[int, ...],
+    dilation: tuple[int, ...],
+    groups: int,
+) -> Storage | None:
+    """Run a grouped cross-correlation with an accelerated backend."""
+    patch = kernel.size // max(kernel.shape[0], 1)
+    if not _array_work_is_large_enough(
+        _shape_size(output_shape) * patch,
+        _NUMPY_MATMUL_MIN_WORK,
+    ):
+        return None
+
+    convolution = _backend_kernel("convolution")
+    return convolution(
+        inputs,
+        kernel,
+        bias,
+        dtype=dtype,
+        output_shape=output_shape,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        groups=groups,
+    )
+
+
+def execute_convolution_gradient(
+    grad: Tensor,
+    inputs: Tensor,
+    kernel: Tensor,
+    *,
+    stride: tuple[int, ...],
+    padding: tuple[int, ...],
+    dilation: tuple[int, ...],
+    groups: int,
+    include_bias: bool,
+) -> tuple[Storage, ...] | None:
+    """Run convolution VJPs when native accumulation preserves semantics."""
+    patch = kernel.size // max(kernel.shape[0], 1)
+    if not _array_work_is_large_enough(
+        grad.size * patch,
+        _NUMPY_MATMUL_MIN_WORK,
+    ):
+        return None
+
+    convolution_gradient = _backend_kernel("convolution_gradient")
+    return convolution_gradient(
+        grad,
+        inputs,
+        kernel,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        groups=groups,
+        include_bias=include_bias,
+    )
+
+
 def execute_sgd_update(
     parameter: Tensor,
     gradient: Tensor,

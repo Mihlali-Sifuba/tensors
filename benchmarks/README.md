@@ -33,6 +33,7 @@ of values or exercise currently expensive backward paths:
 ```powershell
 python -m benchmarks --suite scaling
 python -m benchmarks --suite storage
+python -m benchmarks --suite convolution
 python -m benchmarks --suite autograd --match matrix_backward
 python -m benchmarks --suite autograd --match planned_chain
 python -m benchmarks --suite optimizer --match _many
@@ -84,6 +85,7 @@ python -m benchmarks --backend accelerated --suite scaling --output after.json
 | `scaling` | public elementwise, reduction, broadcast, and matrix-multiplication size curves |
 | `storage` | host/device conversion, cached lookup, materialization, and mutation invalidation |
 | `chain` | unfused expression chains across tensor width and expression depth |
+| `convolution` | 1D, 2D, 3D, and reverse convolution execution across backends |
 | `graph` | trace versus compiled replay for scalar-chain, branch, and matrix-heavy graph topologies |
 | `autograd` | forward, backward, compiled deep-chain VJPs, accumulation, matrix gradients, graph creation, and higher derivatives |
 | `loss` | target preparation, dense backend kernel, public cross-entropy, and backward pass |
