@@ -8,6 +8,7 @@ from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_where, execute_where_gradient
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_to
 
@@ -30,11 +31,13 @@ def _tensor(value: Any, *, dtype=None) -> Tensor:
     return Tensor(value, dtype=scalar_dtype)
 
 
-class Where:
+class Where(Operation):
     """Choose values from two broadcastable inputs using a fixed condition."""
 
-    @staticmethod
-    def forward(condition: Tensor, left: Tensor, right: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "where"
+
+    def forward(self, condition: Tensor, left: Tensor, right: Tensor) -> Tensor:
         shape = condition.shape.broadcast_with(left.shape).broadcast_with(
             right.shape
         )
@@ -64,12 +67,7 @@ class Where:
             shape=shape,
         )
 
-    @staticmethod
-    def backward(
-        grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> list[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
         condition, left, right = inputs
         accelerated = execute_where_gradient(grad, condition)
         if accelerated is not None:
@@ -126,8 +124,7 @@ class Where:
             sum_to_shape(right_gradient, right.shape),
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         from ..ops._utils import (
             masked_value_graph,
             sum_to_shape_graph,
@@ -218,17 +215,13 @@ def where(
             right_tensor,
             requires_grad=False,
         )
+        operation = Where()
         return Variable._from_operation(
-            Where.forward(
-                condition_variable.data,
-                left_variable.data,
-                right_variable.data,
-            ),
-            "where",
-            Where,
-            [condition_variable, left_variable, right_variable],
+            operation.forward(condition_variable.data, left_variable.data, right_variable.data),
+            operation,
+            (condition_variable, left_variable, right_variable),
         )
-    return Where.forward(condition_tensor, left_tensor, right_tensor)
+    return Where().forward(condition_tensor, left_tensor, right_tensor)
 
 
 __all__ = ["Where", "where"]

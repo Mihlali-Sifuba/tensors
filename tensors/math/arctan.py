@@ -7,15 +7,18 @@ from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 
 
-class ArcTan:
+class ArcTan(Operation):
     """Elementwise inverse tangent over the real numbers."""
 
-    @staticmethod
-    def forward(value: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "arctan"
+
+    def forward(self, value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         return unary_forward(
             "arctan",
@@ -24,17 +27,11 @@ class ArcTan:
             fallback=lambda item: math.atan(float(item)),
         )
 
-    @staticmethod
-    def backward(
-        grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> list[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
         value = inputs[0]
         return [unary_backward("arctan", grad, value, fallback=_gradient)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP for inverse tangent."""
         from .abs import abs
 
@@ -62,15 +59,15 @@ def arctan(value: TensorLike) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
+        operation = ArcTan()
         return Variable._from_operation(
-            ArcTan.forward(value.data),
-            "arctan",
-            ArcTan,
-            [value],
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return ArcTan.forward(value)
+    return ArcTan().forward(value)
 
 
 __all__ = ["ArcTan", "arctan"]

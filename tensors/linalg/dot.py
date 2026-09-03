@@ -14,6 +14,7 @@ from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
 from ..shape import Shape
 from ..storage import PythonStorage
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.coordinates import (
     coordinates_to_linear_index,
@@ -289,13 +290,17 @@ def _transpose_impl(
     return Tensor(values, dtype=tensor.dtype, shape=shape)
 
 
-class Dot:
+class Dot(Operation):
     """General matrix multiplication with a reverse-mode gradient rule."""
 
-    forward = staticmethod(_dot_impl)
+    __slots__ = ()
+    name = "dot"
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def forward(self, a: Tensor, b: Tensor) -> Tensor:
+        """Contract two tensors with matrix-product semantics."""
+        return _dot_impl(a, b)
+
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         """Differentiate a matrix product with respect to both operands."""
         a, b = inputs
         (
@@ -363,8 +368,7 @@ class Dot:
             Tensor(b_values, dtype=grad.dtype, shape=b.shape),
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP for vector and matrix products."""
         from .transpose import transpose
         from ..math.reshape import reshape
@@ -426,16 +430,16 @@ def dot(a: TensorLike, b: TensorLike) -> TensorResult:
     if isinstance(a, Variable) or isinstance(b, Variable):
         left = a if isinstance(a, Variable) else Variable(a, requires_grad=False)
         right = b if isinstance(b, Variable) else Variable(b, requires_grad=False)
+        operation = Dot()
         return Variable._from_operation(
-            Dot.forward(left.data, right.data),
-            "dot",
-            Dot,
-            [left, right],
+            operation.forward(left.data, right.data),
+            operation,
+            (left, right),
         )
 
     left = a if isinstance(a, Tensor) else Tensor(a)
     right = b if isinstance(b, Tensor) else Tensor(b)
-    return Dot.forward(left, right)
+    return Dot().forward(left, right)
 
 
 __all__ = ["Dot", "dot", "_transpose_impl"]

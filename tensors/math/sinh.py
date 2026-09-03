@@ -7,24 +7,22 @@ from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 
 
-class Sinh:
+class Sinh(Operation):
     """Elementwise hyperbolic sine with a reverse-mode gradient rule."""
 
-    @staticmethod
-    def forward(value: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "sinh"
+
+    def forward(self, value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         return unary_forward("sinh", value, dtype=dtype, fallback=_sinh)
 
-    @staticmethod
-    def backward(
-        grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> list[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
         value = inputs[0]
         return [
             unary_backward(
@@ -35,8 +33,7 @@ class Sinh:
             )
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP for hyperbolic sine."""
         from .cosh import cosh
 
@@ -56,15 +53,15 @@ def sinh(value: TensorLike) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
+        operation = Sinh()
         return Variable._from_operation(
-            Sinh.forward(value.data),
-            "sinh",
-            Sinh,
-            [value],
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Sinh.forward(value)
+    return Sinh().forward(value)
 
 
 __all__ = ["Sinh", "sinh"]

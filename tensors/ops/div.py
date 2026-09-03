@@ -4,6 +4,7 @@ from typing import List, Union
 
 from ..backend import execute_binary, execute_division_denominator_gradient
 from ..dtype import result_dtype
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import (
     broadcast_binary_values,
@@ -66,11 +67,13 @@ def _product_over_denominator_power(
     return result
 
 
-class Div:
+class Div(Operation):
     """Element-wise division — forward and backward."""
 
-    @staticmethod
-    def forward(a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
+    __slots__ = ()
+    name = "div"
+
+    def forward(self, a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
         """Element-wise division."""
         if not isinstance(b, (int, float, Tensor)):
             raise TypeError(f"Unsupported: {type(b)}")
@@ -109,86 +112,34 @@ class Div:
             return Tensor(data, dtype=dtype, shape=shape)
         raise TypeError(f"Unsupported: {type(b)}")
 
-    @staticmethod
-    def _mul_tensors(a: Tensor, b: Tensor) -> Tensor:
-        """Element-wise multiply two Tensors (helper for backward)."""
-        data = [x * y for x, y in zip(a._data, b._data)]
-        return Tensor(data, dtype=a.dtype, shape=a.shape)
-
-    @staticmethod
-    def _neg_tensor(t: Tensor) -> Tensor:
-        """Negate a Tensor (helper for backward)."""
-        return Tensor([-x for x in t._data], dtype=t.dtype.typecode, shape=t.shape)
-
-    @staticmethod
-    def forward_reverse(a: Tensor, scalar: Scalar) -> Tensor:
-        """Forward for scalar / tensor (reverse division)."""
-        dtype = result_dtype(a.dtype, scalar, division=True)
-        accelerated = execute_binary(
-            "divide",
-            scalar,
-            a,
-            dtype=dtype,
-            output_shape=a.shape,
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+        a, b = inputs
+        expanded_a, expanded_b = broadcast_tensors(a, b)
+        da = self.forward(grad, expanded_b)
+        accelerated = execute_division_denominator_gradient(
+            grad,
+            expanded_a,
+            expanded_b,
         )
         if accelerated is not None:
-            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
-        values = []
-        for denominator in a._data:
-            if denominator == 0:
-                raise ZeroDivisionError("Division by zero")
-            values.append(scalar / denominator)
-        return Tensor(values, dtype=dtype, shape=a.shape)
-
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
-        if len(inputs) == 2:
-            a, b = inputs
-            expanded_a, expanded_b = broadcast_tensors(a, b)
-            da = Div.forward(grad, expanded_b)
-            accelerated = execute_division_denominator_gradient(
-                grad,
-                expanded_a,
-                expanded_b,
+            db = Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=grad.shape)
+        else:
+            db = Tensor(
+                [
+                    _negative_product_over_square(g, x, y)
+                    for g, x, y in zip(
+                        grad._data,
+                        expanded_a._data,
+                        expanded_b._data,
+                    )
+                ],
+                dtype=grad.dtype,
+                shape=grad.shape,
             )
-            if accelerated is not None:
-                db = Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=grad.shape)
-            else:
-                db = Tensor(
-                    [
-                        _negative_product_over_square(g, x, y)
-                        for g, x, y in zip(
-                            grad._data,
-                            expanded_a._data,
-                            expanded_b._data,
-                        )
-                    ],
-                    dtype=grad.dtype,
-                    shape=grad.shape,
-                )
-            return [sum_to_shape(da, a.shape), sum_to_shape(db, b.shape)]
-        scalar = kwargs.get("scalar", 1.0)
-        assert isinstance(scalar, (int, float))
-        if kwargs.get("reverse", False):
-            a = inputs[0]
-            dtype = result_dtype(grad.dtype, a, division=True)
-            values = (
-                _negative_product_over_square(g, scalar, x)
-                for g, x in zip(grad._data, a._data)
-            )
-            return [Tensor(list(values), dtype=dtype, shape=a.shape)]
-        return [Div.forward(grad, scalar)]
+        return [sum_to_shape(da, a.shape), sum_to_shape(db, b.shape)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP for division."""
-        if len(inputs) == 1:
-            scalar = kwargs.get("scalar", 1.0)
-            if kwargs.get("reverse", False):
-                value = inputs[0]
-                numerator = _constant_like(value, float(scalar))
-                return [_division_denominator_vjp(grad, numerator, value)]
-            return [grad / scalar]
         left, right = inputs
         from ._utils import sum_to_shape_graph
         return [
@@ -215,11 +166,14 @@ def _expanded_division_inputs(
     )
 
 
-class DivisionDenominatorGradient:
+class DivisionDenominatorGradient(Operation):
     """Differentiable range-safe VJP for a division denominator."""
 
-    @staticmethod
+    __slots__ = ()
+    name = "division_denominator_gradient"
+
     def forward(
+        self,
         grad: Tensor,
         numerator: Tensor,
         denominator: Tensor,
@@ -252,11 +206,10 @@ class DivisionDenominatorGradient:
         ]
         return Tensor(values, dtype=grad.dtype, shape=grad.shape)
 
-    @staticmethod
     def backward(
+        self,
         outer_grad: Tensor,
         *inputs: Tensor,
-        **kwargs: object,
     ) -> List[Tensor]:
         grad, numerator, denominator = inputs
         expanded_grad, expanded_numerator, expanded_denominator = (
@@ -301,8 +254,7 @@ class DivisionDenominatorGradient:
             ),
         ]
 
-    @staticmethod
-    def backward_graph(outer_grad, *inputs, **kwargs: object):
+    def backward_graph(self, outer_grad, *inputs):
         from ._utils import sum_to_shape_graph
 
         grad, numerator, denominator = inputs
@@ -350,13 +302,36 @@ def _constant_like(reference, value: float):
 def _division_denominator_vjp(grad, numerator, denominator):
     from ..variable import Variable
 
+    operation = DivisionDenominatorGradient()
     return Variable._from_operation(
-        DivisionDenominatorGradient.forward(
-            grad.data,
-            numerator.data,
-            denominator.data,
-        ),
-        "division_denominator_gradient",
-        DivisionDenominatorGradient,
-        [grad, numerator, denominator],
+        operation.forward(grad.data, numerator.data, denominator.data),
+        operation,
+        (grad, numerator, denominator),
     )
+
+
+divide = Div().forward
+
+
+def divide_scalar(numerator: Scalar, denominator: Tensor) -> Tensor:
+    """Return ``numerator / denominator`` for a scalar left operand."""
+    dtype = result_dtype(denominator.dtype, numerator, division=True)
+    accelerated = execute_binary(
+        "divide",
+        numerator,
+        denominator,
+        dtype=dtype,
+        output_shape=denominator.shape,
+    )
+    if accelerated is not None:
+        return Tensor._from_owned_storage(
+            accelerated,
+            dtype=dtype,
+            shape=denominator.shape,
+        )
+    values = []
+    for value in denominator._data:
+        if value == 0:
+            raise ZeroDivisionError("Division by zero")
+        values.append(numerator / value)
+    return Tensor(values, dtype=dtype, shape=denominator.shape)

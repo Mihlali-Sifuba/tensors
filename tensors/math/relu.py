@@ -4,24 +4,25 @@ import math
 from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 
 
-class ReLU:
+class ReLU(Operation):
     """Elementwise rectified linear unit with a reverse-mode gradient rule."""
 
-    @staticmethod
-    def forward(a: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "relu"
+
+    def forward(self, a: Tensor) -> Tensor:
         return unary_forward("relu", a, dtype=a.dtype, fallback=_relu)
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         a = inputs[0]
         return [unary_backward("relu", grad, a, fallback=_gradient)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build an almost-everywhere differentiable VJP for ReLU."""
         from ..variable import Variable
         value = inputs[0]
@@ -50,15 +51,15 @@ def relu(value: TensorLike) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
+        operation = ReLU()
         return Variable._from_operation(
-            ReLU.forward(value.data),
-            "relu",
-            ReLU,
-            [value],
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return ReLU.forward(value)
+    return ReLU().forward(value)
 
 
 __all__ = ["ReLU", "relu"]

@@ -9,17 +9,28 @@ from typing import TYPE_CHECKING, Any, List, overload
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_stack
 from ..dtype import result_dtype
+from ..graph.operation import Operation
 from ..tensor import Tensor
 
 if TYPE_CHECKING:
     from ..variable import Variable
 
 
-class Stack:
+class Stack(Operation):
     """Stack tensors along a new axis and split gradients back to inputs."""
 
-    @staticmethod
-    def forward(*tensors: Tensor | list[Any], axis: int = 0) -> Tensor:
+    __slots__ = ("axis",)
+    name = "stack"
+
+    def __init__(
+        self,
+        *,
+        axis: int = 0,
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+
+    def forward(self, *tensors: Tensor | list[Any]) -> Tensor:
+        axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("stack axis must be an integer")
         if len(tensors) == 1 and isinstance(tensors[0], list):
@@ -84,10 +95,9 @@ class Stack:
 
         return Tensor(result, dtype=dtype, shape=tuple(out_shape))
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         """Select each slice along the inserted axis."""
-        axis = kwargs.get("axis", 0)
+        axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("stack axis must be an integer")
         if axis < 0:
@@ -99,10 +109,9 @@ class Stack:
             gradients.append(grad[tuple(key)])
         return gradients
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build differentiable selections for a stack VJP."""
-        axis = kwargs.get("axis", 0)
+        axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("stack axis must be an integer")
         if axis < 0:
@@ -136,14 +145,13 @@ def stack(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult:
             value if isinstance(value, Variable) else Variable(value, requires_grad=False)
             for value in tensors
         ]
+        operation = Stack(axis=axis)
         return Variable._from_operation(
-            Stack.forward(*(variable.data for variable in variables), axis=axis),
-            "stack",
-            Stack,
+            operation.forward(*(variable.data for variable in variables)),
+            operation,
             variables,
-            axis=axis,
         )
-    return Stack.forward(*tensors, axis=axis)
+    return Stack(axis=axis).forward(*tensors)
 
 
 __all__ = ["Stack", "stack"]

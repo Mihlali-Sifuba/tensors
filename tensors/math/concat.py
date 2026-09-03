@@ -9,22 +9,32 @@ from typing import TYPE_CHECKING, Any, List, overload
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_concat
 from ..dtype import result_dtype
+from ..graph.operation import Operation
 from ..tensor import Tensor
 
 if TYPE_CHECKING:
     from ..variable import Variable
 
 
-class Concat:
+class Concat(Operation):
     """Concatenate tensors along an existing axis."""
 
-    @staticmethod
-    def forward(
-        *tensors: Tensor | list[Any],
+    __slots__ = ("axis", "keepdims")
+    name = "concat"
+
+    def __init__(
+        self,
+        *,
         axis: int = 0,
         keepdims: bool = False,
-    ) -> Tensor:
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+        object.__setattr__(self, "keepdims", keepdims)
+
+    def forward(self, *tensors: Tensor | list[Any]) -> Tensor:
         """Concatenate one or more tensors along ``axis``."""
+        axis = self.axis
+        keepdims = self.keepdims
         if not isinstance(keepdims, bool):
             raise TypeError("keepdims must be a bool")
         if keepdims:
@@ -114,10 +124,9 @@ class Concat:
 
         return Tensor(values, dtype=dtype, shape=tuple(output_shape))
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         """Split an upstream gradient back across every concatenated input."""
-        axis = kwargs.get("axis", 0)
+        axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("concat axis must be an integer")
         if axis < 0:
@@ -138,10 +147,9 @@ class Concat:
             offset += tensor.shape[axis]
         return gradients
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Differentiably split an upstream gradient along the concat axis."""
-        axis = kwargs.get("axis", 0)
+        axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("concat axis must be an integer")
         if axis < 0:
@@ -179,14 +187,13 @@ def concat(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult:
             value if isinstance(value, Variable) else Variable(value, requires_grad=False)
             for value in tensors
         ]
+        operation = Concat(axis=axis)
         return Variable._from_operation(
-            Concat.forward(*(variable.data for variable in variables), axis=axis),
-            "concat",
-            Concat,
+            operation.forward(*(variable.data for variable in variables)),
+            operation,
             variables,
-            axis=axis,
         )
-    return Concat.forward(*tensors, axis=axis)
+    return Concat(axis=axis).forward(*tensors)
 
 
 __all__ = ["Concat", "concat"]

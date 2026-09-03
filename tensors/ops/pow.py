@@ -12,6 +12,7 @@ from ..backend import (
 )
 from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import float64, result_dtype
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_to, broadcast_tensors
 
@@ -179,14 +180,29 @@ def _exponent_gradient_value(
     return _product_quotient([upstream, output, logarithm])
 
 
-class Pow:
+class Pow(Operation):
     """Element-wise exponentiation with reverse-mode gradient rules."""
 
-    @staticmethod
+    __slots__ = ("differentiate_base", "differentiate_exponent")
+    name = "pow"
+
+    def __init__(
+        self,
+        *,
+        differentiate_base: bool = True,
+        differentiate_exponent: bool = True,
+    ) -> None:
+        object.__setattr__(self, "differentiate_base", bool(differentiate_base))
+        object.__setattr__(
+            self,
+            "differentiate_exponent",
+            bool(differentiate_exponent),
+        )
+
     def forward(
+        self,
         base: Tensor,
         exponent: Tensor | Scalar,
-        **kwargs: object,
     ) -> Tensor:
         """Raise every element in ``base`` to ``exponent``."""
         if not isinstance(exponent, (int, float, Tensor)):
@@ -218,301 +234,160 @@ class Pow:
             return Tensor(values, dtype=dtype, shape=expanded_base.shape)
         raise TypeError(f"Unsupported exponent type: {type(exponent)}")
 
-    @staticmethod
-    def forward_reverse(exponent: Tensor, base: Scalar) -> Tensor:
-        """Return ``base`` raised element-wise to ``exponent``."""
-        dtype = result_dtype(exponent.dtype, base)
-        accelerated = execute_binary(
-            "power",
-            base,
-            exponent,
-            dtype=dtype,
-            output_shape=exponent.shape,
-        )
-        if accelerated is not None:
-            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=exponent.shape)
-        base_tensor = Tensor([base] * exponent.size, dtype=dtype, shape=exponent.shape)
-        return Pow.forward(base_tensor, exponent)
-
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         """Return gradients for a power operation's differentiable inputs."""
-        if len(inputs) == 2:
-            base, exponent = inputs
-            expanded_base, expanded_exponent = broadcast_tensors(base, exponent)
-            differentiate_base = bool(kwargs.get("differentiate_base", True))
-            differentiate_exponent = bool(kwargs.get("differentiate_exponent", True))
-            if differentiate_exponent:
-                if any(value < 0 for value in expanded_base._data):
-                    raise ValueError(
-                        "power gradients with respect to a tensor exponent "
-                        "require non-negative bases"
-                    )
-                if any(
-                    value == 0 and not power > 0
-                    for value, power in zip(
-                        expanded_base._data,
-                        expanded_exponent._data,
-                    )
-                ):
-                    raise ValueError(
-                        "power gradients for a zero base require strictly "
-                        "positive exponents"
-                    )
-            output = Pow.forward(expanded_base, expanded_exponent)
-            if differentiate_base:
-                accelerated_base = execute_power_base_gradient(
-                    grad,
-                    base,
-                    exponent,
+        base, exponent = inputs
+        expanded_base, expanded_exponent = broadcast_tensors(base, exponent)
+        differentiate_base = self.differentiate_base
+        differentiate_exponent = self.differentiate_exponent
+        if differentiate_exponent:
+            if any(value < 0 for value in expanded_base._data):
+                raise ValueError(
+                    "power gradients with respect to a tensor exponent "
+                    "require non-negative bases"
                 )
-                if accelerated_base is not None:
-                    base_grad = Tensor._from_owned_storage(
-                        accelerated_base,
-                        dtype=grad.dtype,
-                        shape=grad.shape,
-                    )
-                else:
-                    base_grad = Tensor(
-                        [
-                            _base_gradient_value(
-                                float(upstream),
-                                float(value),
-                                float(power),
-                                float(result),
-                            )
-                            for upstream, value, power, result in zip(
-                                grad._data,
-                                expanded_base._data,
-                                expanded_exponent._data,
-                                output._data,
-                            )
-                        ],
-                        dtype=grad.dtype,
-                        shape=grad.shape,
-                    )
+            if any(
+                value == 0 and not power > 0
+                for value, power in zip(
+                    expanded_base._data,
+                    expanded_exponent._data,
+                )
+            ):
+                raise ValueError(
+                    "power gradients for a zero base require strictly "
+                    "positive exponents"
+                )
+        output = self.forward(expanded_base, expanded_exponent)
+        if differentiate_base:
+            accelerated_base = execute_power_base_gradient(
+                grad,
+                base,
+                exponent,
+            )
+            if accelerated_base is not None:
+                base_grad = Tensor._from_owned_storage(
+                    accelerated_base,
+                    dtype=grad.dtype,
+                    shape=grad.shape,
+                )
             else:
                 base_grad = Tensor(
-                    [0.0] * grad.size,
+                    [
+                        _base_gradient_value(
+                            float(upstream),
+                            float(value),
+                            float(power),
+                            float(result),
+                        )
+                        for upstream, value, power, result in zip(
+                            grad._data,
+                            expanded_base._data,
+                            expanded_exponent._data,
+                            output._data,
+                        )
+                    ],
                     dtype=grad.dtype,
                     shape=grad.shape,
                 )
-            if differentiate_exponent:
-                accelerated_exponent = execute_power_exponent_gradient(
-                    grad,
-                    base,
-                    exponent,
+        else:
+            base_grad = Tensor(
+                [0.0] * grad.size,
+                dtype=grad.dtype,
+                shape=grad.shape,
+            )
+        if differentiate_exponent:
+            accelerated_exponent = execute_power_exponent_gradient(
+                grad,
+                base,
+                exponent,
+            )
+            if accelerated_exponent is not None:
+                exponent_grad = Tensor._from_owned_storage(
+                    accelerated_exponent,
+                    dtype=grad.dtype,
+                    shape=grad.shape,
                 )
-                if accelerated_exponent is not None:
-                    exponent_grad = Tensor._from_owned_storage(
-                        accelerated_exponent,
-                        dtype=grad.dtype,
-                        shape=grad.shape,
-                    )
-                else:
-                    exponent_grad = Tensor(
-                        [
-                            _exponent_gradient_value(
-                                float(upstream),
-                                float(value),
-                                float(base_value),
-                                float(power),
-                            )
-                            for upstream, value, base_value, power in zip(
-                                grad._data,
-                                output._data,
-                                expanded_base._data,
-                                expanded_exponent._data,
-                            )
-                        ],
-                        dtype=grad.dtype,
-                        shape=grad.shape,
-                    )
             else:
                 exponent_grad = Tensor(
-                    [0.0] * grad.size,
+                    [
+                        _exponent_gradient_value(
+                            float(upstream),
+                            float(value),
+                            float(base_value),
+                            float(power),
+                        )
+                        for upstream, value, base_value, power in zip(
+                            grad._data,
+                            output._data,
+                            expanded_base._data,
+                            expanded_exponent._data,
+                        )
+                    ],
                     dtype=grad.dtype,
                     shape=grad.shape,
                 )
-            return [
-                sum_to_shape(base_grad, base.shape),
-                sum_to_shape(exponent_grad, exponent.shape),
-            ]
-
-        exponent = kwargs.get("scalar")
-        if not isinstance(exponent, (int, float)):
-            raise TypeError("power scalar exponent must be an int or float")
-
-        value = inputs[0]
-        if kwargs.get("reverse", False):
-            if exponent < 0:
-                raise ValueError(
-                    "power gradients with respect to an exponent require a positive base"
-                )
-            if exponent == 0:
-                if any(not power > 0 for power in value._data):
-                    raise ValueError(
-                        "power gradients for a zero base require strictly "
-                        "positive exponents"
-                    )
-                return [
-                    Tensor(
-                        [0.0] * value.size,
-                        dtype=grad.dtype,
-                        shape=value.shape,
-                    )
-                ]
-            scalar_base = Tensor([float(exponent)], dtype=grad.dtype)
-            accelerated = execute_power_exponent_gradient(
-                grad,
-                scalar_base,
-                value,
-            )
-            if accelerated is not None:
-                return [
-                    Tensor._from_owned_storage(
-                        accelerated,
-                        dtype=grad.dtype,
-                        shape=value.shape,
-                    )
-                ]
-            output = Pow.forward_reverse(value, exponent)
-            values = [
-                _exponent_gradient_value(
-                    float(upstream),
-                    float(result),
-                    float(exponent),
-                    float(power),
-                )
-                for upstream, result, power in zip(
-                    grad._data,
-                    output._data,
-                    value._data,
-                )
-            ]
-            return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
-
-        if exponent == 0:
-            values = [0.0] * value.size
         else:
-            scalar_exponent = Tensor([float(exponent)], dtype=grad.dtype)
-            accelerated = execute_power_base_gradient(
-                grad,
-                value,
-                scalar_exponent,
+            exponent_grad = Tensor(
+                [0.0] * grad.size,
+                dtype=grad.dtype,
+                shape=grad.shape,
             )
-            if accelerated is not None:
-                return [
-                    Tensor._from_owned_storage(
-                        accelerated,
-                        dtype=grad.dtype,
-                        shape=value.shape,
-                    )
-                ]
-            output = Pow.forward(value, exponent)
-            values = [
-                _base_gradient_value(
-                    float(upstream),
-                    float(base),
-                    float(exponent),
-                    float(result),
-                )
-                for upstream, base, result in zip(
-                    grad._data,
-                    value._data,
-                    output._data,
-                )
-            ]
-        return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
-
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
-        """Build a differentiable VJP for exponentiation."""
-        if len(inputs) == 2:
-            base, exponent = inputs
-            differentiate_base = bool(kwargs.get("differentiate_base", True))
-            differentiate_exponent = bool(
-                kwargs.get("differentiate_exponent", True)
-            )
-            expanded_base, expanded_exponent = broadcast_tensors(
-                base.data,
-                exponent.data,
-            )
-            if differentiate_exponent:
-                if any(value < 0 for value in expanded_base._data):
-                    raise ValueError(
-                        "power gradients with respect to a tensor exponent "
-                        "require non-negative bases"
-                    )
-                if any(
-                    value == 0 and not power > 0
-                    for value, power in zip(
-                        expanded_base._data,
-                        expanded_exponent._data,
-                    )
-                ):
-                    raise ValueError(
-                        "power gradients for a zero base require strictly "
-                        "positive exponents"
-                    )
-            base_gradient = (
-                _power_base_vjp(
-                    grad,
-                    base,
-                    exponent,
-                    differentiate_exponent=differentiate_exponent,
-                )
-                if differentiate_base
-                else _zero_variable(base)
-            )
-            exponent_gradient = (
-                _power_exponent_vjp(
-                    grad,
-                    base,
-                    exponent,
-                    differentiate_base=differentiate_base,
-                )
-                if differentiate_exponent
-                else _zero_variable(exponent)
-            )
-            return [
-                sum_to_shape_graph(base_gradient, base.shape),
-                sum_to_shape_graph(exponent_gradient, exponent.shape),
-            ]
-
-        exponent = kwargs.get("scalar")
-        if not isinstance(exponent, (int, float)):
-            raise TypeError("power scalar exponent must be an int or float")
-        value = inputs[0]
-        if kwargs.get("reverse", False):
-            if exponent < 0:
-                raise ValueError(
-                    "power gradients with respect to an exponent require a positive base"
-                )
-            if exponent == 0:
-                if any(not power > 0 for power in value.data._data):
-                    raise ValueError(
-                        "power gradients for a zero base require strictly "
-                        "positive exponents"
-                    )
-            base = _constant_like(value, float(exponent))
-            return [
-                _power_exponent_vjp(
-                    grad,
-                    base,
-                    value,
-                    differentiate_base=False,
-                )
-            ]
-        power = _constant_like(value, float(exponent))
         return [
+            sum_to_shape(base_grad, base.shape),
+            sum_to_shape(exponent_grad, exponent.shape),
+        ]
+
+    def backward_graph(self, grad, *inputs):
+        """Build a differentiable VJP for exponentiation."""
+        base, exponent = inputs
+        differentiate_base = self.differentiate_base
+        differentiate_exponent = self.differentiate_exponent
+        expanded_base, expanded_exponent = broadcast_tensors(
+            base.data,
+            exponent.data,
+        )
+        if differentiate_exponent:
+            if any(value < 0 for value in expanded_base._data):
+                raise ValueError(
+                    "power gradients with respect to a tensor exponent "
+                    "require non-negative bases"
+                )
+            if any(
+                value == 0 and not power > 0
+                for value, power in zip(
+                    expanded_base._data,
+                    expanded_exponent._data,
+                )
+            ):
+                raise ValueError(
+                    "power gradients for a zero base require strictly "
+                    "positive exponents"
+                )
+        base_gradient = (
             _power_base_vjp(
                 grad,
-                value,
-                power,
-                differentiate_exponent=False,
+                base,
+                exponent,
+                differentiate_exponent=differentiate_exponent,
             )
+            if differentiate_base
+            else _zero_variable(base)
+        )
+        exponent_gradient = (
+            _power_exponent_vjp(
+                grad,
+                base,
+                exponent,
+                differentiate_base=differentiate_base,
+            )
+            if differentiate_exponent
+            else _zero_variable(exponent)
+        )
+        return [
+            sum_to_shape_graph(base_gradient, base.shape),
+            sum_to_shape_graph(exponent_gradient, exponent.shape),
         ]
+
 
 
 def _expanded_power_inputs(
@@ -528,16 +403,24 @@ def _expanded_power_inputs(
     )
 
 
-class PowerBaseGradient:
+class PowerBaseGradient(Operation):
     """Differentiable range-safe VJP with respect to a power base."""
 
-    @staticmethod
+    __slots__ = ("differentiate_exponent",)
+    name = "power_base_gradient"
+
+    def __init__(self, *, differentiate_exponent: bool) -> None:
+        object.__setattr__(
+            self,
+            "differentiate_exponent",
+            bool(differentiate_exponent),
+        )
+
     def forward(
+        self,
         grad: Tensor,
         base: Tensor,
         exponent: Tensor,
-        *,
-        differentiate_exponent: bool,
     ) -> Tensor:
         grad, base, exponent = _expanded_power_inputs(grad, base, exponent)
         accelerated = execute_power_base_gradient(grad, base, exponent)
@@ -547,7 +430,7 @@ class PowerBaseGradient:
                 dtype=grad.dtype,
                 shape=grad.shape,
             )
-        output = Pow.forward(base, exponent)
+        output = _power_values(base, exponent)
         values = [
             _base_gradient_value(
                 float(upstream),
@@ -564,21 +447,18 @@ class PowerBaseGradient:
         ]
         return Tensor(values, dtype=grad.dtype, shape=grad.shape)
 
-    @staticmethod
     def backward(
+        self,
         outer_grad: Tensor,
         *inputs: Tensor,
-        **kwargs: object,
     ) -> List[Tensor]:
         grad, base, exponent = inputs
-        differentiate_exponent = bool(
-            kwargs.get("differentiate_exponent", True)
-        )
+        differentiate_exponent = self.differentiate_exponent
         expanded_grad, expanded_base, expanded_exponent = (
             _expanded_power_inputs(grad, base, exponent)
         )
         expanded_outer = broadcast_to(outer_grad, expanded_grad.shape)
-        output = Pow.forward(expanded_base, expanded_exponent)
+        output = _power_values(expanded_base, expanded_exponent)
         grad_values = []
         base_values = []
         exponent_values = []
@@ -636,14 +516,11 @@ class PowerBaseGradient:
             ),
         ]
 
-    @staticmethod
-    def backward_graph(outer_grad, *inputs, **kwargs: object):
+    def backward_graph(self, outer_grad, *inputs):
         from ..math import log
 
         grad, base, exponent = inputs
-        differentiate_exponent = bool(
-            kwargs.get("differentiate_exponent", True)
-        )
+        differentiate_exponent = self.differentiate_exponent
         grad_gradient = _power_base_vjp(
             outer_grad,
             base,
@@ -672,11 +549,16 @@ class PowerBaseGradient:
         ]
 
 
-class PowerExponentGradient:
+class PowerExponentGradient(Operation):
     """Differentiable range-safe VJP with respect to a power exponent."""
 
-    @staticmethod
-    def forward(grad: Tensor, base: Tensor, exponent: Tensor) -> Tensor:
+    __slots__ = ("differentiate_base",)
+    name = "power_exponent_gradient"
+
+    def __init__(self, *, differentiate_base: bool) -> None:
+        object.__setattr__(self, "differentiate_base", bool(differentiate_base))
+
+    def forward(self, grad: Tensor, base: Tensor, exponent: Tensor) -> Tensor:
         grad, base, exponent = _expanded_power_inputs(grad, base, exponent)
         accelerated = execute_power_exponent_gradient(
             grad,
@@ -689,7 +571,7 @@ class PowerExponentGradient:
                 dtype=grad.dtype,
                 shape=grad.shape,
             )
-        output = Pow.forward(base, exponent)
+        output = _power_values(base, exponent)
         values = [
             _exponent_gradient_value(
                 float(upstream),
@@ -706,19 +588,18 @@ class PowerExponentGradient:
         ]
         return Tensor(values, dtype=grad.dtype, shape=grad.shape)
 
-    @staticmethod
     def backward(
+        self,
         outer_grad: Tensor,
         *inputs: Tensor,
-        **kwargs: object,
     ) -> List[Tensor]:
         grad, base, exponent = inputs
-        differentiate_base = bool(kwargs.get("differentiate_base", True))
+        differentiate_base = self.differentiate_base
         expanded_grad, expanded_base, expanded_exponent = (
             _expanded_power_inputs(grad, base, exponent)
         )
         expanded_outer = broadcast_to(outer_grad, expanded_grad.shape)
-        output = Pow.forward(expanded_base, expanded_exponent)
+        output = _power_values(expanded_base, expanded_exponent)
         grad_values = []
         base_values = []
         exponent_values = []
@@ -777,12 +658,11 @@ class PowerExponentGradient:
             ),
         ]
 
-    @staticmethod
-    def backward_graph(outer_grad, *inputs, **kwargs: object):
+    def backward_graph(self, outer_grad, *inputs):
         from ..math import log
 
         grad, base, exponent = inputs
-        differentiate_base = bool(kwargs.get("differentiate_base", True))
+        differentiate_base = self.differentiate_base
         logarithm = log(base)
         output = base ** exponent
         grad_gradient = _power_exponent_vjp(
@@ -842,17 +722,13 @@ def _power_base_vjp(
 ):
     from ..variable import Variable
 
-    return Variable._from_operation(
-        PowerBaseGradient.forward(
-            grad.data,
-            base.data,
-            exponent.data,
-            differentiate_exponent=differentiate_exponent,
-        ),
-        "power_base_gradient",
-        PowerBaseGradient,
-        [grad, base, exponent],
+    operation = PowerBaseGradient(
         differentiate_exponent=differentiate_exponent,
+    )
+    return Variable._from_operation(
+        operation.forward(grad.data, base.data, exponent.data),
+        operation,
+        (grad, base, exponent),
     )
 
 
@@ -865,12 +741,11 @@ def _power_exponent_vjp(
 ):
     from ..variable import Variable
 
+    operation = PowerExponentGradient(differentiate_base=differentiate_base)
     return Variable._from_operation(
-        PowerExponentGradient.forward(grad.data, base.data, exponent.data),
-        "power_exponent_gradient",
-        PowerExponentGradient,
-        [grad, base, exponent],
-        differentiate_base=differentiate_base,
+        operation.forward(grad.data, base.data, exponent.data),
+        operation,
+        (grad, base, exponent),
     )
 
 
@@ -891,4 +766,32 @@ def pow(base: TensorLike, exponent: TensorLike) -> TensorResult:
     return base ** exponent
 
 
-__all__ = ["Pow", "pow"]
+_power_values = Pow().forward
+power = _power_values
+
+
+def power_scalar_base(base: Scalar, exponent: Tensor) -> Tensor:
+    """Return ``base`` raised element-wise to ``exponent`` for a scalar base."""
+    dtype = result_dtype(exponent.dtype, base)
+    accelerated = execute_binary(
+        "power",
+        base,
+        exponent,
+        dtype=dtype,
+        output_shape=exponent.shape,
+    )
+    if accelerated is not None:
+        return Tensor._from_owned_storage(
+            accelerated,
+            dtype=dtype,
+            shape=exponent.shape,
+        )
+    base_tensor = Tensor(
+        [base] * exponent.size,
+        dtype=dtype,
+        shape=exponent.shape,
+    )
+    return _power_values(base_tensor, exponent)
+
+
+__all__ = ["Pow", "pow", "power", "power_scalar_base"]

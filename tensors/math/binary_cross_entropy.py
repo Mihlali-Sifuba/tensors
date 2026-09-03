@@ -13,6 +13,7 @@ from ..backend import (
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..shape import Shape
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_tensors
 from .cross_entropy import Reduction, _validate_reduction
@@ -68,17 +69,24 @@ def _reduce(values: list[float], reduction: Reduction) -> tuple[list[float], tup
     return [total], (1,)
 
 
-class BinaryCrossEntropy:
+class BinaryCrossEntropy(Operation):
     """Binary cross-entropy for probabilities or raw logits."""
 
-    @staticmethod
-    def forward(
-        prediction: Tensor,
-        target: Tensor,
+    __slots__ = ("from_logits", "reduction")
+    name = "binary_cross_entropy"
+
+    def __init__(
+        self,
         *,
         from_logits: bool = False,
         reduction: Reduction = "mean",
-    ) -> Tensor:
+    ) -> None:
+        object.__setattr__(self, "from_logits", from_logits)
+        object.__setattr__(self, "reduction", reduction)
+
+    def forward(self, prediction: Tensor, target: Tensor) -> Tensor:
+        from_logits = self.from_logits
+        reduction = self.reduction
         _validate_reduction(reduction)
         _validate_from_logits(from_logits)
         prediction, target = broadcast_tensors(prediction, target)
@@ -125,12 +133,11 @@ class BinaryCrossEntropy:
         reduced, shape = _reduce(values, reduction)
         return Tensor(reduced, dtype=dtype, shape=shape)
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         prediction, target = inputs
-        from_logits = kwargs.get("from_logits", False)
+        from_logits = self.from_logits
         _validate_from_logits(from_logits)
-        reduction = kwargs.get("reduction", "mean")
+        reduction = self.reduction
         if not isinstance(reduction, str):
             raise TypeError("reduction must be a string")
 
@@ -206,16 +213,15 @@ class BinaryCrossEntropy:
             sum_to_shape(target_gradient, target.shape),
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable binary cross-entropy VJP."""
         from .log import log
         from .sigmoid import sigmoid
 
         prediction, target = inputs
-        from_logits = kwargs.get("from_logits", False)
+        from_logits = self.from_logits
         _validate_from_logits(from_logits)
-        reduction = kwargs.get("reduction", "mean")
+        reduction = self.reduction
         shape = prediction.shape.broadcast_with(target.shape)
         size = shape.size
         upstream = grad / size if reduction == "mean" and size else grad
@@ -355,25 +361,17 @@ def binary_cross_entropy(
         target_variable = target if target_is_variable else Variable(
             target_tensor, requires_grad=False
         )
+        operation = BinaryCrossEntropy(from_logits=from_logits, reduction=reduction)
         return Variable._from_operation(
-            BinaryCrossEntropy.forward(
-                prediction_variable.data,
-                target_variable.data,
-                from_logits=from_logits,
-                reduction=reduction,
-            ),
-            "binary_cross_entropy",
-            BinaryCrossEntropy,
-            [prediction_variable, target_variable],
-            from_logits=from_logits,
-            reduction=reduction,
+            operation.forward(prediction_variable.data, target_variable.data),
+            operation,
+            (prediction_variable, target_variable),
         )
-    return BinaryCrossEntropy.forward(
-        prediction_tensor,
-        target_tensor,
+    operation = BinaryCrossEntropy(
         from_logits=from_logits,
         reduction=reduction,
     )
+    return operation.forward(prediction_tensor, target_tensor)
 
 
 __all__ = ["BinaryCrossEntropy", "binary_cross_entropy"]

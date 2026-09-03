@@ -4,6 +4,7 @@ from typing import List, Union
 
 from ..backend import execute_binary
 from ..dtype import result_dtype
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_binary_values
 from ._utils import sum_to_shape
@@ -12,11 +13,13 @@ from ._utils import sum_to_shape
 Scalar = Union[int, float]
 
 
-class Add:
+class Add(Operation):
     """Element-wise addition — forward and backward."""
 
-    @staticmethod
-    def forward(a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
+    __slots__ = ()
+    name = "add"
+
+    def forward(self, a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
         """Element-wise addition of two tensors or a tensor and a scalar."""
         if not isinstance(b, (int, float, Tensor)):
             raise TypeError(f"Unsupported: {type(b)}")
@@ -43,21 +46,18 @@ class Add:
             return Tensor(data, dtype=dtype, shape=output_shape)
         raise TypeError(f"Unsupported: {type(b)}")
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
-        if len(inputs) == 1:
-            return [grad]
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         left, right = inputs
         return [sum_to_shape(grad, left.shape), sum_to_shape(grad, right.shape)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP for addition."""
-        if len(inputs) == 1:
-            return [grad]
         left, right = inputs
         from ._utils import sum_to_shape_graph
         return [
             sum_to_shape_graph(grad, left.shape),
             sum_to_shape_graph(grad, right.shape),
         ]
+
+
+add = Add().forward

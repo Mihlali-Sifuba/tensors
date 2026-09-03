@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any, overload
+from typing import ClassVar, TYPE_CHECKING, Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_extremum, execute_extremum_gradient
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_tensors
 
@@ -35,14 +36,16 @@ def _is_nan(value: int | float) -> bool:
     return isinstance(value, float) and math.isnan(value)
 
 
-class _ElementwiseExtremum:
-    select_maximum = False
+class _ElementwiseExtremum(Operation):
+    """Shared elementwise extremum forward and gradient rules."""
 
-    @classmethod
-    def forward(cls, left: Tensor, right: Tensor) -> Tensor:
+    __slots__ = ()
+    select_maximum: ClassVar[bool] = False
+
+    def forward(self, left: Tensor, right: Tensor) -> Tensor:
         shape = left.shape.broadcast_with(right.shape)
         dtype = result_dtype(left.dtype, right)
-        operation = "maximum" if cls.select_maximum else "minimum"
+        operation = "maximum" if self.select_maximum else "minimum"
         accelerated = execute_extremum(
             operation,
             left,
@@ -60,7 +63,7 @@ class _ElementwiseExtremum:
         ):
             if _is_nan(left_value) or _is_nan(right_value):
                 values.append(math.nan)
-            elif cls.select_maximum:
+            elif self.select_maximum:
                 values.append(
                     left_value if left_value >= right_value else right_value
                 )
@@ -74,9 +77,8 @@ class _ElementwiseExtremum:
             shape=expanded_left.shape,
         )
 
-    @classmethod
     def _weights(
-        cls,
+        self,
         left: Tensor,
         right: Tensor,
         *,
@@ -109,22 +111,20 @@ class _ElementwiseExtremum:
                 continue
             left_selected = (
                 left_value > right_value
-                if cls.select_maximum
+                if self.select_maximum
                 else left_value < right_value
             )
             left_weights.append(1.0 if left_selected else 0.0)
             right_weights.append(0.0 if left_selected else 1.0)
         return left_weights, right_weights
 
-    @classmethod
     def backward(
-        cls,
+        self,
         grad: Tensor,
         *inputs: Tensor,
-        **kwargs: object,
     ) -> list[Tensor]:
         left, right = inputs
-        operation = "maximum" if cls.select_maximum else "minimum"
+        operation = "maximum" if self.select_maximum else "minimum"
         accelerated = execute_extremum_gradient(
             operation,
             grad,
@@ -151,7 +151,7 @@ class _ElementwiseExtremum:
                     right.shape,
                 ),
             ]
-        left_weights, right_weights = cls._weights(
+        left_weights, right_weights = self._weights(
             left,
             right,
             higher_order=False,
@@ -171,8 +171,7 @@ class _ElementwiseExtremum:
             sum_to_shape(right_gradient, right.shape),
         ]
 
-    @classmethod
-    def backward_graph(cls, grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         from ..ops._utils import (
             masked_value_graph,
             sum_to_shape_graph,
@@ -180,7 +179,7 @@ class _ElementwiseExtremum:
         )
 
         left, right = inputs
-        left_weights, right_weights = cls._weights(
+        left_weights, right_weights = self._weights(
             left.data,
             right.data,
             higher_order=True,
@@ -210,14 +209,19 @@ class _ElementwiseExtremum:
 class Maximum(_ElementwiseExtremum):
     """Elementwise maximum with broadcasting."""
 
+    __slots__ = ()
+    name = "maximum"
     select_maximum = True
 
 
 class Minimum(_ElementwiseExtremum):
     """Elementwise minimum with broadcasting."""
 
+    __slots__ = ()
+    name = "minimum"
 
-def _extremum(operation, label: str, left: Any, right: Any) -> Any:
+
+def _extremum(operation: Operation, left: Any, right: Any) -> Any:
     from ..variable import Variable
 
     left_is_variable = isinstance(left, Variable)
@@ -240,9 +244,8 @@ def _extremum(operation, label: str, left: Any, right: Any) -> Any:
         )
         return Variable._from_operation(
             operation.forward(left_variable.data, right_variable.data),
-            label,
             operation,
-            [left_variable, right_variable],
+            (left_variable, right_variable),
         )
     return operation.forward(left_tensor, right_tensor)
 
@@ -261,7 +264,7 @@ def maximum(left: TensorData, right: TensorData) -> Tensor: ...
 
 def maximum(left: TensorLike, right: TensorLike) -> TensorResult:
     """Return the broadcasting elementwise maximum of two values."""
-    return _extremum(Maximum, "maximum", left, right)
+    return _extremum(Maximum(), left, right)
 
 
 @overload
@@ -278,7 +281,7 @@ def minimum(left: TensorData, right: TensorData) -> Tensor: ...
 
 def minimum(left: TensorLike, right: TensorLike) -> TensorResult:
     """Return the broadcasting elementwise minimum of two values."""
-    return _extremum(Minimum, "minimum", left, right)
+    return _extremum(Minimum(), left, right)
 
 
 __all__ = ["Maximum", "Minimum", "maximum", "minimum"]

@@ -8,6 +8,7 @@ from typing import Any, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_clip, execute_clip_gradient
 from ..dtype import result_dtype
+from ..graph.operation import Operation
 from ..tensor import Tensor
 
 
@@ -36,16 +37,24 @@ def _validate_bounds(
         raise ValueError("min_value cannot be greater than max_value")
 
 
-class Clip:
+class Clip(Operation):
     """Clip values using a zero subgradient at either finite boundary."""
 
-    @staticmethod
-    def forward(
-        value: Tensor,
+    __slots__ = ("min_value", "max_value")
+    name = "clip"
+
+    def __init__(
+        self,
         *,
         min_value: int | float | None,
         max_value: int | float | None,
-    ) -> Tensor:
+    ) -> None:
+        object.__setattr__(self, "min_value", min_value)
+        object.__setattr__(self, "max_value", max_value)
+
+    def forward(self, value: Tensor) -> Tensor:
+        min_value = self.min_value
+        max_value = self.max_value
         _validate_bounds(min_value, max_value)
         dtype = value.dtype
         if min_value is not None:
@@ -85,15 +94,10 @@ class Clip:
             mask.append(1.0 if above_minimum and below_maximum else 0.0)
         return mask
 
-    @staticmethod
-    def backward(
-        grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> list[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
         value = inputs[0]
-        min_value = kwargs.get("min_value")
-        max_value = kwargs.get("max_value")
+        min_value = self.min_value
+        max_value = self.max_value
         _validate_bounds(min_value, max_value)
         accelerated = execute_clip_gradient(
             grad,
@@ -114,13 +118,12 @@ class Clip:
             shape=value.shape,
         )]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         from ..ops._utils import masked_value_graph, zero_like_graph
 
         value = inputs[0]
-        min_value = kwargs.get("min_value")
-        max_value = kwargs.get("max_value")
+        min_value = self.min_value
+        max_value = self.max_value
         _validate_bounds(min_value, max_value)
         if any(
             isinstance(item, float) and math.isnan(item)
@@ -163,21 +166,15 @@ def clip(
 
     _validate_bounds(min_value, max_value)
     if isinstance(value, Variable):
+        operation = Clip(min_value=min_value, max_value=max_value)
         return Variable._from_operation(
-            Clip.forward(
-                value.data,
-                min_value=min_value,
-                max_value=max_value,
-            ),
-            "clip",
-            Clip,
-            [value],
-            min_value=min_value,
-            max_value=max_value,
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Clip.forward(value, min_value=min_value, max_value=max_value)
+    return Clip(min_value=min_value, max_value=max_value).forward(value)
 
 
 __all__ = ["Clip", "clip"]

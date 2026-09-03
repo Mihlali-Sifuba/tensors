@@ -6,6 +6,7 @@ from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_reduction, execute_reduction_gradient
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ._reduction import (
     Axis,
@@ -17,15 +18,24 @@ from ._reduction import (
 )
 
 
-class Max:
+class Max(Operation):
     """Maximum-value operation."""
 
-    @staticmethod
-    def forward(
-        value: Tensor,
+    __slots__ = ("axis", "keepdims")
+    name = "max"
+
+    def __init__(
+        self,
+        *,
         axis: Axis = None,
         keepdims: bool = False,
-    ) -> Tensor:
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+        object.__setattr__(self, "keepdims", keepdims)
+
+    def forward(self, value: Tensor) -> Tensor:
+        axis = self.axis
+        keepdims = self.keepdims
         axes = normalize_axes(value.ndim, axis)
         output_shape = reduction_shape(value.shape, axes, keepdims)
         if axis is None and not keepdims:
@@ -65,12 +75,11 @@ class Max:
             shape=output_shape,
         )
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         """Distribute each gradient equally among tied maximum values."""
         value = inputs[0]
-        axis = kwargs.get("axis")
-        keepdims = kwargs.get("keepdims", False)
+        axis = self.axis
+        keepdims = self.keepdims
         axes = normalize_axes(value.ndim, axis)
         output_shape = reduction_shape(value.shape, axes, keepdims)
         if axis is None and not keepdims:
@@ -108,15 +117,14 @@ class Max:
                 result[input_index] = share
         return [Tensor(result, dtype=grad.dtype, shape=value.shape)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP where every maximum is unique."""
         from ..ops._utils import masked_value_graph, zero_like_graph
         from .reshape import reshape
 
         value = inputs[0]
-        axis = kwargs.get("axis")
-        keepdims = kwargs.get("keepdims", False)
+        axis = self.axis
+        keepdims = self.keepdims
         _, _, groups = reduction_groups(
             value.data,
             axis,
@@ -181,17 +189,15 @@ def max(
     axis = immutable_axis(axis)
 
     if isinstance(value, Variable):
+        operation = Max(axis=axis, keepdims=keepdims)
         return Variable._from_operation(
-            Max.forward(value.data, axis=axis, keepdims=keepdims),
-            "max",
-            Max,
-            [value],
-            axis=axis,
-            keepdims=keepdims,
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Max.forward(value, axis=axis, keepdims=keepdims)
+    return Max(axis=axis, keepdims=keepdims).forward(value)
 
 
 __all__ = ["Max", "max"]

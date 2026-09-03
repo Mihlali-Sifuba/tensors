@@ -6,6 +6,7 @@ from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_reduction, execute_reduction_gradient
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ._reduction import (
     Axis,
@@ -23,15 +24,24 @@ def _product(values: list[int | float]) -> int | float:
     return result
 
 
-class Prod:
+class Prod(Operation):
     """Product reduction with zero-safe reverse-mode differentiation."""
 
-    @staticmethod
-    def forward(
-        value: Tensor,
+    __slots__ = ("axis", "keepdims")
+    name = "prod"
+
+    def __init__(
+        self,
+        *,
         axis: Axis = None,
         keepdims: bool = False,
-    ) -> Tensor:
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+        object.__setattr__(self, "keepdims", keepdims)
+
+    def forward(self, value: Tensor) -> Tensor:
+        axis = self.axis
+        keepdims = self.keepdims
         axes = normalize_axes(value.ndim, axis)
         output_shape = reduction_shape(value.shape, axes, keepdims)
         if axis is None and not keepdims:
@@ -62,15 +72,10 @@ class Prod:
         ]
         return Tensor(values, dtype=value.dtype, shape=output_shape)
 
-    @staticmethod
-    def backward(
-        grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> list[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
         value = inputs[0]
-        axis = kwargs.get("axis")
-        keepdims = kwargs.get("keepdims", False)
+        axis = self.axis
+        keepdims = self.keepdims
         axes = normalize_axes(value.ndim, axis)
         output_shape = reduction_shape(value.shape, axes, keepdims)
         if axis is None and not keepdims:
@@ -108,16 +113,15 @@ class Prod:
                 )
         return [Tensor(gradients, dtype=grad.dtype, shape=value.shape)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build the product VJP explicitly from products excluding each input."""
         from ..ops._utils import zero_like_graph
         from .concat import concat
         from .reshape import reshape
 
         value = inputs[0]
-        axis = kwargs.get("axis")
-        keepdims = kwargs.get("keepdims", False)
+        axis = self.axis
+        keepdims = self.keepdims
         _, _, groups = reduction_groups(
             value.data,
             axis,
@@ -172,17 +176,15 @@ def prod(
 
     axis = immutable_axis(axis)
     if isinstance(value, Variable):
+        operation = Prod(axis=axis, keepdims=keepdims)
         return Variable._from_operation(
-            Prod.forward(value.data, axis=axis, keepdims=keepdims),
-            "prod",
-            Prod,
-            [value],
-            axis=axis,
-            keepdims=keepdims,
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Prod.forward(value, axis=axis, keepdims=keepdims)
+    return Prod(axis=axis, keepdims=keepdims).forward(value)
 
 
 __all__ = ["Prod", "prod"]
