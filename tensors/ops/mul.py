@@ -48,10 +48,9 @@ class Mul(Operation):
 
     def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         a, b = inputs
-        expanded_a, expanded_b = broadcast_tensors(a, b)
         return [
-            sum_products_to_shape(grad, expanded_b, a.shape),
-            sum_products_to_shape(grad, expanded_a, b.shape),
+            sum_products_to_shape(grad, b, a.shape),
+            sum_products_to_shape(grad, a, b.shape),
         ]
 
     def backward_graph(self, grad, *inputs):
