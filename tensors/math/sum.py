@@ -58,6 +58,14 @@ def _stable_float_sum(values: list[float]) -> float:
 
 def _stable_product_sum(factors: list[tuple[float, float]]) -> float:
     """Accurately sum products, including products outside float range."""
+    if len(factors) == 1:
+        # A single finite, non-zero product neither cancels nor loses range,
+        # so it is already the exact result the general path would return.
+        left, right = factors[0]
+        product = left * right
+        if product and math.isfinite(product):
+            return product
+
     products = [left * right for left, right in factors]
     finite_factors = all(
         math.isfinite(left) and math.isfinite(right)
