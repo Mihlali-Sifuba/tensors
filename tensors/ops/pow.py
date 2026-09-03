@@ -11,7 +11,7 @@ from ..backend import (
     execute_power_exponent_gradient,
 )
 from .._typing import TensorData, TensorLike, TensorResult
-from ..dtype import float64, result_dtype
+from ..dtype import DataType, float64, result_dtype
 from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_to, broadcast_tensors
@@ -237,10 +237,28 @@ class Pow(Operation):
     def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         """Return gradients for a power operation's differentiable inputs."""
         base, exponent = inputs
-        expanded_base, expanded_exponent = broadcast_tensors(base, exponent)
         differentiate_base = self.differentiate_base
         differentiate_exponent = self.differentiate_exponent
+
+        # Broadcasting and the reference power evaluation are only needed by
+        # the domain checks and the reference gradient paths. An accelerated
+        # backend would otherwise pay for a host materialization it discards.
+        expanded: list[Tensor] = []
+
+        def expanded_operands() -> tuple[Tensor, Tensor]:
+            if not expanded:
+                expanded.extend(broadcast_tensors(base, exponent))
+            return expanded[0], expanded[1]
+
+        reference_output: list[Tensor] = []
+
+        def output_values() -> Tensor:
+            if not reference_output:
+                reference_output.append(self.forward(*expanded_operands()))
+            return reference_output[0]
+
         if differentiate_exponent:
+            expanded_base, expanded_exponent = expanded_operands()
             if any(value < 0 for value in expanded_base._data):
                 raise ValueError(
                     "power gradients with respect to a tensor exponent "
@@ -257,7 +275,6 @@ class Pow(Operation):
                     "power gradients for a zero base require strictly "
                     "positive exponents"
                 )
-        output = self.forward(expanded_base, expanded_exponent)
         if differentiate_base:
             accelerated_base = execute_power_base_gradient(
                 grad,
@@ -271,6 +288,7 @@ class Pow(Operation):
                     shape=grad.shape,
                 )
             else:
+                reference_base, reference_exponent = expanded_operands()
                 base_grad = Tensor(
                     [
                         _base_gradient_value(
@@ -281,20 +299,18 @@ class Pow(Operation):
                         )
                         for upstream, value, power, result in zip(
                             grad._data,
-                            expanded_base._data,
-                            expanded_exponent._data,
-                            output._data,
+                            reference_base._data,
+                            reference_exponent._data,
+                            output_values()._data,
                         )
                     ],
                     dtype=grad.dtype,
                     shape=grad.shape,
                 )
         else:
-            base_grad = Tensor(
-                [0.0] * grad.size,
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
+            # A frozen operand contributes zeros, so build them at the
+            # operand's own shape instead of reducing a broadcast zero.
+            base_grad = None
         if differentiate_exponent:
             accelerated_exponent = execute_power_exponent_gradient(
                 grad,
@@ -308,6 +324,7 @@ class Pow(Operation):
                     shape=grad.shape,
                 )
             else:
+                reference_base, reference_exponent = expanded_operands()
                 exponent_grad = Tensor(
                     [
                         _exponent_gradient_value(
@@ -318,23 +335,23 @@ class Pow(Operation):
                         )
                         for upstream, value, base_value, power in zip(
                             grad._data,
-                            output._data,
-                            expanded_base._data,
-                            expanded_exponent._data,
+                            output_values()._data,
+                            reference_base._data,
+                            reference_exponent._data,
                         )
                     ],
                     dtype=grad.dtype,
                     shape=grad.shape,
                 )
         else:
-            exponent_grad = Tensor(
-                [0.0] * grad.size,
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
+            exponent_grad = None
         return [
-            sum_to_shape(base_grad, base.shape),
-            sum_to_shape(exponent_grad, exponent.shape),
+            sum_to_shape(base_grad, base.shape)
+            if base_grad is not None
+            else _zeros_like(base, grad.dtype),
+            sum_to_shape(exponent_grad, exponent.shape)
+            if exponent_grad is not None
+            else _zeros_like(exponent, grad.dtype),
         ]
 
     def backward_graph(self, grad, *inputs):
@@ -342,11 +359,12 @@ class Pow(Operation):
         base, exponent = inputs
         differentiate_base = self.differentiate_base
         differentiate_exponent = self.differentiate_exponent
-        expanded_base, expanded_exponent = broadcast_tensors(
-            base.data,
-            exponent.data,
-        )
         if differentiate_exponent:
+            # Only the exponent's domain checks need the broadcast operands.
+            expanded_base, expanded_exponent = broadcast_tensors(
+                base.data,
+                exponent.data,
+            )
             if any(value < 0 for value in expanded_base._data):
                 raise ValueError(
                     "power gradients with respect to a tensor exponent "
@@ -388,6 +406,15 @@ class Pow(Operation):
             sum_to_shape_graph(exponent_gradient, exponent.shape),
         ]
 
+
+
+def _zeros_like(reference: Tensor, dtype: DataType) -> Tensor:
+    """Return zeros shaped like ``reference`` for a frozen operand."""
+    return Tensor._from_values(
+        [0.0] * reference.shape.size,
+        dtype,
+        reference.shape,
+    )
 
 
 def _expanded_power_inputs(
@@ -691,10 +718,10 @@ def _zero_variable(reference):
     from ..variable import Variable
 
     return Variable(
-        Tensor(
-            [0.0] * reference.size,
-            dtype=reference.dtype,
-            shape=reference.shape,
+        Tensor._from_values(
+            [0.0] * reference.shape.size,
+            reference.dtype,
+            reference.shape,
         ),
         requires_grad=False,
     )
