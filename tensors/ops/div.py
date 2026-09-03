@@ -91,7 +91,7 @@ class Div(Operation):
             if accelerated is not None:
                 return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
             data = [x / b for x in a._data]
-            return Tensor(data, dtype=dtype, shape=a.shape)
+            return Tensor._from_values(data, dtype, a.shape)
         if isinstance(b, Tensor):
             shape = a.shape.broadcast_with(b.shape)
             accelerated = execute_binary(
@@ -109,7 +109,7 @@ class Div(Operation):
                 return x / y
 
             data = broadcast_binary_values(a, b, shape, divide)
-            return Tensor(data, dtype=dtype, shape=shape)
+            return Tensor._from_values(data, dtype, shape)
         raise TypeError(f"Unsupported: {type(b)}")
 
     def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:

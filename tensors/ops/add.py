@@ -40,10 +40,10 @@ class Add(Operation):
             return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
         if isinstance(b, (int, float)):
             data = [x + b for x in a._data]
-            return Tensor(data, dtype=dtype, shape=a.shape)
+            return Tensor._from_values(data, dtype, a.shape)
         if isinstance(b, Tensor):
             data = broadcast_binary_values(a, b, output_shape, lambda x, y: x + y)
-            return Tensor(data, dtype=dtype, shape=output_shape)
+            return Tensor._from_values(data, dtype, output_shape)
         raise TypeError(f"Unsupported: {type(b)}")
 
     def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:

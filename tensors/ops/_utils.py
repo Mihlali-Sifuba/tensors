@@ -29,9 +29,19 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
     if accelerated is not None:
         return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
 
+    target = Shape.from_iterable(shape)
+    if target.size == 1:
+        if gradient.dtype.kind == "floating":
+            from ..math.sum import _stable_float_sum
+
+            total = _stable_float_sum([float(value) for value in gradient._data])
+        else:
+            total = sum(gradient._data)
+        return Tensor._from_values([total], gradient.dtype, target)
+
     padded_shape = (1,) * (gradient.ndim - len(shape)) + shape
     groups: list[list[int | float]] = [
-        [] for _ in range(Shape.from_iterable(shape).size)
+        [] for _ in range(target.size)
     ]
     padding = gradient.ndim - len(shape)
     for index, value in enumerate(gradient._data):
@@ -84,6 +94,31 @@ def sum_products_to_shape(
         raise ValueError(
             f"Cannot reduce gradient shape {expanded_gradient.shape} to {shape}"
         )
+
+    # Both grouping shortcuts still round through _stable_product_sum, so the
+    # cancellation guarantees are unchanged; only the coordinate mapping is
+    # skipped.
+    target = Shape.from_iterable(shape)
+    if expanded_gradient.shape == target:
+        values = [
+            _stable_product_sum([(float(left), float(right))])
+            for left, right in zip(
+                expanded_gradient._data,
+                expanded_factor._data,
+            )
+        ]
+        return Tensor._from_values(values, gradient.dtype, target)
+    if target.size == 1:
+        values = [
+            _stable_product_sum([
+                (float(left), float(right))
+                for left, right in zip(
+                    expanded_gradient._data,
+                    expanded_factor._data,
+                )
+            ])
+        ]
+        return Tensor._from_values(values, gradient.dtype, target)
 
     padded_shape = (1,) * (expanded_gradient.ndim - len(shape)) + shape
     padding = expanded_gradient.ndim - len(shape)

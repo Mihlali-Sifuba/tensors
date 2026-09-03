@@ -28,8 +28,16 @@ def broadcast_to(tensor: Tensor, shape: Shape | Iterable[int]) -> Tensor:
                 f"Shape {tensor.shape} cannot be broadcast to {output_shape}"
             )
 
-    padding = output_shape.rank - tensor.ndim
     source_data = tensor._data
+    if len(source_data) == 1:
+        # Every output position maps to the only element.
+        return Tensor._from_values(
+            [source_data[0]] * output_shape.size,
+            tensor.dtype,
+            output_shape,
+        )
+
+    padding = output_shape.rank - tensor.ndim
     source_strides = (0,) * padding + tuple(Strides.contiguous(tensor.shape))
     broadcast_strides = tuple(
         0 if source_dimension == 1 else stride
@@ -60,7 +68,11 @@ def broadcast_binary_values(
 ) -> list[object]:
     """Apply a binary operation while walking broadcast offsets once."""
     output_shape = Shape.from_iterable(shape)
-    if left.shape.broadcast_with(right.shape) != output_shape:
+    # Callers derive ``shape`` from the operands, so confirm the common
+    # agreements directly before paying for a full broadcast resolution.
+    if (
+        left.shape != output_shape or right.shape != output_shape
+    ) and left.shape.broadcast_with(right.shape) != output_shape:
         raise ValueError(
             f"Shapes {left.shape} and {right.shape} do not broadcast to "
             f"{output_shape}"
@@ -69,10 +81,10 @@ def broadcast_binary_values(
     right_data = right._data
     if left.shape == right.shape:
         return [operation(a, b) for a, b in zip(left_data, right_data)]
-    if left.size == 1:
+    if len(left_data) == 1:
         scalar = left_data[0]
         return [operation(scalar, value) for value in right_data]
-    if right.size == 1:
+    if len(right_data) == 1:
         scalar = right_data[0]
         return [operation(value, scalar) for value in left_data]
 
