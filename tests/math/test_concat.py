@@ -75,7 +75,7 @@ class ConcatTests(unittest.TestCase):
             ts.concat(tensors, axis=0.0)
 
     def test_math_namespace_exposes_concat_operation_class(self):
-        result = ts.math.Concat.forward(ts.Tensor([1]), ts.Tensor([2]))
+        result = ts.math.Concat().forward(ts.Tensor([1]), ts.Tensor([2]))
 
         self.assertEqual(result.tolist(), [1.0, 2.0])
 

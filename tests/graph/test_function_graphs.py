@@ -84,7 +84,7 @@ class FunctionGraphTests(unittest.TestCase):
         source = ts.Variable([3.0])
         result = model(source)
 
-        self.assertIs(result.node.inputs[0], source.node)
+        self.assertIs(result.node.producer.inputs[0], source.node)
         self.assertEqual(result.data.tolist(), [6.0])
 
 

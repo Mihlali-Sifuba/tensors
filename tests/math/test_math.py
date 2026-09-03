@@ -194,7 +194,7 @@ class MathTests(unittest.TestCase):
         self.assertEqual(matrix.grad.tolist(), [-0.5, 0.5, -0.5, 0.5])
 
     def test_math_namespace_exposes_std_operation_class(self):
-        result = ts.math.Std.forward(ts.Tensor([1.0, 2.0, 3.0]))
+        result = ts.math.Std().forward(ts.Tensor([1.0, 2.0, 3.0]))
 
         self.assertAlmostEqual(result.item(), 0.816496580927726)
 
@@ -211,7 +211,7 @@ class MathTests(unittest.TestCase):
         self.assertIs(result.dtype, ts.float32)
 
     def test_math_namespace_exposes_reshape_operation_class(self):
-        result = ts.math.Reshape.forward(ts.Tensor([1, 2, 3, 4]), (2, 2))
+        result = ts.math.Reshape(shape=(2, 2)).forward(ts.Tensor([1, 2, 3, 4]))
 
         self.assertEqual(result.shape, (2, 2))
         self.assertEqual(result.tolist(), [1.0, 2.0, 3.0, 4.0])

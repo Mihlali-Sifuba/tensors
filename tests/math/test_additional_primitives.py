@@ -157,10 +157,10 @@ class ArgExtremaTests(unittest.TestCase):
 
 class NamespaceTests(unittest.TestCase):
     def test_math_namespace_exports_new_operation_classes(self):
-        self.assertEqual(ts.math.Abs.forward(ts.Tensor([-2.0])).tolist(), [2.0])
-        self.assertEqual(ts.math.Prod.forward(ts.Tensor([2.0, 3.0])).tolist(), [6.0])
+        self.assertEqual(ts.math.Abs().forward(ts.Tensor([-2.0])).tolist(), [2.0])
+        self.assertEqual(ts.math.Prod().forward(ts.Tensor([2.0, 3.0])).tolist(), [6.0])
         self.assertEqual(
-            ts.math.Maximum.forward(ts.Tensor([1.0]), ts.Tensor([2.0])).tolist(),
+            ts.math.Maximum().forward(ts.Tensor([1.0]), ts.Tensor([2.0])).tolist(),
             [2.0],
         )
 
