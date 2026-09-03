@@ -11,7 +11,7 @@ from ..utils.broadcasting import (
     broadcast_to,
     broadcast_tensors,
 )
-from ._utils import sum_to_shape
+from ._utils import sum_to_shape, zeros_like
 
 
 Scalar = Union[int, float]
@@ -70,8 +70,21 @@ def _product_over_denominator_power(
 class Div(Operation):
     """Element-wise division — forward and backward."""
 
-    __slots__ = ()
+    __slots__ = ("differentiate_left", "differentiate_right")
     name = "div"
+
+    def __init__(
+        self,
+        *,
+        differentiate_left: bool = True,
+        differentiate_right: bool = True,
+    ) -> None:
+        object.__setattr__(self, "differentiate_left", bool(differentiate_left))
+        object.__setattr__(
+            self,
+            "differentiate_right",
+            bool(differentiate_right),
+        )
 
     def forward(self, a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
         """Element-wise division."""
@@ -114,8 +127,17 @@ class Div(Operation):
 
     def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         a, b = inputs
+        # The denominator VJP needs both operands broadcast together; the
+        # numerator VJP does not, so only pay for it when it is used.
+        if self.differentiate_left:
+            numerator_gradient = sum_to_shape(self.forward(grad, b), a.shape)
+        else:
+            numerator_gradient = zeros_like(a, grad.dtype)
+
+        if not self.differentiate_right:
+            return [numerator_gradient, zeros_like(b, grad.dtype)]
+
         expanded_a, expanded_b = broadcast_tensors(a, b)
-        da = self.forward(grad, expanded_b)
         accelerated = execute_division_denominator_gradient(
             grad,
             expanded_a,
@@ -136,7 +158,7 @@ class Div(Operation):
                 dtype=grad.dtype,
                 shape=grad.shape,
             )
-        return [sum_to_shape(da, a.shape), sum_to_shape(db, b.shape)]
+        return [numerator_gradient, sum_to_shape(db, b.shape)]
 
     def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP for division."""

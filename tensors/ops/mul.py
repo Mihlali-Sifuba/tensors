@@ -7,7 +7,7 @@ from ..dtype import result_dtype
 from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_binary_values, broadcast_tensors
-from ._utils import sum_products_to_shape
+from ._utils import sum_products_to_shape, zeros_like
 
 
 Scalar = Union[int, float]
@@ -16,8 +16,21 @@ Scalar = Union[int, float]
 class Mul(Operation):
     """Element-wise multiplication — forward and backward."""
 
-    __slots__ = ()
+    __slots__ = ("differentiate_left", "differentiate_right")
     name = "mul"
+
+    def __init__(
+        self,
+        *,
+        differentiate_left: bool = True,
+        differentiate_right: bool = True,
+    ) -> None:
+        object.__setattr__(self, "differentiate_left", bool(differentiate_left))
+        object.__setattr__(
+            self,
+            "differentiate_right",
+            bool(differentiate_right),
+        )
 
     def forward(self, a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
         """Element-wise multiplication of two tensors or a tensor and a scalar."""
@@ -49,8 +62,12 @@ class Mul(Operation):
     def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         a, b = inputs
         return [
-            sum_products_to_shape(grad, b, a.shape),
-            sum_products_to_shape(grad, a, b.shape),
+            sum_products_to_shape(grad, b, a.shape)
+            if self.differentiate_left
+            else zeros_like(a, grad.dtype),
+            sum_products_to_shape(grad, a, b.shape)
+            if self.differentiate_right
+            else zeros_like(b, grad.dtype),
         ]
 
     def backward_graph(self, grad, *inputs):

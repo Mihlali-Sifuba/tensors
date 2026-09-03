@@ -7,7 +7,7 @@ from ..dtype import result_dtype
 from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_binary_values
-from ._utils import sum_to_shape
+from ._utils import sum_to_shape, zeros_like
 
 
 Scalar = Union[int, float]
@@ -16,8 +16,21 @@ Scalar = Union[int, float]
 class Add(Operation):
     """Element-wise addition — forward and backward."""
 
-    __slots__ = ()
+    __slots__ = ("differentiate_left", "differentiate_right")
     name = "add"
+
+    def __init__(
+        self,
+        *,
+        differentiate_left: bool = True,
+        differentiate_right: bool = True,
+    ) -> None:
+        object.__setattr__(self, "differentiate_left", bool(differentiate_left))
+        object.__setattr__(
+            self,
+            "differentiate_right",
+            bool(differentiate_right),
+        )
 
     def forward(self, a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
         """Element-wise addition of two tensors or a tensor and a scalar."""
@@ -48,7 +61,14 @@ class Add(Operation):
 
     def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         left, right = inputs
-        return [sum_to_shape(grad, left.shape), sum_to_shape(grad, right.shape)]
+        return [
+            sum_to_shape(grad, left.shape)
+            if self.differentiate_left
+            else zeros_like(left, grad.dtype),
+            sum_to_shape(grad, right.shape)
+            if self.differentiate_right
+            else zeros_like(right, grad.dtype),
+        ]
 
     def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP for addition."""

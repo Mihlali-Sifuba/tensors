@@ -11,6 +11,16 @@ from ..utils.coordinates import (
 )
 
 
+def zeros_like(reference: Tensor, dtype) -> Tensor:
+    """Return zeros shaped like ``reference`` for a non-differentiated operand.
+
+    An operation must return one gradient per operand. When an operand is
+    frozen, the caller discards the value, so the zeros are built directly at
+    the operand's shape instead of reducing a broadcast gradient.
+    """
+    return Tensor._from_values([0.0] * reference.shape.size, dtype, reference.shape)
+
+
 def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
     """Reduce a broadcasted ``gradient`` back to an input ``shape``.
 

@@ -211,8 +211,16 @@ class Variable:
             requires_grad=False,
         )
 
-    def _binary(self, operation, other: Variable) -> Variable:
-        """Record a binary operation over two graph operands."""
+    def _binary(self, operation_type, other: Variable) -> Variable:
+        """Record a binary arithmetic operation over two graph operands.
+
+        Which operands are differentiated is part of the invocation, so a
+        frozen operand does not pay for a VJP the caller discards.
+        """
+        operation = operation_type(
+            differentiate_left=self.requires_grad,
+            differentiate_right=other.requires_grad,
+        )
         return self._from_operation(
             operation.forward(self.data, other.data),
             operation,
@@ -223,21 +231,21 @@ class Variable:
 
     def __add__(self, other: TensorOperand) -> Variable:
         operand = self._operand(other, result_dtype(self.dtype, other))
-        return self._binary(Add(), operand)
+        return self._binary(Add, operand)
 
     def __radd__(self, other: int | float | Tensor) -> Variable:
         return self + other
 
     def __sub__(self, other: TensorOperand) -> Variable:
         operand = self._operand(other, result_dtype(self.dtype, other))
-        return self._binary(Sub(), operand)
+        return self._binary(Sub, operand)
 
     def __rsub__(self, other: int | float | Tensor) -> Variable:
         return (-self) + other
 
     def __mul__(self, other: TensorOperand) -> Variable:
         operand = self._operand(other, result_dtype(self.dtype, other))
-        return self._binary(Mul(), operand)
+        return self._binary(Mul, operand)
 
     def __rmul__(self, other: int | float | Tensor) -> Variable:
         return self * other
@@ -247,7 +255,7 @@ class Variable:
             other,
             result_dtype(self.dtype, other, division=True),
         )
-        return self._binary(Div(), operand)
+        return self._binary(Div, operand)
 
     def __rtruediv__(self, other: int | float | Tensor) -> Variable:
         # Operand order carries the semantics: the numerator is input_0.
@@ -255,7 +263,7 @@ class Variable:
             other,
             result_dtype(self.dtype, other, division=True),
         )
-        return numerator._binary(Div(), self)
+        return numerator._binary(Div, self)
 
     def __pow__(self, other: TensorOperand) -> Variable:
         exponent = self._operand(other, _power_dtype(self.data, other))
@@ -263,7 +271,11 @@ class Variable:
             differentiate_base=self.requires_grad,
             differentiate_exponent=exponent.requires_grad,
         )
-        return self._binary(operation, exponent)
+        return self._from_operation(
+            operation.forward(self.data, exponent.data),
+            operation,
+            (self, exponent),
+        )
 
     def __rpow__(
         self,
@@ -276,7 +288,11 @@ class Variable:
             differentiate_base=base.requires_grad,
             differentiate_exponent=self.requires_grad,
         )
-        return base._binary(operation, self)
+        return base._from_operation(
+            operation.forward(base.data, self.data),
+            operation,
+            (base, self),
+        )
 
     def __neg__(self) -> Variable:
         operation = Neg()
