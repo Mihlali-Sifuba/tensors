@@ -64,11 +64,15 @@ def _saved_gradients(
     inputs: Iterable[Variable],
 ) -> list[tuple[Variable, Any]]:
     """Capture gradients that repeated reverse passes temporarily replace."""
+    from .node import VariableNode
+
     variables = []
     seen = set()
     for node in Computation(output).nodes:
-        variable = node.output_var
-        if variable is not None and id(variable) not in seen:
+        if not isinstance(node, VariableNode):
+            continue
+        variable = node.variable
+        if id(variable) not in seen:
             seen.add(id(variable))
             variables.append(variable)
     for variable in inputs:
