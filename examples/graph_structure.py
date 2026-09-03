@@ -5,7 +5,7 @@ and every relationship is an ``Edge``.
 """
 
 import tensors as ts
-from tensors.graph import Edge, OperationNode, VariableNode
+from tensors.graph import Edge, OperationNode
 from tensors.graph.state import GraphState
 from tensors.ops import Add
 
