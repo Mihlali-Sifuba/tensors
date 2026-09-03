@@ -326,14 +326,11 @@ class Tensor:
         Compact storage is stricter than a contiguous logical layout, which
         may begin at a non-zero offset.
         """
-        if self._offset != 0:
-            return False
-        shape = self._shape
-        # Freshly produced internal results carry canonical strides, so
-        # compare them directly before walking the dimensions.
         return (
-            self._strides == Strides.contiguous(shape) or self.is_contiguous
-        ) and self._storage.size == shape.size
+            self._offset == 0
+            and self.is_contiguous
+            and self._storage.size == self._shape.size
+        )
 
     def _logical_storage_indices(self) -> Iterator[int]:
         """Yield physical positions in logical row-major order."""
