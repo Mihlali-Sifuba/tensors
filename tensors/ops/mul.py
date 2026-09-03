@@ -4,6 +4,7 @@ from typing import List, Union
 
 from ..backend import execute_binary
 from ..dtype import result_dtype
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_binary_values, broadcast_tensors
 from ._utils import sum_products_to_shape
@@ -12,11 +13,13 @@ from ._utils import sum_products_to_shape
 Scalar = Union[int, float]
 
 
-class Mul:
+class Mul(Operation):
     """Element-wise multiplication — forward and backward."""
 
-    @staticmethod
-    def forward(a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
+    __slots__ = ()
+    name = "mul"
+
+    def forward(self, a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
         """Element-wise multiplication of two tensors or a tensor and a scalar."""
         if not isinstance(b, (int, float, Tensor)):
             raise TypeError(f"Unsupported: {type(b)}")
@@ -43,28 +46,22 @@ class Mul:
             return Tensor(data, dtype=dtype, shape=output_shape)
         raise TypeError(f"Unsupported: {type(b)}")
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
-        if len(inputs) == 2:
-            a, b = inputs
-            expanded_a, expanded_b = broadcast_tensors(a, b)
-            return [
-                sum_products_to_shape(grad, expanded_b, a.shape),
-                sum_products_to_shape(grad, expanded_a, b.shape),
-            ]
-        scalar = kwargs.get("scalar", 1.0)
-        assert isinstance(scalar, (int, float))
-        return [Mul.forward(grad, scalar)]
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+        a, b = inputs
+        expanded_a, expanded_b = broadcast_tensors(a, b)
+        return [
+            sum_products_to_shape(grad, expanded_b, a.shape),
+            sum_products_to_shape(grad, expanded_a, b.shape),
+        ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP for multiplication."""
-        if len(inputs) == 1:
-            scalar = kwargs.get("scalar", 1.0)
-            return [grad * scalar]
         left, right = inputs
         from ._utils import sum_products_to_shape_graph
         return [
             sum_products_to_shape_graph(grad, right, left.shape),
             sum_products_to_shape_graph(grad, left, right.shape),
         ]
+
+
+multiply = Mul().forward

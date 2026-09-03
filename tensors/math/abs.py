@@ -7,15 +7,18 @@ import math
 from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 
 
-class Abs:
+class Abs(Operation):
     """Elementwise absolute value with a zero subgradient at zero."""
 
-    @staticmethod
-    def forward(value: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "abs"
+
+    def forward(self, value: Tensor) -> Tensor:
         return unary_forward(
             "abs",
             value,
@@ -23,17 +26,11 @@ class Abs:
             fallback=builtins.abs,
         )
 
-    @staticmethod
-    def backward(
-        grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> list[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
         value = inputs[0]
         return [unary_backward("abs", grad, value, fallback=_abs_gradient)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP using the chosen zero subgradient."""
         from ..ops._utils import masked_value_graph, zero_like_graph
 
@@ -76,15 +73,15 @@ def abs(value: TensorLike) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
+        operation = Abs()
         return Variable._from_operation(
-            Abs.forward(value.data),
-            "abs",
-            Abs,
-            [value],
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Abs.forward(value)
+    return Abs().forward(value)
 
 
 __all__ = ["Abs", "abs"]

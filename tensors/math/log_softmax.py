@@ -9,6 +9,7 @@ import math
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_normalization, execute_normalization_gradient
 from ..dtype import float64
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ._normalization import shifted_normalization
 from .softmax import (
@@ -23,11 +24,21 @@ from .softmax import (
 )
 
 
-class LogSoftmax:
+class LogSoftmax(Operation):
     """Normalize logits in log space along one axis."""
 
-    @staticmethod
-    def forward(a: Tensor, axis: int = -1) -> Tensor:
+    __slots__ = ("axis",)
+    name = "log_softmax"
+
+    def __init__(
+        self,
+        *,
+        axis: int = -1,
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+
+    def forward(self, a: Tensor) -> Tensor:
+        axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("log_softmax axis must be an integer")
         axis = _normalize_axis(a, axis)
@@ -80,19 +91,17 @@ class LogSoftmax:
 
         return Tensor(values, dtype=dtype, shape=a.shape)
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         a = inputs[0]
-        axis = kwargs.get("axis", -1)
+        axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("log_softmax axis must be an integer")
         axis = _normalize_axis(a, axis)
         return [_log_softmax_vjp_tensor(grad, a, axis)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable log-softmax VJP."""
-        axis = kwargs.get("axis", -1)
+        axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("log_softmax axis must be an integer")
         axis = _normalize_axis(inputs[0].data, axis)
@@ -139,26 +148,31 @@ def _log_softmax_vjp_tensor(
     return Tensor(values, dtype=grad.dtype, shape=value.shape)
 
 
-class LogSoftmaxGradient:
+class LogSoftmaxGradient(Operation):
     """Differentiable, cancellation-resistant log-softmax VJP."""
 
-    @staticmethod
-    def forward(grad: Tensor, value: Tensor, *, axis: int) -> Tensor:
+    __slots__ = ("axis",)
+    name = "log_softmax_gradient"
+
+    def __init__(
+        self,
+        *,
+        axis: int,
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+
+    def forward(self, grad: Tensor, value: Tensor) -> Tensor:
+        axis = self.axis
         return _log_softmax_vjp_tensor(grad, value, axis)
 
-    @staticmethod
-    def backward(
-        outer_grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> List[Tensor]:
+    def backward(self, outer_grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         from .sum import Sum
         from ..utils.broadcasting import broadcast_to
 
         grad, value = inputs
-        axis = kwargs["axis"]
+        axis = self.axis
         assert isinstance(axis, int)
-        total = Sum.forward(grad, axis=axis, keepdims=True)
+        total = Sum(axis=axis, keepdims=True).forward(grad)
         expanded_total = broadcast_to(total, value.shape)
         value_vjp = _softmax_vjp_tensor(outer_grad, value, axis)
         return [
@@ -176,12 +190,11 @@ class LogSoftmaxGradient:
             ),
         ]
 
-    @staticmethod
-    def backward_graph(outer_grad, *inputs, **kwargs: object):
+    def backward_graph(self, outer_grad, *inputs):
         from .sum import sum
 
         grad, value = inputs
-        axis = kwargs["axis"]
+        axis = self.axis
         return [
             _softmax_centered(outer_grad, value, axis),
             -sum(grad, axis=axis, keepdims=True)
@@ -192,12 +205,11 @@ class LogSoftmaxGradient:
 def _log_softmax_vjp(grad, value, axis: int):
     from ..variable import Variable
 
+    operation = LogSoftmaxGradient(axis=axis)
     return Variable._from_operation(
-        LogSoftmaxGradient.forward(grad.data, value.data, axis=axis),
-        "log_softmax_gradient",
-        LogSoftmaxGradient,
-        [grad, value],
-        axis=axis,
+        operation.forward(grad.data, value.data),
+        operation,
+        (grad, value),
     )
 
 
@@ -214,16 +226,15 @@ def log_softmax(value: TensorLike, axis: int = -1) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
+        operation = LogSoftmax(axis=axis)
         return Variable._from_operation(
-            LogSoftmax.forward(value.data, axis=axis),
-            "log_softmax",
-            LogSoftmax,
-            [value],
-            axis=axis,
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return LogSoftmax.forward(value, axis=axis)
+    return LogSoftmax(axis=axis).forward(value)
 
 
 __all__ = ["LogSoftmax", "log_softmax"]

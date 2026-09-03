@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..shape import Shape
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.coordinates import (
     coordinates_to_linear_index,
@@ -127,24 +128,24 @@ def sum_to_shape_graph(gradient, shape: tuple[int, ...]):
     return reshape(reduced, shape) if reduced.shape != shape else reduced
 
 
-class ProductSumToShape:
+class ProductSumToShape(Operation):
     """Fused differentiable product reduction used by broadcast VJPs."""
 
-    @staticmethod
-    def forward(
-        left: Tensor,
-        right: Tensor,
+    __slots__ = ("target_shape",)
+    name = "product_sum_to_shape"
+
+    def __init__(
+        self,
         *,
         target_shape: tuple[int, ...],
-    ) -> Tensor:
+    ) -> None:
+        object.__setattr__(self, "target_shape", target_shape)
+
+    def forward(self, left: Tensor, right: Tensor) -> Tensor:
+        target_shape = self.target_shape
         return sum_products_to_shape(left, right, target_shape)
 
-    @staticmethod
-    def backward(
-        grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> list[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
         from ..utils.broadcasting import broadcast_to
 
         left, right = inputs
@@ -155,8 +156,7 @@ class ProductSumToShape:
             sum_products_to_shape(expanded_grad, left, right.shape),
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         left, right = inputs
         common_shape = left.shape.broadcast_with(right.shape)
         ones = Tensor(
@@ -175,32 +175,28 @@ def sum_products_to_shape_graph(left, right, shape: tuple[int, ...]):
     """Record a fused multiply-and-reduce without premature overflow."""
     from ..variable import Variable
 
+    operation = ProductSumToShape(target_shape=shape)
     return Variable._from_operation(
-        ProductSumToShape.forward(left.data, right.data, target_shape=shape),
-        "product_sum_to_shape",
-        ProductSumToShape,
-        [left, right],
-        target_shape=shape,
+        operation.forward(left.data, right.data),
+        operation,
+        (left, right),
     )
 
 
-class ZeroLike:
+class ZeroLike(Operation):
     """A graph-connected zero that is safe for infinite input values."""
 
-    @staticmethod
-    def forward(value: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "zero_like"
+
+    def forward(self, value: Tensor) -> Tensor:
         return Tensor(
             [0.0] * value.size,
             dtype=value.dtype,
             shape=value.shape,
         )
 
-    @staticmethod
-    def backward(
-        grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> list[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
         return [
             Tensor(
                 [0.0] * inputs[0].size,
@@ -209,8 +205,7 @@ class ZeroLike:
             )
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         return [zero_like_graph(inputs[0])]
 
 
@@ -218,19 +213,29 @@ def zero_like_graph(value):
     """Return graph-connected zeros without evaluating ``value * 0``."""
     from ..variable import Variable
 
+    operation = ZeroLike()
     return Variable._from_operation(
-        ZeroLike.forward(value.data),
-        "zero_like",
-        ZeroLike,
-        [value],
+        operation.forward(value.data),
+        operation,
+        (value,),
     )
 
 
-class MaskedValue:
+class MaskedValue(Operation):
     """Select values with a constant mask without evaluating ``infinity * 0``."""
 
-    @staticmethod
-    def forward(value: Tensor, *, mask: Tensor) -> Tensor:
+    __slots__ = ("mask",)
+    name = "masked_value"
+
+    def __init__(
+        self,
+        *,
+        mask: Tensor,
+    ) -> None:
+        object.__setattr__(self, "mask", mask)
+
+    def forward(self, value: Tensor) -> Tensor:
+        mask = self.mask
         from ..utils.broadcasting import broadcast_to
 
         expanded = broadcast_to(value, mask.shape)
@@ -243,13 +248,8 @@ class MaskedValue:
             shape=mask.shape,
         )
 
-    @staticmethod
-    def backward(
-        grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> list[Tensor]:
-        mask = kwargs["mask"]
+    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+        mask = self.mask
         if not isinstance(mask, Tensor):
             raise TypeError("masked-value mask must be a Tensor")
         selected = Tensor(
@@ -262,9 +262,8 @@ class MaskedValue:
         )
         return [sum_to_shape(selected, inputs[0].shape)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
-        mask = kwargs["mask"]
+    def backward_graph(self, grad, *inputs):
+        mask = self.mask
         if not isinstance(mask, Tensor):
             raise TypeError("masked-value mask must be a Tensor")
         return [
@@ -284,12 +283,11 @@ def masked_value_graph(value, mask: Tensor):
             f"Value shape {value.shape} cannot broadcast to mask shape "
             f"{mask.shape}"
         )
+    operation = MaskedValue(mask=mask)
     return Variable._from_operation(
-        MaskedValue.forward(value.data, mask=mask),
-        "masked_value",
-        MaskedValue,
-        [value],
-        mask=mask,
+        operation.forward(value.data),
+        operation,
+        (value,),
     )
 
 

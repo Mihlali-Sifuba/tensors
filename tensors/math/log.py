@@ -5,20 +5,22 @@ from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 
 
-class Log:
+class Log(Operation):
     """Elementwise natural logarithm with a reverse-mode gradient rule."""
 
-    @staticmethod
-    def forward(a: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "log"
+
+    def forward(self, a: Tensor) -> Tensor:
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         return unary_forward("log", a, dtype=dtype, fallback=_log)
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         a = inputs[0]
         return [
             unary_backward(
@@ -29,8 +31,7 @@ class Log:
             )
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP for the natural logarithm."""
         return [grad / inputs[0]]
 
@@ -48,15 +49,15 @@ def log(value: TensorLike) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
+        operation = Log()
         return Variable._from_operation(
-            Log.forward(value.data),
-            "log",
-            Log,
-            [value],
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Log.forward(value)
+    return Log().forward(value)
 
 
 __all__ = ["Log", "log"]

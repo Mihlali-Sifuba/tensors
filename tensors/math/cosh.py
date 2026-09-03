@@ -7,24 +7,22 @@ from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 
 
-class Cosh:
+class Cosh(Operation):
     """Elementwise hyperbolic cosine with a reverse-mode gradient rule."""
 
-    @staticmethod
-    def forward(value: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "cosh"
+
+    def forward(self, value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         return unary_forward("cosh", value, dtype=dtype, fallback=_cosh)
 
-    @staticmethod
-    def backward(
-        grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> list[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
         value = inputs[0]
         return [
             unary_backward(
@@ -35,8 +33,7 @@ class Cosh:
             )
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP for hyperbolic cosine."""
         from .sinh import sinh
 
@@ -56,15 +53,15 @@ def cosh(value: TensorLike) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
+        operation = Cosh()
         return Variable._from_operation(
-            Cosh.forward(value.data),
-            "cosh",
-            Cosh,
-            [value],
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Cosh.forward(value)
+    return Cosh().forward(value)
 
 
 __all__ = ["Cosh", "cosh"]

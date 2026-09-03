@@ -15,6 +15,7 @@ from ..backend import (
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..shape import Shape
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_tensors
 from ..utils.coordinates import (
@@ -184,17 +185,24 @@ def _validate_distributions(targets: Tensor, axis: int) -> None:
             )
 
 
-class CrossEntropy:
+class CrossEntropy(Operation):
     """Stable cross-entropy between logits and dense target distributions."""
 
-    @staticmethod
-    def forward(
-        logits: Tensor,
-        targets: Tensor,
+    __slots__ = ("axis", "reduction")
+    name = "cross_entropy"
+
+    def __init__(
+        self,
         *,
         axis: int = -1,
         reduction: Reduction = "mean",
-    ) -> Tensor:
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+        object.__setattr__(self, "reduction", reduction)
+
+    def forward(self, logits: Tensor, targets: Tensor) -> Tensor:
+        axis = self.axis
+        reduction = self.reduction
         _validate_reduction(reduction)
         axis = _normalize_axis(logits, axis)
         logits, targets = broadcast_tensors(logits, targets)
@@ -212,7 +220,7 @@ class CrossEntropy:
         )
         if storage is not None:
             return Tensor._from_owned_storage(storage, dtype=dtype, shape=result_shape)
-        log_probabilities = LogSoftmax.forward(logits, axis=axis)
+        log_probabilities = LogSoftmax(axis=axis).forward(logits)
         _, _, groups = reduction_groups(logits, axis, keepdims=False)
 
         # Zero-probability targets make no contribution. Skipping those terms
@@ -234,11 +242,10 @@ class CrossEntropy:
             total = _stable_float_sum(losses)
         return Tensor([total], dtype=dtype, shape=(1,))
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         logits, targets = inputs
-        axis = kwargs.get("axis", -1)
-        reduction = kwargs.get("reduction", "mean")
+        axis = self.axis
+        reduction = self.reduction
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("cross_entropy axis must be an integer")
         _validate_reduction(reduction)
@@ -285,8 +292,8 @@ class CrossEntropy:
                 ),
             ]
 
-        probabilities = Softmax.forward(expanded_logits, axis=axis)
-        log_probabilities = LogSoftmax.forward(expanded_logits, axis=axis)
+        probabilities = Softmax(axis=axis).forward(expanded_logits)
+        log_probabilities = LogSoftmax(axis=axis).forward(expanded_logits)
         _, _, groups = reduction_groups(
             expanded_logits,
             axis,
@@ -343,15 +350,14 @@ class CrossEntropy:
             ),
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable cross-entropy VJP."""
         from .log_softmax import _log_softmax_vjp
         from .reshape import reshape
 
         logits, targets = inputs
-        axis = kwargs.get("axis", -1)
-        reduction = kwargs.get("reduction", "mean")
+        axis = self.axis
+        reduction = self.reduction
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("cross_entropy axis must be an integer")
         _validate_reduction(reduction)
@@ -456,26 +462,15 @@ def cross_entropy(
             if targets_are_variable
             else Variable(_tensor(prepared_targets), requires_grad=False)
         )
+        operation = CrossEntropy(axis=axis, reduction=reduction)
         return Variable._from_operation(
-            CrossEntropy.forward(
-                logits_variable.data,
-                targets_variable.data,
-                axis=axis,
-                reduction=reduction,
-            ),
-            "cross_entropy",
-            CrossEntropy,
-            [logits_variable, targets_variable],
-            axis=axis,
-            reduction=reduction,
+            operation.forward(logits_variable.data, targets_variable.data),
+            operation,
+            (logits_variable, targets_variable),
         )
 
-    return CrossEntropy.forward(
-        logits_tensor,
-        _tensor(prepared_targets),
-        axis=axis,
-        reduction=reduction,
-    )
+    operation = CrossEntropy(axis=axis, reduction=reduction)
+    return operation.forward(logits_tensor, _tensor(prepared_targets))
 
 
 __all__ = ["CrossEntropy", "Reduction", "cross_entropy"]

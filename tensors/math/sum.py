@@ -6,6 +6,7 @@ from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_reduction, execute_reduction_gradient
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ._reduction import (
     Axis,
@@ -122,19 +123,30 @@ def _sum_impl(a: Tensor, axis: Axis = None,
     return Tensor(values, dtype=a.dtype, shape=output_shape)
 
 
-class Sum:
+class Sum(Operation):
     """Sum with a reverse-mode gradient rule."""
 
-    @staticmethod
-    def forward(a: Tensor, axis: Axis = None,
-                keepdims: bool = False) -> Tensor:
+    __slots__ = ("axis", "keepdims")
+    name = "sum"
+
+    def __init__(
+        self,
+        *,
+        axis: Axis = None,
+        keepdims: bool = False,
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+        object.__setattr__(self, "keepdims", keepdims)
+
+    def forward(self, a: Tensor) -> Tensor:
+        axis = self.axis
+        keepdims = self.keepdims
         return _sum_impl(a, axis=axis, keepdims=keepdims)
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         a = inputs[0]
-        axis = kwargs.get("axis")
-        keepdims = kwargs.get("keepdims", False)
+        axis = self.axis
+        keepdims = self.keepdims
         axes = normalize_axes(a.ndim, axis)
         output_shape = reduction_shape(a.shape, axes, keepdims)
         if axis is None and not keepdims:
@@ -162,15 +174,14 @@ class Sum:
 
         return [Tensor(result, dtype=grad.dtype, shape=a.shape)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP for an axis-aware sum."""
         from ..creation import ones
         from ..variable import Variable
         from .reshape import reshape
 
-        axis = kwargs.get("axis")
-        keepdims = kwargs.get("keepdims", False)
+        axis = self.axis
+        keepdims = self.keepdims
         value = inputs[0]
         expanded = grad if keepdims else reshape(grad, keepdims_shape(value.shape, axis))
         unit = Variable(
@@ -207,17 +218,15 @@ def sum(
     axis = immutable_axis(axis)
 
     if isinstance(value, Variable):
+        operation = Sum(axis=axis, keepdims=keepdims)
         return Variable._from_operation(
-            Sum.forward(value.data, axis=axis, keepdims=keepdims),
-            "sum",
-            Sum,
-            [value],
-            axis=axis,
-            keepdims=keepdims,
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Sum.forward(value, axis=axis, keepdims=keepdims)
+    return Sum(axis=axis, keepdims=keepdims).forward(value)
 
 
 __all__ = ["Sum", "sum"]

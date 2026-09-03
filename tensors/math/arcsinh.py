@@ -7,15 +7,18 @@ from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 
 
-class ArcSinh:
+class ArcSinh(Operation):
     """Elementwise inverse hyperbolic sine over the real numbers."""
 
-    @staticmethod
-    def forward(value: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "arcsinh"
+
+    def forward(self, value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         return unary_forward(
             "arcsinh",
@@ -24,17 +27,11 @@ class ArcSinh:
             fallback=lambda item: math.asinh(float(item)),
         )
 
-    @staticmethod
-    def backward(
-        grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> list[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
         value = inputs[0]
         return [unary_backward("arcsinh", grad, value, fallback=_gradient)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a stable differentiable VJP for inverse hyperbolic sine."""
         from .abs import abs
         from .sqrt import sqrt
@@ -78,15 +75,15 @@ def arcsinh(value: TensorLike) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
+        operation = ArcSinh()
         return Variable._from_operation(
-            ArcSinh.forward(value.data),
-            "arcsinh",
-            ArcSinh,
-            [value],
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return ArcSinh.forward(value)
+    return ArcSinh().forward(value)
 
 
 __all__ = ["ArcSinh", "arcsinh"]

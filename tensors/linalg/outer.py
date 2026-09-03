@@ -8,17 +8,20 @@ from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_outer, execute_outer_gradient
 from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
+from ..graph.operation import Operation
 from ..tensor import Tensor
 
 if TYPE_CHECKING:
     from ..variable import Variable
 
 
-class Outer:
+class Outer(Operation):
     """Vector outer product with reverse-mode gradient rules."""
 
-    @staticmethod
-    def forward(a: Tensor, b: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "outer"
+
+    def forward(self, a: Tensor, b: Tensor) -> Tensor:
         """Return the matrix whose entries are ``a[i] * b[j]``."""
         if a.ndim != 1 or b.ndim != 1:
             raise ValueError("outer requires two 1D vectors")
@@ -34,8 +37,7 @@ class Outer:
         values = [left * right for left in a._data for right in b._data]
         return Tensor(values, dtype=dtype, shape=(a.size, b.size))
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
         """Differentiate an outer product with respect to both vectors."""
         left, right = inputs
         expected_shape = (left.size, right.size)
@@ -81,8 +83,7 @@ class Outer:
             Tensor(right_gradient, dtype=grad.dtype, shape=right.shape),
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build a differentiable VJP for an outer product."""
         left, right = inputs
         return [grad @ right, left @ grad]
@@ -107,16 +108,16 @@ def outer(a: TensorLike, b: TensorLike) -> TensorResult:
     if isinstance(a, Variable) or isinstance(b, Variable):
         left = a if isinstance(a, Variable) else Variable(a, requires_grad=False)
         right = b if isinstance(b, Variable) else Variable(b, requires_grad=False)
+        operation = Outer()
         return Variable._from_operation(
-            Outer.forward(left.data, right.data),
-            "outer",
-            Outer,
-            [left, right],
+            operation.forward(left.data, right.data),
+            operation,
+            (left, right),
         )
 
     left = a if isinstance(a, Tensor) else Tensor(a)
     right = b if isinstance(b, Tensor) else Tensor(b)
-    return Outer.forward(left, right)
+    return Outer().forward(left, right)
 
 
 __all__ = ["Outer", "outer"]

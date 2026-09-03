@@ -6,28 +6,25 @@ import math
 from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..graph.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 
 
-class Sign:
+class Sign(Operation):
     """Elementwise sign with a zero derivative away from zero."""
 
-    @staticmethod
-    def forward(value: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "sign"
+
+    def forward(self, value: Tensor) -> Tensor:
         return unary_forward("sign", value, dtype=value.dtype, fallback=_sign)
 
-    @staticmethod
-    def backward(
-        grad: Tensor,
-        *inputs: Tensor,
-        **kwargs: object,
-    ) -> list[Tensor]:
+    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
         value = inputs[0]
         return [unary_backward("sign", grad, value, fallback=_gradient)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(self, grad, *inputs):
         """Build the zero VJP on intervals where sign is constant."""
         from ..ops._utils import zero_like_graph
 
@@ -55,15 +52,15 @@ def sign(value: TensorLike) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
+        operation = Sign()
         return Variable._from_operation(
-            Sign.forward(value.data),
-            "sign",
-            Sign,
-            [value],
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Sign.forward(value)
+    return Sign().forward(value)
 
 
 __all__ = ["Sign", "sign"]
