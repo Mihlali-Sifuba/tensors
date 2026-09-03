@@ -130,9 +130,9 @@ tensors/
     ├── computation.py     # forward replay and reverse-mode execution
     ├── derivatives.py     # Jacobian and Hessian construction
     ├── gradcheck.py       # finite-difference verification
-    ├── node.py
+    ├── operation.py       # the Operation abstract base class
+    ├── node.py            # Node, VariableNode, and OperationNode
     ├── edge.py
-    ├── protocols.py
     └── state.py
 ```
 
@@ -193,8 +193,15 @@ The folders have deliberately narrow responsibilities:
 - `math` contains all mathematical functions, including reductions and
   activation functions. It remains flat rather than separating activations or
   reductions into extra namespaces.
-- `graph` owns tracing state, operation protocols, computation execution,
-  derivatives, and reusable computational model functions.
+- `graph` owns tracing state, the operation contract, computation execution,
+  derivatives, and reusable computational model functions. A recorded graph
+  alternates `VariableNode -> OperationNode -> VariableNode`, and every
+  relationship is an `Edge`. `Node` holds only identity and connectivity;
+  `VariableNode` adds its `Variable` and `OperationNode` adds its `Operation`.
+  `Operation` is an abstract base class carrying the immutable configuration of
+  one concrete invocation plus its local `forward`, `backward`, and optional
+  `backward_graph` semantics. See [Automatic differentiation](autodiff.md) for
+  the recorded topology and the responsibility split.
 - `Computation` owns compiled forward and backward plans, reusable execution
   workspaces, and eligible CUDA chain fusion; `ts.backward` is a root
   convenience alias.
@@ -206,5 +213,6 @@ The folders have deliberately narrow responsibilities:
 - `random` owns seeded Python, NumPy, and CUDA generator state and exposes the
   minimal `ts.random` facade. It does not modify provider-global RNG state.
 
-Operation classes, `Node`, and `Edge` are implementation or advanced
-inspection details. They should not be part of the everyday root API.
+Operation classes, `Node`, `VariableNode`, `OperationNode`, and `Edge` are
+implementation or advanced inspection details. They should not be part of the
+everyday root API.
