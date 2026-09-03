@@ -4,6 +4,119 @@ The package records eager `Variable` operations as a directed acyclic graph and
 uses reverse-mode automatic differentiation to calculate vector-Jacobian
 products (VJPs).
 
+## Graph model
+
+A recorded graph alternates between two vertex types:
+
+```text
+VariableNode -> OperationNode -> VariableNode
+```
+
+Every relationship is an `Edge`. An operation's operands arrive on its incoming
+edges, and its single result leaves on its outgoing edge. For `c = a + b`:
+
+```text
+VariableNode(a) ──input_0──┐
+                           ▼
+                    OperationNode(Add())
+                           ▲
+VariableNode(b) ──input_1──┘
+                           │
+                        result
+                           ▼
+                    VariableNode(c)
+```
+
+Responsibilities divide as follows:
+
+| Object | Responsibility |
+| --- | --- |
+| `Variable` | the differentiable runtime value |
+| `VariableNode` | the graph representation of one `Variable` |
+| `Operation` | one concrete mathematical invocation |
+| `OperationNode` | the graph representation of that invocation |
+| `Edge` | a graph relationship and its data flow |
+| `Computation` | traversal and execution of the graph |
+| `GraphState` | non-owning registry of live nodes and edges |
+| `Graph` | the reusable callable function or model |
+
+Stated compactly:
+
+```text
+Operation   = local mathematical semantics
+Computation = traversal and execution
+Graph       = reusable function/model abstraction
+```
+
+`Node` itself carries only identity and connectivity. `VariableNode` adds its
+`variable`, and `OperationNode` adds its `operation`; neither stores execution
+state.
+
+### Variables and their nodes
+
+Every `Variable` owns exactly one `VariableNode`, and the relationship is
+strong in both directions:
+
+```python
+variable.node.variable is variable  # always true
+```
+
+This holds for leaves, for Tensor operands wrapped on the way into an
+operation, for normalized scalar operands, and for operation results.
+`Variable.node` is never an `OperationNode`.
+
+### Operands are graph values, configuration is not
+
+A runtime operand always enters an operation through the graph. Writing
+`y = x + 3` records the scalar as a non-gradient `Variable`:
+
+```text
+VariableNode(x) ──input_0──┐
+                           ▼
+                    OperationNode(Add())
+                           ▲
+VariableNode(3) ──input_1──┘
+```
+
+Operand order carries the meaning of a reverse expression, so `3 / x` records
+the numerator as `input_0` and `x` as `input_1`. There is no scalar or reverse
+flag on the node. Converting a Python scalar preserves the existing dtype
+promotion rules, so `int32_variable * 3` still produces `int32`.
+
+Configuration that defines the transformation rather than supplying a value
+belongs to the operation instance:
+
+```text
+VariableNode(x)
+      │
+      ▼
+OperationNode(Sum(axis=1, keepdims=True))
+      │
+      ▼
+VariableNode(result)
+```
+
+`axis`, `keepdims`, a cast dtype, a slice key, and convolution geometry are
+configuration. They never appear as graph operands.
+
+### Operation instances
+
+An `Operation` is immutable once constructed, so a recorded invocation cannot
+change meaning while a graph still refers to it:
+
+```python
+operation = Sum(axis=1)
+operation.axis = 0  # AttributeError
+```
+
+Operations must not store values produced by a particular forward pass — no
+saved inputs, outputs, temporary gradients, or workspaces. That state belongs
+to `Computation`, which keeps it per thread so replay and concurrent execution
+stay correct.
+
+Each invocation produces exactly one output. A `Graph` returning several
+Variables exposes them as separate computation roots.
+
 ## Public API
 
 ```python
@@ -176,8 +289,8 @@ one.
 
 ## Mutation and recomputation
 
-An eager operation calculates its output immediately and records the state of
-its input and output tensors. Every successful item assignment increments the
+An eager operation calculates its output immediately, and its result Variable
+records the state of the operation's operands and of the result itself. Every successful item assignment increments the
 tensor's read-only `version` counter. Replacing `Variable.data` is tracked
 separately, including replacements made by optimizers.
 
@@ -206,7 +319,9 @@ contract.
 
 Graph state is a non-owning, thread-local registry used for eager inspection.
 It stores callback-free weak references, while nodes keep lightweight weak
-references to outgoing edges. Active `Graph` traces derive their structure
+references to outgoing edges. A `Variable` and its `VariableNode` refer to each
+other strongly, so an unreachable computation forms a reference cycle; ordinary
+cycle collection still reclaims it. Active `Graph` traces derive their structure
 directly from output-owned incoming edges and skip the redundant registry.
 Consequently, a persistent leaf such as a model parameter does not keep every
 discarded forward result alive. A live output still owns its incoming edges and
@@ -222,14 +337,21 @@ Parameters and other mutable attributes are still shared Python state and
 must be synchronized separately if callers modify them concurrently.
 
 `Computation` compiles its dependency-first traversal into forward and backward
-execution plans once at construction. The plans resolve variable slots,
-operation callables, scalar metadata, and consumer counts ahead of replay.
-Thread-local workspaces reuse value and gradient slots without sharing mutable
-execution state between threads.
+execution plans once at construction. It resolves each operation vertex's
+operands from its incoming edges and its result from its outgoing edge at that
+point, so replay and differentiation never walk the graph again. The plans
+resolve variable slots, operation callables, and consumer counts ahead of
+replay. Thread-local workspaces reuse value and gradient slots without sharing
+mutable execution state between threads.
+
+The execution plan is an optimized runtime representation and deliberately does
+not mirror the graph object for object: the graph is the semantic structure,
+and the plan is how that structure is executed.
 
 On CUDA, compatible single-consumer float32 and float64 elementwise chains may
 execute as one fused kernel in both directions. Fusion supports broadcast
-tensor arithmetic, scalar powers, and common unary mathematics. Intermediate
+tensor arithmetic, powers with a frozen exponent, and common unary
+mathematics. Intermediate
 `.data` and `.grad` values are still published, so fusion changes execution
 cost rather than graph semantics.
 Native backend VJPs are also used for supported reductions and elementwise
@@ -238,29 +360,50 @@ operations; numerically delicate inputs return to the stable Python rules.
 Call `Computation.release()` when a long-lived Computation object no longer
 needs its output, plans, or workspaces. A released Computation cannot be reused.
 
-## Operation protocols
+## The operation contract
 
-Custom operation classes are checked structurally through Python protocols.
-`ts.graph.Operation` requires `forward()` and `backward()`;
-`HigherOrderOperation` additionally provides `backward_graph()`, while
-`ReverseOperation` provides `forward_reverse()` for scalar-left expressions.
-The class does not need to inherit from these protocols:
+`ts.graph.Operation` is an abstract base class. A concrete operation inherits
+from it and implements `forward()` and `backward()`:
 
 ```python
-class Identity:
-    @staticmethod
-    def forward(value):
+from tensors.graph import Operation
+
+
+class Identity(Operation):
+    name = "identity"
+
+    def forward(self, value):
         return value
 
-    @staticmethod
-    def backward(gradient, value):
+    def backward(self, gradient, value):
         return [gradient]
 ```
 
-Supplying `Identity` as an operation class works because it implements the
-required interface. See Python's
-[`typing.Protocol`](https://docs.python.org/3.14/library/typing.html#typing.Protocol)
-documentation for structural subtyping details.
+`backward_graph()` is optional and enables higher-order differentiation. The
+base implementation raises `NotImplementedError`, so an operation without it
+reports the limitation instead of silently detaching a gradient.
+
+A configured operation declares its configuration in `__slots__` and assigns it
+in `__init__`, which keeps the instance immutable:
+
+```python
+class Scale(Operation):
+    __slots__ = ("factor",)
+    name = "scale"
+
+    def __init__(self, *, factor):
+        object.__setattr__(self, "factor", factor)
+
+    def forward(self, value):
+        return value * self.factor
+
+    def backward(self, gradient, value):
+        return [gradient * self.factor]
+```
+
+`Computation` invokes `operation.forward(...)`, `operation.backward(...)`, and
+`operation.backward_graph(...)` directly; it never interprets an operation's
+configuration.
 
 ## Numerically stable probability functions
 
@@ -295,10 +438,11 @@ binary cross-entropy must lie in the closed interval `[0, 1]`.
 ## Validation guarantees
 
 During backward execution, every operation must return exactly one gradient per
-input. The engine validates each gradient's type and shape before propagating
-it. Graph traversal is iterative, so deeply composed functions do not depend on
-Python's recursion limit. Node labels are descriptive metadata and never
-control execution.
+input, including operands that do not require gradients. The engine validates
+each gradient's type and shape before propagating it. Graph traversal is
+iterative, so deeply composed functions do not depend on Python's recursion
+limit. Node labels are derived from the recorded operation and never control
+execution.
 
 Run the full suite from the repository root with:
 
