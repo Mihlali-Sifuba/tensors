@@ -38,7 +38,8 @@ class GraphTests(unittest.TestCase):
         self.assertIsNot(first, second)
         self.assertEqual(second.data.tolist(), [9.0])
         self.assertIs(model.computation.output, second)
-        self.assertEqual(len(model.nodes), 5)
+        # input, weight, mul, product, bias, add, result
+        self.assertEqual(len(model.nodes), 7)
         self.assertEqual(model.parameters(), [model.weight, model.bias])
 
     def test_function_graph_works_as_a_decorator_target(self):
@@ -95,9 +96,11 @@ class GraphTests(unittest.TestCase):
             return value * scale
 
         result = model(ts.Tensor([2.0]), scale=3.0)
+        operands = result.node.producer.operands
 
         self.assertEqual(result.data.tolist(), [6.0])
-        self.assertEqual(result.node.args["scalar"], 3.0)
+        self.assertEqual(operands[1].data.item(), 3.0)
+        self.assertFalse(operands[1].requires_grad)
 
     def test_graph_uses_python_keyword_errors_on_fresh_trace(self):
         @ts.Graph

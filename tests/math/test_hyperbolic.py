@@ -74,7 +74,7 @@ class HyperbolicTests(unittest.TestCase):
                 expected = reference(point)
                 self.assertAlmostEqual(function([point]).item(), expected)
                 self.assertAlmostEqual(
-                    operation.forward(ts.Tensor([point])).item(),
+                    operation().forward(ts.Tensor([point])).item(),
                     expected,
                 )
 

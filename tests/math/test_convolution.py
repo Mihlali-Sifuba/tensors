@@ -89,9 +89,9 @@ class Conv2dTests(unittest.TestCase):
 
         result = ts.conv2d(inputs, kernel, bias)
 
-        self.assertEqual(result.node.label, "conv2d")
+        self.assertEqual(result.node.producer.label, "conv2d")
         self.assertEqual(
-            result.node.inputs,
+            result.node.producer.inputs,
             [inputs.node, kernel.node, bias.node],
         )
 
@@ -222,7 +222,7 @@ class Conv1dTests(unittest.TestCase):
         kernel = ts.Variable([[[1.0, -1.0]]], name="w")
 
         result = ts.conv1d(inputs, kernel)
-        self.assertEqual(result.node.label, "conv1d")
+        self.assertEqual(result.node.producer.label, "conv1d")
 
         ts.backward(result)
 
@@ -306,7 +306,7 @@ class Conv3dAndUnbatchedTests(unittest.TestCase):
         kernel = ts.Variable(ts.ones((1, 1, 2, 2, 2)))
         result = ts.conv3d(inputs, kernel)
 
-        self.assertEqual(result.node.label, "conv3d")
+        self.assertEqual(result.node.producer.label, "conv3d")
         self.assertEqual(Computation(result).forward().tolist(), [8.0])
 
 

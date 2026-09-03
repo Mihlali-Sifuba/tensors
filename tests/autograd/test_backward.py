@@ -1,7 +1,7 @@
 import unittest
 
 import tensors as ts
-from tensors.graph import Computation
+from tensors.graph import Computation, Operation
 from tensors.graph.state import reset_graph_state
 
 
@@ -12,18 +12,20 @@ class AutogradTests(unittest.TestCase):
     def tearDown(self):
         reset_graph_state()
 
-    def test_operation_result_is_owned_by_operation_node(self):
+    def test_operation_result_is_produced_by_an_operation_node(self):
         x = ts.Variable([1.0, 2.0])
         result = x + 2.0
 
-        self.assertEqual(result.node.label, "add")
-        self.assertIs(result.node.inputs[0], x.node)
+        self.assertEqual(result.node.producer.label, "add")
+        self.assertIs(result.node.producer.inputs[0], x.node)
 
-    def test_node_labels_do_not_control_execution(self):
+    def test_node_labels_are_derived_and_do_not_control_execution(self):
         x = ts.Variable([2.0])
         result = x * 3.0
-        x.node.label = "input"
-        result.node.label = "product"
+
+        # Labels describe the recorded graph; execution reads the operation.
+        self.assertEqual(x.node.label, "var")
+        self.assertEqual(result.node.producer.label, "mul")
 
         replayed = Computation(result).forward()
         ts.backward(result)
@@ -39,7 +41,8 @@ class AutogradTests(unittest.TestCase):
 
         computation = Computation(result)
 
-        self.assertEqual(len(computation.nodes), 1501)
+        # One leaf, then a scalar operand, operation, and result per step.
+        self.assertEqual(len(computation.nodes), 1 + 1500 * 3)
         self.assertEqual(computation.forward().tolist(), [1500.0])
 
     def test_grad_validates_requested_inputs(self):
@@ -144,42 +147,42 @@ class AutogradTests(unittest.TestCase):
         self.assertIs(output.grad, previous_output_gradient)
 
     def test_backward_rejects_an_invalid_gradient_count(self):
-        class BrokenOperation:
-            @staticmethod
-            def forward(value):
+        class BrokenOperation(Operation):
+            name = "broken"
+
+            def forward(self, value):
                 return value
 
-            @staticmethod
-            def backward(gradient, value):
+            def backward(self, gradient, value):
                 return []
 
         value = ts.Variable([2.0])
+        operation = BrokenOperation()
         output = value._from_operation(
-            BrokenOperation.forward(value.data),
-            "broken",
-            BrokenOperation,
-            [value],
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
 
         with self.assertRaisesRegex(RuntimeError, "returned 0 gradients for 1 inputs"):
             ts.backward(output)
 
     def test_failed_backward_does_not_partially_replace_gradients(self):
-        class BrokenOperation:
-            @staticmethod
-            def forward(value):
+        class BrokenOperation(Operation):
+            name = "broken"
+
+            def forward(self, value):
                 return value
 
-            @staticmethod
-            def backward(gradient, value):
+            def backward(self, gradient, value):
                 raise RuntimeError("deliberate failure")
 
         value = ts.Variable([2.0])
+        operation = BrokenOperation()
         output = value._from_operation(
-            BrokenOperation.forward(value.data),
-            "broken",
-            BrokenOperation,
-            [value],
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
         previous_value_gradient = ts.Tensor([7.0])
         previous_output_gradient = ts.Tensor([8.0])

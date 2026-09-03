@@ -28,8 +28,8 @@ class ExtremaTests(unittest.TestCase):
         self.assertEqual(ts.max([3, 1, 2]).tolist(), [3.0])
 
     def test_math_namespace_exposes_extrema_operation_classes(self):
-        self.assertEqual(ts.math.Min.forward(ts.Tensor([3, 1, 2])).tolist(), [1.0])
-        self.assertEqual(ts.math.Max.forward(ts.Tensor([3, 1, 2])).tolist(), [3.0])
+        self.assertEqual(ts.math.Min().forward(ts.Tensor([3, 1, 2])).tolist(), [1.0])
+        self.assertEqual(ts.math.Max().forward(ts.Tensor([3, 1, 2])).tolist(), [3.0])
 
     def test_min_rejects_empty_tensor(self):
         with self.assertRaisesRegex(ValueError, "empty tensor"):

@@ -66,8 +66,8 @@ class NormTests(unittest.TestCase):
         value = ts.Variable([3.0, 4.0])
         result = ts.norm(value)
 
-        self.assertEqual(result.node.label, "norm")
-        self.assertEqual(result.node.inputs, [value.node])
+        self.assertEqual(result.node.producer.label, "norm")
+        self.assertEqual(result.node.producer.inputs, [value.node])
 
         ts.backward(result)
 

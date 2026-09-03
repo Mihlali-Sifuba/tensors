@@ -109,11 +109,11 @@ class ComputationTests(unittest.TestCase):
         self.assertIs(first._forward_plan, second._forward_plan)
         self.assertEqual(
             [node.label for node in first.nodes],
-            ["var", "mul", "add"],
+            ["var", "var", "mul", "var", "var", "add", "var"],
         )
         self.assertEqual(
             [node.label for node in second.nodes],
-            ["var", "mul", "sub"],
+            ["var", "var", "mul", "var", "var", "sub", "var"],
         )
 
     def test_single_computation_property_rejects_multi_output_graph(self):

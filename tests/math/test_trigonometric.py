@@ -37,12 +37,12 @@ class TrigonometricTests(unittest.TestCase):
         self.assertAlmostEqual(ts.math.cos([0.0]).item(), 1.0)
         self.assertAlmostEqual(ts.math.tan([math.pi / 4.0]).item(), 1.0)
         self.assertAlmostEqual(
-            ts.math.Sin.forward(ts.Tensor([math.pi / 2.0])).item(),
+            ts.math.Sin().forward(ts.Tensor([math.pi / 2.0])).item(),
             1.0,
         )
-        self.assertAlmostEqual(ts.math.Cos.forward(ts.Tensor([0.0])).item(), 1.0)
+        self.assertAlmostEqual(ts.math.Cos().forward(ts.Tensor([0.0])).item(), 1.0)
         self.assertAlmostEqual(
-            ts.math.Tan.forward(ts.Tensor([math.pi / 4.0])).item(),
+            ts.math.Tan().forward(ts.Tensor([math.pi / 4.0])).item(),
             1.0,
         )
 
