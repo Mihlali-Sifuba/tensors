@@ -211,6 +211,27 @@ class Tensor:
             )
         return tensor
 
+    @classmethod
+    def _from_values(
+        cls,
+        values: Iterable[Scalar],
+        dtype: _dtype.DataType,
+        shape: Shape,
+    ) -> Tensor:
+        """Adopt flat logical values already known to match ``shape``.
+
+        Reserved for internal results whose extents are already resolved, so
+        the public shape-inference path is skipped.
+        """
+        tensor = cls.__new__(cls)
+        tensor._dtype = dtype
+        tensor._set_storage(PythonStorage.from_values(values, dtype))
+        tensor._shape = shape
+        tensor._strides = Strides.contiguous(shape)
+        tensor._offset = 0
+        tensor._version = 0
+        return tensor
+
     def _replace_owned_storage(self, storage: Storage) -> None:
         """Adopt a same-shaped internal result while retaining Tensor identity."""
         if storage.dtype != self.dtype or storage.size != self.size:
@@ -305,11 +326,14 @@ class Tensor:
         Compact storage is stricter than a contiguous logical layout, which
         may begin at a non-zero offset.
         """
+        if self._offset != 0:
+            return False
+        shape = self._shape
+        # Freshly produced internal results carry canonical strides, so
+        # compare them directly before walking the dimensions.
         return (
-            self.offset == 0
-            and self.is_contiguous
-            and self._storage.size == self.size
-        )
+            self._strides == Strides.contiguous(shape) or self.is_contiguous
+        ) and self._storage.size == shape.size
 
     def _logical_storage_indices(self) -> Iterator[int]:
         """Yield physical positions in logical row-major order."""

@@ -29,6 +29,7 @@ from .ops.pow import _power_dtype
 from .graph.state import get_graph_state
 
 
+_SCALAR_SHAPE = Shape()
 _INPUT_LABELS = ("input_0", "input_1", "input_2", "input_3", "input_4")
 
 
@@ -143,10 +144,12 @@ class Variable:
 
     def _mutation_state(self):
         """Return the value state recorded by operation nodes."""
+        # Read through the attributes directly: every recorded operand is
+        # re-checked on each replay and differentiation pass.
         return (
             self._data_generation,
-            self.data.version,
-            self.requires_grad,
+            self._data._version,
+            self._requires_grad,
         )
 
     @property
@@ -204,7 +207,7 @@ class Variable:
         if isinstance(other, Tensor):
             return Variable(other, requires_grad=False)
         return Variable(
-            Tensor([other], dtype=dtype, shape=()),
+            Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
             requires_grad=False,
         )
 
