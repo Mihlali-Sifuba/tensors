@@ -880,8 +880,8 @@ class Tensor:
         return Ops.divide(self, other)
 
     def __rtruediv__(self, other: Scalar) -> Tensor:
-        from .ops import Div
-        return Div.forward_reverse(self, other)
+        from .ops import divide_scalar
+        return divide_scalar(other, self)
 
     @overload
     def __pow__(self, other: Variable) -> Variable: ...
@@ -893,12 +893,12 @@ class Tensor:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rpow__(self)
-        from .ops import Pow
-        return Pow.forward(self, other)
+        from .ops import power
+        return power(self, other)
 
     def __rpow__(self, other: Scalar) -> Tensor:
-        from .ops import Pow
-        return Pow.forward_reverse(self, other)
+        from .ops import power_scalar_base
+        return power_scalar_base(other, self)
 
     def __neg__(self) -> Tensor:
         from .ops import Ops
