@@ -798,9 +798,19 @@ def _fused_backward_checks(
         return ((f"({value}) == 1.0", 12),)
     if operation == "sign":
         return ((f"({value}) == 0.0", 13),)
-    if operation == "power" and scalar is not None and not reverse:
-        if scalar != 0 and scalar < 1:
-            return ((f"({value}) == 0.0", 14),)
+    if operation == "power" and not reverse:
+        if scalar is not None:
+            if scalar != 0 and scalar < 1:
+                return ((f"({value}) == 0.0", 14),)
+            return ()
+        operand = _fused_operand_expression(step, value)
+        if operand is not None:
+            # A fractional exponent below one has no derivative at a zero base.
+            return ((
+                f"({value}) == 0.0 && ({operand}) != 0.0 "
+                f"&& ({operand}) < 1.0",
+                14,
+            ),)
     return ()
 
 
@@ -823,22 +833,45 @@ def _fused_vjp_expressions(
             )
             return contribution, None
 
-        assert scalar is not None
-        if scalar == 0:
-            return "0.0", None
-        if scalar == 1:
-            return upstream, None
-        scalar_literal = _fused_operand_expression(step, value)
-        assert scalar_literal is not None
-        sign = f"({upstream}) * ({scalar_literal})"
-        if float(scalar).is_integer() and (int(scalar) - 1) % 2:
-            sign = f"({sign}) * (({value}) < 0.0 ? -1.0 : 1.0)"
-        contribution = (
-            f"(({upstream}) == 0.0 || ({value}) == 0.0 ? 0.0 : "
-            f"copysign(exp(log(fabs({upstream})) + log(fabs({scalar_literal})) "
-            f"+ (({scalar_literal}) - 1.0) * log(fabs({value}))), {sign})"
+        exponent = operand
+        magnitude = (
+            f"copysign(exp(log(fabs({upstream})) + log(fabs({exponent})) "
+            f"+ (({exponent}) - 1.0) * log(fabs({value}))), {{sign}})"
         )
-        contribution += ")"
+        if scalar is not None:
+            # A literal exponent resolves its parity while building the kernel.
+            sign = f"({upstream}) * ({exponent})"
+            if float(scalar).is_integer() and (int(scalar) - 1) % 2:
+                sign = f"({sign}) * (({value}) < 0.0 ? -1.0 : 1.0)"
+            if scalar == 0:
+                return "0.0", None
+            if scalar == 1:
+                return upstream, None
+            contribution = (
+                f"(({upstream}) == 0.0 || ({value}) == 0.0 ? 0.0 : "
+                + magnitude.format(sign=sign)
+                + ")"
+            )
+            return contribution, None
+
+        # An operand exponent resolves the same parity rule at runtime. An
+        # even integer exponent leaves an odd power in the derivative, so the
+        # result follows the sign of the base.
+        even_integer = (
+            f"(({exponent}) == floor({exponent}) "
+            f"&& fmod({exponent}, 2.0) == 0.0)"
+        )
+        sign = (
+            f"(({upstream}) * ({exponent}) * ({even_integer} "
+            f"? (({value}) < 0.0 ? -1.0 : 1.0) : 1.0))"
+        )
+        contribution = (
+            f"(({exponent}) == 0.0 ? 0.0 "
+            f": (({exponent}) == 1.0 ? ({upstream}) "
+            f": ((({upstream}) == 0.0 || ({value}) == 0.0) ? 0.0 : "
+            + magnitude.format(sign=sign)
+            + ")))"
+        )
         return contribution, None
 
     if operation == "divide" and operand is not None:

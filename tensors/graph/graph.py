@@ -559,6 +559,8 @@ class Graph:
             if node not in boundaries
             for edge in node._in_edges
         )
+        # ``nodes`` already excludes anything past a boundary, so the incoming
+        # edges of the traversed vertices are exactly the recorded data flow.
         return nodes, edges
 
     @staticmethod

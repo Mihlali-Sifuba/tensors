@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-import math
 import threading
 from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorLike
 from ..tensor import Tensor
-from .node import Node, operation_methods
+from .node import Node, OperationNode, VariableNode
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -18,21 +17,22 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class _ForwardInstruction:
-    """One pre-resolved operation in a computation replay plan."""
+    """One pre-resolved operation invocation in a computation replay plan.
 
-    node: Node
+    The graph relationships an operation node expresses through its edges are
+    resolved once here, so replay and differentiation never rediscover the
+    topology.
+    """
+
+    node: OperationNode
+    operation: Any
     output_slot: int
     output_variable: Any
     input_slots: tuple[int, ...]
     input_variables: tuple[Any, ...]
     forward: Any
-    reverse_forward: Any | None
     backward: Any
-    backward_graph: Any | None
-    arguments: dict[str, Any]
-    scalar_operand: bool
-    scalar: Any
-    reverse: bool
+    backward_graph: Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,13 +71,18 @@ class Computation:
 
     @classmethod
     def _for_autograd(cls, output: Variable) -> Computation:
-        """Return the reusable reverse plan owned by an output node."""
+        """Return the reusable reverse plan owned by an output Variable.
+
+        The plan is execution state, so it lives on the runtime value rather
+        than on a structural graph node. Graph topology is immutable, so later
+        calls reuse the pre-resolved plan while execution workspaces stay
+        thread-local inside the Computation.
+        """
         cls._validate_outputs((output,))
-        node = output.node
-        computation = node._autograd_computation
+        computation = output._autograd_computation
         if computation is None or computation._released:
             computation = cls(output)
-            node._autograd_computation = computation
+            output._autograd_computation = computation
         return computation
 
     @classmethod
@@ -115,7 +120,7 @@ class Computation:
         if not outputs:
             raise ValueError("Computation requires at least one output")
         for output in outputs:
-            if getattr(output, "node", None) is None:
+            if not isinstance(getattr(output, "node", None), VariableNode):
                 raise TypeError("Computation output must have a graph node")
         return outputs
 
@@ -139,6 +144,7 @@ class Computation:
             if mask & output_bit
         )
         self._compile_execution_plan()
+        self._select_view()
         self._workspace_state = threading.local()
         self._released = False
 
@@ -166,43 +172,64 @@ class Computation:
         self._forward_plan = owner._forward_plan
         self._backward_plan = owner._backward_plan
         self._output_slot = self._variable_slots[output]
+        self._select_view()
         self._workspace_state = threading.local()
         self._released = False
 
+    def _select_view(self) -> None:
+        """Resolve the Variables and instructions this output reaches."""
+        reachable = set(self._nodes)
+        self._view_variables = tuple(
+            node.variable
+            for node in self._nodes
+            if isinstance(node, VariableNode)
+        )
+        self._view_instructions = tuple(
+            instruction
+            for instruction in self._forward_instructions
+            if instruction.node in reachable
+        )
+
     def _compile_execution_plan(self) -> None:
-        """Resolve graph edges and operation methods once at construction."""
-        variables = tuple(node.output_var for node in self._all_nodes)
+        """Resolve graph relationships and operation methods once.
+
+        Every Variable vertex becomes an execution slot. Every operation vertex
+        becomes one instruction whose operands are named by its incoming edges
+        and whose result is the Variable named by its outgoing edge. Replay and
+        differentiation then work from this compact plan instead of walking the
+        graph again.
+        """
+        variables = tuple(
+            node.variable
+            for node in self._all_nodes
+            if isinstance(node, VariableNode)
+        )
         slots = {variable: index for index, variable in enumerate(variables)}
         instructions: list[_ForwardInstruction] = []
         leaf_slots: list[tuple[int, Any]] = []
-        resolved_operations: dict[type[Any], tuple[Any, Any, Any, Any]] = {}
+        boundary_nodes = self._boundary_nodes
         for node in self._all_nodes:
-            output = node.output_var
+            if not isinstance(node, VariableNode):
+                continue
+            output = node.variable
             output_slot = slots[output]
-            if node.op_cls is None or node in self._boundary_nodes:
+            producer = node.producer
+            if producer is None or node in boundary_nodes:
                 leaf_slots.append((output_slot, output))
                 continue
-            inputs = tuple(edge.source.output_var for edge in node._in_edges)
-            methods = resolved_operations.get(node.op_cls)
-            if methods is None:
-                methods = operation_methods(node.op_cls)
-                resolved_operations[node.op_cls] = methods
-            forward, reverse_forward, backward, backward_graph = methods
+            operation = producer.operation
+            inputs = tuple(edge.source.variable for edge in producer._in_edges)
             instructions.append(
                 _ForwardInstruction(
-                    node=node,
+                    node=producer,
+                    operation=operation,
                     output_slot=output_slot,
                     output_variable=output,
                     input_slots=tuple(slots[value] for value in inputs),
                     input_variables=inputs,
-                    forward=forward,
-                    reverse_forward=reverse_forward,
-                    backward=backward,
-                    backward_graph=backward_graph,
-                    arguments=node.args,
-                    scalar_operand=node._scalar_operand,
-                    scalar=node.args.get("scalar"),
-                    reverse=bool(node.args.get("reverse", False)),
+                    forward=operation.forward,
+                    backward=operation.backward,
+                    backward_graph=operation.backward_graph,
                 )
             )
 
@@ -284,7 +311,7 @@ class Computation:
     def _fused_operation(
         instruction: _ForwardInstruction,
     ) -> str | None:
-        """Return the internal operation name for a fusible instruction."""
+        """Return the internal kernel name for a fusible invocation."""
         names = {
             "Add": "add",
             "Sub": "subtract",
@@ -313,7 +340,14 @@ class Computation:
             "Tanh": "tanh",
             "Softplus": "softplus",
         }
-        return names.get(instruction.node.op_cls.__name__)
+        operation = instruction.operation
+        name = names.get(type(operation).__name__)
+        if name == "power" and getattr(operation, "differentiate_exponent", True):
+            # A differentiable exponent carries domain restrictions that the
+            # compact fusion step cannot express. A frozen exponent — the form
+            # a normalized scalar power produces — fuses safely.
+            return None
+        return name
 
     @classmethod
     def _start_fused_instruction(
@@ -335,7 +369,6 @@ class Computation:
         if unary:
             if (
                 len(instruction.input_slots) != 1
-                or instruction.scalar_operand
                 or instruction.input_variables[0].shape != output.shape
             ):
                 return None
@@ -343,36 +376,6 @@ class Computation:
                 (operation, None, False, None),
                 [instruction.input_slots[0]],
             )
-
-        if instruction.scalar_operand:
-            if (
-                len(instruction.input_slots) != 1
-                or instruction.input_variables[0].shape != output.shape
-            ):
-                return None
-            scalar = instruction.scalar
-            if (
-                isinstance(scalar, bool)
-                or not isinstance(scalar, (int, float))
-                or not math.isfinite(float(scalar))
-                or (operation == "power" and instruction.reverse and scalar <= 0)
-                or (
-                    operation == "divide"
-                    and not instruction.reverse
-                    and scalar == 0
-                )
-            ):
-                return None
-            return (
-                (operation, float(scalar), instruction.reverse, None),
-                [instruction.input_slots[0]],
-            )
-
-        # Tensor exponents carry differentiation-domain metadata that is not
-        # represented by the compact fusion step. Scalar powers cover common
-        # chains without weakening Pow's public error contract.
-        if operation == "power":
-            return None
 
         if len(instruction.input_slots) != 2:
             return None
@@ -402,33 +405,9 @@ class Computation:
         }
         unary = operation not in binary_operations
         if unary:
-            if (
-                instruction.scalar_operand
-                or instruction.input_slots != (current_slot,)
-            ):
-                return None
-            return operation, None, False, None
-
-        if instruction.scalar_operand:
             if instruction.input_slots != (current_slot,):
                 return None
-            scalar = instruction.scalar
-            if (
-                isinstance(scalar, bool)
-                or not isinstance(scalar, (int, float))
-                or not math.isfinite(float(scalar))
-                or (operation == "power" and instruction.reverse and scalar <= 0)
-                or (
-                    operation == "divide"
-                    and not instruction.reverse
-                    and scalar == 0
-                )
-            ):
-                return None
-            return operation, float(scalar), instruction.reverse, None
-
-        if operation == "power":
-            return None
+            return operation, None, False, None
 
         if len(instruction.input_slots) != 2:
             return None
@@ -507,10 +486,9 @@ class Computation:
         return tuple(order), tuple(masks[node] for node in order), boundary_nodes
 
     @classmethod
-    def _dependency_order(cls, output_node: Node) -> tuple[Node, ...]:
-        """Calculate and cache the dependency-first traversal for an output."""
-        output = output_node.output_var
-        nodes, _, _ = cls._dependency_plan((output,), ())
+    def _dependency_order(cls, output_node: VariableNode) -> tuple[Node, ...]:
+        """Calculate the dependency-first traversal reaching an output."""
+        nodes, _, _ = cls._dependency_plan((output_node.variable,), ())
         return nodes
 
     def _require_active(self) -> None:
@@ -542,6 +520,8 @@ class Computation:
         self._variable_slots = {}
         self._leaf_slots = ()
         self._forward_instructions = ()
+        self._view_variables = ()
+        self._view_instructions = ()
         self._forward_plan = ()
         self._backward_plan = ()
         self._workspace_state.workspace = None
@@ -583,25 +563,12 @@ class Computation:
                 raise RuntimeError("Computation input slot is uninitialized")
             args.append(value)
 
-        if instruction.scalar_operand:
-            if instruction.reverse:
-                if instruction.reverse_forward is None:
-                    raise TypeError(
-                        f"{instruction.node.label} does not support a scalar "
-                        "left operand"
-                    )
-                result = instruction.reverse_forward(
-                    args[0],
-                    instruction.scalar,
-                )
-            else:
-                result = instruction.forward(args[0], instruction.scalar)
-        else:
-            result = instruction.forward(*args, **instruction.arguments)
+        result = instruction.forward(*args)
 
         tensor = result if isinstance(result, Tensor) else Tensor([result])
-        instruction.output_variable._replace_data_from_replay(tensor)
-        instruction.node.capture_states()
+        output = instruction.output_variable
+        output._replace_data_from_replay(tensor)
+        output._capture_forward_record(instruction.node)
         values[instruction.output_slot] = tensor
 
     @staticmethod
@@ -639,33 +606,39 @@ class Computation:
                 dtype=instruction.output_variable.dtype,
                 shape=output_shape,
             )
-            instruction.output_variable._replace_data_from_replay(tensor)
-            instruction.node.capture_states()
+            output = instruction.output_variable
+            output._replace_data_from_replay(tensor)
+            output._capture_forward_record(instruction.node)
             values[instruction.output_slot] = tensor
         return True
 
     def _validate_recorded_states(self) -> None:
         """Reject a backward pass whose recorded forward values changed."""
         self._require_active()
-        for node in self._nodes:
-            if node.op_cls is None or node._output_state is None:
+        for instruction in self._view_instructions:
+            output = instruction.output_variable
+            record = output._forward_record
+            if record is None:
                 continue
-            if node.output_changed():
-                operation = node.label or getattr(
-                    node.op_cls,
-                    "__name__",
-                    "operation",
-                )
+            input_states, output_state = record
+            operation = instruction.operation.name
+            if output._mutation_state() != output_state:
                 raise RuntimeError(
                     f"Output of operation {operation!r} was modified after its "
                     "forward pass. Run a fresh forward pass or call "
                     "Computation(output).forward() before differentiation."
                 )
-            changed = node.changed_input()
-            if changed is None:
-                continue
-            index, variable = changed
-            operation = node.label or getattr(node.op_cls, "__name__", "operation")
+            inputs = instruction.input_variables
+            if len(input_states) != len(inputs):
+                index, variable = 0, None
+            else:
+                for index, (variable, expected) in enumerate(
+                    zip(inputs, input_states)
+                ):
+                    if variable._mutation_state() != expected:
+                        break
+                else:
+                    continue
             variable_name = getattr(variable, "name", None)
             description = (
                 f" ({variable_name!r})" if variable_name is not None else ""
@@ -696,10 +669,8 @@ class Computation:
         # Publish gradients only after the entire reverse pass succeeds. A
         # malformed operation or domain error therefore cannot leave a graph
         # with partially cleared or partially updated ``.grad`` attributes.
-        for node in self._nodes:
-            variable = node.output_var
-            if variable is not None:
-                variable.grad = gradients.get(variable)
+        for variable in self._view_variables:
+            variable.grad = gradients.get(variable)
 
     def _gradient_seed(
         self,
@@ -781,18 +752,12 @@ class Computation:
             inputs = instruction.input_variables
             if not any(variable.requires_grad for variable in inputs):
                 continue
-            if instruction.backward_graph is None:
-                raise NotImplementedError(
-                    "Higher-order derivatives are not implemented for "
-                    f"{instruction.node.label}"
-                )
             input_gradients = instruction.backward_graph(
                 output_gradient,
                 *inputs,
-                **instruction.arguments,
             )
             input_gradients = self._validate_gradients(
-                instruction.node,
+                instruction,
                 input_gradients,
                 graph=True,
             )
@@ -865,13 +830,9 @@ class Computation:
         input_data = tuple(
             variable.data for variable in instruction.input_variables
         )
-        input_gradients = instruction.backward(
-            output_gradient,
-            *input_data,
-            **instruction.arguments,
-        )
+        input_gradients = instruction.backward(output_gradient, *input_data)
         input_gradients = self._validate_gradients(
-            instruction.node,
+            instruction,
             input_gradients,
             graph=False,
         )
@@ -994,40 +955,46 @@ class Computation:
         return sum(stack(gradients, axis=0), axis=0)
 
     @staticmethod
-    def _validate_gradients(node: Node, gradients: Any, *, graph: bool) -> tuple[Any, ...]:
+    def _validate_gradients(
+        instruction: _ForwardInstruction,
+        gradients: Any,
+        *,
+        graph: bool,
+    ) -> tuple[Any, ...]:
         """Validate an operation's VJP result before propagating it."""
         from ..variable import Variable
 
+        label = instruction.operation.name
         try:
             results = tuple(gradients)
         except TypeError as exc:
             raise TypeError(
-                f"{node.label} backward must return one gradient per input"
+                f"{label} backward must return one gradient per input"
             ) from exc
 
-        expected = len(node._in_edges)
-        if len(results) != expected:
+        inputs = instruction.input_variables
+        if len(results) != len(inputs):
             raise RuntimeError(
-                f"{node.label} backward returned {len(results)} gradients for "
-                f"{expected} inputs"
+                f"{label} backward returned {len(results)} gradients for "
+                f"{len(inputs)} inputs"
             )
 
         expected_type = Variable if graph else Tensor
         validated = list(results)
-        for index, (edge, gradient) in enumerate(zip(node._in_edges, results)):
+        for index, (input_variable, gradient) in enumerate(
+            zip(inputs, results)
+        ):
             if not isinstance(gradient, expected_type):
                 mode = "backward_graph" if graph else "backward"
                 raise TypeError(
-                    f"{node.label} {mode} gradient {index} must be a "
+                    f"{label} {mode} gradient {index} must be a "
                     f"{expected_type.__name__}, got {type(gradient).__name__}"
                 )
-            expected_shape = edge.source.output_var.shape
-            if gradient.shape != expected_shape:
+            if gradient.shape != input_variable.shape:
                 raise ValueError(
-                    f"{node.label} backward gradient {index} has shape "
-                    f"{gradient.shape}; expected {expected_shape}"
+                    f"{label} backward gradient {index} has shape "
+                    f"{gradient.shape}; expected {input_variable.shape}"
                 )
-            input_variable = edge.source.output_var
             if (
                 input_variable.requires_grad
                 and gradient.dtype != input_variable.dtype
