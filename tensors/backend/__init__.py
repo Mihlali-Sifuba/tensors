@@ -412,8 +412,15 @@ def execute_fused_elementwise_backward(
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
+    requested_external: tuple[int, ...] = (),
 ) -> tuple[Storage, ...] | None:
-    """Run a compatible floating-point chain VJP in one CUDA kernel."""
+    """Run the requested part of a chain VJP in one CUDA kernel.
+
+    ``requested_external`` names the fused steps whose external operand
+    gradient the current reverse pass wants. The backend refuses the request
+    when its compact step form carries no such derivative, so the caller can
+    fall back to ordinary operation execution.
+    """
     work = _shape_size(output_shape)
     if (
         get_backend() != "cuda"
@@ -433,6 +440,7 @@ def execute_fused_elementwise_backward(
         tuple(steps),
         dtype=dtype,
         output_shape=output_shape,
+        requested_external=requested_external,
     )
 
 

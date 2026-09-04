@@ -814,6 +814,19 @@ def _fused_backward_checks(
     return ()
 
 
+def _fused_external_gradient_available(step: FusedElementwiseStep) -> bool:
+    """Whether a fused step can produce its external operand's gradient.
+
+    A power step's compact form records no base or exponent VJP, so a chain
+    whose caller wants that derivative must fall back to ordinary operation
+    execution rather than read an unwritten row.
+    """
+    operation, scalar, _, operand_index = step
+    if scalar is not None or operand_index is None or operand_index < 0:
+        return False
+    return operation != "power"
+
+
 def _fused_vjp_expressions(
     step: FusedElementwiseStep,
     value: str,
@@ -931,6 +944,7 @@ def _cuda_fused_elementwise_backward_kernel(
     dtype_name: str,
     input_shapes: tuple[tuple[int, ...], ...],
     output_shape: tuple[int, ...],
+    requested_external: tuple[int, ...],
 ) -> tuple[Any, bool]:
     """Compile and cache one typed VJP kernel for a fused chain."""
     cupy = importlib.import_module("cupy")
@@ -944,12 +958,13 @@ def _cuda_fused_elementwise_backward_kernel(
             dtype_name=dtype_name,
         ))
 
+    # The generated layout depends on which external gradients were asked
+    # for, so ``requested_external`` participates in the kernel cache key.
     external_rows = {}
     next_row = len(steps) + 1
-    for index, (_, scalar, _, operand_index) in enumerate(steps):
-        if scalar is None and operand_index is not None and operand_index >= 0:
-            external_rows[index] = next_row
-            next_row += 1
+    for index in requested_external:
+        external_rows[index] = next_row
+        next_row += 1
 
     body.append(
         f"const double upstream_{len(steps)} = (double)gradient[index];"
@@ -977,7 +992,8 @@ def _cuda_fused_elementwise_backward_kernel(
                 body.append(
                     f"if ({condition}) {{ atomicExch(error, {code}); }}"
                 )
-        if operand_contribution is not None:
+        if operand_contribution is not None and index in external_rows:
+            # Only a requested external operand gradient gets an output row.
             body.append(_fused_output_statement(
                 external_rows[index],
                 operand_contribution,
@@ -1146,8 +1162,15 @@ def fused_elementwise_backward(
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
+    requested_external: tuple[int, ...] = (),
 ) -> tuple[Storage, ...] | None:
-    """Evaluate safe same-shape VJPs for a fused expression chain."""
+    """Evaluate the requested same-shape VJPs for a fused expression chain.
+
+    ``requested_external`` names the step indices whose external operand
+    gradient the caller wants. Rows are produced only for those, and the
+    request is refused when a step's compact form carries no such derivative,
+    so the caller can fall back to ordinary operation execution.
+    """
     from . import get_backend
 
     if (
@@ -1158,13 +1181,14 @@ def fused_elementwise_backward(
         or grad.shape != output_shape
     ):
         return None
+    if any(
+        not _fused_external_gradient_available(steps[index])
+        for index in requested_external
+    ):
+        return None
     cupy = _numpy()
     size = grad.size
-    external_count = sum(
-        scalar is None and operand_index is not None and operand_index >= 0
-        for _, scalar, _, operand_index in steps
-    )
-    row_count = len(steps) + 1 + external_count
+    row_count = len(steps) + 1 + len(requested_external)
     result = cupy.empty((row_count, size), dtype=cupy.dtype(dtype.name))
     if not size:
         return tuple(CudaStorage(result[index], dtype) for index in range(row_count))
@@ -1179,6 +1203,7 @@ def fused_elementwise_backward(
             dtype.name,
             tuple(value.shape for value in values),
             output_shape,
+            requested_external,
         )
         error = cupy.zeros((1,), dtype=cupy.int32) if validate_errors else None
         threads = 256
