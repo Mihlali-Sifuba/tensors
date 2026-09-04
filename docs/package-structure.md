@@ -128,7 +128,8 @@ tensors/
 │   └── _state.py
 └── graph/                 # tracing, execution, and differentiation
     ├── graph.py           # reusable callable model abstraction
-    ├── computation.py     # forward replay and reverse-mode execution
+    ├── computation.py     # executable computation planning and execution
+    ├── autograd.py        # functional reverse-mode differentiation API
     ├── fusion.py          # fused execution of compatible instruction runs
     ├── derivatives.py     # Jacobian and Hessian construction
     ├── gradcheck.py       # finite-difference verification
@@ -206,9 +207,10 @@ The folders have deliberately narrow responsibilities:
   decides which local derivatives a reverse pass requires and supplies that
   demand as `needs_input_grad`. See [Automatic differentiation](autodiff.md) for
   the recorded topology and the responsibility split.
-- `Computation` owns compiled forward and backward plans, reusable execution
-  workspaces, and eligible CUDA chain fusion; `ts.backward` is a root
-  convenience alias.
+- `Computation` owns the instruction plan and executes it forwards and in
+  reverse; `fusion` recognizes and accelerates compatible instruction runs
+  beside that plan; `autograd` is the functional interface through which
+  callers request differentiation. `ts.backward` is a root convenience alias.
 - `optim` provides the shared optimizer contract plus SGD, Adam, and RMSprop.
 - `init` provides immutable callable initializer configurations plus lowercase
   function facades for variance-scaling, Xavier, He, LeCun, truncated-normal,

@@ -65,7 +65,12 @@ assert_type(ts.stack([tensor, tensor]), ts.Tensor)
 targets = ts.Tensor([1], dtype=ts.int64)
 loss = ts.cross_entropy(variable, targets)
 assert_type(loss, ts.Variable)
+assert_type(ts.backward(loss), None)
 assert_type(ts.grad(loss, variable), ts.Tensor | ts.Variable | None)
+assert_type(
+    ts.grad(loss, [variable]),
+    tuple[ts.Tensor | ts.Variable | None, ...],
+)
 assert_type(ts.jacobian(loss, variable), ts.Tensor | ts.Variable)
 assert_type(ts.hessian(loss, variable), ts.Tensor | ts.Variable)
 
