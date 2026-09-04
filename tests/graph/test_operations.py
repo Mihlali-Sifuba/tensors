@@ -100,10 +100,8 @@ class OperationOwnershipTests(unittest.TestCase):
 
     def test_graph_and_execution_forms_both_reference_an_operation(self):
         from tensors.graph import OperationNode
-        from tensors.graph.computation.computation import (
-            Computation,
-            Instruction,
-        )
+        from tensors.graph.computation.computation import Computation
+        from tensors.graph.computation.instruction import Instruction
 
         left = ts.Variable([2.0])
         right = ts.Variable([3.0])

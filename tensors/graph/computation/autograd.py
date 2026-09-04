@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, overload
 
 from ..._typing import TensorLike
 from ...tensor import Tensor
+from .compiler import validate_outputs
 from .computation import Computation
 from .gradients import gradient_seed
 
@@ -28,7 +29,7 @@ def computation_for(output: Variable) -> Computation:
     reuse the pre-resolved plan; each pass allocates its own execution buffers
     and shares none of them. A released plan is replaced rather than reused.
     """
-    Computation._validate_outputs((output,))
+    validate_outputs((output,))
     computation = output._autograd_computation
     if computation is None or computation._released:
         computation = Computation(output)

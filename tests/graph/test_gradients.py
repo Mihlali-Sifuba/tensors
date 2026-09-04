@@ -64,15 +64,12 @@ class GradientModuleBoundaryTests(unittest.TestCase):
     def test_fusion_no_longer_imports_computation_at_runtime(self):
         self.assertNotIn("Computation", vars(fusion))
         computation_imports = [
-            node
+            alias.name
             for node in ast.walk(ast.parse(inspect.getsource(fusion)))
             if isinstance(node, ast.ImportFrom) and node.module == "computation"
+            for alias in node.names
         ]
-        # Only the TYPE_CHECKING import of Instruction may remain.
-        self.assertEqual(
-            [alias.name for node in computation_imports for alias in node.names],
-            ["Instruction"],
-        )
+        self.assertEqual(computation_imports, [])
 
     def test_both_execution_paths_share_one_accumulation_rule(self):
         self.assertIs(

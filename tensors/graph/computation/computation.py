@@ -1,13 +1,13 @@
-"""A recorded computation rooted at an output Variable."""
+"""Execution of a compiled computation rooted at an output Variable."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..._typing import TensorLike
 from ...tensor import Tensor
+from .compiler import Compiler
 from .fusion import execute_fused_backward, execute_fused_forward, plan_fusions
 from .gradients import (
     gradient_seed,
@@ -15,49 +15,29 @@ from .gradients import (
     sum_gradient_values,
     validate_gradients,
 )
-from ..node import Node, VariableNode
-from ...ops.operation import Operation
+from ..node import VariableNode
 
 if TYPE_CHECKING:
     from ...variable import Variable
-
-
-@dataclass(frozen=True, slots=True)
-class Instruction:
-    """One executable operation invocation.
-
-    An instruction says which :class:`Operation` runs, which slots hold its
-    operands, and which slot receives its result. Everything else about the
-    invocation — the Variables themselves, their mutation records, and which
-    of its VJPs a reverse pass wants — is resolved by the
-    :class:`Computation` that owns the instruction.
-    """
-
-    operation: Operation
-    input_slots: tuple[int, ...]
-    output_slot: int
+    from ..node import Node
+    from .instruction import Instruction
 
 
 class Computation:
-    """The planned, executable representation of a computational graph.
+    """The compiled, executable representation of a computational graph.
 
-    Constructing a Computation inspects the graph rooted at an output
-    Variable, resolves it into ordered :class:`Instruction` objects over
-    numbered Variable slots, and retains that plan for replay and
-    differentiation. The Computation is the plan: :meth:`forward` and
-    :meth:`backward` execute it.
+    A :class:`~tensors.graph.computation.compiler.Compiler` turns the graph
+    rooted at an output Variable into ordered
+    :class:`~tensors.graph.computation.instruction.Instruction` objects over
+    numbered Variable slots. A Computation holds one such compiled program,
+    selects the part of it its own output needs, and executes it:
+    :meth:`forward` replays it and :meth:`backward` differentiates it.
     """
 
     def __init__(self, output: Variable) -> None:
-        outputs = self._validate_outputs((output,))
-        nodes, node_masks, boundary_nodes = self._dependency_plan(outputs, ())
-        self._initialize_plan(
-            outputs[0],
-            nodes,
-            node_masks,
-            boundary_nodes,
-            1,
-        )
+        compiler = Compiler((output,))
+        compiler.compile()
+        self._adopt_program(compiler, 0)
 
     @classmethod
     def from_outputs(
@@ -66,78 +46,52 @@ class Computation:
         *,
         boundaries: Iterable[Variable] = (),
     ) -> tuple[Computation, ...]:
-        """Build output views over one shared multi-root execution plan."""
-        output_tuple = cls._validate_outputs(tuple(outputs))
-        boundary_tuple = tuple(boundaries)
-        nodes, node_masks, boundary_nodes = cls._dependency_plan(
-            output_tuple,
-            boundary_tuple,
-        )
+        """Build output views over one shared multi-root compiled program."""
+        compiler = Compiler(outputs, boundaries=boundaries)
+        compiler.compile()
 
         first = cls.__new__(cls)
-        first._initialize_plan(
-            output_tuple[0],
-            nodes,
-            node_masks,
-            boundary_nodes,
-            1,
-        )
+        first._adopt_program(compiler, 0)
         computations = [first]
-        for index, output in enumerate(output_tuple[1:], 1):
+        for index, output in enumerate(compiler.outputs[1:], 1):
             computation = cls.__new__(cls)
-            computation._initialize_shared_view(output, first, 1 << index)
+            computation._share_program(output, first, index)
             computations.append(computation)
         return tuple(computations)
 
-    @staticmethod
-    def _validate_outputs(outputs: tuple[Variable, ...]) -> tuple[Variable, ...]:
-        if not outputs:
-            raise ValueError("Computation requires at least one output")
-        for output in outputs:
-            if not isinstance(getattr(output, "node", None), VariableNode):
-                raise TypeError("Computation output must have a graph node")
-        return outputs
-
-    def _initialize_plan(
-        self,
-        output: Variable,
-        nodes: tuple[Node, ...],
-        node_masks: tuple[int, ...],
-        boundary_nodes: frozenset[Node],
-        output_bit: int,
-    ) -> None:
-        """Initialize the owner of a new shared execution plan."""
-        self.output = output
-        self._all_nodes = nodes
-        self._node_masks = node_masks
-        self._boundary_nodes = boundary_nodes
-        self._output_bit = output_bit
-        self._nodes = tuple(
-            node
-            for node, mask in zip(nodes, node_masks)
-            if mask & output_bit
+    def _adopt_program(self, compiler: Compiler, index: int) -> None:
+        """Take ownership of one compiled program for one of its outputs."""
+        self.output = compiler.outputs[index]
+        self._all_nodes = compiler.nodes
+        self._node_masks = compiler.node_masks
+        self._boundary_nodes = compiler.boundary_nodes
+        self._output_bit = 1 << index
+        self._variables = compiler.variables
+        self._variable_slots = compiler.variable_slots
+        self._leaf_slots = compiler.leaf_slots
+        self._instructions = compiler.instructions
+        self._output_slot = compiler.output_slots[index]
+        # Fusion is an optional acceleration of this sequence, recorded beside
+        # it. The instructions themselves stay the canonical program.
+        self._fusions, self._fusion_starts = plan_fusions(
+            self._instructions,
+            self._variables,
         )
-        self._compile_execution_plan()
         self._select_view()
         self._released = False
 
-    def _initialize_shared_view(
+    def _share_program(
         self,
         output: Variable,
         owner: Computation,
-        output_bit: int,
+        index: int,
     ) -> None:
-        """Initialize another output view without rebuilding the shared plan."""
+        """Take another output's view of a program already compiled once."""
         self.output = output
         self._all_nodes = owner._all_nodes
         self._node_masks = owner._node_masks
         self._boundary_nodes = owner._boundary_nodes
-        self._output_bit = output_bit
-        self._nodes = tuple(
-            node
-            for node, mask in zip(self._all_nodes, self._node_masks)
-            if mask & output_bit
-        )
+        self._output_bit = 1 << index
         self._variables = owner._variables
         self._variable_slots = owner._variable_slots
         self._leaf_slots = owner._leaf_slots
@@ -149,7 +103,18 @@ class Computation:
         self._released = False
 
     def _select_view(self) -> None:
-        """Resolve the slots and instructions this output reaches."""
+        """Resolve the nodes, slots, and instructions this output reaches.
+
+        The compiler recorded which outputs reach each traversed node; this
+        reads those masks for one output. It interprets compiled metadata
+        rather than the graph, so no traversal happens here.
+        """
+        output_bit = self._output_bit
+        self._nodes = tuple(
+            node
+            for node, mask in zip(self._all_nodes, self._node_masks)
+            if mask & output_bit
+        )
         slots = self._variable_slots
         view_slots = {
             slots[node.variable]
@@ -161,55 +126,6 @@ class Computation:
             instruction
             for instruction in self._instructions
             if instruction.output_slot in view_slots
-        )
-
-    def _compile_execution_plan(self) -> None:
-        """Resolve graph relationships and operation methods once.
-
-        Every Variable vertex becomes an execution slot. Every operation vertex
-        becomes one instruction whose operands are named by its incoming edges
-        and whose result is the Variable named by its outgoing edge. Replay and
-        differentiation then work from this compact plan instead of walking the
-        graph again.
-        """
-        variables = tuple(
-            node.variable
-            for node in self._all_nodes
-            if isinstance(node, VariableNode)
-        )
-        slots = {variable: index for index, variable in enumerate(variables)}
-        instructions: list[Instruction] = []
-        leaf_slots: list[int] = []
-        boundary_nodes = self._boundary_nodes
-        for node in self._all_nodes:
-            if not isinstance(node, VariableNode):
-                continue
-            output_slot = slots[node.variable]
-            producer = node.producer
-            if producer is None or node in boundary_nodes:
-                leaf_slots.append(output_slot)
-                continue
-            instructions.append(
-                Instruction(
-                    operation=producer.operation,
-                    input_slots=tuple(
-                        slots[edge.source.variable]
-                        for edge in producer._in_edges
-                    ),
-                    output_slot=output_slot,
-                )
-            )
-
-        self._variables = variables
-        self._variable_slots = slots
-        self._leaf_slots = tuple(leaf_slots)
-        self._instructions = tuple(instructions)
-        self._output_slot = slots[self.output]
-        # Fusion is an optional acceleration of this sequence, recorded beside
-        # it. The instructions themselves stay the canonical plan.
-        self._fusions, self._fusion_starts = plan_fusions(
-            self._instructions,
-            variables,
         )
 
     def _live_slots(self, targets: tuple[Variable, ...] | None) -> set[int]:
@@ -247,54 +163,6 @@ class Computation:
             ):
                 live.add(instruction.output_slot)
         return live
-
-    @classmethod
-    def _dependency_plan(
-        cls,
-        outputs: tuple[Variable, ...],
-        boundaries: tuple[Variable, ...],
-    ) -> tuple[tuple[Node, ...], tuple[int, ...], frozenset[Node]]:
-        """Return one traversal and per-output reachability masks."""
-        boundary_nodes = frozenset(
-            variable.node
-            for variable in boundaries
-            if getattr(variable, "node", None) is not None
-        )
-        order: list[Node] = []
-        visited: set[Node] = set()
-        for output in outputs:
-            stack = [(output.node, False)]
-            while stack:
-                node, expanded = stack.pop()
-                if expanded:
-                    order.append(node)
-                    continue
-                if node in visited:
-                    continue
-                visited.add(node)
-                stack.append((node, True))
-                if node in boundary_nodes:
-                    continue
-                for edge in reversed(node._in_edges):
-                    if edge.source not in visited:
-                        stack.append((edge.source, False))
-
-        masks = {node: 0 for node in order}
-        for index, output in enumerate(outputs):
-            masks[output.node] |= 1 << index
-        for node in reversed(order):
-            mask = masks[node]
-            if not mask or node in boundary_nodes:
-                continue
-            for edge in node._in_edges:
-                masks[edge.source] |= mask
-        return tuple(order), tuple(masks[node] for node in order), boundary_nodes
-
-    @classmethod
-    def _dependency_order(cls, output_node: VariableNode) -> tuple[Node, ...]:
-        """Calculate the dependency-first traversal reaching an output."""
-        nodes, _, _ = cls._dependency_plan((output_node.variable,), ())
-        return nodes
 
     def _require_active(self) -> None:
         """Reject work after this object has released its graph references."""

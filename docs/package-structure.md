@@ -132,7 +132,9 @@ tensors/
     ├── edge.py
     ├── state.py
     └── computation/       # the executable, differentiable form of a graph
-        ├── computation.py   # executable computation planning and execution
+        ├── instruction.py   # one executable operation invocation
+        ├── compiler.py      # graph to slot-based instruction compilation
+        ├── computation.py   # execution of compiled instructions
         ├── autograd.py      # functional reverse-mode differentiation API
         ├── gradients.py     # seed construction, accumulation, VJP validation
         ├── derivatives.py   # Jacobian and Hessian construction
@@ -210,17 +212,25 @@ The folders have deliberately narrow responsibilities:
   decides which local derivatives a reverse pass requires and supplies that
   demand as `needs_input_grad`. See [Automatic differentiation](autodiff.md) for
   the recorded topology and the responsibility split.
-- `graph/computation` holds that executable form. `Computation` owns the
-  instruction plan and executes it forwards and in reverse; `gradients`
-  supplies the generic mechanics it uses along the way — upstream seed
-  construction, gradient accumulation, and VJP result validation; `fusion`
-  recognizes and accelerates compatible instruction runs beside that plan;
-  `autograd` is the functional interface through which callers request
-  differentiation; `derivatives` builds Jacobians and Hessians from repeated
-  reverse passes and `gradcheck` verifies them against finite differences.
-  The subpackage layout is internal: `ts.backward`, `ts.grad`, `ts.jacobian`,
-  `ts.hessian`, `ts.gradcheck`, and `ts.graph.Computation` are unaffected by
-  it.
+- `graph/computation` holds that executable form, in one direction:
+
+  ```text
+  structural graph -> Compiler -> Instructions + slot metadata
+                   -> Computation -> forward / backward
+  ```
+
+  `Compiler` understands graph structure and emits the slot-based program;
+  an `Instruction` is one executable operation invocation; `Computation`
+  understands the compiled program and executes it forwards and in reverse.
+  `gradients` supplies the generic mechanics reverse execution uses along the
+  way — upstream seed construction, gradient accumulation, and VJP result
+  validation; `fusion` recognizes and accelerates compatible instruction runs
+  beside the program; `autograd` is the functional interface through which
+  callers request differentiation; `derivatives` builds Jacobians and Hessians
+  from repeated reverse passes and `gradcheck` verifies them against finite
+  differences. The subpackage layout is internal: `ts.backward`, `ts.grad`,
+  `ts.jacobian`, `ts.hessian`, `ts.gradcheck`, and `ts.graph.Computation` are
+  unaffected by it.
 - `optim` provides the shared optimizer contract plus SGD, Adam, and RMSprop.
 - `init` provides immutable callable initializer configurations plus lowercase
   function facades for variance-scaling, Xavier, He, LeCun, truncated-normal,

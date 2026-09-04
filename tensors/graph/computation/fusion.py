@@ -19,7 +19,7 @@ from .gradients import sum_gradient_values
 
 if TYPE_CHECKING:
     from ...variable import Variable
-    from .computation import Instruction
+    from .instruction import Instruction
 
 
 #: One fused elementwise step: kernel name, literal scalar, operand order,
