@@ -36,17 +36,12 @@ class Instruction:
     output_slot: int
 
 
-@dataclass(frozen=True, slots=True)
-class _ForwardGroup:
-    """One instruction or a CUDA-fusible elementwise chain.
-
-    The representation of fusion is under separate review; this type exists
-    to keep the current CUDA behaviour intact.
-    """
-
-    instructions: tuple[Instruction, ...]
-    fused_steps: tuple[FusedStep, ...] | None = None
-    fused_input_slots: tuple[int, ...] = ()
+#: Fusion metadata for one contiguous run of instructions: the index the run
+#: ends at (inclusive), the fused kernel steps, and the slots holding the
+#: run's external sources. Fusion is an optimization over the instruction
+#: sequence, so it is recorded beside that sequence rather than wrapped
+#: around it.
+Fusion = tuple[int, tuple[FusedStep, ...], tuple[int, ...]]
 
 
 class Computation:
@@ -169,7 +164,8 @@ class Computation:
         self._variable_slots = owner._variable_slots
         self._leaf_slots = owner._leaf_slots
         self._instructions = owner._instructions
-        self._groups = owner._groups
+        self._fusions = owner._fusions
+        self._fusion_starts = owner._fusion_starts
         self._output_slot = self._variable_slots[output]
         self._select_view()
         self._released = False
@@ -235,66 +231,70 @@ class Computation:
         for instruction in instructions:
             for slot in instruction.input_slots:
                 consumer_counts[slot] += 1
-        self._groups = self._group_instructions(instructions, consumer_counts)
+        self._fusions = self._plan_fusions(instructions, consumer_counts)
+        # Reverse execution recognizes a run by the index it ends at.
+        self._fusion_starts = {
+            end: start for start, (end, _, _) in self._fusions.items()
+        }
 
-    def _group_instructions(
+    def _plan_fusions(
         self,
         instructions: list[Instruction],
         consumer_counts: list[int],
-    ) -> tuple[_ForwardGroup, ...]:
-        """Collect linear floating-point chains for optional CUDA fusion."""
+    ) -> dict[int, Fusion]:
+        """Find the instruction runs the fused backend can execute together.
+
+        The result maps the first index of each worthwhile run to its
+        metadata. An instruction absent from the mapping simply executes
+        ordinarily, so the instruction sequence stays canonical and identical
+        across every backend.
+        """
         variables = self._variables
-        groups: list[_ForwardGroup] = []
+        fusions: dict[int, Fusion] = {}
+        count = len(instructions)
         index = 0
-        while index < len(instructions):
-            first = instructions[index]
-            start = self._start_fused_instruction(first)
-            if start is None:
-                groups.append(_ForwardGroup((first,)))
+        while index < count:
+            opening = self._start_fused_instruction(instructions[index])
+            if opening is None:
                 index += 1
                 continue
 
-            first_step, fused_input_slots = start
-            first_output = variables[first.output_slot]
-            chain = [first]
+            first_step, source_slots = opening
+            first_output = variables[instructions[index].output_slot]
             steps = [first_step]
-            chain_output_slots = {first.output_slot}
-            next_index = index + 1
-            while next_index < len(instructions):
-                candidate = instructions[next_index]
+            current_slot = instructions[index].output_slot
+            chain_output_slots = {current_slot}
+            end = index
+            candidate_index = index + 1
+            while candidate_index < count:
+                candidate = instructions[candidate_index]
                 candidate_output = variables[candidate.output_slot]
                 if (
-                    consumer_counts[chain[-1].output_slot] != 1
+                    consumer_counts[current_slot] != 1
                     or candidate_output.shape != first_output.shape
                     or candidate_output.dtype != first_output.dtype
                 ):
                     break
                 step = self._extend_fused_instruction(
                     candidate,
-                    chain[-1].output_slot,
-                    fused_input_slots,
+                    current_slot,
+                    source_slots,
                     chain_output_slots,
                 )
                 if step is None:
                     break
-                chain.append(candidate)
                 steps.append(step)
-                chain_output_slots.add(candidate.output_slot)
-                next_index += 1
+                current_slot = candidate.output_slot
+                chain_output_slots.add(current_slot)
+                end = candidate_index
+                candidate_index += 1
 
-            if len(chain) > 1:
-                groups.append(
-                    _ForwardGroup(
-                        tuple(chain),
-                        tuple(steps),
-                        tuple(fused_input_slots),
-                    )
-                )
-                index = next_index
+            if end > index:
+                fusions[index] = (end, tuple(steps), tuple(source_slots))
+                index = end + 1
             else:
-                groups.append(_ForwardGroup((first,)))
                 index += 1
-        return tuple(groups)
+        return fusions
 
     @staticmethod
     def _fused_operation(instruction: Instruction) -> str | None:
@@ -524,7 +524,8 @@ class Computation:
         self._variable_slots = {}
         self._leaf_slots = ()
         self._instructions = ()
-        self._groups = ()
+        self._fusions = {}
+        self._fusion_starts = {}
         self._view_slots = ()
         self._view_instructions = ()
         self._released = True
@@ -539,14 +540,21 @@ class Computation:
         for slot in self._leaf_slots:
             values[slot] = variables[slot].data
 
-        for group in self._groups:
-            if group.fused_steps is not None and self._execute_fused_group(
-                group,
+        instructions = self._instructions
+        fusions = self._fusions
+        index = 0
+        count = len(instructions)
+        while index < count:
+            fusion = fusions.get(index)
+            if fusion is not None and self._execute_fused_range(
+                index,
+                fusion,
                 values,
             ):
+                index = fusion[0] + 1
                 continue
-            for instruction in group.instructions:
-                self._execute_instruction(instruction, values)
+            self._execute_instruction(instructions[index], values)
+            index += 1
 
         result = values[self._output_slot]
         if result is None:
@@ -578,18 +586,21 @@ class Computation:
         )
         values[instruction.output_slot] = tensor
 
-    def _execute_fused_group(
+    def _execute_fused_range(
         self,
-        group: _ForwardGroup,
+        start: int,
+        fusion: Fusion,
         values: list[Tensor | None],
     ) -> bool:
-        """Execute an elementwise chain in one CUDA kernel."""
+        """Execute one fused instruction run in a single CUDA kernel."""
         from ..backend import execute_fused_elementwise
 
+        end, steps, source_slots = fusion
         variables = self._variables
-        first_output = variables[group.instructions[0].output_slot]
+        instructions = self._instructions[start:end + 1]
+        first_output = variables[instructions[0].output_slot]
         source_values = []
-        for slot in group.fused_input_slots:
+        for slot in source_slots:
             value = values[slot]
             if value is None:
                 return False
@@ -598,17 +609,17 @@ class Computation:
         dtype = first_output.dtype
         storages = execute_fused_elementwise(
             tuple(source_values),
-            group.fused_steps or (),
+            steps,
             dtype=dtype,
             output_shape=output_shape,
         )
         if storages is None:
             return False
-        if len(storages) != len(group.instructions):
+        if len(storages) != len(instructions):
             raise RuntimeError(
                 "Fused elementwise kernel returned an unexpected output count"
             )
-        for instruction, storage in zip(group.instructions, storages):
+        for instruction, storage in zip(instructions, storages):
             output = variables[instruction.output_slot]
             tensor = Tensor._from_owned_storage(
                 storage,
@@ -811,21 +822,37 @@ class Computation:
         gradients: list[Any | None] = [None] * count
         gradient_terms[self._output_slot].append(seed)
 
-        for group in reversed(self._groups):
-            if group.fused_steps is not None and self._execute_fused_backward_group(
-                group,
-                gradient_terms,
-                gradients,
-                live,
-            ):
-                continue
-            for instruction in reversed(group.instructions):
+        instructions = self._instructions
+        fusion_starts = self._fusion_starts
+        index = len(instructions) - 1
+        while index >= 0:
+            start = fusion_starts.get(index)
+            if start is None:
                 self._execute_backward_instruction(
-                    instruction,
+                    instructions[index],
                     gradient_terms,
                     gradients,
                     live,
                 )
+                index -= 1
+                continue
+            if not self._execute_fused_backward_range(
+                start,
+                self._fusions[start],
+                gradient_terms,
+                gradients,
+                live,
+            ):
+                # The fused VJP cannot serve this demand, so the same
+                # instructions run ordinarily in reverse.
+                for position in range(index, start - 1, -1):
+                    self._execute_backward_instruction(
+                        instructions[position],
+                        gradient_terms,
+                        gradients,
+                        live,
+                    )
+            index = start - 1
 
         for slot, terms in enumerate(gradient_terms):
             if terms and gradients[slot] is None:
@@ -876,27 +903,26 @@ class Computation:
             if wanted:
                 gradient_terms[slot].append(input_gradient)
 
-    def _execute_fused_backward_group(
+    def _execute_fused_backward_range(
         self,
-        group: _ForwardGroup,
+        start: int,
+        fusion: Fusion,
         gradient_terms: list[list[Any]],
         gradients: list[Any | None],
         live: set[int],
     ) -> bool:
-        """Run a safe single-consumer elementwise-chain VJP in one CUDA kernel."""
+        """Run a fused instruction run's VJP in a single CUDA kernel."""
         from ..backend import execute_fused_elementwise_backward
 
+        end, steps, source_slots = fusion
         variables = self._variables
-        instructions = group.instructions
+        instructions = self._instructions[start:end + 1]
         last_output = variables[instructions[-1].output_slot]
         output_terms = gradient_terms[instructions[-1].output_slot]
         if not output_terms:
             return True
         output_gradient = self._sum_gradient_values(output_terms)
-        source_values = tuple(
-            variables[slot].data for slot in group.fused_input_slots
-        )
-        steps = group.fused_steps or ()
+        source_values = tuple(variables[slot].data for slot in source_slots)
         output_shape = last_output.shape
         dtype = last_output.dtype
         # An external operand gradient is only calculated where this reverse
@@ -908,7 +934,7 @@ class Computation:
             if scalar is None
             and operand_index is not None
             and operand_index >= 0
-            and group.fused_input_slots[operand_index] in live
+            and source_slots[operand_index] in live
         )
         storages = execute_fused_elementwise_backward(
             source_values,
@@ -939,7 +965,7 @@ class Computation:
             )
 
         def append_source_gradient(storage: Any, source_index: int) -> None:
-            slot = group.fused_input_slots[source_index]
+            slot = source_slots[source_index]
             if slot not in live:
                 return
             variable = variables[slot]
