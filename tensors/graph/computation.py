@@ -361,14 +361,10 @@ class Computation:
             "Tanh": "tanh",
             "Softplus": "softplus",
         }
-        operation = instruction.operation
-        name = names.get(type(operation).__name__)
-        if name == "power" and getattr(operation, "differentiate_exponent", True):
-            # A differentiable exponent carries domain restrictions that the
-            # compact fusion step cannot express. A frozen exponent — the form
-            # a normalized scalar power produces — fuses safely.
-            return None
-        return name
+        # Forward fusion depends only on the forward mathematics, the dtype,
+        # and the backend kernel's capability. It never depends on which
+        # derivatives a later reverse pass might request.
+        return names.get(type(instruction.operation).__name__)
 
     @classmethod
     def _start_fused_instruction(
@@ -952,23 +948,32 @@ class Computation:
         steps = group.fused_steps or ()
         output_shape = last.output_variable.shape
         dtype = last.output_variable.dtype
-        storages = execute_fused_elementwise_backward(
-            source_values,
-            output_gradient,
-            steps,
-            dtype=dtype,
-            output_shape=output_shape,
-        )
-        if storages is None:
-            return False
-
+        # An external operand gradient is only calculated where this reverse
+        # pass wants it. The chain's internal derivative is separate: reverse
+        # propagation always needs it to reach the chain's first input.
         external_steps = tuple(
             (step_index, operand_index)
             for step_index, (_, scalar, _, operand_index) in enumerate(steps)
             if scalar is None
             and operand_index is not None
             and operand_index >= 0
+            and demand.live[group.fused_input_slots[operand_index]]
         )
+        storages = execute_fused_elementwise_backward(
+            source_values,
+            output_gradient,
+            steps,
+            dtype=dtype,
+            output_shape=output_shape,
+            requested_external=tuple(
+                step_index for step_index, _ in external_steps
+            ),
+        )
+        if storages is None:
+            # The fused VJP cannot supply a requested derivative, so ordinary
+            # operation execution handles this group instead.
+            return False
+
         expected = len(instructions) + 1 + len(external_steps)
         if len(storages) != expected:
             raise RuntimeError(
@@ -984,9 +989,9 @@ class Computation:
 
         def append_source_gradient(storage: Any, source_index: int) -> None:
             slot = group.fused_input_slots[source_index]
-            variable = self._variables[slot]
-            if not variable.requires_grad:
+            if not demand.live[slot]:
                 return
+            variable = self._variables[slot]
             gradient = Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
             if gradient.shape != variable.shape:
                 from ..ops._utils import sum_to_shape
