@@ -200,7 +200,9 @@ The folders have deliberately narrow responsibilities:
   `VariableNode` adds its `Variable` and `OperationNode` adds its `Operation`.
   `Operation` is an abstract base class carrying the immutable configuration of
   one concrete invocation plus its local `forward`, `backward`, and optional
-  `backward_graph` semantics. See [Automatic differentiation](autodiff.md) for
+  `backward_graph` semantics. An operation defines how a local derivative is
+  calculated; `Computation` decides which local derivatives a reverse pass
+  requires and supplies that demand as `needs_input_grad`. See [Automatic differentiation](autodiff.md) for
   the recorded topology and the responsibility split.
 - `Computation` owns compiled forward and backward plans, reusable execution
   workspaces, and eligible CUDA chain fusion; `ts.backward` is a root

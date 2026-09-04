@@ -48,6 +48,16 @@ Computation = traversal and execution
 Graph       = reusable function/model abstraction
 ```
 
+The same split governs differentiation:
+
+```text
+Operation
+    defines how local derivatives are calculated
+
+Computation
+    determines which local derivatives are required
+```
+
 `Node` itself carries only identity and connectivity. `VariableNode` adds its
 `variable`, and `OperationNode` adds its `operation`; neither stores execution
 state.
@@ -114,8 +124,77 @@ saved inputs, outputs, temporary gradients, or workspaces. That state belongs
 to `Computation`, which keeps it per thread so replay and concurrent execution
 stay correct.
 
+Reverse demand is execution state for the same reason. An operation never
+records which of its operands will be differentiated: that depends on the
+reverse call being made, not on the recorded graph. Configuration therefore
+never contains a name like `differentiate_left` or `needs_input_grad`, and
+`requires_grad` never appears in an operation's VJP logic to decide whether a
+derivative is worth calculating.
+
 Each invocation produces exactly one output. A `Graph` returning several
 Variables exposes them as separate computation roots.
+
+### Reverse gradient demand
+
+`Computation` resolves demand before executing any VJP and passes it to the
+operation as `needs_input_grad`, one flag per operand:
+
+```python
+def backward(self, gradient, *inputs, needs_input_grad):
+    need_left, need_right = needs_input_grad
+    return (
+        left_vjp(...) if need_left else None,
+        right_vjp(...) if need_right else None,
+    )
+```
+
+The two absent-versus-zero cases are distinct and enforced:
+
+```text
+None
+    the VJP was not requested
+
+a zero Tensor/Variable
+    the VJP was requested and its mathematical value is zero
+```
+
+Returning a value for an unrequested operand raises, as does returning `None`
+for a requested one. That makes skipping unused work an enforceable contract
+rather than an optimisation an operation may quietly ignore. `backward_graph`
+follows the same contract with `Variable` results.
+
+A derivative-specific domain error is raised only when the derivative it
+guards was requested. Differentiating `base ** exponent` with respect to a
+negative base is well defined, so:
+
+```python
+base = ts.Variable([-2.0])
+exponent = ts.Variable([2.0])
+output = base ** exponent
+
+ts.grad(output, base)      # -4.0
+ts.grad(output, exponent)  # ValueError: requires non-negative bases
+```
+
+`backward()` requests a gradient at every reachable differentiable Variable,
+which is what it publishes. `grad(output, inputs)` instead plans the reverse
+pass from the requested inputs: a VJP runs only where a requested Variable's
+influence flows toward the output. For
+
+```python
+y = (a * b) + c
+ts.grad(y, a)
+```
+
+the addition is asked for its left VJP only, the multiplication for `a` only,
+and nothing behind `c` is calculated. Requesting `c` alone skips the
+multiplication entirely. Higher-order differentiation, `create_graph=True`,
+`jacobian`, and `hessian` all use the same plan.
+
+Because demand depends on `requires_grad`, which is mutable and participates
+in mutation detection, it is resolved per reverse invocation and never cached
+on a compiled forward instruction. A replayed computation therefore uses the
+gradient requirements that hold at the time it is differentiated.
 
 ## Public API
 
@@ -350,8 +429,17 @@ and the plan is how that structure is executed.
 
 On CUDA, compatible single-consumer float32 and float64 elementwise chains may
 execute as one fused kernel in both directions. Fusion supports broadcast
-tensor arithmetic, powers with a frozen exponent, and common unary
-mathematics. Intermediate
+tensor arithmetic, powers, and common unary mathematics.
+
+Forward fusion depends only on the forward mathematics, the dtype and layout,
+and what the backend kernel supports; it never depends on which derivatives a
+later reverse pass may want. Backward fusion does consult the current demand:
+it produces only the external operand gradients that were requested, and when
+a requested derivative is one the compact fused form cannot express, that
+group falls back to ordinary operation VJP execution instead of disabling the
+valid fused forward pass. The internal chain derivative that carries the
+upstream gradient through the sequence is calculated regardless, because
+reverse propagation needs it even when it is never published. Intermediate
 `.data` and `.grad` values are still published, so fusion changes execution
 cost rather than graph semantics.
 Native backend VJPs are also used for supported reductions and elementwise
@@ -438,8 +526,8 @@ binary cross-entropy must lie in the closed interval `[0, 1]`.
 ## Validation guarantees
 
 During backward execution, every operation must return exactly one gradient per
-input, including operands that do not require gradients. The engine validates
-each gradient's type and shape before propagating it. Graph traversal is
+requested input, and `None` for every unrequested one. The engine validates
+each gradient's presence, type, and shape before propagating it. Graph traversal is
 iterative, so deeply composed functions do not depend on Python's recursion
 limit. Node labels are derived from the recorded operation and never control
 execution.
