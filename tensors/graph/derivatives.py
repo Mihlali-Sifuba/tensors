@@ -8,7 +8,8 @@ from typing import Any, overload
 
 from ..tensor import Tensor
 from ..variable import Variable
-from .computation import Computation, grad
+from .autograd import grad
+from .computation import Computation
 from .state import isolated_graph_state
 
 

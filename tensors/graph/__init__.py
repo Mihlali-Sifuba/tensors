@@ -4,7 +4,8 @@ from typing import Any
 
 from .node import Node, OperationNode, VariableNode
 from .edge import Edge
-from .computation import Computation, backward, grad
+from .computation import Computation
+from .autograd import backward, grad
 from .derivatives import hessian, jacobian
 from .gradcheck import GradcheckError, gradcheck
 

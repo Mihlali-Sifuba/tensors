@@ -10,7 +10,7 @@ from .._typing import TensorResult
 from ..tensor import Tensor
 from ..utils.coordinates import linear_index_to_coordinates
 from ..variable import Variable
-from .computation import grad
+from .autograd import grad
 from .state import isolated_graph_state, reset_graph_state
 
 
