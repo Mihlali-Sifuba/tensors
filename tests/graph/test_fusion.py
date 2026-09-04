@@ -3,8 +3,8 @@ from unittest.mock import patch
 
 import tensors as ts
 from tensors.graph import Computation
-from tensors.graph import computation as computation_module
-from tensors.graph import fusion
+from tensors.graph.computation import computation as computation_module
+from tensors.graph.computation import fusion
 from tensors.graph.state import reset_graph_state
 
 

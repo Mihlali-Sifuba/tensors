@@ -126,16 +126,17 @@ tensors/
 │   └── truncated_normal.py, orthogonal.py
 ├── random/                # backend-native random generation
 │   └── _state.py
-└── graph/                 # tracing, execution, and differentiation
+└── graph/                 # structural graph representation and tracing
     ├── graph.py           # reusable callable model abstraction
-    ├── computation.py     # executable computation planning and execution
-    ├── autograd.py        # functional reverse-mode differentiation API
-    ├── fusion.py          # fused execution of compatible instruction runs
-    ├── derivatives.py     # Jacobian and Hessian construction
-    ├── gradcheck.py       # finite-difference verification
     ├── node.py            # Node, VariableNode, and OperationNode
     ├── edge.py
-    └── state.py
+    ├── state.py
+    └── computation/       # the executable, differentiable form of a graph
+        ├── computation.py   # executable computation planning and execution
+        ├── autograd.py      # functional reverse-mode differentiation API
+        ├── derivatives.py   # Jacobian and Hessian construction
+        ├── gradcheck.py     # finite-difference verification
+        └── fusion.py        # fused execution of compatible instruction runs
 ```
 
 ## Namespace Rules
@@ -198,8 +199,9 @@ The folders have deliberately narrow responsibilities:
 - `math` contains all mathematical functions, including reductions and
   activation functions. It remains flat rather than separating activations or
   reductions into extra namespaces.
-- `graph` owns tracing state, the operation contract, computation execution,
-  derivatives, and reusable computational model functions. A recorded graph
+- `graph` owns the recorded structure, tracing state, and reusable
+  computational model functions; its `computation` subpackage owns the
+  executable, differentiable form of that structure. A recorded graph
   alternates `VariableNode -> OperationNode -> VariableNode`, and every
   relationship is an `Edge`. `Node` holds only identity and connectivity;
   `VariableNode` adds its `Variable` and `OperationNode` adds its `Operation`.
@@ -207,10 +209,15 @@ The folders have deliberately narrow responsibilities:
   decides which local derivatives a reverse pass requires and supplies that
   demand as `needs_input_grad`. See [Automatic differentiation](autodiff.md) for
   the recorded topology and the responsibility split.
-- `Computation` owns the instruction plan and executes it forwards and in
-  reverse; `fusion` recognizes and accelerates compatible instruction runs
-  beside that plan; `autograd` is the functional interface through which
-  callers request differentiation. `ts.backward` is a root convenience alias.
+- `graph/computation` holds that executable form. `Computation` owns the
+  instruction plan and executes it forwards and in reverse; `fusion`
+  recognizes and accelerates compatible instruction runs beside that plan;
+  `autograd` is the functional interface through which callers request
+  differentiation; `derivatives` builds Jacobians and Hessians from repeated
+  reverse passes and `gradcheck` verifies them against finite differences.
+  The subpackage layout is internal: `ts.backward`, `ts.grad`, `ts.jacobian`,
+  `ts.hessian`, `ts.gradcheck`, and `ts.graph.Computation` are unaffected by
+  it.
 - `optim` provides the shared optimizer contract plus SGD, Adam, and RMSprop.
 - `init` provides immutable callable initializer configurations plus lowercase
   function facades for variance-scaling, Xavier, He, LeCun, truncated-normal,

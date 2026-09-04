@@ -6,14 +6,14 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from .._typing import TensorLike
-from ..tensor import Tensor
+from ..._typing import TensorLike
+from ...tensor import Tensor
 from .fusion import execute_fused_backward, execute_fused_forward, plan_fusions
-from .node import Node, VariableNode
-from ..ops.operation import Operation
+from ..node import Node, VariableNode
+from ...ops.operation import Operation
 
 if TYPE_CHECKING:
-    from ..variable import Variable
+    from ...variable import Variable
 
 
 @dataclass(frozen=True, slots=True)
@@ -454,10 +454,10 @@ class Computation:
         create_graph: bool = False,
     ) -> Any:
         """Return a validated upstream gradient, optionally as a Variable."""
-        from ..variable import Variable
+        from ...variable import Variable
 
         if grad is None:
-            from ..creation import ones
+            from ...creation import ones
 
             typecode = (
                 self.output.dtype.typecode
@@ -661,16 +661,16 @@ class Computation:
         if len(gradients) == 1:
             return gradients[0]
 
-        from ..backend import get_backend
+        from ...backend import get_backend
 
         first = gradients[0]
         if get_backend() != "python" and first.size >= 32:
-            from ..math import stack
-            from ..math import sum as tensor_sum
+            from ...math import stack
+            from ...math import sum as tensor_sum
 
             return tensor_sum(stack(gradients, axis=0), axis=0)
 
-        from ..math.sum import _stable_float_sum
+        from ...math.sum import _stable_float_sum
 
         values = [
             _stable_float_sum([
@@ -686,7 +686,7 @@ class Computation:
         if len(gradients) == 1:
             return gradients[0]
 
-        from ..math import stack, sum
+        from ...math import stack, sum
 
         return sum(stack(gradients, axis=0), axis=0)
 
@@ -708,7 +708,7 @@ class Computation:
         advisory. A real zero remains a valid answer for a requested
         derivative whose value is mathematically zero.
         """
-        from ..variable import Variable
+        from ...variable import Variable
 
         label = operation.name
         mode = "backward_graph" if graph else "backward"

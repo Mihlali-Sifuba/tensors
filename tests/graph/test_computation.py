@@ -2,7 +2,7 @@ import unittest
 
 import tensors as ts
 from tensors.graph import Computation
-from tensors.graph.computation import Instruction
+from tensors.graph.computation.computation import Instruction
 from tensors.graph.state import reset_graph_state
 
 
