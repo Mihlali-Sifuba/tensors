@@ -132,13 +132,13 @@ class ComputationTests(unittest.TestCase):
         value = ts.Variable([2.0])
         result = (value + 1.0) * 3.0
         computation = ts.graph.Computation(result)
-        cached_order = computation._nodes
+        cached_order = computation._view_nodes
 
         first = computation.nodes
         second = computation.nodes
         first.clear()
 
-        self.assertIs(computation._nodes, cached_order)
+        self.assertIs(computation._view_nodes, cached_order)
         self.assertEqual(second, list(cached_order))
         self.assertEqual(computation.nodes, list(cached_order))
         self.assertEqual(computation.forward().tolist(), [9.0])

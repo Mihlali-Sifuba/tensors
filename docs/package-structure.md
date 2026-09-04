@@ -133,8 +133,8 @@ tensors/
     ├── state.py
     └── computation/       # the executable, differentiable form of a graph
         ├── instruction.py   # one executable operation invocation
-        ├── compiler.py      # graph to slot-based instruction compilation
-        ├── computation.py   # execution of compiled instructions
+        ├── compiler.py      # Node/Edge topology to slots, instructions, views
+        ├── computation.py   # execution of the compiled slot representation
         ├── autograd.py      # functional reverse-mode differentiation API
         ├── gradients.py     # seed construction, accumulation, VJP validation
         ├── derivatives.py   # Jacobian and Hessian construction
@@ -202,9 +202,9 @@ The folders have deliberately narrow responsibilities:
 - `math` contains all mathematical functions, including reductions and
   activation functions. It remains flat rather than separating activations or
   reductions into extra namespaces.
-- `graph` owns the recorded structure, tracing state, and reusable
-  computational model functions; its `computation` subpackage owns the
-  executable, differentiable form of that structure. A recorded graph
+- `graph` owns the recorded structure, tracing state, and the public `Graph`
+  abstraction; its `computation` subpackage owns the executable,
+  differentiable form of that structure. A recorded graph
   alternates `VariableNode -> OperationNode -> VariableNode`, and every
   relationship is an `Edge`. `Node` holds only identity and connectivity;
   `VariableNode` adds its `Variable` and `OperationNode` adds its `Operation`.
@@ -212,16 +212,31 @@ The folders have deliberately narrow responsibilities:
   decides which local derivatives a reverse pass requires and supplies that
   demand as `needs_input_grad`. See [Automatic differentiation](autodiff.md) for
   the recorded topology and the responsibility split.
-- `graph/computation` holds that executable form, in one direction:
+- `graph/computation` holds that executable form. `Compiler` is the boundary
+  between the two domains, and one compilation feeds both sides:
 
   ```text
-  structural graph -> Compiler -> Instructions + slot metadata
-                   -> Computation -> forward / backward
+             structural graph
+                    │
+                    ▼
+                 Compiler
+                    │
+        ┌───────────┴───────────┐
+        ▼                       ▼
+  Graph metadata          execution metadata
+  (nodes, edges)                │
+                                ▼
+                           Computation
+                                │
+                         forward / backward
   ```
 
-  `Compiler` understands graph structure and emits the slot-based program;
-  an `Instruction` is one executable operation invocation; `Computation`
-  understands the compiled program and executes it forwards and in reverse.
+  `Compiler` is the last component that understands Nodes and Edges: it emits
+  the slot-based program, resolves each output's execution view, and hands
+  the graph layer the traversal and edges it keeps. An `Instruction` is one
+  executable operation invocation. `Computation` receives an already-resolved
+  execution view and works only in the compiled domain — Variables, slots,
+  instructions, and fusion metadata — to execute it forwards and in reverse.
   `gradients` supplies the generic mechanics reverse execution uses along the
   way — upstream seed construction, gradient accumulation, and VJP result
   validation; `fusion` recognizes and accelerates compatible instruction runs

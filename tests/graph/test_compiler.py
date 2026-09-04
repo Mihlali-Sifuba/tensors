@@ -326,8 +326,6 @@ class CompiledComputationTests(unittest.TestCase):
         )
         self.assertIn(one._variable_slots[only_first], one._view_slots)
         self.assertNotIn(two._variable_slots[only_first], two._view_slots)
-        self.assertEqual(one._output_bit, 0b01)
-        self.assertEqual(two._output_bit, 0b10)
         self.assertIn(first.node, one.nodes)
         self.assertNotIn(first.node, two.nodes)
 

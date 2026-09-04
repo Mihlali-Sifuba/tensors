@@ -17,6 +17,7 @@ from inspect import getclosurevars, isfunction, ismethod
 from ..tensor import Tensor
 from ..variable import Variable
 from .computation import Computation
+from .computation.compiler import Compiler
 from .state import TraceScope
 
 
@@ -494,12 +495,18 @@ class Graph:
         outputs: tuple[Variable, ...],
         boundaries: tuple[Variable, ...],
     ) -> None:
-        """Compile one shared plan and capture its structural metadata."""
-        state.computations = Computation.from_outputs(
-            outputs,
-            boundaries=boundaries,
-        )
-        state.nodes, state.edges = Graph._capture(state.computations)
+        """Compile one shared plan and keep its structural metadata.
+
+        The compiler is the component that understands graph structure, so it
+        supplies the nodes and edges directly. One compilation serves both
+        sides: the structural record kept here and the computations that
+        execute the program it emitted.
+        """
+        compiler = Compiler(outputs, boundaries=boundaries)
+        compiler.compile()
+        state.computations = Computation._from_compiler(compiler)
+        state.nodes = compiler.nodes
+        state.edges = compiler.edges
         state.pending_outputs = ()
         state.pending_boundaries = ()
 
@@ -547,24 +554,6 @@ class Graph:
             active_containers.add(identity)
             pending.append((output, True))
             pending.extend((item, False) for item in reversed(output))
-
-    @staticmethod
-    def _capture(
-        computations: tuple[Computation, ...],
-    ) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
-        if not computations:
-            return (), ()
-        nodes = computations[0]._all_nodes
-        boundaries = computations[0]._boundary_nodes
-        edges = tuple(
-            edge
-            for node in nodes
-            if node not in boundaries
-            for edge in node._in_edges
-        )
-        # ``nodes`` already excludes anything past a boundary, so the incoming
-        # edges of the traversed vertices are exactly the recorded data flow.
-        return nodes, edges
 
     @staticmethod
     def _function_values(function: Callable[..., Any]) -> Iterator[Any]:
