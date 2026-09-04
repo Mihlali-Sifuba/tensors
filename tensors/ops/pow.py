@@ -234,7 +234,7 @@ class Pow(Operation):
         check runs only when the derivative it guards was requested.
         """
         base, exponent = inputs
-        differentiate_base, differentiate_exponent = needs_input_grad
+        need_base, need_exponent = needs_input_grad
 
         # Broadcasting and the reference power evaluation are only needed by
         # the domain checks and the reference gradient paths. An accelerated
@@ -253,7 +253,7 @@ class Pow(Operation):
                 reference_output.append(self.forward(*expanded_operands()))
             return reference_output[0]
 
-        if differentiate_exponent:
+        if need_exponent:
             expanded_base, expanded_exponent = expanded_operands()
             if any(value < 0 for value in expanded_base._data):
                 raise ValueError(
@@ -271,7 +271,7 @@ class Pow(Operation):
                     "power gradients for a zero base require strictly "
                     "positive exponents"
                 )
-        if differentiate_base:
+        if need_base:
             accelerated_base = execute_power_base_gradient(
                 grad,
                 base,
@@ -307,7 +307,7 @@ class Pow(Operation):
             # A frozen operand contributes zeros, so build them at the
             # operand's own shape instead of reducing a broadcast zero.
             base_grad = None
-        if differentiate_exponent:
+        if need_exponent:
             accelerated_exponent = execute_power_exponent_gradient(
                 grad,
                 base,
@@ -358,8 +358,8 @@ class Pow(Operation):
     ):
         """Build the requested differentiable VJPs for exponentiation."""
         base, exponent = inputs
-        differentiate_base, differentiate_exponent = needs_input_grad
-        if differentiate_exponent:
+        need_base, need_exponent = needs_input_grad
+        if need_exponent:
             # Only the exponent's domain checks need the broadcast operands.
             expanded_base, expanded_exponent = broadcast_tensors(
                 base.data,
@@ -386,13 +386,13 @@ class Pow(Operation):
                 _power_base_vjp(grad, base, exponent),
                 base.shape,
             )
-            if differentiate_base
+            if need_base
             else None,
             sum_to_shape_graph(
                 _power_exponent_vjp(grad, base, exponent),
                 exponent.shape,
             )
-            if differentiate_exponent
+            if need_exponent
             else None,
         ]
 
@@ -468,7 +468,7 @@ class PowerBaseGradient(Operation):
         needs_input_grad: tuple[bool, ...],
     ) -> List[Optional[Tensor]]:
         grad, base, exponent = inputs
-        need_grad, need_base, differentiate_exponent = needs_input_grad
+        need_grad, need_base, need_exponent = needs_input_grad
         expanded_grad, expanded_base, expanded_exponent = (
             _expanded_power_inputs(grad, base, exponent)
         )
@@ -501,7 +501,7 @@ class PowerBaseGradient(Operation):
                         power - 2.0,
                     )
                 )
-            if not differentiate_exponent:
+            if not need_exponent:
                 exponent_values.append(0.0)
             elif base_value == 0.0:
                 if power > 1.0:
@@ -528,7 +528,7 @@ class PowerBaseGradient(Operation):
             _reduced(grad_values, outer_grad, shape, grad) if need_grad else None,
             _reduced(base_values, outer_grad, shape, base) if need_base else None,
             _reduced(exponent_values, outer_grad, shape, exponent)
-            if differentiate_exponent
+            if need_exponent
             else None,
         ]
 
@@ -614,7 +614,7 @@ class PowerExponentGradient(Operation):
         needs_input_grad: tuple[bool, ...],
     ) -> List[Optional[Tensor]]:
         grad, base, exponent = inputs
-        need_grad, differentiate_base, need_exponent = needs_input_grad
+        need_grad, need_base, need_exponent = needs_input_grad
         expanded_grad, expanded_base, expanded_exponent = (
             _expanded_power_inputs(grad, base, exponent)
         )
@@ -645,7 +645,7 @@ class PowerExponentGradient(Operation):
                     )
                 )
             if base_value == 0.0:
-                if not differentiate_base or power > 1.0:
+                if not need_base or power > 1.0:
                     base_values.append(0.0)
                     exponent_values.append(0.0)
                     continue
@@ -654,7 +654,7 @@ class PowerExponentGradient(Operation):
                     "zero base"
                 )
             logarithm = math.log(base_value)
-            if differentiate_base:
+            if need_base:
                 coefficient = math.fsum([1.0, power * logarithm])
                 base_values.append(
                     _power_product(
@@ -675,7 +675,7 @@ class PowerExponentGradient(Operation):
         return [
             _reduced(grad_values, outer_grad, shape, grad) if need_grad else None,
             _reduced(base_values, outer_grad, shape, base)
-            if differentiate_base
+            if need_base
             else None,
             _reduced(exponent_values, outer_grad, shape, exponent)
             if need_exponent
