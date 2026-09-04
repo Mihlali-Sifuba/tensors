@@ -17,6 +17,7 @@ Differentiation starts from a chosen output::
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from types import NotImplementedType
 from typing import Any
 
@@ -86,19 +87,21 @@ class Variable:
         for label, operand in zip(_operand_labels(len(inputs)), inputs):
             graph.add_edge(operand.node, node, label=label)
         graph.add_edge(node, result.node, label="result")
-        result._capture_forward_record(node)
+        result._capture_forward_record(inputs)
         return result
 
-    def _capture_forward_record(self, node) -> None:
-        """Remember the operand and result states of the forward pass."""
+    def _capture_forward_record(self, operands: Iterable[Variable]) -> None:
+        """Remember the operand and result states of the forward pass.
+
+        The record describes values rather than topology, so it takes the
+        operand Variables directly and execution never has to consult the
+        graph to refresh it.
+        """
         if not self.requires_grad:
             self._forward_record = None
             return
         self._forward_record = (
-            tuple(
-                edge.source.variable._mutation_state()
-                for edge in node._in_edges
-            ),
+            tuple(operand._mutation_state() for operand in operands),
             self._mutation_state(),
         )
 

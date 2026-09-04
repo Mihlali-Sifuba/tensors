@@ -1,6 +1,7 @@
 import unittest
 
 import tensors as ts
+from tensors.graph import Computation
 from tensors.graph.state import reset_graph_state
 
 
@@ -105,8 +106,8 @@ class ComputationTests(unittest.TestCase):
         model(ts.Tensor([3.0]))
         first, second = model.computations
 
-        self.assertIs(first._forward_instructions, second._forward_instructions)
-        self.assertIs(first._forward_plan, second._forward_plan)
+        self.assertIs(first._instructions, second._instructions)
+        self.assertIs(first._groups, second._groups)
         self.assertEqual(
             [node.label for node in first.nodes],
             ["var", "var", "mul", "var", "var", "add", "var"],
@@ -173,6 +174,83 @@ class ComputationTests(unittest.TestCase):
             computation.forward()
         with self.assertRaisesRegex(RuntimeError, "released"):
             computation.backward()
+
+
+class ExecutionModelTests(unittest.TestCase):
+    """The execution model is Computation plus ordered Instructions."""
+
+    def test_instruction_holds_only_the_operation_and_its_slots(self):
+        from tensors.graph.computation import Instruction
+
+        x = ts.Variable([2.0])
+        y = ts.Variable([3.0])
+        computation = Computation(x * y)
+        instruction = computation._instructions[0]
+
+        self.assertIsInstance(instruction, Instruction)
+        self.assertEqual(
+            Instruction.__slots__,
+            ("operation", "input_slots", "output_slot"),
+        )
+        self.assertIsInstance(instruction.operation, ts.graph.Operation)
+        self.assertEqual(
+            instruction.input_slots,
+            (
+                computation._variable_slots[x],
+                computation._variable_slots[y],
+            ),
+        )
+        self.assertEqual(
+            computation._variables[instruction.output_slot],
+            computation.output,
+        )
+
+    def test_instruction_is_immutable(self):
+        computation = Computation(ts.Variable([2.0]) * ts.Variable([3.0]))
+        instruction = computation._instructions[0]
+
+        with self.assertRaises(AttributeError):
+            instruction.output_slot = 0
+        with self.assertRaises(AttributeError):
+            instruction.operation = None
+
+    def test_removed_execution_containers_are_gone(self):
+        from tensors.graph import computation as module
+
+        for name in (
+            "_ForwardInstruction",
+            "_ReverseDemand",
+            "_ExecutionWorkspace",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(module, name))
+
+    def test_concurrent_replay_does_not_share_execution_buffers(self):
+        import threading
+
+        value = ts.Variable(ts.full((64,), 2.0))
+        output = value * 3.0 + 1.0
+        computation = Computation(output)
+        results: list[float] = []
+        failures: list[BaseException] = []
+        barrier = threading.Barrier(4)
+
+        def replay() -> None:
+            try:
+                barrier.wait()
+                for _ in range(50):
+                    results.append(computation.forward()[0])
+            except BaseException as error:  # pragma: no cover - reported below
+                failures.append(error)
+
+        workers = [threading.Thread(target=replay) for _ in range(4)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+
+        self.assertEqual(failures, [])
+        self.assertEqual(set(results), {7.0})
 
 
 if __name__ == "__main__":

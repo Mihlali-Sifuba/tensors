@@ -285,21 +285,21 @@ class ReverseDemandPlanningTests(unittest.TestCase):
         self.assertEqual(ts.grad(output, weight).tolist(), [2.0])
         self.assertIsNone(ts.grad(output, value))
 
-        # Demand is resolved per reverse call, so the plan reflects the
-        # Variable's current state rather than the state it was traced with.
+        # Demand is resolved per reverse call, so the live slots reflect the
+        # Variables' current state rather than the state traced with.
+        value_slot = computation._variable_slots[value]
+        weight_slot = computation._variable_slots[weight]
         self.assertEqual(
-            computation._reverse_demand((weight,)).masks,
-            ((False, True),),
+            computation._live_slots((weight,)) & {value_slot, weight_slot},
+            {weight_slot},
         )
-        self.assertEqual(
-            computation._reverse_demand(None).masks,
-            ((False, True),),
-        )
+        self.assertNotIn(value_slot, computation._live_slots(None))
+
         value.requires_grad = True
         computation.forward()
         self.assertEqual(
-            computation._reverse_demand(None).masks,
-            ((True, True),),
+            computation._live_slots(None) & {value_slot, weight_slot},
+            {value_slot, weight_slot},
         )
 
     def test_jacobian_and_hessian_remain_correct(self):
