@@ -27,11 +27,21 @@ class ArcSinh(Operation):
             fallback=lambda item: math.asinh(float(item)),
         )
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Tensor]:
         value = inputs[0]
         return [unary_backward("arcsinh", grad, value, fallback=_gradient)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a stable differentiable VJP for inverse hyperbolic sine."""
         from .abs import abs
         from .sqrt import sqrt

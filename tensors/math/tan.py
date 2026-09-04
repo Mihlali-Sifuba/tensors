@@ -25,11 +25,21 @@ class Tan(Operation):
             fallback=lambda value: _math.tan(float(value)),
         )
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         a = inputs[0]
         return [unary_backward("tan", grad, a, fallback=_tan_gradient)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for tangent."""
         from .cos import cos
 

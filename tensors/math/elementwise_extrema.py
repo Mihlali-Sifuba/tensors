@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import ClassVar, TYPE_CHECKING, Any, overload
+from typing import ClassVar, TYPE_CHECKING, Any, Optional, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_extremum, execute_extremum_gradient
@@ -122,14 +122,17 @@ class _ElementwiseExtremum(Operation):
         self,
         grad: Tensor,
         *inputs: Tensor,
-    ) -> list[Tensor]:
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Optional[Tensor]]:
         left, right = inputs
+        need_left, need_right = needs_input_grad
         operation = "maximum" if self.select_maximum else "minimum"
         accelerated = execute_extremum_gradient(
             operation,
             grad,
             left,
             right,
+            needs_input_grad=needs_input_grad,
         )
         if accelerated is not None:
             left_storage, right_storage = accelerated
@@ -141,7 +144,9 @@ class _ElementwiseExtremum(Operation):
                         shape=grad.shape,
                     ),
                     left.shape,
-                ),
+                )
+                if left_storage is not None
+                else None,
                 sum_to_shape(
                     Tensor._from_owned_storage(
                         right_storage,
@@ -149,29 +154,40 @@ class _ElementwiseExtremum(Operation):
                         shape=grad.shape,
                     ),
                     right.shape,
-                ),
+                )
+                if right_storage is not None
+                else None,
             ]
         left_weights, right_weights = self._weights(
             left,
             right,
             higher_order=False,
         )
-        left_gradient = Tensor(
-            [upstream * weight for upstream, weight in zip(grad._data, left_weights)],
-            dtype=grad.dtype,
-            shape=grad.shape,
-        )
-        right_gradient = Tensor(
-            [upstream * weight for upstream, weight in zip(grad._data, right_weights)],
-            dtype=grad.dtype,
-            shape=grad.shape,
-        )
+
+        def weighted(weights: list[float], target: Tensor) -> Tensor:
+            return sum_to_shape(
+                Tensor(
+                    [
+                        upstream * weight
+                        for upstream, weight in zip(grad._data, weights)
+                    ],
+                    dtype=grad.dtype,
+                    shape=grad.shape,
+                ),
+                target.shape,
+            )
+
         return [
-            sum_to_shape(left_gradient, left.shape),
-            sum_to_shape(right_gradient, right.shape),
+            weighted(left_weights, left) if need_left else None,
+            weighted(right_weights, right) if need_right else None,
         ]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         from ..ops._utils import (
             masked_value_graph,
             sum_to_shape_graph,
@@ -179,30 +195,23 @@ class _ElementwiseExtremum(Operation):
         )
 
         left, right = inputs
+        need_left, need_right = needs_input_grad
         left_weights, right_weights = self._weights(
             left.data,
             right.data,
             higher_order=True,
         )
-        left_mask = Tensor(
-            left_weights,
-            dtype=grad.dtype,
-            shape=grad.shape,
-        )
-        right_mask = Tensor(
-            right_weights,
-            dtype=grad.dtype,
-            shape=grad.shape,
-        )
+
+        def masked(weights: list[float], target: Any) -> Any:
+            mask = Tensor(weights, dtype=grad.dtype, shape=grad.shape)
+            return sum_to_shape_graph(
+                masked_value_graph(grad, mask),
+                target.shape,
+            ) + zero_like_graph(target)
+
         return [
-            sum_to_shape_graph(
-                masked_value_graph(grad, left_mask),
-                left.shape,
-            ) + zero_like_graph(left),
-            sum_to_shape_graph(
-                masked_value_graph(grad, right_mask),
-                right.shape,
-            ) + zero_like_graph(right),
+            masked(left_weights, left) if need_left else None,
+            masked(right_weights, right) if need_right else None,
         ]
 
 

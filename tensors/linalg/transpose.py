@@ -21,7 +21,12 @@ class Transpose(Operation):
         """Permute the tensor axes described by this invocation."""
         return _transpose_impl(value, self.axes)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         """Transpose the upstream gradient back to the input layout."""
         axes = self.axes
         if axes is None:
@@ -30,7 +35,12 @@ class Transpose(Operation):
         inverse = tuple(normalized.index(axis) for axis in range(grad.ndim))
         return [_transpose_impl(grad, inverse)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for transpose."""
         axes = self.axes
         if axes is None:

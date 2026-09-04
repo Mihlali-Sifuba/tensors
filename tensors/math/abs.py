@@ -26,11 +26,21 @@ class Abs(Operation):
             fallback=builtins.abs,
         )
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Tensor]:
         value = inputs[0]
         return [unary_backward("abs", grad, value, fallback=_abs_gradient)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP using the chosen zero subgradient."""
         from ..ops._utils import masked_value_graph, zero_like_graph
 

@@ -72,7 +72,12 @@ class Prod(Operation):
         ]
         return Tensor(values, dtype=value.dtype, shape=output_shape)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Tensor]:
         value = inputs[0]
         axis = self.axis
         keepdims = self.keepdims
@@ -113,7 +118,12 @@ class Prod(Operation):
                 )
         return [Tensor(gradients, dtype=grad.dtype, shape=value.shape)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build the product VJP explicitly from products excluding each input."""
         from ..ops._utils import zero_like_graph
         from .concat import concat

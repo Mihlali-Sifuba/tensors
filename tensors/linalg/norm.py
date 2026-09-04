@@ -76,7 +76,12 @@ class Norm(Operation):
             results.append(scale * normalized_magnitude)
         return Tensor(results, dtype=dtype, shape=output_shape)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         """Differentiate the Euclidean norm with respect to its input."""
         value = inputs[0]
         axis = self.axis
@@ -98,7 +103,12 @@ class Norm(Operation):
                 )
         return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for nonzero axis-aware norms."""
         from ..math.reshape import reshape
         from ..variable import Variable

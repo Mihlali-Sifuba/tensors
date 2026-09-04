@@ -48,7 +48,12 @@ class Slice(Operation):
             return result
         return Tensor(result, dtype=a.dtype, shape=())
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         source = inputs[0]
         selected, _ = _logical_linear_indices(source, self.key)
         values = [0.0] * source.size
@@ -56,7 +61,12 @@ class Slice(Operation):
             values[logical_linear_index] += grad_value
         return [Tensor(values, dtype=grad.dtype, shape=source.shape)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable scatter for a slice VJP."""
         return [_slice_scatter(grad, inputs[0].shape, self.key)]
 
@@ -101,10 +111,20 @@ class SliceScatter(Operation):
             values[logical_linear_index] += grad_value
         return Tensor(values, dtype=grad.dtype, shape=source_shape)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         return [Slice(key=self.key).forward(grad)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         return [grad[self.key]]
 
 

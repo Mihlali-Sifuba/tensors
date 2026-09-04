@@ -11,7 +11,7 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, List, TypeAlias, overload
+from typing import TYPE_CHECKING, Any, List, Optional, TypeAlias, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_convolution, execute_convolution_gradient
@@ -372,8 +372,9 @@ class ConvND(Operation):
         self,
         grad: Tensor,
         *inputs: Tensor,
-    ) -> List[Tensor]:
-        """Differentiate a convolution with respect to each recorded input."""
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Optional[Tensor]]:
+        """Differentiate a convolution with respect to its requested inputs."""
         values, kernel = inputs[0], inputs[1]
         bias = inputs[2] if len(inputs) > 2 else None
         geometry = _geometry(
@@ -407,6 +408,7 @@ class ConvND(Operation):
             dilation=geometry.dilation,
             groups=geometry.groups,
             include_bias=bias is not None,
+            needs_input_grad=needs_input_grad,
         )
         if accelerated is not None:
             return [
@@ -415,11 +417,25 @@ class ConvND(Operation):
                     dtype=grad.dtype,
                     shape=shape,
                 )
+                if storage is not None
+                else None
                 for storage, shape in zip(accelerated, shapes)
             ]
-        return self._reference_backward(grad, values, kernel, bias, geometry)
+        return self._reference_backward(
+            grad,
+            values,
+            kernel,
+            bias,
+            geometry,
+            needs_input_grad,
+        )
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable convolution VJP from primitive graph ops."""
         from ..math.reshape import reshape
         from ..math.stack import stack
@@ -501,46 +517,58 @@ class ConvND(Operation):
         kernel: Tensor,
         bias: Tensor | None,
         geometry: _Geometry,
-    ) -> List[Tensor]:
-        """Collect every VJP term before summing it stably."""
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Optional[Tensor]]:
+        """Collect the requested VJP terms before summing them stably."""
+        need_values, need_kernel = needs_input_grad[0], needs_input_grad[1]
+        need_bias = bias is not None and needs_input_grad[2]
         grad_data = grad._data
         input_data = values._data
         kernel_data = kernel._data
         input_terms: list[list[tuple[float, float]]] = [
-            [] for _ in range(values.size)
+            [] for _ in range(values.size if need_values else 0)
         ]
         kernel_terms: list[list[tuple[float, float]]] = [
-            [] for _ in range(kernel.size)
+            [] for _ in range(kernel.size if need_kernel else 0)
         ]
         bias_terms: list[list[float]] = [
-            [] for _ in range(geometry.out_channels)
+            [] for _ in range(geometry.out_channels if need_bias else 0)
         ]
+        if not (need_values or need_kernel or need_bias):
+            return [None] * len(needs_input_grad)
 
         for index, out_channel, pairs in _contributions(
             geometry, values, kernel
         ):
             upstream = float(grad_data[index])
-            for source, weight in pairs:
-                input_terms[source].append(
-                    (upstream, float(kernel_data[weight]))
-                )
-                kernel_terms[weight].append(
-                    (upstream, float(input_data[source]))
-                )
-            if bias is not None:
+            if need_values or need_kernel:
+                for source, weight in pairs:
+                    if need_values:
+                        input_terms[source].append(
+                            (upstream, float(kernel_data[weight]))
+                        )
+                    if need_kernel:
+                        kernel_terms[weight].append(
+                            (upstream, float(input_data[source]))
+                        )
+            if need_bias:
                 bias_terms[out_channel].append(upstream)
 
-        results = [
+        results: List[Optional[Tensor]] = [
             Tensor(
                 [_stable_product_sum(terms) for terms in input_terms],
                 dtype=grad.dtype,
                 shape=values.shape,
-            ),
+            )
+            if need_values
+            else None,
             Tensor(
                 [_stable_product_sum(terms) for terms in kernel_terms],
                 dtype=grad.dtype,
                 shape=kernel.shape,
-            ),
+            )
+            if need_kernel
+            else None,
         ]
         if bias is not None:
             results.append(
@@ -549,6 +577,8 @@ class ConvND(Operation):
                     dtype=grad.dtype,
                     shape=(geometry.out_channels,),
                 )
+                if need_bias
+                else None
             )
         return results
 

@@ -25,7 +25,12 @@ class Tanh(Operation):
             fallback=lambda value: _math.tanh(float(value)),
         )
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         a = inputs[0]
         return [
             unary_backward(
@@ -38,7 +43,12 @@ class Tanh(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for hyperbolic tangent."""
         from ..ops._utils import masked_value_graph
         from .exp import exp

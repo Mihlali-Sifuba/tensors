@@ -26,6 +26,7 @@ class _ForwardInstruction:
 
     node: OperationNode
     operation: Any
+    index: int
     output_slot: int
     output_variable: Any
     input_slots: tuple[int, ...]
@@ -44,6 +45,25 @@ class _ForwardGroup:
         tuple[tuple[str, float | None, bool, int | None], ...] | None
     ) = None
     fused_input_slots: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _ReverseDemand:
+    """Which gradients one reverse invocation requires.
+
+    Demand is execution state, not topology: it depends on the reverse call
+    being made, so it is resolved per invocation and never cached on a
+    compiled forward instruction, whose inputs' ``requires_grad`` may change
+    between passes.
+
+    ``live[slot]`` states whether a gradient is wanted at that Variable slot.
+    ``masks[index]`` is the ``needs_input_grad`` tuple for the instruction at
+    that index, or ``None`` when no input of that operation is wanted and its
+    VJP therefore should not run at all.
+    """
+
+    live: tuple[bool, ...]
+    masks: tuple[tuple[bool, ...] | None, ...]
 
 
 @dataclass(slots=True)
@@ -223,6 +243,7 @@ class Computation:
                 _ForwardInstruction(
                     node=producer,
                     operation=operation,
+                    index=len(instructions),
                     output_slot=output_slot,
                     output_variable=output,
                     input_slots=tuple(slots[value] for value in inputs),
@@ -430,6 +451,47 @@ class Computation:
             fused_input_slots.append(external_slot)
             operand_index = len(fused_input_slots) - 1
         return operation, None, reverse, operand_index
+
+    def _reverse_demand(
+        self,
+        targets: tuple[Variable, ...] | None,
+    ) -> _ReverseDemand:
+        """Resolve which input VJPs this reverse invocation requires.
+
+        ``targets is None`` requests a gradient at every reachable
+        differentiable Variable, which is what ``backward`` publishes.
+        A target tuple instead requests only the reverse paths that connect
+        the output to those Variables, so a VJP is calculated only where a
+        requested Variable's influence actually flows.
+        """
+        self._require_active()
+        variables = self._variables
+        live = [False] * len(variables)
+
+        if targets is None:
+            for index, variable in enumerate(variables):
+                live[index] = variable.requires_grad
+        else:
+            slots = self._variable_slots
+            for variable in targets:
+                slot = slots.get(variable)
+                if slot is not None and variable.requires_grad:
+                    live[slot] = True
+            # Reverse liveness: a gradient is wanted wherever a requested
+            # Variable's influence passes on its way to the output. The
+            # instruction list is already in dependency order, so one forward
+            # sweep closes the set.
+            for instruction in self._forward_instructions:
+                if instruction.output_variable.requires_grad and any(
+                    live[slot] for slot in instruction.input_slots
+                ):
+                    live[instruction.output_slot] = True
+
+        masks: list[tuple[bool, ...] | None] = []
+        for instruction in self._forward_instructions:
+            mask = tuple(live[slot] for slot in instruction.input_slots)
+            masks.append(mask if True in mask else None)
+        return _ReverseDemand(tuple(live), tuple(masks))
 
     def _workspace(self) -> _ExecutionWorkspace:
         """Return reusable execution slots private to the current thread."""
@@ -659,12 +721,13 @@ class Computation:
         if not isinstance(create_graph, bool):
             raise TypeError("create_graph must be a bool")
         self._validate_recorded_states()
+        demand = self._reverse_demand(None)
         if create_graph:
             seed = self._gradient_seed(grad, create_graph=True)
-            gradients = self._backward_graph(seed)
+            gradients = self._backward_graph(seed, demand)
         else:
             seed = self._gradient_seed(grad)
-            gradients = self._backward_values(seed)
+            gradients = self._backward_values(seed, demand)
 
         # Publish gradients only after the entire reverse pass succeeds. A
         # malformed operation or domain error therefore cannot leave a graph
@@ -730,7 +793,11 @@ class Computation:
             return seed if isinstance(seed, Variable) else Variable(seed, requires_grad=False)
         return seed.data if isinstance(seed, Variable) else seed
 
-    def _backward_graph(self, seed: Any) -> dict[Any, Any]:
+    def _backward_graph(
+        self,
+        seed: Any,
+        demand: _ReverseDemand,
+    ) -> dict[Any, Any]:
         """Build a differentiable reverse-mode gradient computation."""
         if not self.output.requires_grad:
             return {}
@@ -749,26 +816,28 @@ class Computation:
                 continue
             output_gradient = self._sum_gradient_graph(output_terms)
             gradients[instruction.output_slot] = output_gradient
-            inputs = instruction.input_variables
-            if not any(variable.requires_grad for variable in inputs):
+            mask = demand.masks[instruction.index]
+            if mask is None:
                 continue
+            inputs = instruction.input_variables
             input_gradients = instruction.backward_graph(
                 output_gradient,
                 *inputs,
+                needs_input_grad=mask,
             )
             input_gradients = self._validate_gradients(
                 instruction,
                 input_gradients,
+                mask,
                 graph=True,
             )
-            for slot, input_variable, input_gradient in zip(
+            for slot, wanted, input_gradient in zip(
                 instruction.input_slots,
-                inputs,
+                mask,
                 input_gradients,
             ):
-                if not input_variable.requires_grad:
-                    continue
-                gradient_terms[slot].append(input_gradient)
+                if wanted:
+                    gradient_terms[slot].append(input_gradient)
 
         for slot, terms in enumerate(gradient_terms):
             if terms and gradients[slot] is None:
@@ -779,7 +848,11 @@ class Computation:
             if gradient is not None
         }
 
-    def _backward_values(self, seed: Tensor) -> dict[Any, Tensor]:
+    def _backward_values(
+        self,
+        seed: Tensor,
+        demand: _ReverseDemand,
+    ) -> dict[Any, Tensor]:
         """Return numerical reverse-mode gradients without mutating Variables."""
         if not self.output.requires_grad:
             return {}
@@ -797,6 +870,7 @@ class Computation:
                 group,
                 gradient_terms,
                 gradients,
+                demand,
             ):
                 continue
             for instruction in reversed(group.instructions):
@@ -804,6 +878,7 @@ class Computation:
                     instruction,
                     gradient_terms,
                     gradients,
+                    demand,
                 )
 
         for slot, terms in enumerate(gradient_terms):
@@ -820,6 +895,7 @@ class Computation:
         instruction: _ForwardInstruction,
         gradient_terms: list[list[Any]],
         gradients: list[Any | None],
+        demand: _ReverseDemand,
     ) -> None:
         """Execute one pre-resolved numerical VJP instruction."""
         output_terms = gradient_terms[instruction.output_slot]
@@ -827,21 +903,30 @@ class Computation:
             return
         output_gradient = self._sum_gradient_values(output_terms)
         gradients[instruction.output_slot] = output_gradient
+        mask = demand.masks[instruction.index]
+        if mask is None:
+            # Nothing this reverse pass wants lies behind this operation.
+            return
         input_data = tuple(
             variable.data for variable in instruction.input_variables
         )
-        input_gradients = instruction.backward(output_gradient, *input_data)
+        input_gradients = instruction.backward(
+            output_gradient,
+            *input_data,
+            needs_input_grad=mask,
+        )
         input_gradients = self._validate_gradients(
             instruction,
             input_gradients,
+            mask,
             graph=False,
         )
-        for slot, input_variable, input_gradient in zip(
+        for slot, wanted, input_gradient in zip(
             instruction.input_slots,
-            instruction.input_variables,
+            mask,
             input_gradients,
         ):
-            if input_variable.requires_grad:
+            if wanted:
                 gradient_terms[slot].append(input_gradient)
 
     def _execute_fused_backward_group(
@@ -849,6 +934,7 @@ class Computation:
         group: _ForwardGroup,
         gradient_terms: list[list[Any]],
         gradients: list[Any | None],
+        demand: _ReverseDemand,
     ) -> bool:
         """Run a safe single-consumer elementwise-chain VJP in one CUDA kernel."""
         from ..backend import execute_fused_elementwise_backward
@@ -958,13 +1044,23 @@ class Computation:
     def _validate_gradients(
         instruction: _ForwardInstruction,
         gradients: Any,
+        needs_input_grad: tuple[bool, ...],
         *,
         graph: bool,
     ) -> tuple[Any, ...]:
-        """Validate an operation's VJP result before propagating it."""
+        """Validate an operation's VJP result against the requested demand.
+
+        A requested input must receive a value of the expected type, shape,
+        and dtype. An unrequested input must receive ``None``: returning a
+        value there means the operation calculated work the reverse pass did
+        not ask for, which makes the demand contract enforceable rather than
+        advisory. A real zero remains a valid answer for a requested
+        derivative whose value is mathematically zero.
+        """
         from ..variable import Variable
 
         label = instruction.operation.name
+        mode = "backward_graph" if graph else "backward"
         try:
             results = tuple(gradients)
         except TypeError as exc:
@@ -981,11 +1077,23 @@ class Computation:
 
         expected_type = Variable if graph else Tensor
         validated = list(results)
-        for index, (input_variable, gradient) in enumerate(
-            zip(inputs, results)
+        for index, (input_variable, gradient, wanted) in enumerate(
+            zip(inputs, results, needs_input_grad)
         ):
+            if not wanted:
+                if gradient is not None:
+                    raise RuntimeError(
+                        f"{label} {mode} returned a gradient for input "
+                        f"{index}, which this reverse pass did not request; "
+                        "return None for an unrequested derivative"
+                    )
+                continue
+            if gradient is None:
+                raise RuntimeError(
+                    f"{label} {mode} returned None for input {index}, whose "
+                    "gradient this reverse pass requested"
+                )
             if not isinstance(gradient, expected_type):
-                mode = "backward_graph" if graph else "backward"
                 raise TypeError(
                     f"{label} {mode} gradient {index} must be a "
                     f"{expected_type.__name__}, got {type(gradient).__name__}"
@@ -1073,14 +1181,16 @@ def grad(
             )
     computation = Computation._for_autograd(output)
     computation._validate_recorded_states()
+    # Build the reverse demand from the requested inputs so only the paths
+    # connecting them to the output are differentiated.
+    demand = computation._reverse_demand(requested)
     if create_graph:
         seed = computation._gradient_seed(grad_outputs, create_graph=True)
-        gradients = computation._backward_graph(seed)
-        result = tuple(gradients.get(variable) for variable in requested)
+        gradients = computation._backward_graph(seed, demand)
     else:
         seed = computation._gradient_seed(grad_outputs)
-        gradients = computation._backward_values(seed)
-        result = tuple(gradients.get(variable) for variable in requested)
+        gradients = computation._backward_values(seed, demand)
+    result = tuple(gradients.get(variable) for variable in requested)
     return result[0] if single_input else result
 
 

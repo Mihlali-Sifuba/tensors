@@ -66,7 +66,12 @@ class Variance(Operation):
             values.append(deviation * deviation)
         return Tensor(values, dtype=dtype, shape=output_shape)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Tensor]:
         value = inputs[0]
         axis = self.axis
         keepdims = self.keepdims
@@ -111,7 +116,12 @@ class Variance(Operation):
                 gradients[input_index] = upstream * centered_value * factor
         return [Tensor(gradients, dtype=grad.dtype, shape=value.shape)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable population-variance VJP."""
         from ..ops._utils import zero_like_graph
         from ..variable import Variable

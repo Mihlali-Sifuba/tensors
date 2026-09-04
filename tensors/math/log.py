@@ -20,7 +20,12 @@ class Log(Operation):
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         return unary_forward("log", a, dtype=dtype, fallback=_log)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         a = inputs[0]
         return [
             unary_backward(
@@ -31,7 +36,12 @@ class Log(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for the natural logarithm."""
         return [grad / inputs[0]]
 

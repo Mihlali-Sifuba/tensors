@@ -91,7 +91,12 @@ class LogSoftmax(Operation):
 
         return Tensor(values, dtype=dtype, shape=a.shape)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         a = inputs[0]
         axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
@@ -99,7 +104,12 @@ class LogSoftmax(Operation):
         axis = _normalize_axis(a, axis)
         return [_log_softmax_vjp_tensor(grad, a, axis)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable log-softmax VJP."""
         axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
@@ -165,19 +175,25 @@ class LogSoftmaxGradient(Operation):
         axis = self.axis
         return _log_softmax_vjp_tensor(grad, value, axis)
 
-    def backward(self, outer_grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        outer_grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         from .sum import Sum
         from ..utils.broadcasting import broadcast_to
 
         grad, value = inputs
+        need_grad, need_value = needs_input_grad
         axis = self.axis
         assert isinstance(axis, int)
-        total = Sum(axis=axis, keepdims=True).forward(grad)
-        expanded_total = broadcast_to(total, value.shape)
-        value_vjp = _softmax_vjp_tensor(outer_grad, value, axis)
-        return [
-            _centered_softmax_tensor(outer_grad, value, axis),
-            Tensor(
+        value_gradient = None
+        if need_value:
+            total = Sum(axis=axis, keepdims=True).forward(grad)
+            expanded_total = broadcast_to(total, value.shape)
+            value_vjp = _softmax_vjp_tensor(outer_grad, value, axis)
+            value_gradient = Tensor(
                 [
                     -scale * derivative
                     for scale, derivative in zip(
@@ -187,18 +203,31 @@ class LogSoftmaxGradient(Operation):
                 ],
                 dtype=outer_grad.dtype,
                 shape=value.shape,
-            ),
+            )
+        return [
+            _centered_softmax_tensor(outer_grad, value, axis)
+            if need_grad
+            else None,
+            value_gradient,
         ]
 
-    def backward_graph(self, outer_grad, *inputs):
+    def backward_graph(
+        self,
+        outer_grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         from .sum import sum
 
         grad, value = inputs
+        need_grad, need_value = needs_input_grad
         axis = self.axis
         return [
-            _softmax_centered(outer_grad, value, axis),
+            _softmax_centered(outer_grad, value, axis) if need_grad else None,
             -sum(grad, axis=axis, keepdims=True)
-            * _softmax_vjp(outer_grad, value, axis),
+            * _softmax_vjp(outer_grad, value, axis)
+            if need_value
+            else None,
         ]
 
 

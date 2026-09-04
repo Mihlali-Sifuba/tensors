@@ -20,11 +20,21 @@ class Sign(Operation):
     def forward(self, value: Tensor) -> Tensor:
         return unary_forward("sign", value, dtype=value.dtype, fallback=_sign)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Tensor]:
         value = inputs[0]
         return [unary_backward("sign", grad, value, fallback=_gradient)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build the zero VJP on intervals where sign is constant."""
         from ..ops._utils import zero_like_graph
 

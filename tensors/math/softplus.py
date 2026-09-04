@@ -20,7 +20,12 @@ class Softplus(Operation):
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         return unary_forward("softplus", a, dtype=dtype, fallback=_softplus)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         a = inputs[0]
         return [
             unary_backward(
@@ -33,7 +38,12 @@ class Softplus(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for softplus."""
         from .sigmoid import sigmoid
         return [grad * sigmoid(inputs[0])]

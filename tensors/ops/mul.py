@@ -1,13 +1,13 @@
 """Multiplication operation."""
 
-from typing import List, Union
+from typing import List, Optional, Union
 
 from ..backend import execute_binary
 from ..dtype import result_dtype
 from ..graph.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_binary_values
-from ._utils import sum_products_to_shape, zeros_like
+from ._utils import sum_products_to_shape
 
 
 Scalar = Union[int, float]
@@ -16,21 +16,8 @@ Scalar = Union[int, float]
 class Mul(Operation):
     """Element-wise multiplication — forward and backward."""
 
-    __slots__ = ("differentiate_left", "differentiate_right")
+    __slots__ = ()
     name = "mul"
-
-    def __init__(
-        self,
-        *,
-        differentiate_left: bool = True,
-        differentiate_right: bool = True,
-    ) -> None:
-        object.__setattr__(self, "differentiate_left", bool(differentiate_left))
-        object.__setattr__(
-            self,
-            "differentiate_right",
-            bool(differentiate_right),
-        )
 
     def forward(self, a: Tensor, b: Union[Tensor, Scalar]) -> Tensor:
         """Element-wise multiplication of two tensors or a tensor and a scalar."""
@@ -59,24 +46,36 @@ class Mul(Operation):
             return Tensor._from_values(data, dtype, output_shape)
         raise TypeError(f"Unsupported: {type(b)}")
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Optional[Tensor]]:
         a, b = inputs
+        need_left, need_right = needs_input_grad
         return [
-            sum_products_to_shape(grad, b, a.shape)
-            if self.differentiate_left
-            else zeros_like(a, grad.dtype),
-            sum_products_to_shape(grad, a, b.shape)
-            if self.differentiate_right
-            else zeros_like(b, grad.dtype),
+            sum_products_to_shape(grad, b, a.shape) if need_left else None,
+            sum_products_to_shape(grad, a, b.shape) if need_right else None,
         ]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for multiplication."""
         left, right = inputs
+        need_left, need_right = needs_input_grad
         from ._utils import sum_products_to_shape_graph
         return [
-            sum_products_to_shape_graph(grad, right, left.shape),
-            sum_products_to_shape_graph(grad, left, right.shape),
+            sum_products_to_shape_graph(grad, right, left.shape)
+            if need_left
+            else None,
+            sum_products_to_shape_graph(grad, left, right.shape)
+            if need_right
+            else None,
         ]
 
 

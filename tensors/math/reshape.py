@@ -28,11 +28,21 @@ class Reshape(Operation):
             )
         return Tensor(tensor._data, dtype=tensor.dtype, shape=shape)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         """Restore the input shape without changing gradient values."""
         return [Reshape(shape=inputs[0].shape).forward(grad)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable reshape VJP."""
         return [reshape(grad, inputs[0].shape)]
 
