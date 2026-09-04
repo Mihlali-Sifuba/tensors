@@ -129,6 +129,7 @@ tensors/
 └── graph/                 # tracing, execution, and differentiation
     ├── graph.py           # reusable callable model abstraction
     ├── computation.py     # forward replay and reverse-mode execution
+    ├── fusion.py          # fused execution of compatible instruction runs
     ├── derivatives.py     # Jacobian and Hessian construction
     ├── gradcheck.py       # finite-difference verification
     ├── node.py            # Node, VariableNode, and OperationNode

@@ -8,16 +8,12 @@ from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorLike
 from ..tensor import Tensor
+from .fusion import execute_fused_backward, execute_fused_forward, plan_fusions
 from .node import Node, VariableNode
 from ..ops.operation import Operation
 
 if TYPE_CHECKING:
     from ..variable import Variable
-
-
-#: One fused elementwise step: kernel name, literal scalar, operand order,
-#: and the index of an external operand among the fused sources.
-FusedStep = tuple[str, float | None, bool, int | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,14 +30,6 @@ class Instruction:
     operation: Operation
     input_slots: tuple[int, ...]
     output_slot: int
-
-
-#: Fusion metadata for one contiguous run of instructions: the index the run
-#: ends at (inclusive), the fused kernel steps, and the slots holding the
-#: run's external sources. Fusion is an optimization over the instruction
-#: sequence, so it is recorded beside that sequence rather than wrapped
-#: around it.
-Fusion = tuple[int, tuple[FusedStep, ...], tuple[int, ...]]
 
 
 class Computation:
@@ -227,189 +215,12 @@ class Computation:
         self._leaf_slots = tuple(leaf_slots)
         self._instructions = tuple(instructions)
         self._output_slot = slots[self.output]
-        consumer_counts = [0] * len(variables)
-        for instruction in instructions:
-            for slot in instruction.input_slots:
-                consumer_counts[slot] += 1
-        self._fusions = self._plan_fusions(instructions, consumer_counts)
-        # Reverse execution recognizes a run by the index it ends at.
-        self._fusion_starts = {
-            end: start for start, (end, _, _) in self._fusions.items()
-        }
-
-    def _plan_fusions(
-        self,
-        instructions: list[Instruction],
-        consumer_counts: list[int],
-    ) -> dict[int, Fusion]:
-        """Find the instruction runs the fused backend can execute together.
-
-        The result maps the first index of each worthwhile run to its
-        metadata. An instruction absent from the mapping simply executes
-        ordinarily, so the instruction sequence stays canonical and identical
-        across every backend.
-        """
-        variables = self._variables
-        fusions: dict[int, Fusion] = {}
-        count = len(instructions)
-        index = 0
-        while index < count:
-            opening = self._start_fused_instruction(instructions[index])
-            if opening is None:
-                index += 1
-                continue
-
-            first_step, source_slots = opening
-            first_output = variables[instructions[index].output_slot]
-            steps = [first_step]
-            current_slot = instructions[index].output_slot
-            chain_output_slots = {current_slot}
-            end = index
-            candidate_index = index + 1
-            while candidate_index < count:
-                candidate = instructions[candidate_index]
-                candidate_output = variables[candidate.output_slot]
-                if (
-                    consumer_counts[current_slot] != 1
-                    or candidate_output.shape != first_output.shape
-                    or candidate_output.dtype != first_output.dtype
-                ):
-                    break
-                step = self._extend_fused_instruction(
-                    candidate,
-                    current_slot,
-                    source_slots,
-                    chain_output_slots,
-                )
-                if step is None:
-                    break
-                steps.append(step)
-                current_slot = candidate.output_slot
-                chain_output_slots.add(current_slot)
-                end = candidate_index
-                candidate_index += 1
-
-            if end > index:
-                fusions[index] = (end, tuple(steps), tuple(source_slots))
-                index = end + 1
-            else:
-                index += 1
-        return fusions
-
-    @staticmethod
-    def _fused_operation(instruction: Instruction) -> str | None:
-        """Return the internal kernel name for a fusible invocation."""
-        names = {
-            "Add": "add",
-            "Sub": "subtract",
-            "Mul": "multiply",
-            "Div": "divide",
-            "Pow": "power",
-            "Neg": "negate",
-            "Abs": "abs",
-            "Sqrt": "sqrt",
-            "Exp": "exp",
-            "Log": "log",
-            "Sin": "sin",
-            "Cos": "cos",
-            "Tan": "tan",
-            "ArcSin": "arcsin",
-            "ArcCos": "arccos",
-            "ArcTan": "arctan",
-            "Sinh": "sinh",
-            "Cosh": "cosh",
-            "ArcSinh": "arcsinh",
-            "ArcCosh": "arccosh",
-            "ArcTanh": "arctanh",
-            "Sign": "sign",
-            "ReLU": "relu",
-            "Sigmoid": "sigmoid",
-            "Tanh": "tanh",
-            "Softplus": "softplus",
-        }
-        # Forward fusion depends only on the forward mathematics, the dtype,
-        # and the backend kernel's capability. It never depends on which
-        # derivatives a later reverse pass might request.
-        return names.get(type(instruction.operation).__name__)
-
-    def _start_fused_instruction(
-        self,
-        instruction: Instruction,
-    ) -> tuple[FusedStep, list[int]] | None:
-        """Describe the first operation and source slots of a fused chain."""
-        operation = self._fused_operation(instruction)
-        output = self._variables[instruction.output_slot]
-        if operation is None or output.dtype.kind != "floating":
-            return None
-        binary_operations = {
-            "add", "subtract", "multiply", "divide", "power",
-        }
-        unary = operation not in binary_operations
-        if unary:
-            if (
-                len(instruction.input_slots) != 1
-                or self._variables[instruction.input_slots[0]].shape
-                != output.shape
-            ):
-                return None
-            return (
-                (operation, None, False, None),
-                [instruction.input_slots[0]],
-            )
-
-        if len(instruction.input_slots) != 2:
-            return None
-        left_slot, right_slot = instruction.input_slots
-        source_slots = [left_slot]
-        if right_slot == left_slot:
-            operand_index = -1
-        else:
-            source_slots.append(right_slot)
-            operand_index = 1
-        return (operation, None, False, operand_index), source_slots
-
-    def _extend_fused_instruction(
-        self,
-        instruction: Instruction,
-        current_slot: int,
-        fused_input_slots: list[int],
-        chain_output_slots: set[int],
-    ) -> FusedStep | None:
-        """Describe a chain continuation and register external source slots."""
-        operation = self._fused_operation(instruction)
-        output = self._variables[instruction.output_slot]
-        if operation is None or output.dtype.kind != "floating":
-            return None
-        binary_operations = {
-            "add", "subtract", "multiply", "divide", "power",
-        }
-        unary = operation not in binary_operations
-        if unary:
-            if instruction.input_slots != (current_slot,):
-                return None
-            return operation, None, False, None
-
-        if len(instruction.input_slots) != 2:
-            return None
-        left_slot, right_slot = instruction.input_slots
-        if left_slot == current_slot and right_slot == current_slot:
-            return operation, None, False, -1
-        if left_slot == current_slot:
-            external_slot = right_slot
-            reverse = False
-        elif right_slot == current_slot:
-            external_slot = left_slot
-            reverse = True
-        else:
-            return None
-        if external_slot in chain_output_slots:
-            return None
-        try:
-            operand_index = fused_input_slots.index(external_slot)
-        except ValueError:
-            fused_input_slots.append(external_slot)
-            operand_index = len(fused_input_slots) - 1
-        return operation, None, reverse, operand_index
+        # Fusion is an optional acceleration of this sequence, recorded beside
+        # it. The instructions themselves stay the canonical plan.
+        self._fusions, self._fusion_starts = plan_fusions(
+            self._instructions,
+            variables,
+        )
 
     def _live_slots(self, targets: tuple[Variable, ...] | None) -> set[int]:
         """Return the slots whose gradient this reverse invocation requires.
@@ -546,9 +357,11 @@ class Computation:
         count = len(instructions)
         while index < count:
             fusion = fusions.get(index)
-            if fusion is not None and self._execute_fused_range(
+            if fusion is not None and execute_fused_forward(
                 index,
                 fusion,
+                instructions,
+                variables,
                 values,
             ):
                 index = fusion[0] + 1
@@ -585,53 +398,6 @@ class Computation:
             variables[slot] for slot in input_slots
         )
         values[instruction.output_slot] = tensor
-
-    def _execute_fused_range(
-        self,
-        start: int,
-        fusion: Fusion,
-        values: list[Tensor | None],
-    ) -> bool:
-        """Execute one fused instruction run in a single CUDA kernel."""
-        from ..backend import execute_fused_elementwise
-
-        end, steps, source_slots = fusion
-        variables = self._variables
-        instructions = self._instructions[start:end + 1]
-        first_output = variables[instructions[0].output_slot]
-        source_values = []
-        for slot in source_slots:
-            value = values[slot]
-            if value is None:
-                return False
-            source_values.append(value)
-        output_shape = first_output.shape
-        dtype = first_output.dtype
-        storages = execute_fused_elementwise(
-            tuple(source_values),
-            steps,
-            dtype=dtype,
-            output_shape=output_shape,
-        )
-        if storages is None:
-            return False
-        if len(storages) != len(instructions):
-            raise RuntimeError(
-                "Fused elementwise kernel returned an unexpected output count"
-            )
-        for instruction, storage in zip(instructions, storages):
-            output = variables[instruction.output_slot]
-            tensor = Tensor._from_owned_storage(
-                storage,
-                dtype=output.dtype,
-                shape=output_shape,
-            )
-            output._replace_data_from_replay(tensor)
-            output._capture_forward_record(
-                variables[slot] for slot in instruction.input_slots
-            )
-            values[instruction.output_slot] = tensor
-        return True
 
     def _validate_recorded_states(self) -> None:
         """Reject a backward pass whose recorded forward values changed."""
@@ -836,9 +602,11 @@ class Computation:
                 )
                 index -= 1
                 continue
-            if not self._execute_fused_backward_range(
+            if not execute_fused_backward(
                 start,
                 self._fusions[start],
+                instructions,
+                self._variables,
                 gradient_terms,
                 gradients,
                 live,
@@ -902,90 +670,6 @@ class Computation:
         ):
             if wanted:
                 gradient_terms[slot].append(input_gradient)
-
-    def _execute_fused_backward_range(
-        self,
-        start: int,
-        fusion: Fusion,
-        gradient_terms: list[list[Any]],
-        gradients: list[Any | None],
-        live: set[int],
-    ) -> bool:
-        """Run a fused instruction run's VJP in a single CUDA kernel."""
-        from ..backend import execute_fused_elementwise_backward
-
-        end, steps, source_slots = fusion
-        variables = self._variables
-        instructions = self._instructions[start:end + 1]
-        last_output = variables[instructions[-1].output_slot]
-        output_terms = gradient_terms[instructions[-1].output_slot]
-        if not output_terms:
-            return True
-        output_gradient = self._sum_gradient_values(output_terms)
-        source_values = tuple(variables[slot].data for slot in source_slots)
-        output_shape = last_output.shape
-        dtype = last_output.dtype
-        # An external operand gradient is only calculated where this reverse
-        # pass wants it. The chain's internal derivative is separate: reverse
-        # propagation always needs it to reach the chain's first input.
-        external_steps = tuple(
-            (step_index, operand_index)
-            for step_index, (_, scalar, _, operand_index) in enumerate(steps)
-            if scalar is None
-            and operand_index is not None
-            and operand_index >= 0
-            and source_slots[operand_index] in live
-        )
-        storages = execute_fused_elementwise_backward(
-            source_values,
-            output_gradient,
-            steps,
-            dtype=dtype,
-            output_shape=output_shape,
-            requested_external=tuple(
-                step_index for step_index, _ in external_steps
-            ),
-        )
-        if storages is None:
-            # The fused VJP cannot supply a requested derivative, so ordinary
-            # operation execution handles this group instead.
-            return False
-
-        expected = len(instructions) + 1 + len(external_steps)
-        if len(storages) != expected:
-            raise RuntimeError(
-                "Fused elementwise VJP returned an unexpected output count"
-            )
-
-        for instruction, storage in zip(instructions, storages):
-            gradients[instruction.output_slot] = Tensor._from_owned_storage(
-                storage,
-                dtype=dtype,
-                shape=output_shape,
-            )
-
-        def append_source_gradient(storage: Any, source_index: int) -> None:
-            slot = source_slots[source_index]
-            if slot not in live:
-                return
-            variable = variables[slot]
-            gradient = Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
-            if gradient.shape != variable.shape:
-                from ..ops._utils import sum_to_shape
-
-                gradient = sum_to_shape(gradient, variable.shape)
-            if gradient.dtype != variable.dtype:
-                gradient = gradient.astype(variable.dtype)
-            gradient_terms[slot].append(gradient)
-
-        append_source_gradient(storages[len(instructions)], 0)
-        external_offset = len(instructions) + 1
-        for row, (_, operand_index) in enumerate(external_steps):
-            append_source_gradient(
-                storages[external_offset + row],
-                operand_index,
-            )
-        return True
 
     @staticmethod
     def _sum_gradient_values(gradients: list[Tensor]) -> Tensor:
