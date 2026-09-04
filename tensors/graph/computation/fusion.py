@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ...tensor import Tensor
+from .gradients import sum_gradient_values
 
 if TYPE_CHECKING:
     from ...variable import Variable
@@ -285,18 +286,15 @@ def execute_fused_backward(
     """
     from ...backend import execute_fused_elementwise_backward
 
-    # A fused range accumulates gradient terms exactly as the ordinary
-    # reverse pass does. The import is deferred so the dependency between the
-    # modules runs one way: computation imports fusion, never the reverse.
-    from .computation import Computation
-
     end, steps, source_slots = fusion
     fused = instructions[start:end + 1]
     last_output = variables[fused[-1].output_slot]
     output_terms = gradient_terms[fused[-1].output_slot]
     if not output_terms:
         return True
-    output_gradient = Computation._sum_gradient_values(output_terms)
+    # A fused range accumulates gradient terms exactly as the ordinary
+    # reverse pass does.
+    output_gradient = sum_gradient_values(output_terms)
     source_values = tuple(variables[slot].data for slot in source_slots)
     output_shape = last_output.shape
     dtype = last_output.dtype

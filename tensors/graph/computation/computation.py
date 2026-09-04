@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..._typing import TensorLike
 from ...tensor import Tensor
 from .fusion import execute_fused_backward, execute_fused_forward, plan_fusions
+from .gradients import (
+    gradient_seed,
+    sum_gradient_graph,
+    sum_gradient_values,
+    validate_gradients,
+)
 from ..node import Node, VariableNode
 from ...ops.operation import Operation
 
@@ -433,10 +439,10 @@ class Computation:
         self._validate_recorded_states()
         live = self._live_slots(None)
         if create_graph:
-            seed = self._gradient_seed(grad, create_graph=True)
+            seed = gradient_seed(self.output, grad, create_graph=True)
             gradients = self._backward_graph(seed, live)
         else:
-            seed = self._gradient_seed(grad)
+            seed = gradient_seed(self.output, grad)
             gradients = self._backward_values(seed, live)
 
         # Publish gradients only after the entire reverse pass succeeds. A
@@ -446,64 +452,6 @@ class Computation:
         for slot in self._view_slots:
             variable = variables[slot]
             variable.grad = gradients.get(variable)
-
-    def _gradient_seed(
-        self,
-        grad: TensorLike | None,
-        *,
-        create_graph: bool = False,
-    ) -> Any:
-        """Return a validated upstream gradient, optionally as a Variable."""
-        from ...variable import Variable
-
-        if grad is None:
-            from ...creation import ones
-
-            typecode = (
-                self.output.dtype.typecode
-                if self.output.dtype.typecode in {"f", "d"}
-                else "d"
-            )
-            seed = ones(
-                self.output.data.shape,
-                dtype=typecode,
-            )
-        elif isinstance(grad, Variable):
-            seed = grad
-        elif isinstance(grad, (int, float)) and self.output.data.shape == ():
-            seed = Tensor([grad], shape=())
-        else:
-            seed = grad if isinstance(grad, Tensor) else Tensor(grad)
-
-        seed_shape = seed.shape if isinstance(seed, Variable) else seed.shape
-        if seed_shape != self.output.data.shape:
-            raise ValueError(
-                f"Gradient shape {seed_shape} does not match output shape "
-                f"{self.output.data.shape}"
-            )
-
-        output_dtype = (
-            self.output.dtype
-            if self.output.dtype.typecode in {"f", "d"}
-            else None
-        )
-        if output_dtype is not None and seed.dtype != output_dtype:
-            if isinstance(seed, Variable):
-                if create_graph and seed.requires_grad:
-                    raise TypeError(
-                        "A differentiable gradient seed must have the same "
-                        "dtype as the output"
-                    )
-                seed = Variable(
-                    seed.data.astype(output_dtype),
-                    requires_grad=False,
-                )
-            else:
-                seed = seed.astype(output_dtype)
-
-        if create_graph:
-            return seed if isinstance(seed, Variable) else Variable(seed, requires_grad=False)
-        return seed.data if isinstance(seed, Variable) else seed
 
     def _backward_graph(
         self,
@@ -523,7 +471,7 @@ class Computation:
             output_terms = gradient_terms[instruction.output_slot]
             if not output_terms:
                 continue
-            output_gradient = self._sum_gradient_graph(output_terms)
+            output_gradient = sum_gradient_graph(output_terms)
             gradients[instruction.output_slot] = output_gradient
             input_slots = instruction.input_slots
             needs_input_grad = tuple(slot in live for slot in input_slots)
@@ -535,7 +483,7 @@ class Computation:
                 *inputs,
                 needs_input_grad=needs_input_grad,
             )
-            input_gradients = self._validate_gradients(
+            input_gradients = validate_gradients(
                 instruction.operation,
                 inputs,
                 input_gradients,
@@ -552,7 +500,7 @@ class Computation:
 
         for slot, terms in enumerate(gradient_terms):
             if terms and gradients[slot] is None:
-                gradients[slot] = self._sum_gradient_graph(terms)
+                gradients[slot] = sum_gradient_graph(terms)
         return {
             variable: gradient
             for variable, gradient in zip(self._variables, gradients)
@@ -608,7 +556,7 @@ class Computation:
 
         for slot, terms in enumerate(gradient_terms):
             if terms and gradients[slot] is None:
-                gradients[slot] = self._sum_gradient_values(terms)
+                gradients[slot] = sum_gradient_values(terms)
         return {
             variable: gradient
             for variable, gradient in zip(self._variables, gradients)
@@ -626,7 +574,7 @@ class Computation:
         output_terms = gradient_terms[instruction.output_slot]
         if not output_terms:
             return
-        output_gradient = self._sum_gradient_values(output_terms)
+        output_gradient = sum_gradient_values(output_terms)
         gradients[instruction.output_slot] = output_gradient
         input_slots = instruction.input_slots
         needs_input_grad = tuple(slot in live for slot in input_slots)
@@ -640,7 +588,7 @@ class Computation:
             *(variable.data for variable in inputs),
             needs_input_grad=needs_input_grad,
         )
-        input_gradients = self._validate_gradients(
+        input_gradients = validate_gradients(
             instruction.operation,
             inputs,
             input_gradients,
@@ -654,111 +602,6 @@ class Computation:
         ):
             if wanted:
                 gradient_terms[slot].append(input_gradient)
-
-    @staticmethod
-    def _sum_gradient_values(gradients: list[Tensor]) -> Tensor:
-        """Combine gradient contributions without order-dependent overflow."""
-        if len(gradients) == 1:
-            return gradients[0]
-
-        from ...backend import get_backend
-
-        first = gradients[0]
-        if get_backend() != "python" and first.size >= 32:
-            from ...math import stack
-            from ...math import sum as tensor_sum
-
-            return tensor_sum(stack(gradients, axis=0), axis=0)
-
-        from ...math.sum import _stable_float_sum
-
-        values = [
-            _stable_float_sum([
-                float(gradient._data[index]) for gradient in gradients
-            ])
-            for index in range(first.size)
-        ]
-        return Tensor(values, dtype=first.dtype, shape=first.shape)
-
-    @staticmethod
-    def _sum_gradient_graph(gradients: list[Any]) -> Any:
-        """Differentiably combine gradient contributions with stable summation."""
-        if len(gradients) == 1:
-            return gradients[0]
-
-        from ...math import stack, sum
-
-        return sum(stack(gradients, axis=0), axis=0)
-
-    @staticmethod
-    def _validate_gradients(
-        operation: Operation,
-        inputs: Sequence[Variable],
-        gradients: Any,
-        needs_input_grad: tuple[bool, ...],
-        *,
-        graph: bool,
-    ) -> tuple[Any, ...]:
-        """Validate an operation's VJP result against the requested demand.
-
-        A requested input must receive a value of the expected type, shape,
-        and dtype. An unrequested input must receive ``None``: returning a
-        value there means the operation calculated work the reverse pass did
-        not ask for, which makes the demand contract enforceable rather than
-        advisory. A real zero remains a valid answer for a requested
-        derivative whose value is mathematically zero.
-        """
-        from ...variable import Variable
-
-        label = operation.name
-        mode = "backward_graph" if graph else "backward"
-        try:
-            results = tuple(gradients)
-        except TypeError as exc:
-            raise TypeError(
-                f"{label} backward must return one gradient per input"
-            ) from exc
-
-        if len(results) != len(inputs):
-            raise RuntimeError(
-                f"{label} backward returned {len(results)} gradients for "
-                f"{len(inputs)} inputs"
-            )
-
-        expected_type = Variable if graph else Tensor
-        validated = list(results)
-        for index, (input_variable, gradient, wanted) in enumerate(
-            zip(inputs, results, needs_input_grad)
-        ):
-            if not wanted:
-                if gradient is not None:
-                    raise RuntimeError(
-                        f"{label} {mode} returned a gradient for input "
-                        f"{index}, which this reverse pass did not request; "
-                        "return None for an unrequested derivative"
-                    )
-                continue
-            if gradient is None:
-                raise RuntimeError(
-                    f"{label} {mode} returned None for input {index}, whose "
-                    "gradient this reverse pass requested"
-                )
-            if not isinstance(gradient, expected_type):
-                raise TypeError(
-                    f"{label} {mode} gradient {index} must be a "
-                    f"{expected_type.__name__}, got {type(gradient).__name__}"
-                )
-            if gradient.shape != input_variable.shape:
-                raise ValueError(
-                    f"{label} backward gradient {index} has shape "
-                    f"{gradient.shape}; expected {input_variable.shape}"
-                )
-            if (
-                input_variable.requires_grad
-                and gradient.dtype != input_variable.dtype
-            ):
-                validated[index] = gradient.astype(input_variable.dtype)
-        return tuple(validated)
 
 
 __all__ = ["Computation"]
