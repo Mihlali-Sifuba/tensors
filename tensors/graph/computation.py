@@ -2,81 +2,62 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-import threading
 from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorLike
 from ..tensor import Tensor
-from .node import Node, OperationNode, VariableNode
+from .node import Node, VariableNode
+from .operation import Operation
 
 if TYPE_CHECKING:
     from ..variable import Variable
 
 
-@dataclass(frozen=True, slots=True)
-class _ForwardInstruction:
-    """One pre-resolved operation invocation in a computation replay plan.
+#: One fused elementwise step: kernel name, literal scalar, operand order,
+#: and the index of an external operand among the fused sources.
+FusedStep = tuple[str, float | None, bool, int | None]
 
-    The graph relationships an operation node expresses through its edges are
-    resolved once here, so replay and differentiation never rediscover the
-    topology.
+
+@dataclass(frozen=True, slots=True)
+class Instruction:
+    """One executable operation invocation.
+
+    An instruction says which :class:`Operation` runs, which slots hold its
+    operands, and which slot receives its result. Everything else about the
+    invocation — the Variables themselves, their mutation records, and which
+    of its VJPs a reverse pass wants — is resolved by the
+    :class:`Computation` that owns the instruction.
     """
 
-    node: OperationNode
-    operation: Any
-    index: int
-    output_slot: int
-    output_variable: Any
+    operation: Operation
     input_slots: tuple[int, ...]
-    input_variables: tuple[Any, ...]
-    forward: Any
-    backward: Any
-    backward_graph: Any
+    output_slot: int
 
 
 @dataclass(frozen=True, slots=True)
 class _ForwardGroup:
-    """One instruction or a CUDA-fusible elementwise chain."""
+    """One instruction or a CUDA-fusible elementwise chain.
 
-    instructions: tuple[_ForwardInstruction, ...]
-    fused_steps: (
-        tuple[tuple[str, float | None, bool, int | None], ...] | None
-    ) = None
+    The representation of fusion is under separate review; this type exists
+    to keep the current CUDA behaviour intact.
+    """
+
+    instructions: tuple[Instruction, ...]
+    fused_steps: tuple[FusedStep, ...] | None = None
     fused_input_slots: tuple[int, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class _ReverseDemand:
-    """Which gradients one reverse invocation requires.
-
-    Demand is execution state, not topology: it depends on the reverse call
-    being made, so it is resolved per invocation and never cached on a
-    compiled forward instruction, whose inputs' ``requires_grad`` may change
-    between passes.
-
-    ``live[slot]`` states whether a gradient is wanted at that Variable slot.
-    ``masks[index]`` is the ``needs_input_grad`` tuple for the instruction at
-    that index, or ``None`` when no input of that operation is wanted and its
-    VJP therefore should not run at all.
-    """
-
-    live: tuple[bool, ...]
-    masks: tuple[tuple[bool, ...] | None, ...]
-
-
-@dataclass(slots=True)
-class _ExecutionWorkspace:
-    """Thread-local reusable slot buffers for forward and backward execution."""
-
-    values: list[Tensor | None]
-    gradient_terms: list[list[Any]]
-    gradients: list[Any | None]
-
-
 class Computation:
-    """A concrete computation that owns its forward and backward passes."""
+    """The planned, executable representation of a computational graph.
+
+    Constructing a Computation inspects the graph rooted at an output
+    Variable, resolves it into ordered :class:`Instruction` objects over
+    numbered Variable slots, and retains that plan for replay and
+    differentiation. The Computation is the plan: :meth:`forward` and
+    :meth:`backward` execute it.
+    """
 
     def __init__(self, output: Variable) -> None:
         outputs = self._validate_outputs((output,))
@@ -165,7 +146,6 @@ class Computation:
         )
         self._compile_execution_plan()
         self._select_view()
-        self._workspace_state = threading.local()
         self._released = False
 
     def _initialize_shared_view(
@@ -188,26 +168,25 @@ class Computation:
         self._variables = owner._variables
         self._variable_slots = owner._variable_slots
         self._leaf_slots = owner._leaf_slots
-        self._forward_instructions = owner._forward_instructions
-        self._forward_plan = owner._forward_plan
-        self._backward_plan = owner._backward_plan
+        self._instructions = owner._instructions
+        self._groups = owner._groups
         self._output_slot = self._variable_slots[output]
         self._select_view()
-        self._workspace_state = threading.local()
         self._released = False
 
     def _select_view(self) -> None:
-        """Resolve the Variables and instructions this output reaches."""
-        reachable = set(self._nodes)
-        self._view_variables = tuple(
-            node.variable
+        """Resolve the slots and instructions this output reaches."""
+        slots = self._variable_slots
+        view_slots = {
+            slots[node.variable]
             for node in self._nodes
             if isinstance(node, VariableNode)
-        )
+        }
+        self._view_slots = tuple(sorted(view_slots))
         self._view_instructions = tuple(
             instruction
-            for instruction in self._forward_instructions
-            if instruction.node in reachable
+            for instruction in self._instructions
+            if instruction.output_slot in view_slots
         )
 
     def _compile_execution_plan(self) -> None:
@@ -225,83 +204,72 @@ class Computation:
             if isinstance(node, VariableNode)
         )
         slots = {variable: index for index, variable in enumerate(variables)}
-        instructions: list[_ForwardInstruction] = []
-        leaf_slots: list[tuple[int, Any]] = []
+        instructions: list[Instruction] = []
+        leaf_slots: list[int] = []
         boundary_nodes = self._boundary_nodes
         for node in self._all_nodes:
             if not isinstance(node, VariableNode):
                 continue
-            output = node.variable
-            output_slot = slots[output]
+            output_slot = slots[node.variable]
             producer = node.producer
             if producer is None or node in boundary_nodes:
-                leaf_slots.append((output_slot, output))
+                leaf_slots.append(output_slot)
                 continue
-            operation = producer.operation
-            inputs = tuple(edge.source.variable for edge in producer._in_edges)
             instructions.append(
-                _ForwardInstruction(
-                    node=producer,
-                    operation=operation,
-                    index=len(instructions),
+                Instruction(
+                    operation=producer.operation,
+                    input_slots=tuple(
+                        slots[edge.source.variable]
+                        for edge in producer._in_edges
+                    ),
                     output_slot=output_slot,
-                    output_variable=output,
-                    input_slots=tuple(slots[value] for value in inputs),
-                    input_variables=inputs,
-                    forward=operation.forward,
-                    backward=operation.backward,
-                    backward_graph=operation.backward_graph,
                 )
             )
 
         self._variables = variables
         self._variable_slots = slots
         self._leaf_slots = tuple(leaf_slots)
-        self._forward_instructions = tuple(instructions)
+        self._instructions = tuple(instructions)
+        self._output_slot = slots[self.output]
         consumer_counts = [0] * len(variables)
         for instruction in instructions:
             for slot in instruction.input_slots:
                 consumer_counts[slot] += 1
-        self._forward_plan = self._group_forward_instructions(
-            instructions,
-            consumer_counts,
-        )
-        self._backward_plan = tuple(reversed(instructions))
-        self._output_slot = slots[self.output]
+        self._groups = self._group_instructions(instructions, consumer_counts)
 
-    @classmethod
-    def _group_forward_instructions(
-        cls,
-        instructions: list[_ForwardInstruction],
+    def _group_instructions(
+        self,
+        instructions: list[Instruction],
         consumer_counts: list[int],
     ) -> tuple[_ForwardGroup, ...]:
         """Collect linear floating-point chains for optional CUDA fusion."""
+        variables = self._variables
         groups: list[_ForwardGroup] = []
         index = 0
         while index < len(instructions):
             first = instructions[index]
-            start = cls._start_fused_instruction(first)
+            start = self._start_fused_instruction(first)
             if start is None:
                 groups.append(_ForwardGroup((first,)))
                 index += 1
                 continue
 
             first_step, fused_input_slots = start
+            first_output = variables[first.output_slot]
             chain = [first]
             steps = [first_step]
             chain_output_slots = {first.output_slot}
             next_index = index + 1
             while next_index < len(instructions):
                 candidate = instructions[next_index]
+                candidate_output = variables[candidate.output_slot]
                 if (
                     consumer_counts[chain[-1].output_slot] != 1
-                    or candidate.output_variable.shape
-                    != first.output_variable.shape
-                    or candidate.output_variable.dtype
-                    != first.output_variable.dtype
+                    or candidate_output.shape != first_output.shape
+                    or candidate_output.dtype != first_output.dtype
                 ):
                     break
-                step = cls._extend_fused_instruction(
+                step = self._extend_fused_instruction(
                     candidate,
                     chain[-1].output_slot,
                     fused_input_slots,
@@ -329,9 +297,7 @@ class Computation:
         return tuple(groups)
 
     @staticmethod
-    def _fused_operation(
-        instruction: _ForwardInstruction,
-    ) -> str | None:
+    def _fused_operation(instruction: Instruction) -> str | None:
         """Return the internal kernel name for a fusible invocation."""
         names = {
             "Add": "add",
@@ -366,17 +332,13 @@ class Computation:
         # derivatives a later reverse pass might request.
         return names.get(type(instruction.operation).__name__)
 
-    @classmethod
     def _start_fused_instruction(
-        cls,
-        instruction: _ForwardInstruction,
-    ) -> tuple[
-        tuple[str, float | None, bool, int | None],
-        list[int],
-    ] | None:
+        self,
+        instruction: Instruction,
+    ) -> tuple[FusedStep, list[int]] | None:
         """Describe the first operation and source slots of a fused chain."""
-        operation = cls._fused_operation(instruction)
-        output = instruction.output_variable
+        operation = self._fused_operation(instruction)
+        output = self._variables[instruction.output_slot]
         if operation is None or output.dtype.kind != "floating":
             return None
         binary_operations = {
@@ -386,7 +348,8 @@ class Computation:
         if unary:
             if (
                 len(instruction.input_slots) != 1
-                or instruction.input_variables[0].shape != output.shape
+                or self._variables[instruction.input_slots[0]].shape
+                != output.shape
             ):
                 return None
             return (
@@ -405,17 +368,17 @@ class Computation:
             operand_index = 1
         return (operation, None, False, operand_index), source_slots
 
-    @classmethod
     def _extend_fused_instruction(
-        cls,
-        instruction: _ForwardInstruction,
+        self,
+        instruction: Instruction,
         current_slot: int,
         fused_input_slots: list[int],
         chain_output_slots: set[int],
-    ) -> tuple[str, float | None, bool, int | None] | None:
+    ) -> FusedStep | None:
         """Describe a chain continuation and register external source slots."""
-        operation = cls._fused_operation(instruction)
-        if operation is None or instruction.output_variable.dtype.kind != "floating":
+        operation = self._fused_operation(instruction)
+        output = self._variables[instruction.output_slot]
+        if operation is None or output.dtype.kind != "floating":
             return None
         binary_operations = {
             "add", "subtract", "multiply", "divide", "power",
@@ -448,58 +411,41 @@ class Computation:
             operand_index = len(fused_input_slots) - 1
         return operation, None, reverse, operand_index
 
-    def _reverse_demand(
-        self,
-        targets: tuple[Variable, ...] | None,
-    ) -> _ReverseDemand:
-        """Resolve which input VJPs this reverse invocation requires.
+    def _live_slots(self, targets: tuple[Variable, ...] | None) -> set[int]:
+        """Return the slots whose gradient this reverse invocation requires.
 
         ``targets is None`` requests a gradient at every reachable
-        differentiable Variable, which is what ``backward`` publishes.
-        A target tuple instead requests only the reverse paths that connect
-        the output to those Variables, so a VJP is calculated only where a
-        requested Variable's influence actually flows.
+        differentiable Variable, which is what ``backward`` publishes. A
+        target tuple instead requests only the reverse paths connecting the
+        output to those Variables, so a VJP runs solely where a requested
+        Variable's influence actually flows.
+
+        The result is transient analysis data for one reverse call. It is
+        never cached, because ``requires_grad`` may change between passes.
         """
         self._require_active()
         variables = self._variables
-        live = [False] * len(variables)
-
         if targets is None:
-            for index, variable in enumerate(variables):
-                live[index] = variable.requires_grad
-        else:
-            slots = self._variable_slots
-            for variable in targets:
-                slot = slots.get(variable)
-                if slot is not None and variable.requires_grad:
-                    live[slot] = True
-            # Reverse liveness: a gradient is wanted wherever a requested
-            # Variable's influence passes on its way to the output. The
-            # instruction list is already in dependency order, so one forward
-            # sweep closes the set.
-            for instruction in self._forward_instructions:
-                if instruction.output_variable.requires_grad and any(
-                    live[slot] for slot in instruction.input_slots
-                ):
-                    live[instruction.output_slot] = True
+            return {
+                slot
+                for slot, variable in enumerate(variables)
+                if variable.requires_grad
+            }
 
-        masks: list[tuple[bool, ...] | None] = []
-        for instruction in self._forward_instructions:
-            mask = tuple(live[slot] for slot in instruction.input_slots)
-            masks.append(mask if True in mask else None)
-        return _ReverseDemand(tuple(live), tuple(masks))
-
-    def _workspace(self) -> _ExecutionWorkspace:
-        """Return reusable execution slots private to the current thread."""
-        workspace = getattr(self._workspace_state, "workspace", None)
-        if workspace is None or len(workspace.values) != len(self._variables):
-            workspace = _ExecutionWorkspace(
-                values=[None] * len(self._variables),
-                gradient_terms=[[] for _ in self._variables],
-                gradients=[None] * len(self._variables),
-            )
-            self._workspace_state.workspace = workspace
-        return workspace
+        slots = self._variable_slots
+        live = set()
+        for variable in targets:
+            slot = slots.get(variable)
+            if slot is not None and variable.requires_grad:
+                live.add(slot)
+        # Instructions are in dependency order, so one forward sweep closes
+        # the set over every path from a requested Variable to the output.
+        for instruction in self._instructions:
+            if variables[instruction.output_slot].requires_grad and any(
+                slot in live for slot in instruction.input_slots
+            ):
+                live.add(instruction.output_slot)
+        return live
 
     @classmethod
     def _dependency_plan(
@@ -577,24 +523,23 @@ class Computation:
         self._variables = ()
         self._variable_slots = {}
         self._leaf_slots = ()
-        self._forward_instructions = ()
-        self._view_variables = ()
+        self._instructions = ()
+        self._groups = ()
+        self._view_slots = ()
         self._view_instructions = ()
-        self._forward_plan = ()
-        self._backward_plan = ()
-        self._workspace_state.workspace = None
         self._released = True
 
     def forward(self) -> Tensor:
         """Recompute the output from its current leaf values."""
         self._require_active()
-        values = self._workspace().values
-        for slot, variable in self._leaf_slots:
-            if variable is None:
-                raise RuntimeError("A leaf node has no output Variable")
-            values[slot] = variable.data
+        variables = self._variables
+        # Execution buffers are ordinary locals: every call owns its own, so
+        # concurrent replays of one Computation never share mutable state.
+        values: list[Tensor | None] = [None] * len(variables)
+        for slot in self._leaf_slots:
+            values[slot] = variables[slot].data
 
-        for group in self._forward_plan:
+        for group in self._groups:
             if group.fused_steps is not None and self._execute_fused_group(
                 group,
                 values,
@@ -608,44 +553,49 @@ class Computation:
             raise RuntimeError("Computation replay did not produce an output")
         return result
 
-    @staticmethod
     def _execute_instruction(
-        instruction: _ForwardInstruction,
+        self,
+        instruction: Instruction,
         values: list[Tensor | None],
     ) -> None:
-        """Execute one pre-resolved forward instruction."""
+        """Execute one instruction into its output slot."""
+        input_slots = instruction.input_slots
         args = []
-        for slot in instruction.input_slots:
+        for slot in input_slots:
             value = values[slot]
             if value is None:
                 raise RuntimeError("Computation input slot is uninitialized")
             args.append(value)
 
-        result = instruction.forward(*args)
+        result = instruction.operation.forward(*args)
 
         tensor = result if isinstance(result, Tensor) else Tensor([result])
-        output = instruction.output_variable
+        variables = self._variables
+        output = variables[instruction.output_slot]
         output._replace_data_from_replay(tensor)
-        output._capture_forward_record(instruction.node)
+        output._capture_forward_record(
+            variables[slot] for slot in input_slots
+        )
         values[instruction.output_slot] = tensor
 
-    @staticmethod
     def _execute_fused_group(
+        self,
         group: _ForwardGroup,
         values: list[Tensor | None],
     ) -> bool:
         """Execute an elementwise chain in one CUDA kernel."""
         from ..backend import execute_fused_elementwise
 
-        first = group.instructions[0]
+        variables = self._variables
+        first_output = variables[group.instructions[0].output_slot]
         source_values = []
         for slot in group.fused_input_slots:
             value = values[slot]
             if value is None:
                 return False
             source_values.append(value)
-        output_shape = first.output_variable.shape
-        dtype = first.output_variable.dtype
+        output_shape = first_output.shape
+        dtype = first_output.dtype
         storages = execute_fused_elementwise(
             tuple(source_values),
             group.fused_steps or (),
@@ -659,22 +609,25 @@ class Computation:
                 "Fused elementwise kernel returned an unexpected output count"
             )
         for instruction, storage in zip(group.instructions, storages):
+            output = variables[instruction.output_slot]
             tensor = Tensor._from_owned_storage(
                 storage,
-                dtype=instruction.output_variable.dtype,
+                dtype=output.dtype,
                 shape=output_shape,
             )
-            output = instruction.output_variable
             output._replace_data_from_replay(tensor)
-            output._capture_forward_record(instruction.node)
+            output._capture_forward_record(
+                variables[slot] for slot in instruction.input_slots
+            )
             values[instruction.output_slot] = tensor
         return True
 
     def _validate_recorded_states(self) -> None:
         """Reject a backward pass whose recorded forward values changed."""
         self._require_active()
+        variables = self._variables
         for instruction in self._view_instructions:
-            output = instruction.output_variable
+            output = variables[instruction.output_slot]
             record = output._forward_record
             if record is None:
                 continue
@@ -686,7 +639,7 @@ class Computation:
                     "forward pass. Run a fresh forward pass or call "
                     "Computation(output).forward() before differentiation."
                 )
-            inputs = instruction.input_variables
+            inputs = [variables[slot] for slot in instruction.input_slots]
             if len(input_states) != len(inputs):
                 index, variable = 0, None
             else:
@@ -717,18 +670,20 @@ class Computation:
         if not isinstance(create_graph, bool):
             raise TypeError("create_graph must be a bool")
         self._validate_recorded_states()
-        demand = self._reverse_demand(None)
+        live = self._live_slots(None)
         if create_graph:
             seed = self._gradient_seed(grad, create_graph=True)
-            gradients = self._backward_graph(seed, demand)
+            gradients = self._backward_graph(seed, live)
         else:
             seed = self._gradient_seed(grad)
-            gradients = self._backward_values(seed, demand)
+            gradients = self._backward_values(seed, live)
 
         # Publish gradients only after the entire reverse pass succeeds. A
         # malformed operation or domain error therefore cannot leave a graph
         # with partially cleared or partially updated ``.grad`` attributes.
-        for variable in self._view_variables:
+        variables = self._variables
+        for slot in self._view_slots:
+            variable = variables[slot]
             variable.grad = gradients.get(variable)
 
     def _gradient_seed(
@@ -792,44 +747,43 @@ class Computation:
     def _backward_graph(
         self,
         seed: Any,
-        demand: _ReverseDemand,
+        live: set[int],
     ) -> dict[Any, Any]:
         """Build a differentiable reverse-mode gradient computation."""
         if not self.output.requires_grad:
             return {}
-        workspace = self._workspace()
-        gradient_terms = workspace.gradient_terms
-        gradients = workspace.gradients
-        for terms in gradient_terms:
-            terms.clear()
-        for index in range(len(gradients)):
-            gradients[index] = None
+        count = len(self._variables)
+        gradient_terms: list[list[Any]] = [[] for _ in range(count)]
+        gradients: list[Any | None] = [None] * count
         gradient_terms[self._output_slot].append(seed)
+        variables = self._variables
 
-        for instruction in self._backward_plan:
+        for instruction in reversed(self._instructions):
             output_terms = gradient_terms[instruction.output_slot]
             if not output_terms:
                 continue
             output_gradient = self._sum_gradient_graph(output_terms)
             gradients[instruction.output_slot] = output_gradient
-            mask = demand.masks[instruction.index]
-            if mask is None:
+            input_slots = instruction.input_slots
+            needs_input_grad = tuple(slot in live for slot in input_slots)
+            if not any(needs_input_grad):
                 continue
-            inputs = instruction.input_variables
-            input_gradients = instruction.backward_graph(
+            inputs = tuple(variables[slot] for slot in input_slots)
+            input_gradients = instruction.operation.backward_graph(
                 output_gradient,
                 *inputs,
-                needs_input_grad=mask,
+                needs_input_grad=needs_input_grad,
             )
             input_gradients = self._validate_gradients(
-                instruction,
+                instruction.operation,
+                inputs,
                 input_gradients,
-                mask,
+                needs_input_grad,
                 graph=True,
             )
             for slot, wanted, input_gradient in zip(
-                instruction.input_slots,
-                mask,
+                input_slots,
+                needs_input_grad,
                 input_gradients,
             ):
                 if wanted:
@@ -847,26 +801,22 @@ class Computation:
     def _backward_values(
         self,
         seed: Tensor,
-        demand: _ReverseDemand,
+        live: set[int],
     ) -> dict[Any, Tensor]:
         """Return numerical reverse-mode gradients without mutating Variables."""
         if not self.output.requires_grad:
             return {}
-        workspace = self._workspace()
-        gradient_terms = workspace.gradient_terms
-        gradients = workspace.gradients
-        for terms in gradient_terms:
-            terms.clear()
-        for index in range(len(gradients)):
-            gradients[index] = None
+        count = len(self._variables)
+        gradient_terms: list[list[Any]] = [[] for _ in range(count)]
+        gradients: list[Any | None] = [None] * count
         gradient_terms[self._output_slot].append(seed)
 
-        for group in reversed(self._forward_plan):
+        for group in reversed(self._groups):
             if group.fused_steps is not None and self._execute_fused_backward_group(
                 group,
                 gradient_terms,
                 gradients,
-                demand,
+                live,
             ):
                 continue
             for instruction in reversed(group.instructions):
@@ -874,7 +824,7 @@ class Computation:
                     instruction,
                     gradient_terms,
                     gradients,
-                    demand,
+                    live,
                 )
 
         for slot, terms in enumerate(gradient_terms):
@@ -888,38 +838,39 @@ class Computation:
 
     def _execute_backward_instruction(
         self,
-        instruction: _ForwardInstruction,
+        instruction: Instruction,
         gradient_terms: list[list[Any]],
         gradients: list[Any | None],
-        demand: _ReverseDemand,
+        live: set[int],
     ) -> None:
-        """Execute one pre-resolved numerical VJP instruction."""
+        """Execute one instruction's requested numerical VJPs."""
         output_terms = gradient_terms[instruction.output_slot]
         if not output_terms:
             return
         output_gradient = self._sum_gradient_values(output_terms)
         gradients[instruction.output_slot] = output_gradient
-        mask = demand.masks[instruction.index]
-        if mask is None:
+        input_slots = instruction.input_slots
+        needs_input_grad = tuple(slot in live for slot in input_slots)
+        if not any(needs_input_grad):
             # Nothing this reverse pass wants lies behind this operation.
             return
-        input_data = tuple(
-            variable.data for variable in instruction.input_variables
-        )
-        input_gradients = instruction.backward(
+        variables = self._variables
+        inputs = tuple(variables[slot] for slot in input_slots)
+        input_gradients = instruction.operation.backward(
             output_gradient,
-            *input_data,
-            needs_input_grad=mask,
+            *(variable.data for variable in inputs),
+            needs_input_grad=needs_input_grad,
         )
         input_gradients = self._validate_gradients(
-            instruction,
+            instruction.operation,
+            inputs,
             input_gradients,
-            mask,
+            needs_input_grad,
             graph=False,
         )
         for slot, wanted, input_gradient in zip(
-            instruction.input_slots,
-            mask,
+            input_slots,
+            needs_input_grad,
             input_gradients,
         ):
             if wanted:
@@ -930,24 +881,24 @@ class Computation:
         group: _ForwardGroup,
         gradient_terms: list[list[Any]],
         gradients: list[Any | None],
-        demand: _ReverseDemand,
+        live: set[int],
     ) -> bool:
         """Run a safe single-consumer elementwise-chain VJP in one CUDA kernel."""
         from ..backend import execute_fused_elementwise_backward
 
+        variables = self._variables
         instructions = group.instructions
-        last = instructions[-1]
-        output_terms = gradient_terms[last.output_slot]
+        last_output = variables[instructions[-1].output_slot]
+        output_terms = gradient_terms[instructions[-1].output_slot]
         if not output_terms:
             return True
         output_gradient = self._sum_gradient_values(output_terms)
-        source_variables = tuple(
-            self._variables[slot] for slot in group.fused_input_slots
+        source_values = tuple(
+            variables[slot].data for slot in group.fused_input_slots
         )
-        source_values = tuple(variable.data for variable in source_variables)
         steps = group.fused_steps or ()
-        output_shape = last.output_variable.shape
-        dtype = last.output_variable.dtype
+        output_shape = last_output.shape
+        dtype = last_output.dtype
         # An external operand gradient is only calculated where this reverse
         # pass wants it. The chain's internal derivative is separate: reverse
         # propagation always needs it to reach the chain's first input.
@@ -957,7 +908,7 @@ class Computation:
             if scalar is None
             and operand_index is not None
             and operand_index >= 0
-            and demand.live[group.fused_input_slots[operand_index]]
+            and group.fused_input_slots[operand_index] in live
         )
         storages = execute_fused_elementwise_backward(
             source_values,
@@ -989,9 +940,9 @@ class Computation:
 
         def append_source_gradient(storage: Any, source_index: int) -> None:
             slot = group.fused_input_slots[source_index]
-            if not demand.live[slot]:
+            if slot not in live:
                 return
-            variable = self._variables[slot]
+            variable = variables[slot]
             gradient = Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
             if gradient.shape != variable.shape:
                 from ..ops._utils import sum_to_shape
@@ -1047,7 +998,8 @@ class Computation:
 
     @staticmethod
     def _validate_gradients(
-        instruction: _ForwardInstruction,
+        operation: Operation,
+        inputs: Sequence[Variable],
         gradients: Any,
         needs_input_grad: tuple[bool, ...],
         *,
@@ -1064,7 +1016,7 @@ class Computation:
         """
         from ..variable import Variable
 
-        label = instruction.operation.name
+        label = operation.name
         mode = "backward_graph" if graph else "backward"
         try:
             results = tuple(gradients)
@@ -1073,7 +1025,6 @@ class Computation:
                 f"{label} backward must return one gradient per input"
             ) from exc
 
-        inputs = instruction.input_variables
         if len(results) != len(inputs):
             raise RuntimeError(
                 f"{label} backward returned {len(results)} gradients for "
@@ -1188,13 +1139,13 @@ def grad(
     computation._validate_recorded_states()
     # Build the reverse demand from the requested inputs so only the paths
     # connecting them to the output are differentiated.
-    demand = computation._reverse_demand(requested)
+    live = computation._live_slots(requested)
     if create_graph:
         seed = computation._gradient_seed(grad_outputs, create_graph=True)
-        gradients = computation._backward_graph(seed, demand)
+        gradients = computation._backward_graph(seed, live)
     else:
         seed = computation._gradient_seed(grad_outputs)
-        gradients = computation._backward_values(seed, demand)
+        gradients = computation._backward_values(seed, live)
     result = tuple(gradients.get(variable) for variable in requested)
     return result[0] if single_input else result
 
