@@ -134,6 +134,7 @@ tensors/
     └── computation/       # the executable, differentiable form of a graph
         ├── computation.py   # executable computation planning and execution
         ├── autograd.py      # functional reverse-mode differentiation API
+        ├── gradients.py     # seed construction, accumulation, VJP validation
         ├── derivatives.py   # Jacobian and Hessian construction
         ├── gradcheck.py     # finite-difference verification
         └── fusion.py        # fused execution of compatible instruction runs
@@ -210,7 +211,9 @@ The folders have deliberately narrow responsibilities:
   demand as `needs_input_grad`. See [Automatic differentiation](autodiff.md) for
   the recorded topology and the responsibility split.
 - `graph/computation` holds that executable form. `Computation` owns the
-  instruction plan and executes it forwards and in reverse; `fusion`
+  instruction plan and executes it forwards and in reverse; `gradients`
+  supplies the generic mechanics it uses along the way — upstream seed
+  construction, gradient accumulation, and VJP result validation; `fusion`
   recognizes and accelerates compatible instruction runs beside that plan;
   `autograd` is the functional interface through which callers request
   differentiation; `derivatives` builds Jacobians and Hessians from repeated

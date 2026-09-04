@@ -38,14 +38,10 @@ class FunctionalApiBoundaryTests(unittest.TestCase):
         for name in (
             "backward",
             "_live_slots",
-            "_gradient_seed",
             "_backward_values",
             "_backward_graph",
             "_execute_backward_instruction",
             "_validate_recorded_states",
-            "_sum_gradient_values",
-            "_sum_gradient_graph",
-            "_validate_gradients",
         ):
             with self.subTest(name=name):
                 self.assertTrue(hasattr(Computation, name))

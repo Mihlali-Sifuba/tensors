@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, overload
 from ..._typing import TensorLike
 from ...tensor import Tensor
 from .computation import Computation
+from .gradients import gradient_seed
 
 if TYPE_CHECKING:
     from ...variable import Variable
@@ -110,10 +111,14 @@ def grad(
     # connecting them to the output are differentiated.
     live = computation._live_slots(requested)
     if create_graph:
-        seed = computation._gradient_seed(grad_outputs, create_graph=True)
+        seed = gradient_seed(
+            computation.output,
+            grad_outputs,
+            create_graph=True,
+        )
         gradients = computation._backward_graph(seed, live)
     else:
-        seed = computation._gradient_seed(grad_outputs)
+        seed = gradient_seed(computation.output, grad_outputs)
         gradients = computation._backward_values(seed, live)
     result = tuple(gradients.get(variable) for variable in requested)
     return result[0] if single_input else result
