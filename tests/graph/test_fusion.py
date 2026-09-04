@@ -5,6 +5,7 @@ import tensors as ts
 from tensors.graph import Computation
 from tensors.graph.computation import computation as computation_module
 from tensors.graph.computation import fusion
+from tensors.graph.computation.instruction import Instruction
 from tensors.graph.state import reset_graph_state
 
 
@@ -139,7 +140,7 @@ class FusionModuleBoundaryTests(unittest.TestCase):
     def test_fusion_metadata_is_absent_from_the_instruction_type(self):
         for name in ("fused", "fusion", "fusion_id", "fused_steps"):
             with self.subTest(field=name):
-                self.assertNotIn(name, computation_module.Instruction.__slots__)
+                self.assertNotIn(name, Instruction.__slots__)
 
 
 class DeclinedFusionTests(unittest.TestCase):

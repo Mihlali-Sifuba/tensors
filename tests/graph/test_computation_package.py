@@ -14,8 +14,11 @@ class ComputationPackageLayoutTests(unittest.TestCase):
 
     #: The modules the computation subpackage owns.
     MODULES = (
+        "instruction",
+        "compiler",
         "computation",
         "autograd",
+        "gradients",
         "derivatives",
         "gradcheck",
         "fusion",
@@ -33,7 +36,15 @@ class ComputationPackageLayoutTests(unittest.TestCase):
                 )
 
     def test_graph_package_no_longer_owns_the_execution_modules(self):
-        for name in ("autograd", "derivatives", "gradcheck", "fusion"):
+        for name in (
+            "autograd",
+            "derivatives",
+            "gradcheck",
+            "fusion",
+            "gradients",
+            "compiler",
+            "instruction",
+        ):
             with self.subTest(module=name):
                 self.assertIsNone(
                     importlib.util.find_spec(f"tensors.graph.{name}")
@@ -53,10 +64,11 @@ class ComputationPackageLayoutTests(unittest.TestCase):
             with self.subTest(name=getattr(value, "__name__", value)):
                 self.assertEqual(value.__module__, module)
 
-        from tensors.graph.computation.computation import Instruction
+        from tensors.graph.computation.instruction import Instruction
 
         self.assertEqual(
-            Instruction.__module__, "tensors.graph.computation.computation"
+            Instruction.__module__,
+            "tensors.graph.computation.instruction",
         )
 
     def test_subpackage_facade_exposes_what_the_graph_package_needs(self):
