@@ -17,7 +17,7 @@ from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_convolution, execute_convolution_gradient
 from ..dtype import DataType, result_dtype
 from ..strides import Strides
-from ..graph.operation import Operation
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from .sum import _stable_float_sum, _stable_product_sum
 

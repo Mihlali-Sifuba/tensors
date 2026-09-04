@@ -3,7 +3,7 @@
 from typing import List
 
 from ..backend import execute_negate
-from ..graph.operation import Operation
+from .operation import Operation
 from ..tensor import Tensor
 from ..dtype import negation_dtype
 

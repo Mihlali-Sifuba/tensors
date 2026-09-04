@@ -1,8 +1,14 @@
-"""The local mathematical contract implemented by graph operations.
+"""The contract every concrete mathematical operation implements.
 
 An :class:`Operation` instance describes exactly one concrete invocation. It
 owns the immutable configuration that defines its mathematical transformation
 (a reduction axis, a cast dtype, a slice key) and nothing else.
+
+This is the operations subsystem's own abstraction: the graph package does not
+define what an operation is, it references one.
+:class:`~tensors.graph.node.OperationNode` holds an operation as its graph
+form and :class:`~tensors.graph.computation.Instruction` holds one as its
+execution form.
 
 An operation defines *how* a local derivative is calculated.
 :class:`~tensors.graph.computation.Computation` decides *which* local

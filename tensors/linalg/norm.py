@@ -6,7 +6,7 @@ from typing import Any, List, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_reduction
 from ..dtype import float64
-from ..graph.operation import Operation
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..math._reduction import (
     Axis,

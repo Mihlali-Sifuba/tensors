@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, overload
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_concat
 from ..dtype import result_dtype
-from ..graph.operation import Operation
+from ..ops.operation import Operation
 from ..tensor import Tensor
 
 if TYPE_CHECKING:

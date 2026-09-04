@@ -6,7 +6,7 @@ from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_reduction, execute_reduction_gradient
-from ..graph.operation import Operation
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ._reduction import (
     Axis,

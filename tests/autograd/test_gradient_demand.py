@@ -3,7 +3,8 @@
 import unittest
 
 import tensors as ts
-from tensors.graph import Computation, Operation
+from tensors.graph import Computation
+from tensors.ops import Operation
 from tensors.graph.state import reset_graph_state
 from tensors.math.binary_cross_entropy import BinaryCrossEntropy
 from tensors.math.cross_entropy import CrossEntropy

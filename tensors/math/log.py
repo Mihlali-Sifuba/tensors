@@ -5,7 +5,7 @@ from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
-from ..graph.operation import Operation
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 

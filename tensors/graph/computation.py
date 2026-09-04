@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, overload
 from .._typing import TensorLike
 from ..tensor import Tensor
 from .node import Node, VariableNode
-from .operation import Operation
+from ..ops.operation import Operation
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -71,8 +71,8 @@ class Computation:
 
         The plan is execution state, so it lives on the runtime value rather
         than on a structural graph node. Graph topology is immutable, so later
-        calls reuse the pre-resolved plan while execution workspaces stay
-        thread-local inside the Computation.
+        calls reuse the pre-resolved plan; each pass allocates its own
+        execution buffers and shares none of them.
         """
         cls._validate_outputs((output,))
         computation = output._autograd_computation

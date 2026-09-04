@@ -1,7 +1,8 @@
 import unittest
 
 import tensors as ts
-from tensors.graph import Computation, Operation, OperationNode, VariableNode
+from tensors.graph import Computation, OperationNode, VariableNode
+from tensors.ops import Operation
 from tensors.graph.state import reset_graph_state
 
 

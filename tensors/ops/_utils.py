@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ..shape import Shape
-from ..graph.operation import Operation
+from .operation import Operation
 from ..tensor import Tensor
 from ..utils.coordinates import (
     coordinates_to_linear_index,

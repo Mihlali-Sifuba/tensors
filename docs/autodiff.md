@@ -33,7 +33,7 @@ Responsibilities divide as follows:
 | --- | --- |
 | `Variable` | the differentiable runtime value |
 | `VariableNode` | the graph representation of one `Variable` |
-| `Operation` | one concrete mathematical invocation |
+| `Operation` | one concrete mathematical invocation (owned by `ts.ops`) |
 | `OperationNode` | the graph representation of that invocation |
 | `Edge` | a graph relationship and its data flow |
 | `Computation` | traversal and execution of the graph |
@@ -415,13 +415,21 @@ same graph do not overwrite one another's `computation`, `nodes`, or `edges`.
 Parameters and other mutable attributes are still shared Python state and
 must be synchronized separately if callers modify them concurrently.
 
-`Computation` compiles its dependency-first traversal into forward and backward
-execution plans once at construction. It resolves each operation vertex's
-operands from its incoming edges and its result from its outgoing edge at that
-point, so replay and differentiation never walk the graph again. The plans
-resolve variable slots, operation callables, and consumer counts ahead of
-replay. Thread-local workspaces reuse value and gradient slots without sharing
-mutable execution state between threads.
+`Computation` compiles its dependency-first traversal into ordered
+`Instruction` objects once at construction. Each instruction names the
+operation to run, the slots holding its operands, and the slot receiving its
+result, resolved from the operation vertex's edges at that point, so replay
+and differentiation never walk the graph again. `forward` traverses those
+instructions and reverse execution traverses them backwards.
+
+Every pass allocates its own value and gradient buffers, so concurrent replays
+of one Computation share no mutable execution state.
+
+Fusion is recorded beside the instruction sequence rather than inside it: the
+plan maps the first index of each fusible run to where the run ends and what
+the backend kernel needs. An instruction absent from that mapping simply
+executes on its own, so the same instruction sequence is valid on every
+backend, with or without fusion.
 
 The execution plan is an optimized runtime representation and deliberately does
 not mirror the graph object for object: the graph is the semantic structure,
@@ -446,15 +454,18 @@ Native backend VJPs are also used for supported reductions and elementwise
 operations; numerically delicate inputs return to the stable Python rules.
 
 Call `Computation.release()` when a long-lived Computation object no longer
-needs its output, plans, or workspaces. A released Computation cannot be reused.
+needs its output or plan. A released Computation cannot be reused.
 
 ## The operation contract
 
-`ts.graph.Operation` is an abstract base class. A concrete operation inherits
-from it and implements `forward()` and `backward()`:
+`ts.ops.Operation` is an abstract base class. It lives in the operations
+subsystem because it is the contract every concrete mathematical operation
+implements; the graph package references an operation rather than defining
+what one is. A concrete operation inherits from it and implements `forward()`
+and `backward()`:
 
 ```python
-from tensors.graph import Operation
+from tensors.ops import Operation
 
 
 class Identity(Operation):

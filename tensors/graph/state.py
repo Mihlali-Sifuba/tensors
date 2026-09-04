@@ -10,7 +10,7 @@ from typing import Any
 from ._weak_registry import WeakRegistry
 from .edge import Edge
 from .node import Node, OperationNode, VariableNode
-from .operation import Operation
+from ..ops.operation import Operation
 
 
 class GraphState:

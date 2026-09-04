@@ -1,4 +1,9 @@
-"""Operations — each op is a class with forward/backward differentiation rules.
+"""Operations — the Operation contract and the concrete operations.
+
+:class:`Operation` is defined here because it is the contract every concrete
+mathematical operation in this package implements. The graph package
+references an operation; it does not define what one is.
+
 
 Individual op classes:
     Add, Sub, Mul, Div, Neg, Slice
@@ -13,6 +18,7 @@ from __future__ import annotations
 
 from typing import Tuple, Union
 
+from .operation import Operation
 from .add import Add, add
 from .sub import Sub, subtract
 from .mul import Mul, multiply
@@ -44,6 +50,7 @@ class Ops:
     neg = staticmethod(negate)
 
 __all__ = [
+    "Operation",
     "add",
     "subtract",
     "multiply",

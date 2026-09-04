@@ -9,7 +9,7 @@ import math
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_normalization, execute_normalization_gradient
 from ..dtype import float64
-from ..graph.operation import Operation
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ._normalization import shifted_normalization
 from .softmax import (
