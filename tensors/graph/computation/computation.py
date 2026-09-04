@@ -15,12 +15,23 @@ from .gradients import (
     sum_gradient_values,
     validate_gradients,
 )
-from ..node import VariableNode
 
 if TYPE_CHECKING:
     from ...variable import Variable
     from ..node import Node
+    from .fusion import Fusion
     from .instruction import Instruction
+
+
+def _fusion_plan(
+    compiler: Compiler,
+) -> tuple[dict[int, Fusion], dict[int, int]]:
+    """Plan fusion once over a compiled program; every view shares the plan.
+
+    Fusion is an optional acceleration of the instruction sequence, recorded
+    beside it. The instructions themselves stay the canonical program.
+    """
+    return plan_fusions(compiler.instructions, compiler.variables)
 
 
 class Computation:
@@ -29,15 +40,20 @@ class Computation:
     A :class:`~tensors.graph.computation.compiler.Compiler` turns the graph
     rooted at an output Variable into ordered
     :class:`~tensors.graph.computation.instruction.Instruction` objects over
-    numbered Variable slots. A Computation holds one such compiled program,
-    selects the part of it its own output needs, and executes it:
-    :meth:`forward` replays it and :meth:`backward` differentiates it.
+    numbered Variable slots, and resolves the part of that program each
+    output needs. A Computation holds one such compiled program together with
+    its own execution view and executes it: :meth:`forward` replays it and
+    :meth:`backward` differentiates it.
+
+    Everything here is expressed in the compiled domain — Variables, slots,
+    instructions, and fusion metadata. The graph the program came from is the
+    compiler's concern, not the Computation's.
     """
 
     def __init__(self, output: Variable) -> None:
         compiler = Compiler((output,))
         compiler.compile()
-        self._adopt_program(compiler, 0)
+        self._adopt_program(compiler, 0, _fusion_plan(compiler))
 
     @classmethod
     def from_outputs(
@@ -49,84 +65,49 @@ class Computation:
         """Build output views over one shared multi-root compiled program."""
         compiler = Compiler(outputs, boundaries=boundaries)
         compiler.compile()
+        return cls._from_compiler(compiler)
 
-        first = cls.__new__(cls)
-        first._adopt_program(compiler, 0)
-        computations = [first]
-        for index, output in enumerate(compiler.outputs[1:], 1):
+    @classmethod
+    def _from_compiler(cls, compiler: Compiler) -> tuple[Computation, ...]:
+        """Build one view per output of an already-compiled program.
+
+        A caller that also wants the compiler's structural metadata compiles
+        once and hands that compiler here, so one trace is never compiled
+        twice.
+        """
+        fusion = _fusion_plan(compiler)
+        computations = []
+        for index in range(len(compiler.outputs)):
             computation = cls.__new__(cls)
-            computation._share_program(output, first, index)
+            computation._adopt_program(compiler, index, fusion)
             computations.append(computation)
         return tuple(computations)
 
-    def _adopt_program(self, compiler: Compiler, index: int) -> None:
-        """Take ownership of one compiled program for one of its outputs."""
+    def _adopt_program(
+        self,
+        compiler: Compiler,
+        index: int,
+        fusion: tuple[dict[int, Fusion], dict[int, int]],
+    ) -> None:
+        """Take one output's view of an already-compiled program.
+
+        Every view of one compilation stores the same program objects, so
+        multiple outputs share their instructions, slots and fusion metadata
+        while each keeps its own view of them.
+        """
         self.output = compiler.outputs[index]
-        self._all_nodes = compiler.nodes
-        self._node_masks = compiler.node_masks
-        self._boundary_nodes = compiler.boundary_nodes
-        self._output_bit = 1 << index
         self._variables = compiler.variables
         self._variable_slots = compiler.variable_slots
         self._leaf_slots = compiler.leaf_slots
         self._instructions = compiler.instructions
         self._output_slot = compiler.output_slots[index]
-        # Fusion is an optional acceleration of this sequence, recorded beside
-        # it. The instructions themselves stay the canonical program.
-        self._fusions, self._fusion_starts = plan_fusions(
-            self._instructions,
-            self._variables,
-        )
-        self._select_view()
+        self._view_slots = compiler.view_slots[index]
+        self._view_instructions = compiler.view_instructions[index]
+        # Structural nodes are opaque here: they are carried for the public
+        # ``nodes`` property and never interpreted.
+        self._view_nodes = compiler.view_nodes[index]
+        self._fusions, self._fusion_starts = fusion
         self._released = False
-
-    def _share_program(
-        self,
-        output: Variable,
-        owner: Computation,
-        index: int,
-    ) -> None:
-        """Take another output's view of a program already compiled once."""
-        self.output = output
-        self._all_nodes = owner._all_nodes
-        self._node_masks = owner._node_masks
-        self._boundary_nodes = owner._boundary_nodes
-        self._output_bit = 1 << index
-        self._variables = owner._variables
-        self._variable_slots = owner._variable_slots
-        self._leaf_slots = owner._leaf_slots
-        self._instructions = owner._instructions
-        self._fusions = owner._fusions
-        self._fusion_starts = owner._fusion_starts
-        self._output_slot = self._variable_slots[output]
-        self._select_view()
-        self._released = False
-
-    def _select_view(self) -> None:
-        """Resolve the nodes, slots, and instructions this output reaches.
-
-        The compiler recorded which outputs reach each traversed node; this
-        reads those masks for one output. It interprets compiled metadata
-        rather than the graph, so no traversal happens here.
-        """
-        output_bit = self._output_bit
-        self._nodes = tuple(
-            node
-            for node, mask in zip(self._all_nodes, self._node_masks)
-            if mask & output_bit
-        )
-        slots = self._variable_slots
-        view_slots = {
-            slots[node.variable]
-            for node in self._nodes
-            if isinstance(node, VariableNode)
-        }
-        self._view_slots = tuple(sorted(view_slots))
-        self._view_instructions = tuple(
-            instruction
-            for instruction in self._instructions
-            if instruction.output_slot in view_slots
-        )
 
     def _live_slots(self, targets: tuple[Variable, ...] | None) -> set[int]:
         """Return the slots whose gradient this reverse invocation requires.
@@ -171,9 +152,13 @@ class Computation:
 
     @property
     def nodes(self) -> list[Node]:
-        """Return the cached dependency-first traversal as an independent list."""
+        """Return the cached dependency-first traversal as an independent list.
+
+        The compiler resolved this traversal for this output; a Computation
+        only hands it back.
+        """
         self._require_active()
-        return list(self._nodes)
+        return list(self._view_nodes)
 
     def release(self) -> None:
         """Release graph references owned by this Computation.
@@ -185,10 +170,7 @@ class Computation:
         if self._released:
             return
         self.output = None
-        self._all_nodes = ()
-        self._node_masks = ()
-        self._boundary_nodes = frozenset()
-        self._nodes = ()
+        self._view_nodes = ()
         self._variables = ()
         self._variable_slots = {}
         self._leaf_slots = ()
