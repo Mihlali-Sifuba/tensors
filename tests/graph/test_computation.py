@@ -107,7 +107,7 @@ class ComputationTests(unittest.TestCase):
         first, second = model.computations
 
         self.assertIs(first._instructions, second._instructions)
-        self.assertIs(first._groups, second._groups)
+        self.assertIs(first._fusions, second._fusions)
         self.assertEqual(
             [node.label for node in first.nodes],
             ["var", "var", "mul", "var", "var", "add", "var"],
