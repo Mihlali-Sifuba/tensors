@@ -14,7 +14,7 @@ from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
 from ..shape import Shape
 from ..storage import PythonStorage
-from ..graph.operation import Operation
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..utils.coordinates import (
     coordinates_to_linear_index,

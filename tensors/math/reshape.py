@@ -4,7 +4,7 @@ from typing import Any, List, Tuple, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..shape import Shape
-from ..graph.operation import Operation
+from ..ops.operation import Operation
 from ..tensor import Tensor
 
 

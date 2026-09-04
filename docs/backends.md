@@ -140,8 +140,9 @@ CUDA storage. Calls such as `item()` and `tolist()` intentionally materialize
 host values and therefore synchronize or transfer data. Frequent host
 inspection inside a training loop can erase the benefit of device execution.
 
-`Computation` resolves graph slots and operation callables once, then reuses
-thread-local execution workspaces on forward and backward replay. Compatible
+`Computation` resolves graph slots and operations into ordered instructions
+once, then executes them with per-pass buffers on forward and backward replay.
+Compatible
 float32 and float64 elementwise chains—including broadcast tensor arithmetic,
 scalar powers, and common unary mathematics—can be fused into one CUDA launch
 while retaining the intermediate tensor values required by graph semantics.

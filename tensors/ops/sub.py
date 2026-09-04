@@ -4,7 +4,7 @@ from typing import List, Optional, Union
 
 from ..backend import execute_binary
 from ..dtype import result_dtype
-from ..graph.operation import Operation
+from .operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_binary_values
 from ._utils import sum_to_shape

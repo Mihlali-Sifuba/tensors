@@ -18,7 +18,7 @@ from weakref import ReferenceType, ref
 if TYPE_CHECKING:
     from ..variable import Variable
     from .edge import Edge
-    from .operation import Operation
+    from ..ops.operation import Operation
 
 
 class Node:

@@ -4,7 +4,7 @@ from typing import List
 
 from ..backend import execute_slice_scatter
 from ..shape import Shape
-from ..graph.operation import Operation
+from .operation import Operation
 from ..tensor import Tensor
 from ..utils.slicing import (
     logical_linear_indices_from_ranges,

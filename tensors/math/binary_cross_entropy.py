@@ -13,7 +13,7 @@ from ..backend import (
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..shape import Shape
-from ..graph.operation import Operation
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_tensors
 from .cross_entropy import Reduction, _validate_reduction

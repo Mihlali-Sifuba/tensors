@@ -8,7 +8,7 @@ from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_outer, execute_outer_gradient
 from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
-from ..graph.operation import Operation
+from ..ops.operation import Operation
 from ..tensor import Tensor
 
 if TYPE_CHECKING:

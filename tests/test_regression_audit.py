@@ -76,7 +76,7 @@ class AutogradRegressionTests(unittest.TestCase):
         )
 
     def test_custom_scalar_metadata_is_not_treated_as_operator_dispatch(self):
-        class MetadataOperation(ts.graph.Operation):
+        class MetadataOperation(ts.ops.Operation):
             __slots__ = ("scalar",)
             name = "metadata"
 

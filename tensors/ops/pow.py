@@ -12,7 +12,7 @@ from ..backend import (
 )
 from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import float64, result_dtype
-from ..graph.operation import Operation
+from .operation import Operation
 from ..shape import Shape
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_to, broadcast_tensors

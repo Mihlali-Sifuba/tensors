@@ -4,14 +4,12 @@ from typing import Any
 
 from .node import Node, OperationNode, VariableNode
 from .edge import Edge
-from .operation import Operation
 from .computation import Computation, backward, grad
 from .derivatives import hessian, jacobian
 from .gradcheck import GradcheckError, gradcheck
 
 __all__ = [
     "Graph", "Computation", "Node", "OperationNode", "VariableNode", "Edge",
-    "Operation",
     "GradcheckError", "backward", "grad", "gradcheck", "hessian", "jacobian",
 ]
 

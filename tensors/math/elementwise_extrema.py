@@ -9,7 +9,7 @@ from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_extremum, execute_extremum_gradient
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
-from ..graph.operation import Operation
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_tensors
 

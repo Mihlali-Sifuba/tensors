@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, List
 
 from ..dtype import DataType
-from ..graph.operation import Operation
+from .operation import Operation
 from ..tensor import Tensor
 
 

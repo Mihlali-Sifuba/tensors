@@ -101,7 +101,8 @@ tensors/
 │   ├── indexing.py
 │   ├── lists.py
 │   └── slicing.py
-├── ops/                   # primitive differentiable operations
+├── ops/                   # the Operation contract and its implementations
+│   ├── operation.py       # the Operation abstract base class
 │   ├── add.py, sub.py, mul.py, div.py, neg.py
 │   └── pow.py, slice.py, cast.py
 ├── linalg/                # linear algebra
@@ -130,7 +131,6 @@ tensors/
     ├── computation.py     # forward replay and reverse-mode execution
     ├── derivatives.py     # Jacobian and Hessian construction
     ├── gradcheck.py       # finite-difference verification
-    ├── operation.py       # the Operation abstract base class
     ├── node.py            # Node, VariableNode, and OperationNode
     ├── edge.py
     └── state.py
@@ -175,8 +175,11 @@ The folders have deliberately narrow responsibilities:
   [Tensor memory model](memory-model.md).
 - `creation` provides public constructors for mathematically defined tensor
   values, including zeros, ones, ranges, and identity matrices.
-- `ops` contains primitive differentiable operations such as arithmetic,
-  powers, slicing, and casting.
+- `ops` owns `Operation`, the abstract contract every concrete mathematical
+  operation implements, plus the primitive differentiable operations such as
+  arithmetic, powers, slicing, and casting. The graph package references an
+  operation through `OperationNode` and `Instruction`; it does not define what
+  an operation is.
 - `utils/coordinates.py` converts between logical coordinates and canonical
   row-major logical linear indices using `Shape` and canonical contiguous
   strides derived from that `Shape`; arbitrary Tensor strides and `offset`
@@ -198,11 +201,9 @@ The folders have deliberately narrow responsibilities:
   alternates `VariableNode -> OperationNode -> VariableNode`, and every
   relationship is an `Edge`. `Node` holds only identity and connectivity;
   `VariableNode` adds its `Variable` and `OperationNode` adds its `Operation`.
-  `Operation` is an abstract base class carrying the immutable configuration of
-  one concrete invocation plus its local `forward`, `backward`, and optional
-  `backward_graph` semantics. An operation defines how a local derivative is
-  calculated; `Computation` decides which local derivatives a reverse pass
-  requires and supplies that demand as `needs_input_grad`. See [Automatic differentiation](autodiff.md) for
+  An operation defines how a local derivative is calculated; `Computation`
+  decides which local derivatives a reverse pass requires and supplies that
+  demand as `needs_input_grad`. See [Automatic differentiation](autodiff.md) for
   the recorded topology and the responsibility split.
 - `Computation` owns compiled forward and backward plans, reusable execution
   workspaces, and eligible CUDA chain fusion; `ts.backward` is a root

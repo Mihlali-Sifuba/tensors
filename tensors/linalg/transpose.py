@@ -3,7 +3,7 @@
 from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
-from ..graph.operation import Operation
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from .dot import _transpose_impl
 
