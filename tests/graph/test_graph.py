@@ -15,7 +15,10 @@ class GraphTests(unittest.TestCase):
         reset_graph_state()
 
     def test_graph_package_owns_structural_types(self):
-        self.assertEqual(ts.graph.Computation.__module__, "tensors.graph.computation")
+        self.assertEqual(
+            ts.graph.Computation.__module__,
+            "tensors.graph.computation.computation",
+        )
         self.assertEqual(ts.graph.Edge.__module__, "tensors.graph.edge")
         self.assertEqual(ts.graph.Node.__module__, "tensors.graph.node")
 

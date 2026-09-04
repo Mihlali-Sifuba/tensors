@@ -11,12 +11,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, overload
 
-from .._typing import TensorLike
-from ..tensor import Tensor
+from ..._typing import TensorLike
+from ...tensor import Tensor
 from .computation import Computation
 
 if TYPE_CHECKING:
-    from ..variable import Variable
+    from ...variable import Variable
 
 
 def computation_for(output: Variable) -> Computation:
@@ -84,7 +84,7 @@ def grad(
     Set ``create_graph=True`` when the returned gradients will themselves be
     differentiated.
     """
-    from ..variable import Variable
+    from ...variable import Variable
 
     if not isinstance(create_graph, bool):
         raise TypeError("create_graph must be a bool")

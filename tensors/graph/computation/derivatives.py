@@ -6,11 +6,11 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from typing import Any, overload
 
-from ..tensor import Tensor
-from ..variable import Variable
+from ...tensor import Tensor
+from ...variable import Variable
 from .autograd import grad
 from .computation import Computation
-from .state import isolated_graph_state
+from ..state import isolated_graph_state
 
 
 def _normalize_inputs(inputs: Any, operation: str) -> tuple[tuple[Variable, ...], bool]:
@@ -65,7 +65,7 @@ def _saved_gradients(
     inputs: Iterable[Variable],
 ) -> list[tuple[Variable, Any]]:
     """Capture gradients that repeated reverse passes temporarily replace."""
-    from .node import VariableNode
+    from ..node import VariableNode
 
     variables = []
     seen = set()
@@ -125,7 +125,7 @@ def _assemble_rows(
         return Variable(zero, requires_grad=False) if create_graph else zero
 
     if create_graph:
-        from ..math import reshape, stack
+        from ...math import reshape, stack
 
         return reshape(stack(rows, axis=0), shape)
 

@@ -14,10 +14,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..tensor import Tensor
+from ...tensor import Tensor
 
 if TYPE_CHECKING:
-    from ..variable import Variable
+    from ...variable import Variable
     from .computation import Instruction
 
 
@@ -228,7 +228,7 @@ def execute_fused_forward(
     the run, and ``False`` when the caller must execute the same instructions
     ordinarily instead.
     """
-    from ..backend import execute_fused_elementwise
+    from ...backend import execute_fused_elementwise
 
     end, steps, source_slots = fusion
     fused = instructions[start:end + 1]
@@ -283,7 +283,7 @@ def execute_fused_backward(
     demand for the run, and ``False`` when the caller must differentiate the
     same instructions ordinarily instead.
     """
-    from ..backend import execute_fused_elementwise_backward
+    from ...backend import execute_fused_elementwise_backward
 
     # A fused range accumulates gradient terms exactly as the ordinary
     # reverse pass does. The import is deferred so the dependency between the
@@ -346,7 +346,7 @@ def execute_fused_backward(
         variable = variables[slot]
         gradient = Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
         if gradient.shape != variable.shape:
-            from ..ops._utils import sum_to_shape
+            from ...ops._utils import sum_to_shape
 
             gradient = sum_to_shape(gradient, variable.shape)
         if gradient.dtype != variable.dtype:

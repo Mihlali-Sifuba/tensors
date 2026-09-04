@@ -4,9 +4,9 @@ import unittest
 
 import tensors as ts
 from tensors.graph import Computation
-from tensors.graph import autograd
-from tensors.graph import computation as computation_module
-from tensors.graph.autograd import computation_for
+from tensors.graph.computation import autograd
+from tensors.graph.computation import computation as computation_module
+from tensors.graph.computation.autograd import computation_for
 from tensors.graph.state import reset_graph_state
 
 
@@ -22,7 +22,10 @@ class FunctionalApiBoundaryTests(unittest.TestCase):
     def test_functional_api_is_defined_by_the_autograd_module(self):
         for function in (ts.backward, ts.grad):
             with self.subTest(function=function.__name__):
-                self.assertEqual(function.__module__, "tensors.graph.autograd")
+                self.assertEqual(
+                    function.__module__,
+                    "tensors.graph.computation.autograd",
+                )
         self.assertIs(ts.backward, autograd.backward)
         self.assertIs(ts.grad, autograd.grad)
         self.assertIs(ts.graph.backward, autograd.backward)
@@ -59,7 +62,7 @@ class FunctionalApiBoundaryTests(unittest.TestCase):
                 imported.update(alias.name for alias in node.names)
         self.assertNotIn("autograd", imported)
         self.assertNotIn(".autograd", imported)
-        self.assertNotIn("tensors.graph.autograd", imported)
+        self.assertNotIn("tensors.graph.computation.autograd", imported)
 
     def test_computation_for_is_not_public_api(self):
         self.assertNotIn("computation_for", ts.graph.__all__)
