@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, Optional, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_where, execute_where_gradient
@@ -67,64 +67,96 @@ class Where(Operation):
             shape=shape,
         )
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Optional[Tensor]]:
         condition, left, right = inputs
-        accelerated = execute_where_gradient(grad, condition)
+        need_condition, need_left, need_right = needs_input_grad
+        # ``where`` rejects a differentiable condition, so its derivative is
+        # never requested; the branch remains for contract completeness.
+        condition_gradient = (
+            Tensor._from_values(
+                [0.0] * condition.shape.size,
+                grad.dtype,
+                condition.shape,
+            )
+            if need_condition
+            else None
+        )
+        accelerated = execute_where_gradient(
+            grad,
+            condition,
+            needs_input_grad=(need_left, need_right),
+        )
         if accelerated is not None:
             left_storage, right_storage = accelerated
-            left_gradient = Tensor._from_owned_storage(
-                left_storage,
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
-            right_gradient = Tensor._from_owned_storage(
-                right_storage,
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
             return [
-                Tensor(
-                    [0.0] * condition.size,
-                    dtype=grad.dtype,
-                    shape=condition.shape,
-                ),
-                sum_to_shape(left_gradient, left.shape),
-                sum_to_shape(right_gradient, right.shape),
+                condition_gradient,
+                sum_to_shape(
+                    Tensor._from_owned_storage(
+                        left_storage,
+                        dtype=grad.dtype,
+                        shape=grad.shape,
+                    ),
+                    left.shape,
+                )
+                if left_storage is not None
+                else None,
+                sum_to_shape(
+                    Tensor._from_owned_storage(
+                        right_storage,
+                        dtype=grad.dtype,
+                        shape=grad.shape,
+                    ),
+                    right.shape,
+                )
+                if right_storage is not None
+                else None,
             ]
         expanded_condition = broadcast_to(condition, grad.shape)
-        left_gradient = Tensor(
-            [
-                upstream if selected != 0 else 0.0
-                for upstream, selected in zip(
-                    grad._data,
-                    expanded_condition._data,
-                )
-            ],
-            dtype=grad.dtype,
-            shape=grad.shape,
-        )
-        right_gradient = Tensor(
-            [
-                upstream if selected == 0 else 0.0
-                for upstream, selected in zip(
-                    grad._data,
-                    expanded_condition._data,
-                )
-            ],
-            dtype=grad.dtype,
-            shape=grad.shape,
-        )
-        return [
-            Tensor(
-                [0.0] * condition.size,
-                dtype=grad.dtype,
-                shape=condition.shape,
-            ),
-            sum_to_shape(left_gradient, left.shape),
-            sum_to_shape(right_gradient, right.shape),
-        ]
+        left_gradient = None
+        if need_left:
+            left_gradient = sum_to_shape(
+                Tensor(
+                    [
+                        upstream if selected != 0 else 0.0
+                        for upstream, selected in zip(
+                            grad._data,
+                            expanded_condition._data,
+                        )
+                    ],
+                    dtype=grad.dtype,
+                    shape=grad.shape,
+                ),
+                left.shape,
+            )
+        right_gradient = None
+        if need_right:
+            right_gradient = sum_to_shape(
+                Tensor(
+                    [
+                        upstream if selected == 0 else 0.0
+                        for upstream, selected in zip(
+                            grad._data,
+                            expanded_condition._data,
+                        )
+                    ],
+                    dtype=grad.dtype,
+                    shape=grad.shape,
+                ),
+                right.shape,
+            )
+        return [condition_gradient, left_gradient, right_gradient]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         from ..ops._utils import (
             masked_value_graph,
             sum_to_shape_graph,
@@ -132,27 +164,34 @@ class Where(Operation):
         )
 
         condition, left, right = inputs
+        need_condition, need_left, need_right = needs_input_grad
         expanded = broadcast_to(condition.data, grad.shape)
-        left_mask = Tensor(
-            [1.0 if item != 0 else 0.0 for item in expanded._data],
-            dtype=grad.dtype,
-            shape=grad.shape,
-        )
-        right_mask = Tensor(
-            [1.0 if item == 0 else 0.0 for item in expanded._data],
-            dtype=grad.dtype,
-            shape=grad.shape,
-        )
-        return [
-            zero_like_graph(condition),
-            sum_to_shape_graph(
+        left_gradient = None
+        if need_left:
+            left_mask = Tensor(
+                [1.0 if item != 0 else 0.0 for item in expanded._data],
+                dtype=grad.dtype,
+                shape=grad.shape,
+            )
+            left_gradient = sum_to_shape_graph(
                 masked_value_graph(grad, left_mask),
                 left.shape,
-            ) + zero_like_graph(left),
-            sum_to_shape_graph(
+            ) + zero_like_graph(left)
+        right_gradient = None
+        if need_right:
+            right_mask = Tensor(
+                [1.0 if item == 0 else 0.0 for item in expanded._data],
+                dtype=grad.dtype,
+                shape=grad.shape,
+            )
+            right_gradient = sum_to_shape_graph(
                 masked_value_graph(grad, right_mask),
                 right.shape,
-            ) + zero_like_graph(right),
+            ) + zero_like_graph(right)
+        return [
+            zero_like_graph(condition) if need_condition else None,
+            left_gradient,
+            right_gradient,
         ]
 
 

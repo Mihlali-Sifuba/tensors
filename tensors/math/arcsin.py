@@ -22,7 +22,12 @@ class ArcSin(Operation):
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         return unary_forward("arcsin", value, dtype=dtype, fallback=_arcsin)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Tensor]:
         value = inputs[0]
         return [
             unary_backward(
@@ -33,7 +38,12 @@ class ArcSin(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for inverse sine."""
         from .sqrt import sqrt
 

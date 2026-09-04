@@ -22,7 +22,12 @@ class Sinh(Operation):
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         return unary_forward("sinh", value, dtype=dtype, fallback=_sinh)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Tensor]:
         value = inputs[0]
         return [
             unary_backward(
@@ -33,7 +38,12 @@ class Sinh(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for hyperbolic sine."""
         from .cosh import cosh
 

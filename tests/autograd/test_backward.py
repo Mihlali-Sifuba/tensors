@@ -153,7 +153,7 @@ class AutogradTests(unittest.TestCase):
             def forward(self, value):
                 return value
 
-            def backward(self, gradient, value):
+            def backward(self, gradient, value, *, needs_input_grad):
                 return []
 
         value = ts.Variable([2.0])
@@ -174,7 +174,7 @@ class AutogradTests(unittest.TestCase):
             def forward(self, value):
                 return value
 
-            def backward(self, gradient, value):
+            def backward(self, gradient, value, *, needs_input_grad):
                 raise RuntimeError("deliberate failure")
 
         value = ts.Variable([2.0])

@@ -6,7 +6,7 @@ from typing import Any, List, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_reduction, execute_reduction_gradient
 from ..dtype import float64
-from ..graph.operation import Operation
+from ..graph.operation import Operation, UNARY_DEMAND
 from ..tensor import Tensor
 from ._reduction import (
     Axis, immutable_axis, keepdims_shape, normalize_axes, reduction_groups,
@@ -78,7 +78,12 @@ class Mean(Operation):
         ]
         return Tensor(values, dtype=dtype, shape=output_shape)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         a = inputs[0]
         axis = self.axis
         keepdims = self.keepdims
@@ -103,14 +108,24 @@ class Mean(Operation):
         )
         if accelerated is not None:
             return [Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=a.shape)]
-        summed = Sum(axis=axis, keepdims=keepdims).backward(grad, a)[0]
+        summed = Sum(axis=axis, keepdims=keepdims).backward(
+            grad,
+            a,
+            needs_input_grad=UNARY_DEMAND,
+        )[0]
+        assert summed is not None
         return [Tensor(
             [float(item) / count for item in summed._data],
             dtype=grad.dtype,
             shape=a.shape,
         )]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for an axis-aware mean."""
         from ..creation import ones
         from ..ops._utils import zero_like_graph

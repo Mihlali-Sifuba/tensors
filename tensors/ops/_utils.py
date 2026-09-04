@@ -11,16 +11,6 @@ from ..utils.coordinates import (
 )
 
 
-def zeros_like(reference: Tensor, dtype) -> Tensor:
-    """Return zeros shaped like ``reference`` for a non-differentiated operand.
-
-    An operation must return one gradient per operand. When an operand is
-    frozen, the caller discards the value, so the zeros are built directly at
-    the operand's shape instead of reducing a broadcast gradient.
-    """
-    return Tensor._from_values([0.0] * reference.shape.size, dtype, reference.shape)
-
-
 def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
     """Reduce a broadcasted ``gradient`` back to an input ``shape``.
 
@@ -190,18 +180,33 @@ class ProductSumToShape(Operation):
         target_shape = self.target_shape
         return sum_products_to_shape(left, right, target_shape)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Tensor]:
         from ..utils.broadcasting import broadcast_to
 
         left, right = inputs
+        need_left, need_right = needs_input_grad
         common_shape = left.shape.broadcast_with(right.shape)
         expanded_grad = broadcast_to(grad, common_shape)
         return [
-            sum_products_to_shape(expanded_grad, right, left.shape),
-            sum_products_to_shape(expanded_grad, left, right.shape),
+            sum_products_to_shape(expanded_grad, right, left.shape)
+            if need_left
+            else None,
+            sum_products_to_shape(expanded_grad, left, right.shape)
+            if need_right
+            else None,
         ]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         left, right = inputs
         common_shape = left.shape.broadcast_with(right.shape)
         ones = Tensor(
@@ -210,9 +215,14 @@ class ProductSumToShape(Operation):
             shape=common_shape,
         )
         expanded_grad = grad * ones
+        need_left, need_right = needs_input_grad
         return [
-            sum_products_to_shape_graph(expanded_grad, right, left.shape),
-            sum_products_to_shape_graph(expanded_grad, left, right.shape),
+            sum_products_to_shape_graph(expanded_grad, right, left.shape)
+            if need_left
+            else None,
+            sum_products_to_shape_graph(expanded_grad, left, right.shape)
+            if need_right
+            else None,
         ]
 
 
@@ -241,7 +251,12 @@ class ZeroLike(Operation):
             shape=value.shape,
         )
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Tensor]:
         return [
             Tensor(
                 [0.0] * inputs[0].size,
@@ -250,7 +265,12 @@ class ZeroLike(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         return [zero_like_graph(inputs[0])]
 
 
@@ -293,7 +313,12 @@ class MaskedValue(Operation):
             shape=mask.shape,
         )
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Tensor]:
         mask = self.mask
         if not isinstance(mask, Tensor):
             raise TypeError("masked-value mask must be a Tensor")
@@ -307,7 +332,12 @@ class MaskedValue(Operation):
         )
         return [sum_to_shape(selected, inputs[0].shape)]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         mask = self.mask
         if not isinstance(mask, Tensor):
             raise TypeError("masked-value mask must be a Tensor")

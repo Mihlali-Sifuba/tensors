@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from array import array
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, List, overload
+from typing import TYPE_CHECKING, Any, List, Optional, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_stack
@@ -95,21 +95,34 @@ class Stack(Operation):
 
         return Tensor(result, dtype=dtype, shape=tuple(out_shape))
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
-        """Select each slice along the inserted axis."""
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Optional[Tensor]]:
+        """Select the requested slices along the inserted axis."""
         axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("stack axis must be an integer")
         if axis < 0:
             axis += grad.ndim
-        gradients = []
-        for index in range(len(inputs)):
+        gradients: List[Optional[Tensor]] = []
+        for index, wanted in enumerate(needs_input_grad):
+            if not wanted:
+                gradients.append(None)
+                continue
             key = [slice(None)] * grad.ndim
             key[axis] = index
             gradients.append(grad[tuple(key)])
         return gradients
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build differentiable selections for a stack VJP."""
         axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
@@ -117,7 +130,10 @@ class Stack(Operation):
         if axis < 0:
             axis += grad.ndim
         gradients = []
-        for index in range(len(inputs)):
+        for index, wanted in enumerate(needs_input_grad):
+            if not wanted:
+                gradients.append(None)
+                continue
             key = [slice(None)] * grad.ndim
             key[axis] = index
             gradients.append(grad[tuple(key)])

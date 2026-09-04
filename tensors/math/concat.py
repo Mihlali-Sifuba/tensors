@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from array import array
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, List, overload
+from typing import TYPE_CHECKING, Any, List, Optional, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_concat
@@ -124,8 +124,13 @@ class Concat(Operation):
 
         return Tensor(values, dtype=dtype, shape=tuple(output_shape))
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
-        """Split an upstream gradient back across every concatenated input."""
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Optional[Tensor]]:
+        """Split an upstream gradient across the requested inputs."""
         axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("concat axis must be an integer")
@@ -135,19 +140,29 @@ class Concat(Operation):
         if inputs[0].ndim == 0:
             return [
                 Tensor([grad._data[index]], dtype=grad.dtype, shape=())
-                for index in range(len(inputs))
+                if wanted
+                else None
+                for index, wanted in enumerate(needs_input_grad)
             ]
 
         offset = 0
-        gradients = []
-        for tensor in inputs:
-            key = [slice(None)] * grad.ndim
-            key[axis] = slice(offset, offset + tensor.shape[axis])
-            gradients.append(grad[tuple(key)])
+        gradients: List[Optional[Tensor]] = []
+        for tensor, wanted in zip(inputs, needs_input_grad):
+            if wanted:
+                key = [slice(None)] * grad.ndim
+                key[axis] = slice(offset, offset + tensor.shape[axis])
+                gradients.append(grad[tuple(key)])
+            else:
+                gradients.append(None)
             offset += tensor.shape[axis]
         return gradients
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Differentiably split an upstream gradient along the concat axis."""
         axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
@@ -155,13 +170,19 @@ class Concat(Operation):
         if axis < 0:
             axis += grad.ndim
         if inputs[0].ndim == 0:
-            return [grad[index] for index in range(len(inputs))]
+            return [
+                grad[index] if wanted else None
+                for index, wanted in enumerate(needs_input_grad)
+            ]
         offset = 0
         gradients = []
-        for tensor in inputs:
-            key = [slice(None)] * grad.ndim
-            key[axis] = slice(offset, offset + tensor.shape[axis])
-            gradients.append(grad[tuple(key)])
+        for tensor, wanted in zip(inputs, needs_input_grad):
+            if wanted:
+                key = [slice(None)] * grad.ndim
+                key[axis] = slice(offset, offset + tensor.shape[axis])
+                gradients.append(grad[tuple(key)])
+            else:
+                gradients.append(None)
             offset += tensor.shape[axis]
         return gradients
 

@@ -29,7 +29,7 @@ class OperationContractTests(unittest.TestCase):
             def forward(self, value):
                 return value
 
-            def backward(self, gradient, value):
+            def backward(self, gradient, value, *, needs_input_grad):
                 return [gradient]
 
         operation = Identity()
@@ -40,7 +40,11 @@ class OperationContractTests(unittest.TestCase):
             NotImplementedError,
             "Higher-order derivatives are not implemented for identity",
         ):
-            operation.backward_graph(value, value)
+            operation.backward_graph(
+                value,
+                value,
+                needs_input_grad=(True,),
+            )
 
     def test_operation_instances_are_immutable(self):
         operation = Sum(axis=(1,), keepdims=True)

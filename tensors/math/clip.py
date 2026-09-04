@@ -94,7 +94,12 @@ class Clip(Operation):
             mask.append(1.0 if above_minimum and below_maximum else 0.0)
         return mask
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> list[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> list[Tensor]:
         value = inputs[0]
         min_value = self.min_value
         max_value = self.max_value
@@ -118,7 +123,12 @@ class Clip(Operation):
             shape=value.shape,
         )]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         from ..ops._utils import masked_value_graph, zero_like_graph
 
         value = inputs[0]

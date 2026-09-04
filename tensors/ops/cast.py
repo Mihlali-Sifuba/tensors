@@ -26,10 +26,20 @@ class Cast(Operation):
         dtype = self.dtype
         return value.astype(dtype)
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         return [grad.astype(inputs[0].dtype)]
 
-    def backward_graph(self, grad: Any, *inputs: Any) -> List[Any]:
+    def backward_graph(
+        self,
+        grad: Any,
+        *inputs: Any,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Any]:
         """Build a differentiable VJP converted to the input dtype."""
         return [grad.astype(inputs[0].dtype)]
 

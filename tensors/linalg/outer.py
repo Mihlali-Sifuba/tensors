@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, List, overload
+from typing import TYPE_CHECKING, Any, List, Optional, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_outer, execute_outer_gradient
@@ -37,24 +37,39 @@ class Outer(Operation):
         values = [left * right for left in a._data for right in b._data]
         return Tensor(values, dtype=dtype, shape=(a.size, b.size))
 
-    def backward(self, grad: Tensor, *inputs: Tensor) -> List[Tensor]:
-        """Differentiate an outer product with respect to both vectors."""
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Optional[Tensor]]:
+        """Differentiate an outer product with respect to requested vectors."""
         left, right = inputs
+        need_left, need_right = needs_input_grad
         expected_shape = (left.size, right.size)
         if grad.shape != expected_shape:
             raise ValueError(
                 f"Gradient shape {grad.shape} does not match output shape "
                 f"{expected_shape}"
             )
-        accelerated = execute_outer_gradient(grad, left, right)
+        accelerated = execute_outer_gradient(
+            grad,
+            left,
+            right,
+            needs_input_grad=needs_input_grad,
+        )
         if accelerated is not None:
             left_storage, right_storage = accelerated
             return [
-                Tensor._from_owned_storage(left_storage, dtype=grad.dtype, shape=left.shape),
-                Tensor._from_owned_storage(right_storage, dtype=grad.dtype, shape=right.shape),
+                Tensor._from_owned_storage(left_storage, dtype=grad.dtype, shape=left.shape)
+                if left_storage is not None
+                else None,
+                Tensor._from_owned_storage(right_storage, dtype=grad.dtype, shape=right.shape)
+                if right_storage is not None
+                else None,
             ]
 
-        left_gradient = [
+        left_gradient = [] if not need_left else [
             _stable_product_sum(
                 [
                     (
@@ -66,7 +81,7 @@ class Outer(Operation):
             )
             for row in range(left.size)
         ]
-        right_gradient = [
+        right_gradient = [] if not need_right else [
             _stable_product_sum(
                 [
                     (
@@ -79,14 +94,27 @@ class Outer(Operation):
             for column in range(right.size)
         ]
         return [
-            Tensor(left_gradient, dtype=grad.dtype, shape=left.shape),
-            Tensor(right_gradient, dtype=grad.dtype, shape=right.shape),
+            Tensor(left_gradient, dtype=grad.dtype, shape=left.shape)
+            if need_left
+            else None,
+            Tensor(right_gradient, dtype=grad.dtype, shape=right.shape)
+            if need_right
+            else None,
         ]
 
-    def backward_graph(self, grad, *inputs):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for an outer product."""
         left, right = inputs
-        return [grad @ right, left @ grad]
+        need_left, need_right = needs_input_grad
+        return [
+            grad @ right if need_left else None,
+            left @ grad if need_right else None,
+        ]
 
 
 @overload

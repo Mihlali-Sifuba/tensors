@@ -95,8 +95,9 @@ class VariableOperatorTests(unittest.TestCase):
         base, recorded = producer.operands
         self.assertEqual(base.data.item(), 2.0)
         self.assertIs(recorded, exponent)
-        self.assertFalse(producer.operation.differentiate_base)
-        self.assertTrue(producer.operation.differentiate_exponent)
+        # The recorded operation is mathematics only: which derivatives a
+        # reverse pass wants is decided by Computation.
+        self.assertEqual(type(producer.operation).__slots__, ())
 
     def test_negation_and_slicing_create_operation_nodes(self):
         variable = ts.Variable([1.0, 2.0, 3.0])
