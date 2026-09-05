@@ -399,11 +399,15 @@ def binary_cross_entropy(
     )
 
     if prediction_is_variable or target_is_variable:
-        prediction_variable = prediction if prediction_is_variable else Variable(
-            prediction_tensor, requires_grad=False
+        prediction_variable = (
+            prediction
+            if isinstance(prediction, Variable)
+            else Variable(prediction_tensor, requires_grad=False)
         )
-        target_variable = target if target_is_variable else Variable(
-            target_tensor, requires_grad=False
+        target_variable = (
+            target
+            if isinstance(target, Variable)
+            else Variable(target_tensor, requires_grad=False)
         )
         operation = BinaryCrossEntropy(from_logits=from_logits, reduction=reduction)
         return Variable._record_operation(

@@ -246,13 +246,15 @@ def where(
             if isinstance(condition, Variable)
             else Variable(condition_tensor, requires_grad=False)
         )
-        left_variable = left if left_is_variable else Variable(
-            left_tensor,
-            requires_grad=False,
+        left_variable = (
+            left
+            if isinstance(left, Variable)
+            else Variable(left_tensor, requires_grad=False)
         )
-        right_variable = right if right_is_variable else Variable(
-            right_tensor,
-            requires_grad=False,
+        right_variable = (
+            right
+            if isinstance(right, Variable)
+            else Variable(right_tensor, requires_grad=False)
         )
         operation = Where()
         return Variable._record_operation(
