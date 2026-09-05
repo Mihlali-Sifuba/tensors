@@ -27,8 +27,8 @@ class VariableMathOperationTests(unittest.TestCase):
         for label, result in results.items():
             with self.subTest(operation=label):
                 self.assertIsInstance(result, ts.Variable)
-                self.assertEqual(result.node.label, label)
-                self.assertEqual(result.node.inputs, [variable.node])
+                self.assertEqual(result.node.producer.label, label)
+                self.assertEqual(result.node.producer.inputs, [variable.node])
 
     def test_log_of_exp_has_the_original_value_and_unit_gradient(self):
         variable = ts.Variable([0.5, 1.5])

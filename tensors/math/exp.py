@@ -5,20 +5,27 @@ from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 
 
-class Exp:
+class Exp(Operation):
     """Elementwise exponential with a reverse-mode gradient rule."""
 
-    @staticmethod
-    def forward(a: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "exp"
+
+    def forward(self, a: Tensor) -> Tensor:
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         return unary_forward("exp", a, dtype=dtype, fallback=_exp)
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         a = inputs[0]
         return [
             unary_backward(
@@ -29,8 +36,12 @@ class Exp:
             )
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for exponentiation."""
         return [grad * exp(inputs[0])]
 
@@ -48,15 +59,15 @@ def exp(value: TensorLike) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
-        return Variable._from_operation(
-            Exp.forward(value.data),
-            "exp",
-            Exp,
-            [value],
+        operation = Exp()
+        return Variable._record_operation(
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Exp.forward(value)
+    return Exp().forward(value)
 
 
 __all__ = ["Exp", "exp"]

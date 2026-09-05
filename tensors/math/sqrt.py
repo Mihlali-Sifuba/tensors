@@ -5,25 +5,36 @@ from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 
 
-class Sqrt:
+class Sqrt(Operation):
     """Elementwise square root with a reverse-mode gradient rule."""
 
-    @staticmethod
-    def forward(a: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "sqrt"
+
+    def forward(self, a: Tensor) -> Tensor:
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         return unary_forward("sqrt", a, dtype=dtype, fallback=_sqrt)
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         a = inputs[0]
         return [unary_backward("sqrt", grad, a, fallback=_sqrt_gradient)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for square root."""
         if any(value == 0 for value in inputs[0].data._data):
             raise ValueError("sqrt derivative is undefined at zero")
@@ -43,15 +54,15 @@ def sqrt(value: TensorLike) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
-        return Variable._from_operation(
-            Sqrt.forward(value.data),
-            "sqrt",
-            Sqrt,
-            [value],
+        operation = Sqrt()
+        return Variable._record_operation(
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Sqrt.forward(value)
+    return Sqrt().forward(value)
 
 
 __all__ = ["Sqrt", "sqrt"]

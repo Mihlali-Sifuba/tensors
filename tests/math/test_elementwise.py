@@ -137,13 +137,13 @@ class ElementwiseMathTests(unittest.TestCase):
             ts.backward(ts.sqrt(value))
 
     def test_math_namespace_exposes_elementwise_operation_classes(self):
-        self.assertAlmostEqual(ts.math.Sqrt.forward(ts.Tensor([4.0])).item(), 2.0)
-        self.assertAlmostEqual(ts.math.Exp.forward(ts.Tensor([0.0])).item(), 1.0)
-        self.assertAlmostEqual(ts.math.Log.forward(ts.Tensor([math.e])).item(), 1.0)
-        self.assertEqual(ts.math.ReLU.forward(ts.Tensor([-1.0, 2.0])).tolist(), [0.0, 2.0])
-        self.assertAlmostEqual(ts.math.Sigmoid.forward(ts.Tensor([0.0])).item(), 0.5)
-        self.assertAlmostEqual(ts.math.Tanh.forward(ts.Tensor([1.0])).item(), math.tanh(1.0))
-        self.assertAlmostEqual(ts.math.Softplus.forward(ts.Tensor([0.0])).item(), math.log(2.0))
+        self.assertAlmostEqual(ts.math.Sqrt().forward(ts.Tensor([4.0])).item(), 2.0)
+        self.assertAlmostEqual(ts.math.Exp().forward(ts.Tensor([0.0])).item(), 1.0)
+        self.assertAlmostEqual(ts.math.Log().forward(ts.Tensor([math.e])).item(), 1.0)
+        self.assertEqual(ts.math.ReLU().forward(ts.Tensor([-1.0, 2.0])).tolist(), [0.0, 2.0])
+        self.assertAlmostEqual(ts.math.Sigmoid().forward(ts.Tensor([0.0])).item(), 0.5)
+        self.assertAlmostEqual(ts.math.Tanh().forward(ts.Tensor([1.0])).item(), math.tanh(1.0))
+        self.assertAlmostEqual(ts.math.Softplus().forward(ts.Tensor([0.0])).item(), math.log(2.0))
 
     def test_exp_backward(self):
         x = ts.Variable([0.0, 1.0])

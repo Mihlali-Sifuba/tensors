@@ -8,6 +8,7 @@ from typing import Any, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_reduction, execute_reduction_gradient
 from ..dtype import float64
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ._reduction import (
     Axis,
@@ -19,15 +20,24 @@ from ._reduction import (
 from .std import _scaled_deviations
 
 
-class Variance:
+class Variance(Operation):
     """Axis-aware population variance with stable centering."""
 
-    @staticmethod
-    def forward(
-        value: Tensor,
+    __slots__ = ("axis", "keepdims")
+    name = "variance"
+
+    def __init__(
+        self,
+        *,
         axis: Axis = None,
         keepdims: bool = False,
-    ) -> Tensor:
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+        object.__setattr__(self, "keepdims", keepdims)
+
+    def forward(self, value: Tensor) -> Tensor:
+        axis = self.axis
+        keepdims = self.keepdims
         axes = normalize_axes(value.ndim, axis)
         output_shape = reduction_shape(value.shape, axes, keepdims)
         if axis is None and not keepdims:
@@ -56,15 +66,15 @@ class Variance:
             values.append(deviation * deviation)
         return Tensor(values, dtype=dtype, shape=output_shape)
 
-    @staticmethod
     def backward(
+        self,
         grad: Tensor,
         *inputs: Tensor,
-        **kwargs: object,
+        needs_input_grad: tuple[bool, ...],
     ) -> list[Tensor]:
         value = inputs[0]
-        axis = kwargs.get("axis")
-        keepdims = kwargs.get("keepdims", False)
+        axis = self.axis
+        keepdims = self.keepdims
         axes = normalize_axes(value.ndim, axis)
         output_shape = reduction_shape(value.shape, axes, keepdims)
         if axis is None and not keepdims:
@@ -106,8 +116,12 @@ class Variance:
                 gradients[input_index] = upstream * centered_value * factor
         return [Tensor(gradients, dtype=grad.dtype, shape=value.shape)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable population-variance VJP."""
         from ..ops._utils import zero_like_graph
         from ..variable import Variable
@@ -115,8 +129,8 @@ class Variance:
         from .reshape import reshape
 
         value = inputs[0]
-        axis = kwargs.get("axis")
-        keepdims = kwargs.get("keepdims", False)
+        axis = self.axis
+        keepdims = self.keepdims
         _, scale_shape, groups = reduction_groups(value.data, axis, True)
         count = len(groups[0]) if groups else 0
         if count == 0:
@@ -173,17 +187,15 @@ def variance(
 
     axis = immutable_axis(axis)
     if isinstance(value, Variable):
-        return Variable._from_operation(
-            Variance.forward(value.data, axis=axis, keepdims=keepdims),
-            "variance",
-            Variance,
-            [value],
-            axis=axis,
-            keepdims=keepdims,
+        operation = Variance(axis=axis, keepdims=keepdims)
+        return Variable._record_operation(
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Variance.forward(value, axis=axis, keepdims=keepdims)
+    return Variance(axis=axis, keepdims=keepdims).forward(value)
 
 
 __all__ = ["Variance", "variance"]

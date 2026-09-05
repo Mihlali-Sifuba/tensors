@@ -38,8 +38,8 @@ class OuterTests(unittest.TestCase):
         right = ts.Variable([3.0, 4.0, 5.0])
         result = ts.outer(left, right)
 
-        self.assertEqual(result.node.label, "outer")
-        self.assertEqual(result.node.inputs, [left.node, right.node])
+        self.assertEqual(result.node.producer.label, "outer")
+        self.assertEqual(result.node.producer.inputs, [left.node, right.node])
 
         ts.backward(ts.sum(result))
 

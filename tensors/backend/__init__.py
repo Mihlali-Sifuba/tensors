@@ -262,15 +262,27 @@ def execute_matmul_gradient(
     grad: Tensor,
     left: Tensor,
     right: Tensor,
-) -> tuple[Storage, Storage] | None:
-    """Run matrix-product VJPs with an accelerated backend when safe."""
+    *,
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None] | None:
+    """Run the requested matrix-product VJPs with an accelerated backend.
+
+    ``needs_input_grad`` states which operand gradients the caller wants, so
+    the kernel can skip an output the reverse pass will discard. An
+    unrequested position comes back as ``None``.
+    """
     contraction_size = left.shape[-1]
     work = grad.size * contraction_size
     if not _array_work_is_large_enough(work, _NUMPY_MATMUL_MIN_WORK):
         return None
 
     matmul_gradient = _backend_kernel("matmul_gradient")
-    return matmul_gradient(grad, left, right)
+    return matmul_gradient(
+        grad,
+        left,
+        right,
+        needs_input_grad=needs_input_grad,
+    )
 
 
 def execute_binary(
@@ -400,8 +412,15 @@ def execute_fused_elementwise_backward(
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
+    requested_external: tuple[int, ...] = (),
 ) -> tuple[Storage, ...] | None:
-    """Run a compatible floating-point chain VJP in one CUDA kernel."""
+    """Run the requested part of a chain VJP in one CUDA kernel.
+
+    ``requested_external`` names the fused steps whose external operand
+    gradient the current reverse pass wants. The backend refuses the request
+    when its compact step form carries no such derivative, so the caller can
+    fall back to ordinary operation execution.
+    """
     work = _shape_size(output_shape)
     if (
         get_backend() != "cuda"
@@ -421,6 +440,7 @@ def execute_fused_elementwise_backward(
         tuple(steps),
         dtype=dtype,
         output_shape=output_shape,
+        requested_external=requested_external,
     )
 
 
@@ -667,7 +687,9 @@ def execute_outer_gradient(
     grad: Tensor,
     left: Tensor,
     right: Tensor,
-) -> tuple[Storage, Storage] | None:
+    *,
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None] | None:
     """Run outer-product VJPs when native sums preserve semantics."""
     if not _array_work_is_large_enough(
         grad.size,
@@ -676,7 +698,12 @@ def execute_outer_gradient(
         return None
 
     outer_gradient = _backend_kernel("outer_gradient")
-    return outer_gradient(grad, left, right)
+    return outer_gradient(
+        grad,
+        left,
+        right,
+        needs_input_grad=needs_input_grad,
+    )
 
 
 def execute_convolution(
@@ -723,8 +750,9 @@ def execute_convolution_gradient(
     dilation: tuple[int, ...],
     groups: int,
     include_bias: bool,
-) -> tuple[Storage, ...] | None:
-    """Run convolution VJPs when native accumulation preserves semantics."""
+    needs_input_grad: tuple[bool, ...] = (True, True, True),
+) -> tuple[Storage | None, ...] | None:
+    """Run the requested convolution VJPs when native accumulation is safe."""
     patch = kernel.size // max(kernel.shape[0], 1)
     if not _array_work_is_large_enough(
         grad.size * patch,
@@ -742,6 +770,7 @@ def execute_convolution_gradient(
         dilation=dilation,
         groups=groups,
         include_bias=include_bias,
+        needs_input_grad=needs_input_grad,
     )
 
 
@@ -1056,7 +1085,9 @@ def execute_where(
 def execute_where_gradient(
     grad: Tensor,
     condition: Tensor,
-) -> tuple[Storage, Storage] | None:
+    *,
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None] | None:
     """Split a selection gradient along a condition mask."""
     if not _array_work_is_large_enough(
         grad.size,
@@ -1065,7 +1096,11 @@ def execute_where_gradient(
         return None
 
     where_gradient = _backend_kernel("where_gradient")
-    return where_gradient(grad, condition)
+    return where_gradient(
+        grad,
+        condition,
+        needs_input_grad=needs_input_grad,
+    )
 
 
 def execute_clip(
@@ -1138,7 +1173,9 @@ def execute_extremum_gradient(
     grad: Tensor,
     left: Tensor,
     right: Tensor,
-) -> tuple[Storage, Storage] | None:
+    *,
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None] | None:
     """Split an elementwise-extremum VJP, including tie sharing."""
     if not _array_work_is_large_enough(
         grad.size,
@@ -1147,7 +1184,13 @@ def execute_extremum_gradient(
         return None
 
     extremum_gradient = _backend_kernel("extremum_gradient")
-    return extremum_gradient(operation, grad, left, right)
+    return extremum_gradient(
+        operation,
+        grad,
+        left,
+        right,
+        needs_input_grad=needs_input_grad,
+    )
 
 
 def execute_normalization(
@@ -1298,8 +1341,9 @@ def execute_cross_entropy_gradient(
     axis: int,
     *,
     reduction: LossReduction,
-) -> tuple[Storage, Storage] | None:
-    """Run fused multiclass cross-entropy VJPs when numerically safe."""
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None] | None:
+    """Run the requested multiclass cross-entropy VJPs when safe."""
     if not _array_work_is_large_enough(
         logits.size,
         _NUMPY_ELEMENTWISE_MIN_SIZE,
@@ -1313,6 +1357,7 @@ def execute_cross_entropy_gradient(
         targets,
         axis,
         reduction=reduction,
+        needs_input_grad=needs_input_grad,
     )
 
 
@@ -1350,8 +1395,9 @@ def execute_binary_cross_entropy_gradient(
     *,
     from_logits: bool,
     reduction: LossReduction,
-) -> tuple[Storage, Storage] | None:
-    """Run fused binary cross-entropy VJPs."""
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None] | None:
+    """Run the requested binary cross-entropy VJPs."""
     if not _array_work_is_large_enough(
         prediction.size,
         _NUMPY_ELEMENTWISE_MIN_SIZE,
@@ -1365,6 +1411,7 @@ def execute_binary_cross_entropy_gradient(
         target,
         from_logits=from_logits,
         reduction=reduction,
+        needs_input_grad=needs_input_grad,
     )
 
 

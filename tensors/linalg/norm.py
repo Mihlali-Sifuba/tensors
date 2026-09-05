@@ -6,6 +6,7 @@ from typing import Any, List, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_reduction
 from ..dtype import float64
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..math._reduction import (
     Axis,
@@ -36,16 +37,25 @@ def _scaled_norm(
     return scale, normalized, normalized_magnitude
 
 
-class Norm:
+class Norm(Operation):
     """Whole-tensor Euclidean norm with reverse-mode gradient rules."""
 
-    @staticmethod
-    def forward(
-        value: Tensor,
+    __slots__ = ("axis", "keepdims")
+    name = "norm"
+
+    def __init__(
+        self,
+        *,
         axis: Axis = None,
         keepdims: bool = False,
-    ) -> Tensor:
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+        object.__setattr__(self, "keepdims", keepdims)
+
+    def forward(self, value: Tensor) -> Tensor:
         """Return Euclidean norms over one, several, or all axes."""
+        axis = self.axis
+        keepdims = self.keepdims
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         axes = normalize_axes(value.ndim, axis)
         output_shape = reduction_shape(value.shape, axes, keepdims)
@@ -66,12 +76,16 @@ class Norm:
             results.append(scale * normalized_magnitude)
         return Tensor(results, dtype=dtype, shape=output_shape)
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         """Differentiate the Euclidean norm with respect to its input."""
         value = inputs[0]
-        axis = kwargs.get("axis")
-        keepdims = kwargs.get("keepdims", False)
+        axis = self.axis
+        keepdims = self.keepdims
         _, output_shape, groups = reduction_groups(value, axis, keepdims)
         if grad.shape != output_shape:
             raise ValueError(
@@ -89,15 +103,19 @@ class Norm:
                 )
         return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for nonzero axis-aware norms."""
         from ..math.reshape import reshape
         from ..variable import Variable
 
         value = inputs[0]
-        axis = kwargs.get("axis")
-        keepdims = kwargs.get("keepdims", False)
+        axis = self.axis
+        keepdims = self.keepdims
         _, scale_shape, groups = reduction_groups(value.data, axis, True)
         statistics = [_scaled_norm(value.data, group) for group in groups]
         if any(item[2] == 0 for item in statistics):
@@ -153,17 +171,15 @@ def norm(
     axis = immutable_axis(axis)
 
     if isinstance(value, Variable):
-        return Variable._from_operation(
-            Norm.forward(value.data, axis=axis, keepdims=keepdims),
-            "norm",
-            Norm,
-            [value],
-            axis=axis,
-            keepdims=keepdims,
+        operation = Norm(axis=axis, keepdims=keepdims)
+        return Variable._record_operation(
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Norm.forward(value, axis=axis, keepdims=keepdims)
+    return Norm(axis=axis, keepdims=keepdims).forward(value)
 
 
 __all__ = ["Norm", "norm"]

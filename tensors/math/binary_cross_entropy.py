@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any, List, overload
+from typing import TYPE_CHECKING, Any, List, Optional, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import (
@@ -13,6 +13,7 @@ from ..backend import (
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..shape import Shape
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..utils.broadcasting import broadcast_tensors
 from .cross_entropy import Reduction, _validate_reduction
@@ -68,17 +69,24 @@ def _reduce(values: list[float], reduction: Reduction) -> tuple[list[float], tup
     return [total], (1,)
 
 
-class BinaryCrossEntropy:
+class BinaryCrossEntropy(Operation):
     """Binary cross-entropy for probabilities or raw logits."""
 
-    @staticmethod
-    def forward(
-        prediction: Tensor,
-        target: Tensor,
+    __slots__ = ("from_logits", "reduction")
+    name = "binary_cross_entropy"
+
+    def __init__(
+        self,
         *,
         from_logits: bool = False,
         reduction: Reduction = "mean",
-    ) -> Tensor:
+    ) -> None:
+        object.__setattr__(self, "from_logits", from_logits)
+        object.__setattr__(self, "reduction", reduction)
+
+    def forward(self, prediction: Tensor, target: Tensor) -> Tensor:
+        from_logits = self.from_logits
+        reduction = self.reduction
         _validate_reduction(reduction)
         _validate_from_logits(from_logits)
         prediction, target = broadcast_tensors(prediction, target)
@@ -125,12 +133,17 @@ class BinaryCrossEntropy:
         reduced, shape = _reduce(values, reduction)
         return Tensor(reduced, dtype=dtype, shape=shape)
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Optional[Tensor]]:
         prediction, target = inputs
-        from_logits = kwargs.get("from_logits", False)
+        need_prediction, need_target = needs_input_grad
+        from_logits = self.from_logits
         _validate_from_logits(from_logits)
-        reduction = kwargs.get("reduction", "mean")
+        reduction = self.reduction
         if not isinstance(reduction, str):
             raise TypeError("reduction must be a string")
 
@@ -142,6 +155,7 @@ class BinaryCrossEntropy:
             expanded_target,
             from_logits=from_logits,
             reduction=reduction,
+            needs_input_grad=needs_input_grad,
         )
         if accelerated is not None:
             prediction_storage, target_storage = accelerated
@@ -154,7 +168,9 @@ class BinaryCrossEntropy:
                         shape=expanded_shape,
                     ),
                     prediction.shape,
-                ),
+                )
+                if prediction_storage is not None
+                else None,
                 sum_to_shape(
                     Tensor._from_owned_storage(
                         target_storage,
@@ -162,7 +178,9 @@ class BinaryCrossEntropy:
                         shape=expanded_shape,
                     ),
                     target.shape,
-                ),
+                )
+                if target_storage is not None
+                else None,
             ]
         if reduction == "none":
             upstream = list(grad._data)
@@ -176,46 +194,71 @@ class BinaryCrossEntropy:
             upstream, expanded_prediction._data, expanded_target._data
         ):
             if upstream_value == 0:
-                prediction_gradients.append(0.0)
-                target_gradients.append(0.0)
+                if need_prediction:
+                    prediction_gradients.append(0.0)
+                if need_target:
+                    target_gradients.append(0.0)
                 continue
             value = float(raw_prediction)
             target_value = float(raw_target)
-            if from_logits:
-                prediction_derivative = (
-                    (1.0 - target_value) - _sigmoid(-value)
-                    if value >= 0.0
-                    else _sigmoid(value) - target_value
+            if need_prediction:
+                prediction_gradients.append(
+                    upstream_value * (
+                        (
+                            (1.0 - target_value) - _sigmoid(-value)
+                            if value >= 0.0
+                            else _sigmoid(value) - target_value
+                        )
+                        if from_logits
+                        else _probability_gradient(value, target_value)
+                    )
                 )
-                target_derivative = -value
-            else:
-                prediction_derivative = _probability_gradient(value, target_value)
-                target_derivative = _target_gradient(value)
-            prediction_gradients.append(upstream_value * prediction_derivative)
-            target_gradients.append(upstream_value * target_derivative)
+            if need_target:
+                target_gradients.append(
+                    upstream_value * (
+                        -value if from_logits else _target_gradient(value)
+                    )
+                )
 
         expanded_shape = expanded_prediction.shape
-        prediction_gradient = Tensor(
-            prediction_gradients, dtype=grad.dtype, shape=expanded_shape
-        )
-        target_gradient = Tensor(
-            target_gradients, dtype=grad.dtype, shape=expanded_shape
-        )
         return [
-            sum_to_shape(prediction_gradient, prediction.shape),
-            sum_to_shape(target_gradient, target.shape),
+            sum_to_shape(
+                Tensor(
+                    prediction_gradients,
+                    dtype=grad.dtype,
+                    shape=expanded_shape,
+                ),
+                prediction.shape,
+            )
+            if need_prediction
+            else None,
+            sum_to_shape(
+                Tensor(
+                    target_gradients,
+                    dtype=grad.dtype,
+                    shape=expanded_shape,
+                ),
+                target.shape,
+            )
+            if need_target
+            else None,
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable binary cross-entropy VJP."""
         from .log import log
         from .sigmoid import sigmoid
 
         prediction, target = inputs
-        from_logits = kwargs.get("from_logits", False)
+        need_prediction, need_target = needs_input_grad
+        from_logits = self.from_logits
         _validate_from_logits(from_logits)
-        reduction = kwargs.get("reduction", "mean")
+        reduction = self.reduction
         shape = prediction.shape.broadcast_with(target.shape)
         size = shape.size
         upstream = grad / size if reduction == "mean" and size else grad
@@ -248,7 +291,7 @@ class BinaryCrossEntropy:
                 zip(expanded_prediction._data, expanded_target._data)
             )
 
-            if prediction.requires_grad:
+            if need_prediction:
                 if any(
                     (value == 0.0 and target_value != 0.0)
                     or (value == 1.0 and target_value != 1.0)
@@ -279,9 +322,9 @@ class BinaryCrossEntropy:
                     + (1.0 - target) / (1.0 - prediction + one_mask)
                 )
             else:
-                prediction_derivative = prediction * 0.0
+                prediction_derivative = None
 
-            if target.requires_grad:
+            if need_target:
                 if any(value in {0.0, 1.0} for value, _ in boundary_values):
                     raise ValueError(
                         "Higher-order gradients with respect to binary "
@@ -292,10 +335,17 @@ class BinaryCrossEntropy:
                     log(1.0 - prediction) - log(prediction) + target * 0.0
                 )
             else:
-                target_derivative = target * 0.0
+                target_derivative = None
         return [
-            sum_to_shape_graph(upstream * prediction_derivative, prediction.shape),
-            sum_to_shape_graph(upstream * target_derivative, target.shape),
+            sum_to_shape_graph(
+                upstream * prediction_derivative,
+                prediction.shape,
+            )
+            if need_prediction
+            else None,
+            sum_to_shape_graph(upstream * target_derivative, target.shape)
+            if need_target
+            else None,
         ]
 
 
@@ -349,31 +399,27 @@ def binary_cross_entropy(
     )
 
     if prediction_is_variable or target_is_variable:
-        prediction_variable = prediction if prediction_is_variable else Variable(
-            prediction_tensor, requires_grad=False
+        prediction_variable = (
+            prediction
+            if isinstance(prediction, Variable)
+            else Variable(prediction_tensor, requires_grad=False)
         )
-        target_variable = target if target_is_variable else Variable(
-            target_tensor, requires_grad=False
+        target_variable = (
+            target
+            if isinstance(target, Variable)
+            else Variable(target_tensor, requires_grad=False)
         )
-        return Variable._from_operation(
-            BinaryCrossEntropy.forward(
-                prediction_variable.data,
-                target_variable.data,
-                from_logits=from_logits,
-                reduction=reduction,
-            ),
-            "binary_cross_entropy",
-            BinaryCrossEntropy,
-            [prediction_variable, target_variable],
-            from_logits=from_logits,
-            reduction=reduction,
+        operation = BinaryCrossEntropy(from_logits=from_logits, reduction=reduction)
+        return Variable._record_operation(
+            operation.forward(prediction_variable.data, target_variable.data),
+            operation,
+            (prediction_variable, target_variable),
         )
-    return BinaryCrossEntropy.forward(
-        prediction_tensor,
-        target_tensor,
+    operation = BinaryCrossEntropy(
         from_logits=from_logits,
         reduction=reduction,
     )
+    return operation.forward(prediction_tensor, target_tensor)
 
 
 __all__ = ["BinaryCrossEntropy", "binary_cross_entropy"]

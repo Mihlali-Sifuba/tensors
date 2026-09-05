@@ -33,15 +33,15 @@ class InverseTrigonometricTests(unittest.TestCase):
         self.assertAlmostEqual(ts.math.arccos([0.5]).item(), math.acos(0.5))
         self.assertAlmostEqual(ts.math.arctan([0.5]).item(), math.atan(0.5))
         self.assertAlmostEqual(
-            ts.math.ArcSin.forward(ts.Tensor([0.5])).item(),
+            ts.math.ArcSin().forward(ts.Tensor([0.5])).item(),
             math.asin(0.5),
         )
         self.assertAlmostEqual(
-            ts.math.ArcCos.forward(ts.Tensor([0.5])).item(),
+            ts.math.ArcCos().forward(ts.Tensor([0.5])).item(),
             math.acos(0.5),
         )
         self.assertAlmostEqual(
-            ts.math.ArcTan.forward(ts.Tensor([0.5])).item(),
+            ts.math.ArcTan().forward(ts.Tensor([0.5])).item(),
             math.atan(0.5),
         )
 
@@ -204,7 +204,7 @@ class SignTests(unittest.TestCase):
     def test_public_math_namespace_exposes_sign_function_and_class(self):
         self.assertEqual(ts.math.sign([-1.0, 0.0, 1.0]).tolist(), [-1.0, 0.0, 1.0])
         self.assertEqual(
-            ts.math.Sign.forward(ts.Tensor([-1.0, 0.0, 1.0])).tolist(),
+            ts.math.Sign().forward(ts.Tensor([-1.0, 0.0, 1.0])).tolist(),
             [-1.0, 0.0, 1.0],
         )
 

@@ -32,6 +32,8 @@ class Shape(tuple[int, ...]):
     @classmethod
     def from_iterable(cls, dimensions: Iterable[int]) -> Shape:
         """Build a shape from any iterable of dimensions."""
+        if type(dimensions) is cls:
+            return dimensions
         try:
             normalized = tuple(dimensions)
         except TypeError as exc:
@@ -45,6 +47,15 @@ class Shape(tuple[int, ...]):
         normalized_other = (
             other if isinstance(other, Shape) else Shape.from_iterable(other)
         )
+        # Equal shapes and rank-zero operands dominate expression code, and
+        # both resolve without inspecting individual dimensions.
+        if tuple.__eq__(self, normalized_other) is True:
+            return self
+        if not normalized_other:
+            return self
+        if not self:
+            return normalized_other
+
         dimensions: list[int] = []
         for dimension, other_dimension in zip(
             reversed(self),
@@ -66,8 +77,12 @@ class Shape(tuple[int, ...]):
         )
         matched_dimensions = min(self.rank, normalized_other.rank)
         unmatched_dimensions = longer_shape.rank - matched_dimensions
-        dimensions.extend(reversed(longer_shape[:unmatched_dimensions]))
-        return Shape(*reversed(dimensions))
+        dimensions.extend(
+            reversed(tuple.__getitem__(longer_shape, slice(unmatched_dimensions)))
+        )
+        dimensions.reverse()
+        # Every dimension came from an already-validated Shape.
+        return tuple.__new__(Shape, dimensions)
 
     @overload
     def __getitem__(self, key: SupportsIndex) -> int: ...
@@ -78,7 +93,7 @@ class Shape(tuple[int, ...]):
     def __getitem__(self, key: SupportsIndex | slice) -> int | Shape:
         """Return one dimension or a Shape containing a dimension slice."""
         if isinstance(key, slice):
-            return Shape.from_iterable(tuple.__getitem__(self, key))
+            return tuple.__new__(Shape, tuple.__getitem__(self, key))
         return tuple.__getitem__(self, key)
 
     @property

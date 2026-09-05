@@ -7,23 +7,26 @@ from typing import Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 
 
-class ArcCos:
+class ArcCos(Operation):
     """Elementwise inverse cosine on the closed real interval [-1, 1]."""
 
-    @staticmethod
-    def forward(value: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "arccos"
+
+    def forward(self, value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         return unary_forward("arccos", value, dtype=dtype, fallback=_arccos)
 
-    @staticmethod
     def backward(
+        self,
         grad: Tensor,
         *inputs: Tensor,
-        **kwargs: object,
+        needs_input_grad: tuple[bool, ...],
     ) -> list[Tensor]:
         value = inputs[0]
         return [
@@ -35,8 +38,12 @@ class ArcCos:
             )
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for inverse cosine."""
         from .sqrt import sqrt
 
@@ -59,15 +66,15 @@ def arccos(value: TensorLike) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
-        return Variable._from_operation(
-            ArcCos.forward(value.data),
-            "arccos",
-            ArcCos,
-            [value],
+        operation = ArcCos()
+        return Variable._record_operation(
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return ArcCos.forward(value)
+    return ArcCos().forward(value)
 
 
 __all__ = ["ArcCos", "arccos"]

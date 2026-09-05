@@ -138,7 +138,7 @@ class MutationSafetyTests(unittest.TestCase):
 
         replayed = Computation(output).forward()
 
-        self.assertEqual(output.node.args["axis"], (0,))
+        self.assertEqual(output.node.producer.operation.axis, (0,))
         self.assertEqual(replayed.tolist(), [4.0, 6.0])
 
     def test_optimizer_step_invalidates_an_old_loss(self):

@@ -26,7 +26,7 @@ class VariableSoftmaxTests(unittest.TestCase):
             probability * (gradient - weighted_sum)
             for gradient, probability in zip(upstream.tolist(), probabilities.data.tolist())
         ]
-        self.assertEqual(probabilities.node.label, "softmax")
+        self.assertEqual(probabilities.node.producer.label, "softmax")
         for actual, expected_value in zip(logits.grad.tolist(), expected):
             self.assertAlmostEqual(actual, expected_value)
 

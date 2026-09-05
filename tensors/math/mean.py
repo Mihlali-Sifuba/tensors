@@ -6,6 +6,7 @@ from typing import Any, List, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_reduction, execute_reduction_gradient
 from ..dtype import float64
+from ..ops.operation import Operation, UNARY_DEMAND
 from ..tensor import Tensor
 from ._reduction import (
     Axis, immutable_axis, keepdims_shape, normalize_axes, reduction_groups,
@@ -26,12 +27,24 @@ def _stable_float_mean(values: list[float]) -> float:
     )
 
 
-class Mean:
+class Mean(Operation):
     """Mean with a reverse-mode gradient rule."""
 
-    @staticmethod
-    def forward(a: Tensor, axis: Axis = None,
-                keepdims: bool = False) -> Tensor:
+    __slots__ = ("axis", "keepdims")
+    name = "mean"
+
+    def __init__(
+        self,
+        *,
+        axis: Axis = None,
+        keepdims: bool = False,
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+        object.__setattr__(self, "keepdims", keepdims)
+
+    def forward(self, a: Tensor) -> Tensor:
+        axis = self.axis
+        keepdims = self.keepdims
         axes = normalize_axes(a.ndim, axis)
         output_shape = reduction_shape(a.shape, axes, keepdims)
         if axis is None and not keepdims:
@@ -65,11 +78,15 @@ class Mean:
         ]
         return Tensor(values, dtype=dtype, shape=output_shape)
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         a = inputs[0]
-        axis = kwargs.get("axis")
-        keepdims = kwargs.get("keepdims", False)
+        axis = self.axis
+        keepdims = self.keepdims
         axes = normalize_axes(a.ndim, axis)
         output_shape = reduction_shape(a.shape, axes, keepdims)
         if axis is None and not keepdims:
@@ -91,23 +108,32 @@ class Mean:
         )
         if accelerated is not None:
             return [Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=a.shape)]
-        summed = Sum.backward(grad, a, axis=axis, keepdims=keepdims)[0]
+        summed = Sum(axis=axis, keepdims=keepdims).backward(
+            grad,
+            a,
+            needs_input_grad=UNARY_DEMAND,
+        )[0]
+        assert summed is not None
         return [Tensor(
             [float(item) / count for item in summed._data],
             dtype=grad.dtype,
             shape=a.shape,
         )]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for an axis-aware mean."""
         from ..creation import ones
         from ..ops._utils import zero_like_graph
         from ..variable import Variable
         from .reshape import reshape
 
-        axis = kwargs.get("axis")
-        keepdims = kwargs.get("keepdims", False)
+        axis = self.axis
+        keepdims = self.keepdims
         value = inputs[0]
         count = reduction_size(value.shape, normalize_axes(value.ndim, axis))
         if count == 0:
@@ -147,17 +173,15 @@ def mean(
     axis = immutable_axis(axis)
 
     if isinstance(value, Variable):
-        return Variable._from_operation(
-            Mean.forward(value.data, axis=axis, keepdims=keepdims),
-            "mean",
-            Mean,
-            [value],
-            axis=axis,
-            keepdims=keepdims,
+        operation = Mean(axis=axis, keepdims=keepdims)
+        return Variable._record_operation(
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Mean.forward(value, axis=axis, keepdims=keepdims)
+    return Mean(axis=axis, keepdims=keepdims).forward(value)
 
 
 __all__ = ["Mean", "mean"]

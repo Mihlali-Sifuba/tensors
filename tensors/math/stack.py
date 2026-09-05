@@ -4,22 +4,33 @@ from __future__ import annotations
 
 from array import array
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, List, overload
+from typing import TYPE_CHECKING, Any, List, Optional, overload
 
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_stack
 from ..dtype import result_dtype
+from ..ops.operation import Operation
 from ..tensor import Tensor
 
 if TYPE_CHECKING:
     from ..variable import Variable
 
 
-class Stack:
+class Stack(Operation):
     """Stack tensors along a new axis and split gradients back to inputs."""
 
-    @staticmethod
-    def forward(*tensors: Tensor | list[Any], axis: int = 0) -> Tensor:
+    __slots__ = ("axis",)
+    name = "stack"
+
+    def __init__(
+        self,
+        *,
+        axis: int = 0,
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+
+    def forward(self, *tensors: Tensor | list[Any]) -> Tensor:
+        axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("stack axis must be an integer")
         if len(tensors) == 1 and isinstance(tensors[0], list):
@@ -84,31 +95,45 @@ class Stack:
 
         return Tensor(result, dtype=dtype, shape=tuple(out_shape))
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
-        """Select each slice along the inserted axis."""
-        axis = kwargs.get("axis", 0)
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Optional[Tensor]]:
+        """Select the requested slices along the inserted axis."""
+        axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("stack axis must be an integer")
         if axis < 0:
             axis += grad.ndim
-        gradients = []
-        for index in range(len(inputs)):
+        gradients: List[Optional[Tensor]] = []
+        for index, wanted in enumerate(needs_input_grad):
+            if not wanted:
+                gradients.append(None)
+                continue
             key = [slice(None)] * grad.ndim
             key[axis] = index
             gradients.append(grad[tuple(key)])
         return gradients
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build differentiable selections for a stack VJP."""
-        axis = kwargs.get("axis", 0)
+        axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("stack axis must be an integer")
         if axis < 0:
             axis += grad.ndim
         gradients = []
-        for index in range(len(inputs)):
+        for index, wanted in enumerate(needs_input_grad):
+            if not wanted:
+                gradients.append(None)
+                continue
             key = [slice(None)] * grad.ndim
             key[axis] = index
             gradients.append(grad[tuple(key)])
@@ -136,14 +161,13 @@ def stack(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult:
             value if isinstance(value, Variable) else Variable(value, requires_grad=False)
             for value in tensors
         ]
-        return Variable._from_operation(
-            Stack.forward(*(variable.data for variable in variables), axis=axis),
-            "stack",
-            Stack,
+        operation = Stack(axis=axis)
+        return Variable._record_operation(
+            operation.forward(*(variable.data for variable in variables)),
+            operation,
             variables,
-            axis=axis,
         )
-    return Stack.forward(*tensors, axis=axis)
+    return Stack(axis=axis).forward(*tensors)
 
 
 __all__ = ["Stack", "stack"]

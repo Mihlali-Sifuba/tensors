@@ -30,8 +30,14 @@ class GraphOutputTests(unittest.TestCase):
 
         model(ts.Tensor([3.0]))
 
-        self.assertEqual([node.label for node in model.nodes], ["var", "add", "mul"])
-        self.assertEqual([edge.label for edge in model.edges], ["input_0", "input_0"])
+        self.assertEqual(
+            [node.label for node in model.nodes],
+            ["var", "var", "add", "var", "var", "mul", "var"],
+        )
+        self.assertEqual(
+            [edge.label for edge in model.edges],
+            ["input_0", "input_1", "result", "input_0", "input_1", "result"],
+        )
 
     def test_nodes_and_edges_properties_return_independent_lists(self):
         @ts.Graph
@@ -44,8 +50,8 @@ class GraphOutputTests(unittest.TestCase):
         nodes.clear()
         edges.clear()
 
-        self.assertEqual(len(model.nodes), 2)
-        self.assertEqual(len(model.edges), 1)
+        self.assertEqual(len(model.nodes), 4)
+        self.assertEqual(len(model.edges), 3)
 
     def test_computation_is_unavailable_until_the_graph_has_been_called(self):
         @ts.Graph

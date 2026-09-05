@@ -9,8 +9,8 @@ from typing import Any
 
 from ._weak_registry import WeakRegistry
 from .edge import Edge
-from .node import Node
-from .protocols import Operation
+from .node import Node, OperationNode, VariableNode
+from ..ops.operation import Operation
 
 
 class GraphState:
@@ -38,21 +38,16 @@ class GraphState:
         """Return the live edges in registration order."""
         return self._edges.values()
 
-    def add_node(
-        self,
-        label: str,
-        output_var: Any = None,
-        op_cls: type[Operation] | None = None,
-        _scalar_operand: bool = False,
-        **kwargs: Any,
-    ) -> Node:
-        node = Node(
-            label=label,
-            output_var=output_var,
-            op_cls=op_cls,
-            _scalar_operand=_scalar_operand,
-            **kwargs,
-        )
+    def add_variable_node(self, variable: Any) -> VariableNode:
+        """Record the graph vertex representing one Variable."""
+        node = VariableNode(variable)
+        if self._record_registries:
+            self._nodes.add(node)
+        return node
+
+    def add_operation_node(self, operation: Operation) -> OperationNode:
+        """Record the graph vertex representing one operation invocation."""
+        node = OperationNode(operation)
         if self._record_registries:
             self._nodes.add(node)
         return node
