@@ -133,7 +133,7 @@ def _slice_scatter(grad, source_shape: tuple[int, ...], key):
     from ..variable import Variable
 
     operation = SliceScatter(source_shape=source_shape, key=key)
-    return Variable._from_operation(
+    return Variable._record_operation(
         operation.forward(grad.data),
         operation,
         (grad,),

@@ -61,17 +61,22 @@ class Variable:
         self.data = data.data if isinstance(data, Variable) else data
         self.grad = None
         self.name = name or f"v{id(self) & 0xFFFF:04x}"
-        # Execution state, not graph structure: the recorded forward states
-        # used to reject differentiating a mutated computation, and the
-        # reusable reverse plan rooted at this Variable.
-        self._forward_record: Any = None
-        self._autograd_computation: Any = None
+        # Execution state, not graph structure: the forward pass states used
+        # to reject differentiating a mutated computation, and the reusable
+        # Computation compiled from the graph rooted at this Variable.
+        self._forward_state: Any = None
+        self._cached_computation: Any = None
 
         self.node = get_graph_state().add_variable_node(self)
 
     @classmethod
-    def _from_operation(cls, data, operation, inputs):
-        """Record ``operation`` over ``inputs`` and return its result Variable.
+    def _record_operation(cls, data, operation, inputs):
+        """Record an executed ``operation`` and return its result Variable.
+
+        The operation has already run: this writes it into graph history by
+        creating the result Variable, adding the operation vertex, joining
+        each operand to it, joining it to the result, and capturing the
+        result's forward state.
 
         The recorded topology is always
         ``VariableNode -> OperationNode -> VariableNode``: every operand
@@ -87,20 +92,20 @@ class Variable:
         for label, operand in zip(_operand_labels(len(inputs)), inputs):
             graph.add_edge(operand.node, node, label=label)
         graph.add_edge(node, result.node, label="result")
-        result._capture_forward_record(inputs)
+        result._capture_forward_state(inputs)
         return result
 
-    def _capture_forward_record(self, operands: Iterable[Variable]) -> None:
+    def _capture_forward_state(self, operands: Iterable[Variable]) -> None:
         """Remember the operand and result states of the forward pass.
 
-        The record describes values rather than topology, so it takes the
+        The state describes values rather than topology, so it takes the
         operand Variables directly and execution never has to consult the
         graph to refresh it.
         """
         if not self.requires_grad:
-            self._forward_record = None
+            self._forward_state = None
             return
-        self._forward_record = (
+        self._forward_state = (
             tuple(operand._mutation_state() for operand in operands),
             self._mutation_state(),
         )
@@ -195,78 +200,137 @@ class Variable:
             "variable.size != 0 for emptiness checks."
         )
 
-    # -- operand normalization -----------------------------------------
-
-    def _operand(self, other: TensorOperand, dtype: DataType) -> Variable:
-        """Return ``other`` as a graph operand Variable.
-
-        A Python scalar becomes a non-gradient scalar Variable so the value
-        enters the graph structurally instead of hiding inside the operation.
-        ``dtype`` is the dtype the existing scalar promotion rules select, so
-        the resulting tensor-tensor promotion reproduces it exactly.
-        """
-        if isinstance(other, Variable):
-            return other
-        if isinstance(other, Tensor):
-            return Variable(other, requires_grad=False)
-        return Variable(
-            Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
-            requires_grad=False,
-        )
-
-    def _binary(self, operation: Any, other: Variable) -> Variable:
-        """Record a binary operation over two graph operands.
-
-        The recorded operation carries mathematical configuration only. Which
-        VJPs a later reverse pass needs is decided by ``Computation``.
-        """
-        return self._from_operation(
-            operation.forward(self.data, other.data),
-            operation,
-            (self, other),
-        )
-
     # -- operators (build graph implicitly) ----------------------------
+    #
+    # Each operator resolves its own operand and records its own invocation.
+    # A Python scalar becomes a non-gradient scalar Variable so the value
+    # enters the graph structurally instead of hiding inside the operation,
+    # typed by the dtype the scalar promotion rules select so that the
+    # resulting tensor-tensor promotion reproduces it exactly.
 
     def __add__(self, other: TensorOperand) -> Variable:
-        operand = self._operand(other, result_dtype(self.dtype, other))
-        return self._binary(Add(), operand)
+        dtype = result_dtype(self.dtype, other)
+        if isinstance(other, Variable):
+            operand = other
+        elif isinstance(other, Tensor):
+            operand = Variable(other, requires_grad=False)
+        else:
+            operand = Variable(
+                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                requires_grad=False,
+            )
+
+        operation = Add()
+        return self._record_operation(
+            operation.forward(self.data, operand.data),
+            operation,
+            (self, operand),
+        )
 
     def __radd__(self, other: int | float | Tensor) -> Variable:
         return self + other
 
     def __sub__(self, other: TensorOperand) -> Variable:
-        operand = self._operand(other, result_dtype(self.dtype, other))
-        return self._binary(Sub(), operand)
+        dtype = result_dtype(self.dtype, other)
+        if isinstance(other, Variable):
+            operand = other
+        elif isinstance(other, Tensor):
+            operand = Variable(other, requires_grad=False)
+        else:
+            operand = Variable(
+                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                requires_grad=False,
+            )
+
+        operation = Sub()
+        return self._record_operation(
+            operation.forward(self.data, operand.data),
+            operation,
+            (self, operand),
+        )
 
     def __rsub__(self, other: int | float | Tensor) -> Variable:
         return (-self) + other
 
     def __mul__(self, other: TensorOperand) -> Variable:
-        operand = self._operand(other, result_dtype(self.dtype, other))
-        return self._binary(Mul(), operand)
+        dtype = result_dtype(self.dtype, other)
+        if isinstance(other, Variable):
+            operand = other
+        elif isinstance(other, Tensor):
+            operand = Variable(other, requires_grad=False)
+        else:
+            operand = Variable(
+                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                requires_grad=False,
+            )
+
+        operation = Mul()
+        return self._record_operation(
+            operation.forward(self.data, operand.data),
+            operation,
+            (self, operand),
+        )
 
     def __rmul__(self, other: int | float | Tensor) -> Variable:
         return self * other
 
     def __truediv__(self, other: TensorOperand) -> Variable:
-        operand = self._operand(
-            other,
-            result_dtype(self.dtype, other, division=True),
+        dtype = result_dtype(self.dtype, other, division=True)
+        if isinstance(other, Variable):
+            operand = other
+        elif isinstance(other, Tensor):
+            operand = Variable(other, requires_grad=False)
+        else:
+            operand = Variable(
+                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                requires_grad=False,
+            )
+
+        operation = Div()
+        return self._record_operation(
+            operation.forward(self.data, operand.data),
+            operation,
+            (self, operand),
         )
-        return self._binary(Div(), operand)
 
     def __rtruediv__(self, other: int | float | Tensor) -> Variable:
         # Operand order carries the semantics: the numerator is input_0.
-        numerator = self._operand(
-            other,
-            result_dtype(self.dtype, other, division=True),
+        dtype = result_dtype(self.dtype, other, division=True)
+        if isinstance(other, Variable):
+            numerator = other
+        elif isinstance(other, Tensor):
+            numerator = Variable(other, requires_grad=False)
+        else:
+            numerator = Variable(
+                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                requires_grad=False,
+            )
+
+        operation = Div()
+        return self._record_operation(
+            operation.forward(numerator.data, self.data),
+            operation,
+            (numerator, self),
         )
-        return numerator._binary(Div(), self)
 
     def __pow__(self, other: TensorOperand) -> Variable:
-        exponent = self._operand(other, _power_dtype(self.data, other))
-        return self._binary(Pow(), exponent)
+        dtype = _power_dtype(self.data, other)
+        if isinstance(other, Variable):
+            exponent = other
+        elif isinstance(other, Tensor):
+            exponent = Variable(other, requires_grad=False)
+        else:
+            exponent = Variable(
+                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                requires_grad=False,
+            )
+
+        operation = Pow()
+        return self._record_operation(
+            operation.forward(self.data, exponent.data),
+            operation,
+            (self, exponent),
+        )
 
     def __rpow__(
         self,
@@ -274,12 +338,26 @@ class Variable:
     ) -> Variable | NotImplementedType:
         if not isinstance(other, (int, float, Tensor)) or isinstance(other, bool):
             return NotImplemented
-        base = self._operand(other, result_dtype(self.dtype, other))
-        return base._binary(Pow(), self)
+        # Operand order carries the semantics: the base is input_0.
+        dtype = result_dtype(self.dtype, other)
+        if isinstance(other, Tensor):
+            base = Variable(other, requires_grad=False)
+        else:
+            base = Variable(
+                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                requires_grad=False,
+            )
+
+        operation = Pow()
+        return self._record_operation(
+            operation.forward(base.data, self.data),
+            operation,
+            (base, self),
+        )
 
     def __neg__(self) -> Variable:
         operation = Neg()
-        return self._from_operation(
+        return self._record_operation(
             operation.forward(self.data),
             operation,
             (self,),
@@ -299,7 +377,7 @@ class Variable:
 
     def __getitem__(self, key: TensorIndex) -> Variable:
         operation = Slice(key=key)
-        return self._from_operation(
+        return self._record_operation(
             operation.forward(self.data),
             operation,
             (self,),
@@ -308,4 +386,4 @@ class Variable:
     def astype(self, dtype: str | DataType) -> "Variable":
         """Return a differentiable copy converted to ``dtype``."""
         result = self.data.astype(dtype)
-        return self._from_operation(result, Cast(dtype=result.dtype), (self,))
+        return self._record_operation(result, Cast(dtype=result.dtype), (self,))

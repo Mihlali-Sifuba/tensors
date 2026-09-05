@@ -160,7 +160,7 @@ class DemandContractTests(unittest.TestCase):
         left = ts.Variable([2.0])
         right = ts.Variable([3.0], requires_grad=False)
         operation = Overeager()
-        output = ts.Variable._from_operation(
+        output = ts.Variable._record_operation(
             operation.forward(left.data, right.data),
             operation,
             (left, right),
@@ -182,7 +182,7 @@ class DemandContractTests(unittest.TestCase):
         left = ts.Variable([2.0])
         right = ts.Variable([3.0])
         operation = Forgetful()
-        output = ts.Variable._from_operation(
+        output = ts.Variable._record_operation(
             operation.forward(left.data, right.data),
             operation,
             (left, right),

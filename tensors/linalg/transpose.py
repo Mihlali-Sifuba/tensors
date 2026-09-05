@@ -75,7 +75,7 @@ def transpose(
 
     if isinstance(value, Variable):
         operation = Transpose(axes=axes)
-        return Variable._from_operation(
+        return Variable._record_operation(
             operation.forward(value.data),
             operation,
             (value,),

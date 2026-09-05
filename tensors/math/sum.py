@@ -237,7 +237,7 @@ def sum(
 
     if isinstance(value, Variable):
         operation = Sum(axis=axis, keepdims=keepdims)
-        return Variable._from_operation(
+        return Variable._record_operation(
             operation.forward(value.data),
             operation,
             (value,),

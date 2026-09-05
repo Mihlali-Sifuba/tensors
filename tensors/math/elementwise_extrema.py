@@ -251,7 +251,7 @@ def _extremum(operation: Operation, left: Any, right: Any) -> Any:
             right_tensor,
             requires_grad=False,
         )
-        return Variable._from_operation(
+        return Variable._record_operation(
             operation.forward(left_variable.data, right_variable.data),
             operation,
             (left_variable, right_variable),

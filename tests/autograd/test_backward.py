@@ -159,7 +159,7 @@ class AutogradTests(unittest.TestCase):
 
         value = ts.Variable([2.0])
         operation = BrokenOperation()
-        output = value._from_operation(
+        output = value._record_operation(
             operation.forward(value.data),
             operation,
             (value,),
@@ -180,7 +180,7 @@ class AutogradTests(unittest.TestCase):
 
         value = ts.Variable([2.0])
         operation = BrokenOperation()
-        output = value._from_operation(
+        output = value._record_operation(
             operation.forward(value.data),
             operation,
             (value,),

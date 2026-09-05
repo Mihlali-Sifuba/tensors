@@ -262,7 +262,7 @@ def execute_fused_forward(
             shape=output_shape,
         )
         output._replace_data_from_replay(tensor)
-        output._capture_forward_record(
+        output._capture_forward_state(
             variables[slot] for slot in instruction.input_slots
         )
         values[instruction.output_slot] = tensor
