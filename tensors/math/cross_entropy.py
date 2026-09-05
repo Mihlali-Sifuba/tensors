@@ -494,13 +494,14 @@ def cross_entropy(
     logits_is_variable = isinstance(logits, Variable)
     targets_are_variable = isinstance(prepared_targets, Variable)
     if logits_is_variable or targets_are_variable:
-        logits_variable = logits if logits_is_variable else Variable(
-            logits_tensor,
-            requires_grad=False,
+        logits_variable = (
+            logits
+            if isinstance(logits, Variable)
+            else Variable(logits_tensor, requires_grad=False)
         )
         targets_variable = (
             prepared_targets
-            if targets_are_variable
+            if isinstance(prepared_targets, Variable)
             else Variable(_tensor(prepared_targets), requires_grad=False)
         )
         operation = CrossEntropy(axis=axis, reduction=reduction)
