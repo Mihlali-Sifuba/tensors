@@ -14,7 +14,7 @@ class WeakRegistry(Generic[T]):
 
     __slots__ = ("_references", "_additions", "__weakref__")
 
-    _PRUNE_INTERVAL = 256
+    _MINIMUM_PRUNE_INTERVAL = 256
 
     def __init__(self) -> None:
         self._references: dict[int, ReferenceType[T]] = {}
@@ -30,7 +30,13 @@ class WeakRegistry(Generic[T]):
             del self._references[identity]
         self._references[identity] = ref(value)
         self._additions += 1
-        if self._additions >= self._PRUNE_INTERVAL:
+        # Pruning walks every registration, so the interval scales with the
+        # live population. A fixed interval would make recording a large
+        # graph quadratic in the number of registered nodes.
+        if self._additions >= max(
+            self._MINIMUM_PRUNE_INTERVAL,
+            len(self._references),
+        ):
             self._prune()
 
     def __contains__(self, value: object) -> bool:

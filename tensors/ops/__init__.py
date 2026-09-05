@@ -1,4 +1,9 @@
-"""Operations — each op is a class with forward/backward differentiation rules.
+"""Operations — the Operation contract and the concrete operations.
+
+:class:`Operation` is defined here because it is the contract every concrete
+mathematical operation in this package implements. The graph package
+references an operation; it does not define what one is.
+
 
 Individual op classes:
     Add, Sub, Mul, Div, Neg, Slice
@@ -6,20 +11,21 @@ Individual op classes:
 The ``Ops`` namespace provides the old interface for direct use::
 
     from tensors import Ops
-    result = Ops.add(a, b)          # calls Add.forward(a, b)
+    result = Ops.add(a, b)          # evaluates Add().forward(a, b)
 """
 
 from __future__ import annotations
 
 from typing import Tuple, Union
 
-from .add import Add
-from .sub import Sub
-from .mul import Mul
-from .div import Div
-from .neg import Neg
+from .operation import Operation
+from .add import Add, add
+from .sub import Sub, subtract
+from .mul import Mul, multiply
+from .div import Div, divide, divide_scalar
+from .neg import Neg, negate
 from .slice import Slice
-from .pow import Pow, pow
+from .pow import Pow, pow, power, power_scalar_base
 from .cast import Cast
 
 
@@ -34,16 +40,25 @@ class Ops:
     compatibility helper.
     """
 
-    # -- Arithmetic (delegates to op class forward) --------------------
+    # -- Arithmetic (delegates to a configuration-free invocation) -----
 
-    add = staticmethod(Add.forward)
-    subtract = staticmethod(Sub.forward)
-    multiply = staticmethod(Mul.forward)
-    divide = staticmethod(Div.forward)
-    pow = staticmethod(Pow.forward)
-    neg = staticmethod(Neg.forward)
+    add = staticmethod(add)
+    subtract = staticmethod(subtract)
+    multiply = staticmethod(multiply)
+    divide = staticmethod(divide)
+    pow = staticmethod(power)
+    neg = staticmethod(negate)
 
 __all__ = [
+    "Operation",
+    "add",
+    "subtract",
+    "multiply",
+    "divide",
+    "divide_scalar",
+    "negate",
+    "power",
+    "power_scalar_base",
     "Add",
     "Sub",
     "Mul",

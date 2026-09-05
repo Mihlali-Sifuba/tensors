@@ -416,6 +416,142 @@ def _broadcast_backward_case(
     )
 
 
+def _demand_matmul_case(
+    size: int,
+    backends: frozenset[BenchmarkBackend] | None,
+) -> list[BenchmarkCase]:
+    """Compare reverse passes that request one, both, or all gradients.
+
+    A matrix product calculates a separate VJP per operand, so requesting
+    only one of them should cost noticeably less than requesting both.
+    """
+    left = ts.Variable(ts.full((size, size), 0.5), name="demand_left")
+    right = ts.Variable(ts.full((size, size), 0.25), name="demand_right")
+    output = ts.sum(left @ right)
+    seed = ts.ones((1,))
+
+    def single():
+        return ts.grad(output, left, seed)
+
+    def both():
+        return ts.grad(output, (left, right), seed)
+
+    def publish() -> None:
+        ts.backward(output, seed)
+
+    def reset() -> None:
+        left.grad = None
+        right.grad = None
+
+    def validate_single() -> None:
+        result = single()
+        assert isinstance(result, ts.Tensor)
+        assert result.shape == left.shape
+
+    def validate_both() -> None:
+        results = both()
+        assert len(results) == 2
+        assert all(isinstance(result, ts.Tensor) for result in results)
+
+    def validate_publish() -> None:
+        publish()
+        assert isinstance(left.grad, ts.Tensor)
+        assert isinstance(right.grad, ts.Tensor)
+
+    shared = {
+        "work_items": size * size,
+        "layer": "autograd",
+        "backends": backends,
+    }
+    return [
+        BenchmarkCase(
+            name=f"autograd.demand/grad_one/{size}x{size}",
+            run=single,
+            validate=validate_single,
+            description="reverse pass requesting one matrix-product operand",
+            **shared,
+        ),
+        BenchmarkCase(
+            name=f"autograd.demand/grad_both/{size}x{size}",
+            run=both,
+            validate=validate_both,
+            description="reverse pass requesting both operands",
+            **shared,
+        ),
+        BenchmarkCase(
+            name=f"autograd.demand/backward/{size}x{size}",
+            run=publish,
+            validate=validate_publish,
+            reset=reset,
+            description="reverse pass publishing every reachable gradient",
+            **shared,
+        ),
+    ]
+
+
+def _demand_frozen_case(
+    size: int,
+    backends: frozenset[BenchmarkBackend] | None,
+) -> BenchmarkCase:
+    """Measure a reverse pass whose second operand is never requested."""
+    value = ts.Variable(ts.full((size, size), 0.5), name="demand_value")
+    frozen = ts.Variable(
+        ts.full((size, size), 0.25),
+        name="demand_frozen",
+        requires_grad=False,
+    )
+    output = ts.sum(value @ frozen)
+    seed = ts.ones((1,))
+
+    def run():
+        return ts.grad(output, value, seed)
+
+    def validate() -> None:
+        result = run()
+        assert isinstance(result, ts.Tensor)
+        assert result.shape == value.shape
+
+    return BenchmarkCase(
+        name=f"autograd.demand/frozen_operand/{size}x{size}",
+        run=run,
+        validate=validate,
+        work_items=size * size,
+        layer="autograd",
+        description="reverse pass skipping an unrequested operand VJP",
+        backends=backends,
+    )
+
+
+def _demand_create_graph_case(size: int) -> BenchmarkCase:
+    """Measure a differentiable reverse pass under the same demand model."""
+    left = ts.Variable(
+        [1.0 + index / size for index in range(size)],
+        name="demand_graph_left",
+    )
+    right = ts.Variable(
+        [0.5 + index / size for index in range(size)],
+        name="demand_graph_right",
+    )
+    output = ts.sum(left * right + left ** 2.0)
+
+    def run():
+        return ts.grad(output, left, create_graph=True)
+
+    def validate() -> None:
+        result = run()
+        assert isinstance(result, ts.Variable)
+        assert result.shape == left.shape
+
+    return BenchmarkCase(
+        name=f"autograd.demand/create_graph/{size}",
+        run=run,
+        validate=validate,
+        work_items=size,
+        layer="autograd",
+        description="differentiable reverse pass requesting one input",
+    )
+
+
 def cases() -> list[BenchmarkCase]:
     """Return phase, topology, accumulation, and higher-order benchmarks."""
     backend = ts.get_backend()
@@ -431,7 +567,10 @@ def cases() -> list[BenchmarkCase]:
         _third_derivative_case(),
         _gradcheck_case(8),
         _broadcast_backward_case(64, None),
+        _demand_frozen_case(16, None),
+        _demand_create_graph_case(256),
     ))
+    benchmarks.extend(_demand_matmul_case(16, None))
     if backend != "python":
         benchmarks.extend((
             _forward_case(100_000, _ACCELERATED),
@@ -443,5 +582,7 @@ def cases() -> list[BenchmarkCase]:
                 _ACCELERATED,
             ),
             _broadcast_backward_case(256, _ACCELERATED),
+            _demand_frozen_case(64, _ACCELERATED),
         ))
+        benchmarks.extend(_demand_matmul_case(64, _ACCELERATED))
     return benchmarks

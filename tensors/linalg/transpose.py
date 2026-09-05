@@ -3,29 +3,46 @@
 from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from .dot import _transpose_impl
 
 
-class Transpose:
+class Transpose(Operation):
     """Transpose final matrix axes with a reverse-mode gradient rule."""
 
-    forward = staticmethod(_transpose_impl)
+    __slots__ = ("axes",)
+    name = "transpose"
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def __init__(self, *, axes: tuple[int, ...] | None = None) -> None:
+        object.__setattr__(self, "axes", axes)
+
+    def forward(self, value: Tensor) -> Tensor:
+        """Permute the tensor axes described by this invocation."""
+        return _transpose_impl(value, self.axes)
+
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         """Transpose the upstream gradient back to the input layout."""
-        axes = kwargs.get("axes")
+        axes = self.axes
         if axes is None:
             return [_transpose_impl(grad)]
         normalized = tuple(axis + grad.ndim if axis < 0 else axis for axis in axes)
         inverse = tuple(normalized.index(axis) for axis in range(grad.ndim))
         return [_transpose_impl(grad, inverse)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for transpose."""
-        axes = kwargs.get("axes")
+        axes = self.axes
         if axes is None:
             return [transpose(grad)]
         normalized = tuple(axis + grad.ndim if axis < 0 else axis for axis in axes)
@@ -57,16 +74,14 @@ def transpose(
     axes = tuple(axes) if isinstance(axes, list) else axes
 
     if isinstance(value, Variable):
-        return Variable._from_operation(
-            Transpose.forward(value.data, axes=axes),
-            "transpose",
-            Transpose,
-            [value],
-            axes=axes,
+        operation = Transpose(axes=axes)
+        return Variable._record_operation(
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
-    return Transpose.forward(
-        value if isinstance(value, Tensor) else Tensor(value),
-        axes=axes,
+    return Transpose(axes=axes).forward(
+        value if isinstance(value, Tensor) else Tensor(value)
     )
 
 

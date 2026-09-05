@@ -211,6 +211,27 @@ class Tensor:
             )
         return tensor
 
+    @classmethod
+    def _from_values(
+        cls,
+        values: Iterable[Scalar],
+        dtype: _dtype.DataType,
+        shape: Shape,
+    ) -> Tensor:
+        """Adopt flat logical values already known to match ``shape``.
+
+        Reserved for internal results whose extents are already resolved, so
+        the public shape-inference path is skipped.
+        """
+        tensor = cls.__new__(cls)
+        tensor._dtype = dtype
+        tensor._set_storage(PythonStorage.from_values(values, dtype))
+        tensor._shape = shape
+        tensor._strides = Strides.contiguous(shape)
+        tensor._offset = 0
+        tensor._version = 0
+        return tensor
+
     def _replace_owned_storage(self, storage: Storage) -> None:
         """Adopt a same-shaped internal result while retaining Tensor identity."""
         if storage.dtype != self.dtype or storage.size != self.size:
@@ -306,9 +327,9 @@ class Tensor:
         may begin at a non-zero offset.
         """
         return (
-            self.offset == 0
+            self._offset == 0
             and self.is_contiguous
-            and self._storage.size == self.size
+            and self._storage.size == self._shape.size
         )
 
     def _logical_storage_indices(self) -> Iterator[int]:
@@ -880,8 +901,8 @@ class Tensor:
         return Ops.divide(self, other)
 
     def __rtruediv__(self, other: Scalar) -> Tensor:
-        from .ops import Div
-        return Div.forward_reverse(self, other)
+        from .ops import divide_scalar
+        return divide_scalar(other, self)
 
     @overload
     def __pow__(self, other: Variable) -> Variable: ...
@@ -893,12 +914,12 @@ class Tensor:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rpow__(self)
-        from .ops import Pow
-        return Pow.forward(self, other)
+        from .ops import power
+        return power(self, other)
 
     def __rpow__(self, other: Scalar) -> Tensor:
-        from .ops import Pow
-        return Pow.forward_reverse(self, other)
+        from .ops import power_scalar_base
+        return power_scalar_base(other, self)
 
     def __neg__(self) -> Tensor:
         from .ops import Ops

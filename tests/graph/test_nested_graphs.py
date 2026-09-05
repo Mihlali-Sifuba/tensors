@@ -33,8 +33,14 @@ class NestedGraphTests(unittest.TestCase):
         result = model(ts.Tensor([3.0]))
 
         self.assertEqual(result.data.tolist(), [7.0])
-        self.assertEqual([node.label for node in model.nodes], ["var", "var", "mul", "var", "add"])
-        self.assertEqual([node.label for node in model.scale.nodes], ["var", "var", "mul"])
+        self.assertEqual(
+            [node.label for node in model.nodes],
+            ["var", "var", "mul", "var", "var", "add", "var"],
+        )
+        self.assertEqual(
+            [node.label for node in model.scale.nodes],
+            ["var", "var", "mul", "var"],
+        )
 
     def test_parameters_are_deduplicated_when_a_child_is_referenced_twice(self):
         class Scale(ts.Graph):
@@ -75,7 +81,10 @@ class NestedGraphTests(unittest.TestCase):
         self.assertEqual(first.data.tolist(), [5.0])
         self.assertEqual(second.data.tolist(), [9.0])
         self.assertIs(parent.computation.output, second)
-        self.assertIs(child.computation.output, second.node.inputs[0].output_var)
+        self.assertIs(
+            child.computation.output,
+            second.node.producer.operands[0],
+        )
 
     def test_nested_child_computation_stops_at_its_explicit_input(self):
         @ts.Graph
@@ -89,13 +98,19 @@ class NestedGraphTests(unittest.TestCase):
 
         parent(ts.Tensor([5.0]))
 
+        # The child stops at its boundary Variable: the parent's ``sub``
+        # operation is reachable from the parent but not from the child.
         self.assertEqual(
             [node.label for node in child.nodes],
-            ["sub", "mul", "add"],
+            ["var", "var", "mul", "var", "var", "add", "var"],
         )
         self.assertEqual(
             [node.label for node in parent.nodes],
-            ["var", "sub", "mul", "add"],
+            [
+                "var", "var", "sub", "var",
+                "var", "mul", "var",
+                "var", "add", "var",
+            ],
         )
 
 

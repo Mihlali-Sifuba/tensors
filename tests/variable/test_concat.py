@@ -18,7 +18,7 @@ class VariableConcatTests(unittest.TestCase):
 
         ts.backward(ts.sum(result))
 
-        self.assertEqual(result.node.label, "concat")
+        self.assertEqual(result.node.producer.label, "concat")
         self.assertEqual(result.data.tolist(), [1.0, 2.0, 3.0])
         self.assertEqual(left.grad.tolist(), [1.0, 1.0])
         self.assertEqual(right.grad.tolist(), [1.0])

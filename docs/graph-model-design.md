@@ -38,6 +38,19 @@ execution. A user opts into reusable model capture by defining or wrapping a
 `Graph`. Operations on `Variable` values still record autograd history when
 they occur in ordinary Python functions or classes.
 
+## Recorded structure
+
+A traced `Graph` records the same vertex alternation as any eager expression:
+
+```text
+VariableNode -> OperationNode -> VariableNode
+```
+
+`Graph` owns none of that structure directly. It holds the outputs of its most
+recent call and the `Computation` objects rooted at them; the graph itself is
+reachable through those outputs. See
+[Automatic differentiation](autodiff.md) for the vertex and edge contract.
+
 ## Responsibilities
 
 A `Graph` retains the latest execution metadata for its function:

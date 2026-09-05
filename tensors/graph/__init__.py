@@ -2,16 +2,14 @@
 
 from typing import Any
 
-from .node import Node
+from .node import Node, OperationNode, VariableNode
 from .edge import Edge
-from .computation import Computation, backward, grad
-from .derivatives import hessian, jacobian
-from .gradcheck import GradcheckError, gradcheck
-from .protocols import HigherOrderOperation, Operation, ReverseOperation
+from .computation import (
+    Computation, GradcheckError, backward, grad, gradcheck, hessian, jacobian,
+)
 
 __all__ = [
-    "Graph", "Computation", "Node", "Edge",
-    "Operation", "HigherOrderOperation", "ReverseOperation",
+    "Graph", "Computation", "Node", "OperationNode", "VariableNode", "Edge",
     "GradcheckError", "backward", "grad", "gradcheck", "hessian", "jacobian",
 ]
 

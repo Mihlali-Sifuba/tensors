@@ -101,7 +101,8 @@ tensors/
 │   ├── indexing.py
 │   ├── lists.py
 │   └── slicing.py
-├── ops/                   # primitive differentiable operations
+├── ops/                   # the Operation contract and its implementations
+│   ├── operation.py       # the Operation abstract base class
 │   ├── add.py, sub.py, mul.py, div.py, neg.py
 │   └── pow.py, slice.py, cast.py
 ├── linalg/                # linear algebra
@@ -125,15 +126,20 @@ tensors/
 │   └── truncated_normal.py, orthogonal.py
 ├── random/                # backend-native random generation
 │   └── _state.py
-└── graph/                 # tracing, execution, and differentiation
+└── graph/                 # structural graph representation and tracing
     ├── graph.py           # reusable callable model abstraction
-    ├── computation.py     # forward replay and reverse-mode execution
-    ├── derivatives.py     # Jacobian and Hessian construction
-    ├── gradcheck.py       # finite-difference verification
-    ├── node.py
+    ├── node.py            # Node, VariableNode, and OperationNode
     ├── edge.py
-    ├── protocols.py
-    └── state.py
+    ├── state.py
+    └── computation/       # the executable, differentiable form of a graph
+        ├── instruction.py   # one executable operation invocation
+        ├── compiler.py      # Node/Edge topology to slots, instructions, views
+        ├── computation.py   # execution of the compiled slot representation
+        ├── autograd.py      # functional reverse-mode differentiation API
+        ├── gradients.py     # seed construction, accumulation, VJP validation
+        ├── derivatives.py   # Jacobian and Hessian construction
+        ├── gradcheck.py     # finite-difference verification
+        └── fusion.py        # fused execution of compatible instruction runs
 ```
 
 ## Namespace Rules
@@ -175,8 +181,11 @@ The folders have deliberately narrow responsibilities:
   [Tensor memory model](memory-model.md).
 - `creation` provides public constructors for mathematically defined tensor
   values, including zeros, ones, ranges, and identity matrices.
-- `ops` contains primitive differentiable operations such as arithmetic,
-  powers, slicing, and casting.
+- `ops` owns `Operation`, the abstract contract every concrete mathematical
+  operation implements, plus the primitive differentiable operations such as
+  arithmetic, powers, slicing, and casting. The graph package references an
+  operation through `OperationNode` and `Instruction`; it does not define what
+  an operation is.
 - `utils/coordinates.py` converts between logical coordinates and canonical
   row-major logical linear indices using `Shape` and canonical contiguous
   strides derived from that `Shape`; arbitrary Tensor strides and `offset`
@@ -193,11 +202,50 @@ The folders have deliberately narrow responsibilities:
 - `math` contains all mathematical functions, including reductions and
   activation functions. It remains flat rather than separating activations or
   reductions into extra namespaces.
-- `graph` owns tracing state, operation protocols, computation execution,
-  derivatives, and reusable computational model functions.
-- `Computation` owns compiled forward and backward plans, reusable execution
-  workspaces, and eligible CUDA chain fusion; `ts.backward` is a root
-  convenience alias.
+- `graph` owns the recorded structure, tracing state, and the public `Graph`
+  abstraction; its `computation` subpackage owns the executable,
+  differentiable form of that structure. A recorded graph
+  alternates `VariableNode -> OperationNode -> VariableNode`, and every
+  relationship is an `Edge`. `Node` holds only identity and connectivity;
+  `VariableNode` adds its `Variable` and `OperationNode` adds its `Operation`.
+  An operation defines how a local derivative is calculated; `Computation`
+  decides which local derivatives a reverse pass requires and supplies that
+  demand as `needs_input_grad`. See [Automatic differentiation](autodiff.md) for
+  the recorded topology and the responsibility split.
+- `graph/computation` holds that executable form. `Compiler` is the boundary
+  between the two domains, and one compilation feeds both sides:
+
+  ```text
+             structural graph
+                    │
+                    ▼
+                 Compiler
+                    │
+        ┌───────────┴───────────┐
+        ▼                       ▼
+  Graph metadata          execution metadata
+  (nodes, edges)                │
+                                ▼
+                           Computation
+                                │
+                         forward / backward
+  ```
+
+  `Compiler` is the last component that understands Nodes and Edges: it emits
+  the slot-based program, resolves each output's execution view, and hands
+  the graph layer the traversal and edges it keeps. An `Instruction` is one
+  executable operation invocation. `Computation` receives an already-resolved
+  execution view and works only in the compiled domain — Variables, slots,
+  instructions, and fusion metadata — to execute it forwards and in reverse.
+  `gradients` supplies the generic mechanics reverse execution uses along the
+  way — upstream seed construction, gradient accumulation, and VJP result
+  validation; `fusion` recognizes and accelerates compatible instruction runs
+  beside the program; `autograd` is the functional interface through which
+  callers request differentiation; `derivatives` builds Jacobians and Hessians
+  from repeated reverse passes and `gradcheck` verifies them against finite
+  differences. The subpackage layout is internal: `ts.backward`, `ts.grad`,
+  `ts.jacobian`, `ts.hessian`, `ts.gradcheck`, and `ts.graph.Computation` are
+  unaffected by it.
 - `optim` provides the shared optimizer contract plus SGD, Adam, and RMSprop.
 - `init` provides immutable callable initializer configurations plus lowercase
   function facades for variance-scaling, Xavier, He, LeCun, truncated-normal,
@@ -206,5 +254,6 @@ The folders have deliberately narrow responsibilities:
 - `random` owns seeded Python, NumPy, and CUDA generator state and exposes the
   minimal `ts.random` facade. It does not modify provider-global RNG state.
 
-Operation classes, `Node`, and `Edge` are implementation or advanced
-inspection details. They should not be part of the everyday root API.
+Operation classes, `Node`, `VariableNode`, `OperationNode`, and `Edge` are
+implementation or advanced inspection details. They should not be part of the
+everyday root API.

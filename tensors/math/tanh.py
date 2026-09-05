@@ -5,15 +5,18 @@ from typing import Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
 
 
-class Tanh:
+class Tanh(Operation):
     """Elementwise hyperbolic tangent with a reverse-mode gradient rule."""
 
-    @staticmethod
-    def forward(a: Tensor) -> Tensor:
+    __slots__ = ()
+    name = "tanh"
+
+    def forward(self, a: Tensor) -> Tensor:
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         return unary_forward(
             "tanh",
@@ -22,8 +25,12 @@ class Tanh:
             fallback=lambda value: _math.tanh(float(value)),
         )
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         a = inputs[0]
         return [
             unary_backward(
@@ -36,8 +43,12 @@ class Tanh:
             )
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for hyperbolic tangent."""
         from ..ops._utils import masked_value_graph
         from .exp import exp
@@ -73,15 +84,15 @@ def tanh(value: TensorLike) -> TensorResult:
     from ..variable import Variable
 
     if isinstance(value, Variable):
-        return Variable._from_operation(
-            Tanh.forward(value.data),
-            "tanh",
-            Tanh,
-            [value],
+        operation = Tanh()
+        return Variable._record_operation(
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
     if not isinstance(value, Tensor):
         value = Tensor(value)
-    return Tanh.forward(value)
+    return Tanh().forward(value)
 
 
 __all__ = ["Tanh", "tanh"]

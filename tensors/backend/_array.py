@@ -798,10 +798,33 @@ def _fused_backward_checks(
         return ((f"({value}) == 1.0", 12),)
     if operation == "sign":
         return ((f"({value}) == 0.0", 13),)
-    if operation == "power" and scalar is not None and not reverse:
-        if scalar != 0 and scalar < 1:
-            return ((f"({value}) == 0.0", 14),)
+    if operation == "power" and not reverse:
+        if scalar is not None:
+            if scalar != 0 and scalar < 1:
+                return ((f"({value}) == 0.0", 14),)
+            return ()
+        operand = _fused_operand_expression(step, value)
+        if operand is not None:
+            # A fractional exponent below one has no derivative at a zero base.
+            return ((
+                f"({value}) == 0.0 && ({operand}) != 0.0 "
+                f"&& ({operand}) < 1.0",
+                14,
+            ),)
     return ()
+
+
+def _fused_external_gradient_available(step: FusedElementwiseStep) -> bool:
+    """Whether a fused step can produce its external operand's gradient.
+
+    A power step's compact form records no base or exponent VJP, so a chain
+    whose caller wants that derivative must fall back to ordinary operation
+    execution rather than read an unwritten row.
+    """
+    operation, scalar, _, operand_index = step
+    if scalar is not None or operand_index is None or operand_index < 0:
+        return False
+    return operation != "power"
 
 
 def _fused_vjp_expressions(
@@ -823,22 +846,45 @@ def _fused_vjp_expressions(
             )
             return contribution, None
 
-        assert scalar is not None
-        if scalar == 0:
-            return "0.0", None
-        if scalar == 1:
-            return upstream, None
-        scalar_literal = _fused_operand_expression(step, value)
-        assert scalar_literal is not None
-        sign = f"({upstream}) * ({scalar_literal})"
-        if float(scalar).is_integer() and (int(scalar) - 1) % 2:
-            sign = f"({sign}) * (({value}) < 0.0 ? -1.0 : 1.0)"
-        contribution = (
-            f"(({upstream}) == 0.0 || ({value}) == 0.0 ? 0.0 : "
-            f"copysign(exp(log(fabs({upstream})) + log(fabs({scalar_literal})) "
-            f"+ (({scalar_literal}) - 1.0) * log(fabs({value}))), {sign})"
+        exponent = operand
+        magnitude = (
+            f"copysign(exp(log(fabs({upstream})) + log(fabs({exponent})) "
+            f"+ (({exponent}) - 1.0) * log(fabs({value}))), {{sign}})"
         )
-        contribution += ")"
+        if scalar is not None:
+            # A literal exponent resolves its parity while building the kernel.
+            sign = f"({upstream}) * ({exponent})"
+            if float(scalar).is_integer() and (int(scalar) - 1) % 2:
+                sign = f"({sign}) * (({value}) < 0.0 ? -1.0 : 1.0)"
+            if scalar == 0:
+                return "0.0", None
+            if scalar == 1:
+                return upstream, None
+            contribution = (
+                f"(({upstream}) == 0.0 || ({value}) == 0.0 ? 0.0 : "
+                + magnitude.format(sign=sign)
+                + ")"
+            )
+            return contribution, None
+
+        # An operand exponent resolves the same parity rule at runtime. An
+        # even integer exponent leaves an odd power in the derivative, so the
+        # result follows the sign of the base.
+        even_integer = (
+            f"(({exponent}) == floor({exponent}) "
+            f"&& fmod({exponent}, 2.0) == 0.0)"
+        )
+        sign = (
+            f"(({upstream}) * ({exponent}) * ({even_integer} "
+            f"? (({value}) < 0.0 ? -1.0 : 1.0) : 1.0))"
+        )
+        contribution = (
+            f"(({exponent}) == 0.0 ? 0.0 "
+            f": (({exponent}) == 1.0 ? ({upstream}) "
+            f": ((({upstream}) == 0.0 || ({value}) == 0.0) ? 0.0 : "
+            + magnitude.format(sign=sign)
+            + ")))"
+        )
         return contribution, None
 
     if operation == "divide" and operand is not None:
@@ -898,6 +944,7 @@ def _cuda_fused_elementwise_backward_kernel(
     dtype_name: str,
     input_shapes: tuple[tuple[int, ...], ...],
     output_shape: tuple[int, ...],
+    requested_external: tuple[int, ...],
 ) -> tuple[Any, bool]:
     """Compile and cache one typed VJP kernel for a fused chain."""
     cupy = importlib.import_module("cupy")
@@ -911,12 +958,13 @@ def _cuda_fused_elementwise_backward_kernel(
             dtype_name=dtype_name,
         ))
 
+    # The generated layout depends on which external gradients were asked
+    # for, so ``requested_external`` participates in the kernel cache key.
     external_rows = {}
     next_row = len(steps) + 1
-    for index, (_, scalar, _, operand_index) in enumerate(steps):
-        if scalar is None and operand_index is not None and operand_index >= 0:
-            external_rows[index] = next_row
-            next_row += 1
+    for index in requested_external:
+        external_rows[index] = next_row
+        next_row += 1
 
     body.append(
         f"const double upstream_{len(steps)} = (double)gradient[index];"
@@ -944,7 +992,8 @@ def _cuda_fused_elementwise_backward_kernel(
                 body.append(
                     f"if ({condition}) {{ atomicExch(error, {code}); }}"
                 )
-        if operand_contribution is not None:
+        if operand_contribution is not None and index in external_rows:
+            # Only a requested external operand gradient gets an output row.
             body.append(_fused_output_statement(
                 external_rows[index],
                 operand_contribution,
@@ -1113,8 +1162,15 @@ def fused_elementwise_backward(
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
+    requested_external: tuple[int, ...] = (),
 ) -> tuple[Storage, ...] | None:
-    """Evaluate safe same-shape VJPs for a fused expression chain."""
+    """Evaluate the requested same-shape VJPs for a fused expression chain.
+
+    ``requested_external`` names the step indices whose external operand
+    gradient the caller wants. Rows are produced only for those, and the
+    request is refused when a step's compact form carries no such derivative,
+    so the caller can fall back to ordinary operation execution.
+    """
     from . import get_backend
 
     if (
@@ -1125,13 +1181,14 @@ def fused_elementwise_backward(
         or grad.shape != output_shape
     ):
         return None
+    if any(
+        not _fused_external_gradient_available(steps[index])
+        for index in requested_external
+    ):
+        return None
     cupy = _numpy()
     size = grad.size
-    external_count = sum(
-        scalar is None and operand_index is not None and operand_index >= 0
-        for _, scalar, _, operand_index in steps
-    )
-    row_count = len(steps) + 1 + external_count
+    row_count = len(steps) + 1 + len(requested_external)
     result = cupy.empty((row_count, size), dtype=cupy.dtype(dtype.name))
     if not size:
         return tuple(CudaStorage(result[index], dtype) for index in range(row_count))
@@ -1146,6 +1203,7 @@ def fused_elementwise_backward(
             dtype.name,
             tuple(value.shape for value in values),
             output_shape,
+            requested_external,
         )
         error = cupy.zeros((1,), dtype=cupy.int32) if validate_errors else None
         threads = 256
@@ -1706,9 +1764,11 @@ def cross_entropy_gradient(
     axis: int,
     *,
     reduction: LossReduction,
-) -> tuple[Storage, Storage] | None:
-    """Run fused dense multiclass cross-entropy VJPs."""
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None] | None:
+    """Run the requested dense multiclass cross-entropy VJPs."""
     numpy = _numpy()
+    need_logits, need_targets = needs_input_grad
     values = _view(logits, numpy).astype(numpy.float64, copy=False)
     weights = _view(targets, numpy).astype(numpy.float64, copy=False)
     upstream = _view(grad, numpy).astype(numpy.float64, copy=False)
@@ -1753,20 +1813,26 @@ def cross_entropy_gradient(
     )
     if not bool(valid):
         return None
-    logits_storage = _storage(
-        logits_result,
-        dtype=grad.dtype,
-        output_shape=logits.shape,
-        numpy=numpy,
-    )
-    targets_storage = _storage(
-        targets_result,
-        dtype=grad.dtype,
-        output_shape=targets.shape,
-        numpy=numpy,
-    )
-    if logits_storage is None or targets_storage is None:
-        return None
+    logits_storage = None
+    if need_logits:
+        logits_storage = _storage(
+            logits_result,
+            dtype=grad.dtype,
+            output_shape=logits.shape,
+            numpy=numpy,
+        )
+        if logits_storage is None:
+            return None
+    targets_storage = None
+    if need_targets:
+        targets_storage = _storage(
+            targets_result,
+            dtype=grad.dtype,
+            output_shape=targets.shape,
+            numpy=numpy,
+        )
+        if targets_storage is None:
+            return None
     return logits_storage, targets_storage
 
 
@@ -1841,9 +1907,11 @@ def binary_cross_entropy_gradient(
     *,
     from_logits: bool,
     reduction: LossReduction,
-) -> tuple[Storage, Storage] | None:
-    """Run fused binary cross-entropy VJPs."""
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None] | None:
+    """Run the requested binary cross-entropy VJPs."""
     numpy = _numpy()
+    need_prediction, need_target = needs_input_grad
     values = _view(prediction, numpy).astype(numpy.float64, copy=False)
     targets = _view(target, numpy).astype(numpy.float64, copy=False)
     upstream = _view(grad, numpy).astype(numpy.float64, copy=False)
@@ -1921,20 +1989,26 @@ def binary_cross_entropy_gradient(
         zero_upstream = expanded_upstream == 0.0
         prediction_result = numpy.where(zero_upstream, 0.0, prediction_result)
         target_result = numpy.where(zero_upstream, 0.0, target_result)
-    prediction_storage = _storage(
-        prediction_result,
-        dtype=grad.dtype,
-        output_shape=prediction.shape,
-        numpy=numpy,
-    )
-    target_storage = _storage(
-        target_result,
-        dtype=grad.dtype,
-        output_shape=target.shape,
-        numpy=numpy,
-    )
-    if prediction_storage is None or target_storage is None:
-        return None
+    prediction_storage = None
+    if need_prediction:
+        prediction_storage = _storage(
+            prediction_result,
+            dtype=grad.dtype,
+            output_shape=prediction.shape,
+            numpy=numpy,
+        )
+        if prediction_storage is None:
+            return None
+    target_storage = None
+    if need_target:
+        target_storage = _storage(
+            target_result,
+            dtype=grad.dtype,
+            output_shape=target.shape,
+            numpy=numpy,
+        )
+        if target_storage is None:
+            return None
     return prediction_storage, target_storage
 
 
@@ -2212,8 +2286,10 @@ def outer_gradient(
     grad: Tensor,
     left: Tensor,
     right: Tensor,
-) -> tuple[Storage, Storage] | None:
-    """Run stable native outer-product VJPs when products can be summed."""
+    *,
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None] | None:
+    """Run the requested stable native outer-product VJPs."""
     numpy = _numpy()
     upstream = _view(grad, numpy).astype(numpy.float64, copy=False)
     left_values = _view(left, numpy).astype(numpy.float64, copy=False)
@@ -2225,29 +2301,38 @@ def outer_gradient(
         numpy=numpy,
     ):
         return None
+    need_left, need_right = needs_input_grad
     with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
-        left_terms = upstream * right_values
-        right_terms = upstream * left_values[:, None]
-    if not _stable_sum_candidate(left_terms, (1,), numpy) or not (
-        _stable_sum_candidate(right_terms, (0,), numpy)
+        left_terms = upstream * right_values if need_left else None
+        right_terms = upstream * left_values[:, None] if need_right else None
+    if left_terms is not None and not _stable_sum_candidate(
+        left_terms, (1,), numpy
     ):
         return None
-    left_result = numpy.sum(left_terms, axis=1)
-    right_result = numpy.sum(right_terms, axis=0)
-    left_storage = _storage(
-        left_result,
-        dtype=grad.dtype,
-        output_shape=left.shape,
-        numpy=numpy,
-    )
-    right_storage = _storage(
-        right_result,
-        dtype=grad.dtype,
-        output_shape=right.shape,
-        numpy=numpy,
-    )
-    if left_storage is None or right_storage is None:
+    if right_terms is not None and not _stable_sum_candidate(
+        right_terms, (0,), numpy
+    ):
         return None
+    left_storage = None
+    if left_terms is not None:
+        left_storage = _storage(
+            numpy.sum(left_terms, axis=1),
+            dtype=grad.dtype,
+            output_shape=left.shape,
+            numpy=numpy,
+        )
+        if left_storage is None:
+            return None
+    right_storage = None
+    if right_terms is not None:
+        right_storage = _storage(
+            numpy.sum(right_terms, axis=0),
+            dtype=grad.dtype,
+            output_shape=right.shape,
+            numpy=numpy,
+        )
+        if right_storage is None:
+            return None
     return left_storage, right_storage
 
 
@@ -2539,10 +2624,16 @@ def convolution_gradient(
     dilation: tuple[int, ...],
     groups: int,
     include_bias: bool,
-) -> tuple[Storage, ...] | None:
-    """Run convolution VJPs in bounded native matrix-product tiles."""
+    needs_input_grad: tuple[bool, ...] = (True, True, True),
+) -> tuple[Storage | None, ...] | None:
+    """Run the requested convolution VJPs in bounded native tiles."""
     if grad.dtype.kind != "floating":
         return None
+    need_input = needs_input_grad[0]
+    need_kernel = needs_input_grad[1]
+    need_bias = include_bias and needs_input_grad[2]
+    if not (need_input or need_kernel or need_bias):
+        return (None,) * (3 if include_bias else 2)
 
     numpy = _numpy()
     operands = _convolution_operands(inputs, kernel, grad.dtype, numpy)
@@ -2622,48 +2713,57 @@ def convolution_gradient(
                 group_outputs,
                 positions,
             )
-            kernel_result += numpy.matmul(
-                upstream_matrix,
-                column_matrix.transpose(0, 1, 3, 2),
-            ).sum(axis=0).reshape(kernel_values.shape)
-            input_columns = numpy.matmul(
-                matrix.transpose(0, 2, 1),
-                upstream_matrix,
-            ).reshape(
-                (tile_batch, in_channels)
-                + kernel_spatial
-                + output_extent
-            )
-            _convolution_scatter_add(
-                input_result,
-                input_columns,
-                batch_slice,
-                kernel_spatial,
-                output_start,
-                output_extent,
-                stride,
-                dilation,
-            )
+            if need_kernel:
+                kernel_result += numpy.matmul(
+                    upstream_matrix,
+                    column_matrix.transpose(0, 1, 3, 2),
+                ).sum(axis=0).reshape(kernel_values.shape)
+            if need_input:
+                input_columns = numpy.matmul(
+                    matrix.transpose(0, 2, 1),
+                    upstream_matrix,
+                ).reshape(
+                    (tile_batch, in_channels)
+                    + kernel_spatial
+                    + output_extent
+                )
+                _convolution_scatter_add(
+                    input_result,
+                    input_columns,
+                    batch_slice,
+                    kernel_spatial,
+                    output_start,
+                    output_extent,
+                    stride,
+                    dilation,
+                )
 
-        results = []
-        if any(padding):
+        results: list[Any] = []
+        if need_input and any(padding):
             interior = (slice(None), slice(None)) + tuple(
                 slice(pad, pad + extent)
                 for pad, extent in zip(padding, spatial)
             )
             input_result = input_result[interior]
-        results.extend((
-            input_result if batched else input_result[0],
-            kernel_result,
-        ))
+        results.append(
+            (input_result if batched else input_result[0])
+            if need_input
+            else None
+        )
+        results.append(kernel_result if need_kernel else None)
         if include_bias:
             results.append(
                 upstream.sum(
                     axis=(0,) + tuple(range(2, 2 + len(output_spatial)))
                 )
+                if need_bias
+                else None
             )
 
-    if any(not bool(numpy.all(numpy.isfinite(value))) for value in results):
+    if any(
+        value is not None and not bool(numpy.all(numpy.isfinite(value)))
+        for value in results
+    ):
         return None
     shapes: list[tuple[int, ...]] = [
         tuple(inputs.shape),
@@ -2678,9 +2778,11 @@ def convolution_gradient(
             output_shape=shape,
             numpy=numpy,
         )
+        if value is not None
+        else None
         for value, shape in zip(results, shapes)
     )
-    return cast("tuple[Storage, ...]", storages)
+    return cast("tuple[Storage | None, ...]", storages)
 
 def sgd_update(
     parameter: Tensor,
@@ -3746,28 +3848,37 @@ def where(
 def where_gradient(
     grad: Tensor,
     condition: Tensor,
-) -> tuple[Storage, Storage] | None:
-    """Split a selection VJP into its expanded left and right terms."""
+    *,
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None] | None:
+    """Split a selection VJP into the requested left and right terms."""
     numpy = _numpy()
+    need_left, need_right = needs_input_grad
     try:
         selected = numpy.broadcast_to(_view(condition, numpy), grad.shape) != 0
     except ValueError:
         return None
     upstream = _view(grad, numpy).astype(numpy.float64, copy=False)
-    left = _storage(
-        numpy.where(selected, upstream, 0.0),
-        dtype=grad.dtype,
-        output_shape=grad.shape,
-        numpy=numpy,
-    )
-    right = _storage(
-        numpy.where(selected, 0.0, upstream),
-        dtype=grad.dtype,
-        output_shape=grad.shape,
-        numpy=numpy,
-    )
-    if left is None or right is None:
-        return None
+    left = None
+    if need_left:
+        left = _storage(
+            numpy.where(selected, upstream, 0.0),
+            dtype=grad.dtype,
+            output_shape=grad.shape,
+            numpy=numpy,
+        )
+        if left is None:
+            return None
+    right = None
+    if need_right:
+        right = _storage(
+            numpy.where(selected, 0.0, upstream),
+            dtype=grad.dtype,
+            output_shape=grad.shape,
+            numpy=numpy,
+        )
+        if right is None:
+            return None
     return left, right
 
 
@@ -3842,9 +3953,12 @@ def extremum_gradient(
     grad: Tensor,
     left: Tensor,
     right: Tensor,
-) -> tuple[Storage, Storage] | None:
-    """Split an elementwise-extremum VJP, sharing exact ties."""
+    *,
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None] | None:
+    """Split an elementwise-extremum VJP for the requested operands."""
     numpy = _numpy()
+    need_left, need_right = needs_input_grad
     try:
         left_values, right_values = numpy.broadcast_arrays(
             _view(left, numpy),
@@ -3860,30 +3974,36 @@ def extremum_gradient(
         if operation == "maximum"
         else left_values < right_values
     )
-    left_weight = numpy.where(
-        has_nan,
-        numpy.nan,
-        numpy.where(ties, 0.5, numpy.where(left_selected, 1.0, 0.0)),
-    )
-    right_weight = numpy.where(
-        has_nan,
-        numpy.nan,
-        numpy.where(ties, 0.5, numpy.where(left_selected, 0.0, 1.0)),
-    )
-    left_storage = _storage(
-        upstream * left_weight,
-        dtype=grad.dtype,
-        output_shape=grad.shape,
-        numpy=numpy,
-    )
-    right_storage = _storage(
-        upstream * right_weight,
-        dtype=grad.dtype,
-        output_shape=grad.shape,
-        numpy=numpy,
-    )
-    if left_storage is None or right_storage is None:
-        return None
+    left_storage = None
+    if need_left:
+        left_weight = numpy.where(
+            has_nan,
+            numpy.nan,
+            numpy.where(ties, 0.5, numpy.where(left_selected, 1.0, 0.0)),
+        )
+        left_storage = _storage(
+            upstream * left_weight,
+            dtype=grad.dtype,
+            output_shape=grad.shape,
+            numpy=numpy,
+        )
+        if left_storage is None:
+            return None
+    right_storage = None
+    if need_right:
+        right_weight = numpy.where(
+            has_nan,
+            numpy.nan,
+            numpy.where(ties, 0.5, numpy.where(left_selected, 0.0, 1.0)),
+        )
+        right_storage = _storage(
+            upstream * right_weight,
+            dtype=grad.dtype,
+            output_shape=grad.shape,
+            numpy=numpy,
+        )
+        if right_storage is None:
+            return None
     return left_storage, right_storage
 
 
@@ -4332,8 +4452,10 @@ def matmul_gradient(
     grad: Tensor,
     left: Tensor,
     right: Tensor,
-) -> tuple[Storage, Storage] | None:
-    """Run native vector-Jacobian products for general floating matmul."""
+    *,
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None] | None:
+    """Run the requested native vector-Jacobian products for matmul."""
     if grad.dtype.kind != "floating":
         return None
     numpy = _numpy()
@@ -4368,16 +4490,21 @@ def matmul_gradient(
         left_vector,
         right_vector,
     )
+    need_left, need_right = needs_input_grad
     with _errstate(numpy, over="ignore", under="ignore", invalid="ignore"):
-        left_result = numpy.matmul(
-            matrix_grad,
-            numpy.swapaxes(right_matrix, -1, -2),
+        left_result = (
+            numpy.matmul(matrix_grad, numpy.swapaxes(right_matrix, -1, -2))
+            if need_left
+            else None
         )
-        right_result = numpy.matmul(
-            numpy.swapaxes(left_matrix, -1, -2),
-            matrix_grad,
+        right_result = (
+            numpy.matmul(numpy.swapaxes(left_matrix, -1, -2), matrix_grad)
+            if need_right
+            else None
         )
-    if not bool(numpy.all(numpy.isfinite(left_result))):
+    if left_result is not None and not bool(
+        numpy.all(numpy.isfinite(left_result))
+    ):
         if not (
             _comparable_finite_values(matrix_grad, numpy)
             and _comparable_finite_values(right_matrix, numpy)
@@ -4388,7 +4515,9 @@ def matmul_gradient(
             numpy.swapaxes(right_matrix, -1, -2),
             numpy,
         )
-    if not bool(numpy.all(numpy.isfinite(right_result))):
+    if right_result is not None and not bool(
+        numpy.all(numpy.isfinite(right_result))
+    ):
         if not (
             _comparable_finite_values(left_matrix, numpy)
             and _comparable_finite_values(matrix_grad, numpy)
@@ -4399,34 +4528,42 @@ def matmul_gradient(
             matrix_grad,
             numpy,
         )
-    if bool(numpy.any(numpy.isnan(left_result)) | numpy.any(numpy.isnan(right_result))):
-        return None
+    for result in (left_result, right_result):
+        if result is not None and bool(numpy.any(numpy.isnan(result))):
+            return None
 
-    left_shape = (1, left.shape[0]) if left_vector else left.shape
-    right_shape = (right.shape[0], 1) if right_vector else right.shape
-    left_result = _reduce_matrix_gradient(left_result, left_shape, numpy)
-    right_result = _reduce_matrix_gradient(right_result, right_shape, numpy)
-    if left_result is None or right_result is None:
-        return None
-    if left_vector:
-        left_result = left_result.reshape(left.shape)
-    if right_vector:
-        right_result = right_result.reshape(right.shape)
-
-    left_storage = _storage(
-        left_result,
-        dtype=grad.dtype,
-        output_shape=left.shape,
-        numpy=numpy,
-    )
-    right_storage = _storage(
-        right_result,
-        dtype=grad.dtype,
-        output_shape=right.shape,
-        numpy=numpy,
-    )
-    if left_storage is None or right_storage is None:
-        return None
+    left_storage = None
+    if left_result is not None:
+        left_shape = (1, left.shape[0]) if left_vector else left.shape
+        left_result = _reduce_matrix_gradient(left_result, left_shape, numpy)
+        if left_result is None:
+            return None
+        if left_vector:
+            left_result = left_result.reshape(left.shape)
+        left_storage = _storage(
+            left_result,
+            dtype=grad.dtype,
+            output_shape=left.shape,
+            numpy=numpy,
+        )
+        if left_storage is None:
+            return None
+    right_storage = None
+    if right_result is not None:
+        right_shape = (right.shape[0], 1) if right_vector else right.shape
+        right_result = _reduce_matrix_gradient(right_result, right_shape, numpy)
+        if right_result is None:
+            return None
+        if right_vector:
+            right_result = right_result.reshape(right.shape)
+        right_storage = _storage(
+            right_result,
+            dtype=grad.dtype,
+            output_shape=right.shape,
+            numpy=numpy,
+        )
+        if right_storage is None:
+            return None
     return left_storage, right_storage
 
 

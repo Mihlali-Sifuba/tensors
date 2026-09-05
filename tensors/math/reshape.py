@@ -4,14 +4,21 @@ from typing import Any, List, Tuple, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..shape import Shape
+from ..ops.operation import Operation
 from ..tensor import Tensor
 
 
-class Reshape:
+class Reshape(Operation):
     """Reshape operation."""
 
-    @staticmethod
-    def forward(tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
+    __slots__ = ("shape",)
+    name = "reshape"
+
+    def __init__(self, *, shape: Tuple[int, ...]) -> None:
+        object.__setattr__(self, "shape", tuple(shape))
+
+    def forward(self, tensor: Tensor) -> Tensor:
+        shape = self.shape
         current_element_count = tensor.shape.size
         requested_element_count = Shape.from_iterable(shape).size
         if current_element_count != requested_element_count:
@@ -21,13 +28,21 @@ class Reshape:
             )
         return Tensor(tensor._data, dtype=tensor.dtype, shape=shape)
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Tensor]:
         """Restore the input shape without changing gradient values."""
-        return [Reshape.forward(grad, inputs[0].shape)]
+        return [Reshape(shape=inputs[0].shape).forward(grad)]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable reshape VJP."""
         return [reshape(grad, inputs[0].shape)]
 
@@ -46,16 +61,15 @@ def reshape(tensor: TensorLike, shape: tuple[int, ...]) -> TensorResult:
 
     shape = tuple(shape)
     if isinstance(tensor, Variable):
-        return Variable._from_operation(
-            Reshape.forward(tensor.data, shape),
-            "reshape",
-            Reshape,
-            [tensor],
-            shape=shape,
+        operation = Reshape(shape=shape)
+        return Variable._record_operation(
+            operation.forward(tensor.data),
+            operation,
+            (tensor,),
         )
     if not isinstance(tensor, Tensor):
         tensor = Tensor(tensor)
-    return Reshape.forward(tensor, shape)
+    return Reshape(shape=shape).forward(tensor)
 
 
 __all__ = ["Reshape", "reshape"]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, List, overload
+from typing import TYPE_CHECKING, Any, List, Optional, overload
 
 from ..backend import (
     execute_matmul,
@@ -14,6 +14,7 @@ from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
 from ..shape import Shape
 from ..storage import PythonStorage
+from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..utils.coordinates import (
     coordinates_to_linear_index,
@@ -289,15 +290,25 @@ def _transpose_impl(
     return Tensor(values, dtype=tensor.dtype, shape=shape)
 
 
-class Dot:
+class Dot(Operation):
     """General matrix multiplication with a reverse-mode gradient rule."""
 
-    forward = staticmethod(_dot_impl)
+    __slots__ = ()
+    name = "dot"
 
-    @staticmethod
-    def backward(grad: Tensor, *inputs: Tensor, **kwargs: object) -> List[Tensor]:
-        """Differentiate a matrix product with respect to both operands."""
+    def forward(self, a: Tensor, b: Tensor) -> Tensor:
+        """Contract two tensors with matrix-product semantics."""
+        return _dot_impl(a, b)
+
+    def backward(
+        self,
+        grad: Tensor,
+        *inputs: Tensor,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Optional[Tensor]]:
+        """Differentiate a matrix product with respect to requested operands."""
         a, b = inputs
+        need_left, need_right = needs_input_grad
         (
             (
                 a_vector,
@@ -316,16 +327,29 @@ class Dot:
                 f"Gradient shape {grad.shape} does not match output shape {output_shape}"
             )
 
-        accelerated = execute_matmul_gradient(grad, a, b)
+        accelerated = execute_matmul_gradient(
+            grad,
+            a,
+            b,
+            needs_input_grad=needs_input_grad,
+        )
         if accelerated is not None:
             a_storage, b_storage = accelerated
             return [
-                Tensor._from_owned_storage(a_storage, dtype=grad.dtype, shape=a.shape),
-                Tensor._from_owned_storage(b_storage, dtype=grad.dtype, shape=b.shape),
+                Tensor._from_owned_storage(a_storage, dtype=grad.dtype, shape=a.shape)
+                if a_storage is not None
+                else None,
+                Tensor._from_owned_storage(b_storage, dtype=grad.dtype, shape=b.shape)
+                if b_storage is not None
+                else None,
             ]
 
-        a_terms: list[list[tuple[float, float]]] = [[] for _ in range(a.size)]
-        b_terms: list[list[tuple[float, float]]] = [[] for _ in range(b.size)]
+        a_terms: list[list[tuple[float, float]]] = [
+            [] for _ in range(a.size if need_left else 0)
+        ]
+        b_terms: list[list[tuple[float, float]]] = [
+            [] for _ in range(b.size if need_right else 0)
+        ]
         for batch_index in range(Shape.from_iterable(batch_shape).size):
             batch_coordinates = linear_index_to_coordinates(
                 batch_index,
@@ -346,31 +370,47 @@ class Dot:
                     for inner in range(a_columns):
                         a_index = _a_index(a, a_vector, a_batch_coordinates, row, inner)
                         b_index = _b_index(b, b_vector, b_batch_coordinates, inner, column)
-                        a_terms[a_index].append((
-                            float(upstream),
-                            float(b._data[b_index]),
-                        ))
-                        b_terms[b_index].append((
-                            float(upstream),
-                            float(a._data[a_index]),
-                        ))
-
-        a_values = [_stable_product_sum(terms) for terms in a_terms]
-        b_values = [_stable_product_sum(terms) for terms in b_terms]
+                        if need_left:
+                            a_terms[a_index].append((
+                                float(upstream),
+                                float(b._data[b_index]),
+                            ))
+                        if need_right:
+                            b_terms[b_index].append((
+                                float(upstream),
+                                float(a._data[a_index]),
+                            ))
 
         return [
-            Tensor(a_values, dtype=grad.dtype, shape=a.shape),
-            Tensor(b_values, dtype=grad.dtype, shape=b.shape),
+            Tensor(
+                [_stable_product_sum(terms) for terms in a_terms],
+                dtype=grad.dtype,
+                shape=a.shape,
+            )
+            if need_left
+            else None,
+            Tensor(
+                [_stable_product_sum(terms) for terms in b_terms],
+                dtype=grad.dtype,
+                shape=b.shape,
+            )
+            if need_right
+            else None,
         ]
 
-    @staticmethod
-    def backward_graph(grad, *inputs, **kwargs: object):
+    def backward_graph(
+        self,
+        grad,
+        *inputs,
+        needs_input_grad: tuple[bool, ...],
+    ):
         """Build a differentiable VJP for vector and matrix products."""
         from .transpose import transpose
         from ..math.reshape import reshape
         from ..ops._utils import sum_to_shape_graph
 
         left, right = inputs
+        need_left, need_right = needs_input_grad
         left_vector = left.ndim == 1
         right_vector = right.ndim == 1
         left_matrix = (
@@ -392,18 +432,22 @@ class Dot:
         else:
             matrix_grad = grad
 
-        left_gradient = sum_to_shape_graph(
-            matrix_grad @ transpose(right_matrix),
-            left_matrix.shape,
-        )
-        right_gradient = sum_to_shape_graph(
-            transpose(left_matrix) @ matrix_grad,
-            right_matrix.shape,
-        )
-        if left_vector:
-            left_gradient = reshape(left_gradient, left.shape)
-        if right_vector:
-            right_gradient = reshape(right_gradient, right.shape)
+        left_gradient = None
+        if need_left:
+            left_gradient = sum_to_shape_graph(
+                matrix_grad @ transpose(right_matrix),
+                left_matrix.shape,
+            )
+            if left_vector:
+                left_gradient = reshape(left_gradient, left.shape)
+        right_gradient = None
+        if need_right:
+            right_gradient = sum_to_shape_graph(
+                transpose(left_matrix) @ matrix_grad,
+                right_matrix.shape,
+            )
+            if right_vector:
+                right_gradient = reshape(right_gradient, right.shape)
         return [left_gradient, right_gradient]
 
 
@@ -426,16 +470,16 @@ def dot(a: TensorLike, b: TensorLike) -> TensorResult:
     if isinstance(a, Variable) or isinstance(b, Variable):
         left = a if isinstance(a, Variable) else Variable(a, requires_grad=False)
         right = b if isinstance(b, Variable) else Variable(b, requires_grad=False)
-        return Variable._from_operation(
-            Dot.forward(left.data, right.data),
-            "dot",
-            Dot,
-            [left, right],
+        operation = Dot()
+        return Variable._record_operation(
+            operation.forward(left.data, right.data),
+            operation,
+            (left, right),
         )
 
     left = a if isinstance(a, Tensor) else Tensor(a)
     right = b if isinstance(b, Tensor) else Tensor(b)
-    return Dot.forward(left, right)
+    return Dot().forward(left, right)
 
 
 __all__ = ["Dot", "dot", "_transpose_impl"]

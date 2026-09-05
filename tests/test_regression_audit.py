@@ -76,26 +76,28 @@ class AutogradRegressionTests(unittest.TestCase):
         )
 
     def test_custom_scalar_metadata_is_not_treated_as_operator_dispatch(self):
-        class MetadataOperation:
-            @staticmethod
-            def forward(value, *, scalar):
-                return value + scalar
+        class MetadataOperation(ts.ops.Operation):
+            __slots__ = ("scalar",)
+            name = "metadata"
 
-            @staticmethod
-            def backward(gradient, *inputs, **kwargs):
+            def __init__(self, *, scalar):
+                object.__setattr__(self, "scalar", scalar)
+
+            def forward(self, value):
+                return value + self.scalar
+
+            def backward(self, gradient, *inputs):
                 return [gradient]
 
-            @staticmethod
-            def backward_graph(gradient, *inputs, **kwargs):
+            def backward_graph(self, gradient, *inputs):
                 return [gradient]
 
         value = ts.Variable([1.0])
-        output = ts.Variable._from_operation(
-            MetadataOperation.forward(value.data, scalar=2.0),
-            "metadata",
-            MetadataOperation,
-            [value],
-            scalar=2.0,
+        operation = MetadataOperation(scalar=2.0)
+        output = ts.Variable._record_operation(
+            operation.forward(value.data),
+            operation,
+            (value,),
         )
         value.data = ts.Tensor([4.0])
 
@@ -649,8 +651,8 @@ class ValidationRegressionTests(unittest.TestCase):
         output = value * value
         actions = (
             lambda: ts.sum(ts.Tensor([1.0]), keepdims=1),
-            lambda: ts.math.Softmax.forward(ts.Tensor([1.0]), keepdims="yes"),
-            lambda: ts.math.Concat.forward(ts.Tensor([1.0]), keepdims=1),
+            lambda: ts.math.Softmax().forward(ts.Tensor([1.0]), keepdims="yes"),
+            lambda: ts.math.Concat().forward(ts.Tensor([1.0]), keepdims=1),
             lambda: ts.grad(output, value, create_graph=1),
             lambda: ts.jacobian(output, value, create_graph="yes"),
             lambda: ts.gradcheck(

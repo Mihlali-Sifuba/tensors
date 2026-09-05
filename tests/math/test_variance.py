@@ -109,7 +109,7 @@ class VarianceTests(unittest.TestCase):
     def test_math_namespace_exposes_variance_function_and_class(self):
         self.assertAlmostEqual(ts.math.variance([1.0, 2.0, 3.0]).item(), 2.0 / 3.0)
         self.assertAlmostEqual(
-            ts.math.Variance.forward(ts.Tensor([1.0, 2.0, 3.0])).item(),
+            ts.math.Variance().forward(ts.Tensor([1.0, 2.0, 3.0])).item(),
             2.0 / 3.0,
         )
 

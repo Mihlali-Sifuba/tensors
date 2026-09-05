@@ -5,26 +5,41 @@ from __future__ import annotations
 from typing import Any, List
 
 from ..dtype import DataType
+from .operation import Operation
 from ..tensor import Tensor
 
 
-class Cast:
+class Cast(Operation):
     """Convert a tensor dtype while preserving its differentiation path."""
 
-    @staticmethod
-    def forward(value: Tensor, *, dtype: DataType) -> Tensor:
+    __slots__ = ("dtype",)
+    name = "astype"
+
+    def __init__(
+        self,
+        *,
+        dtype: DataType,
+    ) -> None:
+        object.__setattr__(self, "dtype", dtype)
+
+    def forward(self, value: Tensor) -> Tensor:
+        dtype = self.dtype
         return value.astype(dtype)
 
-    @staticmethod
     def backward(
+        self,
         grad: Tensor,
         *inputs: Tensor,
-        **kwargs: object,
+        needs_input_grad: tuple[bool, ...],
     ) -> List[Tensor]:
         return [grad.astype(inputs[0].dtype)]
 
-    @staticmethod
-    def backward_graph(grad: Any, *inputs: Any, **kwargs: object) -> List[Any]:
+    def backward_graph(
+        self,
+        grad: Any,
+        *inputs: Any,
+        needs_input_grad: tuple[bool, ...],
+    ) -> List[Any]:
         """Build a differentiable VJP converted to the input dtype."""
         return [grad.astype(inputs[0].dtype)]
 
