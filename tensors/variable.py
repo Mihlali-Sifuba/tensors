@@ -17,7 +17,7 @@ Differentiation starts from a chosen output::
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from types import NotImplementedType
 from typing import Any
 
@@ -25,7 +25,7 @@ from ._typing import TensorData, TensorIndex, TensorLike, TensorOperand, Variabl
 from .dtype import DataType, result_dtype
 from .shape import Shape
 from .tensor import Tensor
-from .ops import Add, Sub, Mul, Div, Pow, Neg, Slice, Cast
+from .ops import Add, Sub, Mul, Div, Pow, Neg, Operation, Slice, Cast
 from .ops.pow import _power_dtype
 from .graph.state import get_graph_state
 
@@ -70,7 +70,12 @@ class Variable:
         self.node = get_graph_state().add_variable_node(self)
 
     @classmethod
-    def _record_operation(cls, data, operation, inputs):
+    def _record_operation(
+        cls,
+        data: Tensor,
+        operation: Operation,
+        inputs: Sequence[Variable],
+    ) -> Variable:
         """Record an executed ``operation`` and return its result Variable.
 
         The operation has already run: this writes it into graph history by
