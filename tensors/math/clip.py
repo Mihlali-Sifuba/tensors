@@ -177,7 +177,7 @@ def clip(
     _validate_bounds(min_value, max_value)
     if isinstance(value, Variable):
         operation = Clip(min_value=min_value, max_value=max_value)
-        return Variable._from_operation(
+        return Variable._record_operation(
             operation.forward(value.data),
             operation,
             (value,),

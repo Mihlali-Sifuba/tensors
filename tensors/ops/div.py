@@ -346,7 +346,7 @@ def _division_denominator_vjp(grad, numerator, denominator):
     from ..variable import Variable
 
     operation = DivisionDenominatorGradient()
-    return Variable._from_operation(
+    return Variable._record_operation(
         operation.forward(grad.data, numerator.data, denominator.data),
         operation,
         (grad, numerator, denominator),

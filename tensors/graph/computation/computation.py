@@ -234,7 +234,7 @@ class Computation:
         variables = self._variables
         output = variables[instruction.output_slot]
         output._replace_data_from_replay(tensor)
-        output._capture_forward_record(
+        output._capture_forward_state(
             variables[slot] for slot in input_slots
         )
         values[instruction.output_slot] = tensor
@@ -245,7 +245,7 @@ class Computation:
         variables = self._variables
         for instruction in self._view_instructions:
             output = variables[instruction.output_slot]
-            record = output._forward_record
+            record = output._forward_state
             if record is None:
                 continue
             input_states, output_state = record

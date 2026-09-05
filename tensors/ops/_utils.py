@@ -231,7 +231,7 @@ def sum_products_to_shape_graph(left, right, shape: tuple[int, ...]):
     from ..variable import Variable
 
     operation = ProductSumToShape(target_shape=shape)
-    return Variable._from_operation(
+    return Variable._record_operation(
         operation.forward(left.data, right.data),
         operation,
         (left, right),
@@ -279,7 +279,7 @@ def zero_like_graph(value):
     from ..variable import Variable
 
     operation = ZeroLike()
-    return Variable._from_operation(
+    return Variable._record_operation(
         operation.forward(value.data),
         operation,
         (value,),
@@ -359,7 +359,7 @@ def masked_value_graph(value, mask: Tensor):
             f"{mask.shape}"
         )
     operation = MaskedValue(mask=mask)
-    return Variable._from_operation(
+    return Variable._record_operation(
         operation.forward(value.data),
         operation,
         (value,),

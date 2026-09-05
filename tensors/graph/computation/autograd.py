@@ -30,10 +30,10 @@ def computation_for(output: Variable) -> Computation:
     and shares none of them. A released plan is replaced rather than reused.
     """
     validate_outputs((output,))
-    computation = output._autograd_computation
+    computation = output._cached_computation
     if computation is None or computation._released:
         computation = Computation(output)
-        output._autograd_computation = computation
+        output._cached_computation = computation
     return computation
 
 

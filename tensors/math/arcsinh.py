@@ -86,7 +86,7 @@ def arcsinh(value: TensorLike) -> TensorResult:
 
     if isinstance(value, Variable):
         operation = ArcSinh()
-        return Variable._from_operation(
+        return Variable._record_operation(
             operation.forward(value.data),
             operation,
             (value,),

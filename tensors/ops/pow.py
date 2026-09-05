@@ -735,7 +735,7 @@ def _power_base_vjp(grad, base, exponent):
     from ..variable import Variable
 
     operation = PowerBaseGradient()
-    return Variable._from_operation(
+    return Variable._record_operation(
         operation.forward(grad.data, base.data, exponent.data),
         operation,
         (grad, base, exponent),
@@ -746,7 +746,7 @@ def _power_exponent_vjp(grad, base, exponent):
     from ..variable import Variable
 
     operation = PowerExponentGradient()
-    return Variable._from_operation(
+    return Variable._record_operation(
         operation.forward(grad.data, base.data, exponent.data),
         operation,
         (grad, base, exponent),

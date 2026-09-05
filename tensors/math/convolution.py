@@ -622,7 +622,7 @@ def _convolve(
             dilation=dilations,
             groups=groups,
         )
-        result: TensorResult = Variable._from_operation(
+        result: TensorResult = Variable._record_operation(
             operation.forward(
                 values[0],
                 values[1],

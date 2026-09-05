@@ -146,7 +146,7 @@ class LogSumExp(Operation):
         value = inputs[0]
         operation = LogSumExpGradient(axis=axis, keepdims=keepdims)
         return [
-            Variable._from_operation(
+            Variable._record_operation(
                 operation.forward(grad.data, value.data),
                 operation,
                 (grad, value),
@@ -331,7 +331,7 @@ def logsumexp(
 
     if isinstance(value, Variable):
         operation = LogSumExp(axis=axis, keepdims=keepdims)
-        return Variable._from_operation(
+        return Variable._record_operation(
             operation.forward(value.data),
             operation,
             (value,),

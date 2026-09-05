@@ -87,12 +87,12 @@ class ComputationForTests(unittest.TestCase):
     def test_creates_and_caches_a_plan_when_none_exists(self):
         value = ts.Variable([2.0], requires_grad=True)
         output = ts.sum(value * value)
-        self.assertIsNone(output._autograd_computation)
+        self.assertIsNone(output._cached_computation)
 
         computation = computation_for(output)
 
         self.assertIsInstance(computation, Computation)
-        self.assertIs(output._autograd_computation, computation)
+        self.assertIs(output._cached_computation, computation)
         self.assertIs(computation.output, output)
 
     def test_reuses_an_active_cached_plan(self):
@@ -105,9 +105,9 @@ class ComputationForTests(unittest.TestCase):
         self.assertIs(second, first)
         # The public entry points resolve the same cached plan.
         ts.backward(output)
-        self.assertIs(output._autograd_computation, first)
+        self.assertIs(output._cached_computation, first)
         ts.grad(output, value)
-        self.assertIs(output._autograd_computation, first)
+        self.assertIs(output._cached_computation, first)
 
     def test_replaces_a_released_cached_plan(self):
         value = ts.Variable([2.0], requires_grad=True)
@@ -118,7 +118,7 @@ class ComputationForTests(unittest.TestCase):
         second = computation_for(output)
 
         self.assertIsNot(second, first)
-        self.assertIs(output._autograd_computation, second)
+        self.assertIs(output._cached_computation, second)
         self.assertEqual(second.forward().tolist(), [4.0])
 
     def test_differentiating_through_a_released_plan_succeeds(self):

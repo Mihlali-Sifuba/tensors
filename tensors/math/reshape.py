@@ -62,7 +62,7 @@ def reshape(tensor: TensorLike, shape: tuple[int, ...]) -> TensorResult:
     shape = tuple(shape)
     if isinstance(tensor, Variable):
         operation = Reshape(shape=shape)
-        return Variable._from_operation(
+        return Variable._record_operation(
             operation.forward(tensor.data),
             operation,
             (tensor,),
