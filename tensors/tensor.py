@@ -3,7 +3,7 @@ from __future__ import annotations
 from array import array
 from itertools import product
 from collections.abc import Iterable, Iterator
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, NoReturn, overload
 
 from . import dtype as _dtype
 from ._typing import (
@@ -37,6 +37,26 @@ from .utils.indexing import (
 
 if TYPE_CHECKING:
     from .variable import Variable
+
+
+def _reject_unsupported_data(data: Any) -> NoReturn:
+    """Reject data a Tensor cannot be built from.
+
+    A graph vertex arriving here means an expression asked a function that
+    does not record structurally to work on a value that does not exist yet.
+    That is a limit of what can be described rather than a bad value, so it
+    is reported as such and never confused with an ordinary type error.
+    """
+    from .graph.node import VariableNode
+
+    if isinstance(data, VariableNode):
+        from .graph.expression import UnsupportedStructuralExpression
+
+        raise UnsupportedStructuralExpression(
+            f"{type(data).__name__} cannot be converted to a Tensor: this "
+            "operation does not record structurally yet."
+        )
+    raise TypeError(f"Unsupported data type: {type(data)}")
 
 
 class Tensor:
@@ -146,7 +166,7 @@ class Tensor:
             inferred_shape = (len(data),)
 
         else:
-            raise TypeError(f"Unsupported data type: {type(data)}")
+            _reject_unsupported_data(data)
 
         self._shape = Shape.from_iterable(
             inferred_shape if shape is None else shape

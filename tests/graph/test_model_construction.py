@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import tensors as ts
 from tensors.graph.computation.compiler import Compiler
+from tensors.graph.expression import UnsupportedStructuralExpression
 from tensors.graph.node import VariableNode
 from tensors.graph.state import reset_graph_state
 from tensors.ops import Add, Mul
@@ -148,7 +149,9 @@ class ModelExecutionTests(unittest.TestCase):
         self.assertIs(first, second)
         self.assertEqual(second.data.tolist(), [9.0])
         self.assertIs(model._structure, structure)
-        self.assertIs(model._structure.computations[0], structure.computations[0])
+        self.assertIs(
+            model._structure.computations[0], structure.computations[0]
+        )
 
     def test_structural_identity_is_stable_across_calls(self):
         model = Linear()
@@ -201,10 +204,11 @@ class ModelExecutionTests(unittest.TestCase):
 
         model = Outer()
 
+        program = model._structure.computations[0]
         self.assertEqual(
             [
                 instruction.operation.name
-                for instruction in model._structure.computations[0]._instructions
+                for instruction in program._instructions
             ],
             ["dot", "add"],
         )
@@ -247,6 +251,112 @@ class ModelExecutionTests(unittest.TestCase):
         self.assertIsNone(model._structure)
         self.assertEqual(model(ts.Tensor([3.0])).data.tolist(), [7.0])
         self.assertEqual(model(ts.Tensor([4.0])).data.tolist(), [9.0])
+
+
+class StructuralBuildFallbackTests(unittest.TestCase):
+    """Only an expression the graph cannot record yet falls back to tracing."""
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_a_scalar_operand_keeps_the_tracing_lifecycle(self):
+        class Scaled(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.w = ts.Variable([2.0], name="w")
+
+            def forward(self, x):
+                return x * self.w + 1.0
+
+        model = Scaled()
+
+        self.assertIsNone(model._structure)
+        self.assertEqual(model(ts.Tensor([3.0])).data.tolist(), [7.0])
+        # The build stopped on the signal that states the limit.
+        with self.assertRaises(UnsupportedStructuralExpression):
+            VariableNode() + 1.0
+
+    def test_a_function_without_a_structural_form_keeps_tracing(self):
+        class Activated(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.w = ts.Variable([[0.0]], name="w")
+
+            def forward(self, x):
+                return ts.sigmoid(x @ self.w)
+
+        model = Activated()
+
+        self.assertIsNone(model._structure)
+        self.assertEqual(model(ts.Tensor([[1.0]])).data.tolist(), [0.5])
+        with self.assertRaises(UnsupportedStructuralExpression):
+            ts.sigmoid(VariableNode())
+
+    def test_the_signal_is_narrower_than_a_type_error(self):
+        # Existing callers still see a TypeError, but the build only treats
+        # this one as "cannot be recorded yet".
+        self.assertTrue(
+            issubclass(UnsupportedStructuralExpression, TypeError)
+        )
+        with self.assertRaises(TypeError):
+            VariableNode() * 2.0
+
+    def test_a_misspelled_model_attribute_is_not_swallowed(self):
+        class Broken(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.w = ts.Variable([[2.0]], name="w")
+
+            def forward(self, x):
+                return x @ self.ww
+
+        with self.assertRaisesRegex(AttributeError, "ww"):
+            Broken()
+
+    def test_a_failing_forward_propagates_during_construction(self):
+        class Failing(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.w = ts.Variable([[2.0]], name="w")
+
+            def forward(self, x):
+                raise ValueError("deliberate model failure")
+
+        with self.assertRaisesRegex(ValueError, "deliberate model failure"):
+            Failing()
+
+    def test_a_compiler_failure_does_not_become_a_tracing_fallback(self):
+        def broken(self):
+            raise RuntimeError("deliberate compiler failure")
+
+        with patch.object(Compiler, "compile", broken):
+            with self.assertRaisesRegex(RuntimeError, "deliberate compiler"):
+                Linear()
+
+    def test_a_malformed_output_is_reported_during_construction(self):
+        class NotAGraphValue(ts.Graph):
+            def forward(self, x):
+                return 5
+
+        with self.assertRaisesRegex(TypeError, "must return"):
+            NotAGraphValue()
+
+    def test_a_supported_model_still_builds_during_construction(self):
+        model = Linear()
+
+        self.assertIsNotNone(model._structure)
+        program = model._structure.computations[0]
+        self.assertEqual(
+            [
+                instruction.operation.name
+                for instruction in program._instructions
+            ],
+            ["dot", "add"],
+        )
+        self.assertEqual(model(ts.Tensor([[3.0]])).data.tolist(), [7.0])
 
 
 if __name__ == "__main__":
