@@ -102,9 +102,10 @@ relationship.
 Reading structure never requires a materialized value: `producer`,
 `operand_nodes`, and `result_node` describe edges. `operands` and `result`
 resolve the Variables those vertices name, and raise
-`UnboundVariableNodeError` while one is still pending. Compilation currently
-requires every vertex it reaches to be materialized, because an execution
-slot is numbered by the `Variable` occupying it.
+`UnboundVariableNodeError` while one is still pending. Compilation is
+structural for the same reason: an execution slot is numbered by the vertex
+naming a value, so a graph compiles whether or not that value exists.
+Executing the compiled program is what still needs one.
 
 ### Operands are graph values, configuration is not
 
@@ -449,8 +450,11 @@ must be synchronized separately if callers modify them concurrently.
 `Computation` compiles its dependency-first traversal into ordered
 `Instruction` objects once at construction. Each instruction names the
 operation to run, the slots holding its operands, and the slot receiving its
-result, resolved from the operation vertex's edges at that point, so replay
-and differentiation never walk the graph again. `forward` traverses those
+result. A slot is numbered by the `VariableNode` occupying it, and the
+compiler resolves the operand and result slots from the operation vertex's
+edges, so replay and differentiation never walk the graph again. A
+Computation then projects those slots onto the runtime Variables it executes
+over. `forward` traverses those
 instructions and reverse execution traverses them backwards.
 
 Every pass allocates its own value and gradient buffers, so concurrent replays

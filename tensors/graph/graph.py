@@ -17,7 +17,9 @@ from inspect import getclosurevars, isfunction, ismethod
 from ..tensor import Tensor
 from ..variable import Variable
 from .computation import Computation
-from .computation.compiler import Compiler
+from .computation.compiler import (
+    Compiler, resolve_boundaries, resolve_outputs,
+)
 from .state import TraceScope
 
 
@@ -502,7 +504,10 @@ class Graph:
         sides: the structural record kept here and the computations that
         execute the program it emitted.
         """
-        compiler = Compiler(outputs, boundaries=boundaries)
+        compiler = Compiler(
+            resolve_outputs(outputs),
+            boundaries=resolve_boundaries(boundaries),
+        )
         compiler.compile()
         state.computations = Computation._from_compiler(compiler)
         state.nodes = compiler.nodes

@@ -233,9 +233,13 @@ The folders have deliberately narrow responsibilities:
                          forward / backward
   ```
 
-  `Compiler` is the last component that understands Nodes and Edges: it emits
-  the slot-based program, resolves each output's execution view, and hands
-  the graph layer the traversal and edges it keeps. An `Instruction` is one
+  `Compiler` is the last component that understands Nodes and Edges: it
+  takes the output vertices to compile, numbers a slot per `VariableNode`,
+  emits the slot-based program, resolves each output's execution view, and
+  hands the graph layer the traversal and edges it keeps. Compilation reads
+  no values, so a graph compiles before the values it names exist; the
+  `variables` projection onto the runtime is resolved separately, on
+  request. An `Instruction` is one
   executable operation invocation. `Computation` receives an already-resolved
   execution view and works only in the compiled domain — Variables, slots,
   instructions, and fusion metadata — to execute it forwards and in reverse.
