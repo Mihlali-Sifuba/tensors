@@ -184,10 +184,10 @@ class UnmaterializedGraphStructureTests(unittest.TestCase):
         self.assertEqual(
             compiler.output_slots, (compiler.node_slots[output.node],)
         )
-        with self.assertRaises(UnboundVariableNodeError):
-            compiler.variables
-        with self.assertRaises(UnboundVariableNodeError):
-            Computation(output)
+        # The program is adopted structurally, so the Computation exists;
+        # the value nothing ever materialized is missing only when it runs.
+        with self.assertRaisesRegex(RuntimeError, "leaf slot"):
+            Computation(output).forward()
 
 
 class EagerRecordingLifecycleTests(unittest.TestCase):

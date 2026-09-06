@@ -90,10 +90,9 @@ class Compiler:
     sequence is expressed in terms of stays readable on the compiler: the
     slots and leaves the runtime executes over, the per-output execution
     views resolved from the reachability masks, and the traversal and edges
-    the graph layer keeps as its own structural record. :attr:`variables` and
-    :attr:`variable_slots` project the finished program onto the runtime
-    Variables occupying its slots, and are the only part of a compilation
-    that requires those values to have been materialized.
+    the graph layer keeps as its own structural record. Nothing here reads a
+    value; a :class:`~tensors.graph.computation.Computation` is what binds
+    the program's slots to the Variables it executes over.
     """
 
     def __init__(
@@ -127,8 +126,6 @@ class Compiler:
         #: The instructions each output's execution reaches, in program order.
         self.view_instructions: tuple[tuple[Instruction, ...], ...] = ()
         self._edges: tuple[Edge, ...] | None = None
-        self._variables: tuple[Variable, ...] | None = None
-        self._variable_slots: dict[Variable, int] | None = None
 
     def compile(self) -> tuple[Instruction, ...]:
         """Return the instruction sequence the recorded graph compiles to.
@@ -282,34 +279,3 @@ class Compiler:
         self.view_nodes = tuple(view_nodes)
         self.view_slots = tuple(view_slots)
         self.view_instructions = tuple(view_instructions)
-
-    @property
-    def variables(self) -> tuple[Variable, ...]:
-        """Return the runtime Variable occupying each slot, in slot order.
-
-        This is the projection of a compiled program back onto the runtime,
-        and the one part of a compilation that requires its values to exist.
-        It is resolved on request so that compiling never depends on it.
-        """
-        variables = self._variables
-        if variables is None:
-            variables = tuple(node.variable for node in self.variable_nodes)
-            self._variables = variables
-        return variables
-
-    @property
-    def variable_slots(self) -> dict[Variable, int]:
-        """Return the slot each runtime Variable occupies.
-
-        The runtime looks slots up by the value it holds; compilation numbers
-        them by vertex. This resolves the first from the second, and like
-        :attr:`variables` requires every slot to have been materialized.
-        """
-        slots = self._variable_slots
-        if slots is None:
-            slots = {
-                variable: index
-                for index, variable in enumerate(self.variables)
-            }
-            self._variable_slots = slots
-        return slots

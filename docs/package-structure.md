@@ -237,12 +237,13 @@ The folders have deliberately narrow responsibilities:
   takes the output vertices to compile, numbers a slot per `VariableNode`,
   emits the slot-based program, resolves each output's execution view, and
   hands the graph layer the traversal and edges it keeps. Compilation reads
-  no values, so a graph compiles before the values it names exist; the
-  `variables` projection onto the runtime is resolved separately, on
-  request. An `Instruction` is one
-  executable operation invocation. `Computation` receives an already-resolved
-  execution view and works only in the compiled domain — Variables, slots,
-  instructions, and fusion metadata — to execute it forwards and in reverse.
+  no values, so a graph compiles before the values it names exist. An
+  `Instruction` is one executable operation invocation. `Computation`
+  receives an already-resolved execution view and works only in the compiled
+  domain — vertices, slots, values, instructions, and fusion metadata — to
+  execute it forwards and in reverse. It holds Tensors in slots while a pass
+  runs and gives each result to the vertex naming its slot, materializing
+  that vertex's Variable on the first pass and updating it on later ones.
   `gradients` supplies the generic mechanics reverse execution uses along the
   way — upstream seed construction, gradient accumulation, and VJP result
   validation; `fusion` recognizes and accelerates compatible instruction runs

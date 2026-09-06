@@ -67,11 +67,19 @@ class ComputationLeavesGraphStructureBehindTests(unittest.TestCase):
 
     def test_no_edge_inspection_or_node_classification(self):
         source = inspect.getsource(computation_module)
-        self.assertNotIn("_in_edges", source)
-        self.assertNotIn("_out_edges", source)
-        # Deriving an execution view by classifying graph vertices is the
-        # compiler's job now.
-        self.assertNotIn("VariableNode", source)
+        # A Computation identifies each slot by the vertex naming its value
+        # and materializes that value, but it never reads topology: deriving
+        # an execution view from the graph is the compiler's job.
+        for name in (
+            "_in_edges",
+            "_out_edges",
+            "producer",
+            "operand_nodes",
+            "result_node",
+            "Edge",
+        ):
+            with self.subTest(name=name):
+                self.assertNotIn(name, source)
 
     def test_execution_state_is_the_compiled_domain(self):
         value = ts.Variable([2.0], requires_grad=True)
@@ -80,8 +88,8 @@ class ComputationLeavesGraphStructureBehindTests(unittest.TestCase):
         for name in (
             "output",
             "_output_slot",
-            "_variables",
-            "_variable_slots",
+            "_variable_nodes",
+            "_node_slots",
             "_leaf_slots",
             "_instructions",
             "_view_slots",
@@ -149,8 +157,8 @@ class CompiledViewTests(unittest.TestCase):
         one, two = Computation.from_outputs([shared * 3.0, shared + 1.0])
 
         for name in (
-            "_variables",
-            "_variable_slots",
+            "_variable_nodes",
+            "_node_slots",
             "_leaf_slots",
             "_instructions",
             "_fusions",

@@ -450,12 +450,21 @@ must be synchronized separately if callers modify them concurrently.
 `Computation` compiles its dependency-first traversal into ordered
 `Instruction` objects once at construction. Each instruction names the
 operation to run, the slots holding its operands, and the slot receiving its
-result. A slot is numbered by the `VariableNode` occupying it, and the
+result. A slot is numbered by the `VariableNode` naming its value, and the
 compiler resolves the operand and result slots from the operation vertex's
-edges, so replay and differentiation never walk the graph again. A
-Computation then projects those slots onto the runtime Variables it executes
-over. `forward` traverses those
-instructions and reverse execution traverses them backwards.
+edges, so replay and differentiation never walk the graph again.
+
+A slot holds a Tensor while a pass runs. `forward` seeds the leaf slots from
+the Variables they read, executes each instruction into its output slot, and
+gives that slot's vertex the value it produced: the first pass materializes
+the Variable the vertex named, and a later pass updates the one already bound
+to it. A program compiled from vertices that hold nothing yet therefore runs
+exactly like a replay of a recorded one.
+
+Differentiation works on Variables rather than slot values, so it requires a
+forward pass to have produced them; a reverse pass over a program whose slots
+are still empty says so instead of differentiating an incomplete one. Reverse
+execution then traverses the same instructions backwards.
 
 Every pass allocates its own value and gradient buffers, so concurrent replays
 of one Computation share no mutable execution state.
