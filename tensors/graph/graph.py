@@ -20,6 +20,7 @@ from .computation import Computation
 from .computation.compiler import (
     Compiler, resolve_boundaries, resolve_outputs,
 )
+from .expression import UnsupportedStructuralExpression
 from .node import VariableNode
 from .state import TraceScope, get_graph_state
 
@@ -238,18 +239,18 @@ class Graph(metaclass=_GraphMeta):
         A model that cannot be described before its values exist keeps the
         tracing lifecycle it had: a functional graph, a ``forward`` taking
         configuration arguments whose values are only known per call, and a
-        ``forward`` whose expression needs a value to record at all — a
-        Python scalar operand, or anything read off an input. Such a build
-        is abandoned rather than reported here, because the same expression
-        runs again on the first call and raises there if it is genuinely
-        wrong.
+        ``forward`` whose expression the graph cannot record yet — a Python
+        scalar operand, or a function that has no structural form. Only that
+        last case is caught, and only through the signal that states it:
+        anything else wrong with a model or with the machinery that records
+        it is a real failure, and construction reports it here.
         """
         inputs = self._structural_input_count()
         if inputs is None:
             return
         try:
             structure = self._record_structure(inputs)
-        except Exception:
+        except UnsupportedStructuralExpression:
             return
         object.__setattr__(self, "_structure", structure)
 

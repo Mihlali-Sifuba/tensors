@@ -164,6 +164,11 @@ promotion against the value beside it, and a structural expression has not
 calculated that value, so recording one would mean inventing a dtype. Pass a
 typed `Tensor` or `Variable` instead.
 
+That rejection, and a function that has no structural form yet, raise
+`UnsupportedStructuralExpression` — a `TypeError` that states a limit of what
+the graph can describe rather than a faulty expression. It is the signal a
+model build watches for when deciding that a model must be traced instead.
+
 The recorded structure is an ordinary graph, so it compiles like any other:
 
 ```python

@@ -166,10 +166,17 @@ call.
 A model keeps the earlier tracing lifecycle when it cannot be described
 before its values exist: the functional `@Graph` form, a `forward` taking
 configuration arguments whose values are only known per call, and a `forward`
-whose expression needs a value to record — a Python scalar operand, or
-anything read off an input. A `Variable` input also traces, because its
-autograd identity belongs to the caller rather than to the model's own input
-vertex.
+whose expression the graph cannot record yet — a Python scalar operand, or a
+function that has no structural form. A `Variable` input also traces, because
+its autograd identity belongs to the caller rather than to the model's own
+input vertex.
+
+That last case is recognized by one signal and nothing else. Recording an
+expression the graph cannot describe raises
+`UnsupportedStructuralExpression`, and only that abandons the build. Anything
+else — a misspelled attribute, a `forward` that fails, a value read off an
+input, a malformed output, a failure inside the compiler — is a real error
+and construction reports it where it happened.
 
 Traced calls behave as before: each records a new computation. `compile(*args,
 **kwargs)` explicitly enables guarded replay for Tensor inputs on the calling

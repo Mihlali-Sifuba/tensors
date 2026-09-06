@@ -141,10 +141,20 @@ class GraphTests(unittest.TestCase):
     def test_graph_rejects_non_variable_output(self):
         class BadGraph(ts.Graph):
             def forward(self, x):
-                return x.data
+                return 5
 
         with self.assertRaisesRegex(TypeError, "must return"):
-            BadGraph()(ts.Tensor([1.0]))
+            BadGraph()
+
+    def test_graph_reports_a_runtime_read_of_a_model_input(self):
+        class ReadsInput(ts.Graph):
+            def forward(self, x):
+                return x.data
+
+        # A model input has no value while the graph is being described, and
+        # construction says so rather than quietly tracing instead.
+        with self.assertRaises(AttributeError):
+            ReadsInput()
 
     def test_graph_collects_parameters_from_child_graphs_and_containers(self):
         class Child(ts.Graph):

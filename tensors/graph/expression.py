@@ -28,6 +28,16 @@ if TYPE_CHECKING:
     from ..variable import Variable
 
 
+class UnsupportedStructuralExpression(TypeError):
+    """Raised when an expression cannot be recorded before its values exist.
+
+    This is a limit of what the graph can currently describe, not a faulty
+    model: the same expression is well defined once the values are there.
+    Construction-time model building treats it as the signal to keep the
+    tracing lifecycle, so it must never stand in for an ordinary error.
+    """
+
+
 def is_graph_operand(value: object) -> TypeGuard[GraphOperand]:
     """Whether ``value`` names a graph value rather than a plain Tensor."""
     from ..variable import Variable
@@ -77,7 +87,7 @@ def structural_node(operand: GraphOperand | Tensor) -> VariableNode:
 
 def _reject_guessed_constant(value: object) -> NoReturn:
     """Reject a value the graph could only record with a guessed dtype."""
-    raise TypeError(
+    raise UnsupportedStructuralExpression(
         "An operation operand must be a VariableNode, Variable or Tensor, "
         f"got {type(value).__name__}. A Python scalar would have to be "
         "recorded as a constant whose dtype depends on the value beside it, "
@@ -122,6 +132,7 @@ def apply_operation(
 
 
 __all__ = [
+    "UnsupportedStructuralExpression",
     "apply_operation",
     "as_graph_operand",
     "is_graph_operand",
