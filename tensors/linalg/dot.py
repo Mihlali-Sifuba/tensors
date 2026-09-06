@@ -22,6 +22,7 @@ from ..utils.coordinates import (
 )
 
 if TYPE_CHECKING:
+    from ..graph.node import VariableNode
     from ..variable import Variable
 
 
@@ -452,6 +453,14 @@ class Dot(Operation):
 
 
 @overload
+def dot(a: VariableNode, b: TensorLike | VariableNode) -> VariableNode: ...
+
+
+@overload
+def dot(a: TensorLike, b: VariableNode) -> VariableNode: ...
+
+
+@overload
 def dot(a: Variable, b: TensorLike) -> Variable: ...
 
 
@@ -463,15 +472,25 @@ def dot(a: TensorLike, b: Variable) -> Variable: ...
 def dot(a: TensorData, b: TensorData) -> Tensor: ...
 
 
-def dot(a: TensorLike, b: TensorLike) -> TensorResult:
-    """Return the general matrix product of two Tensors or Variables."""
-    from ..variable import Variable
+def dot(
+    a: TensorLike | VariableNode,
+    b: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Return the general matrix product of two graph values or Tensors.
 
-    if isinstance(a, Variable) or isinstance(b, Variable):
-        left = a if isinstance(a, Variable) else Variable(a, requires_grad=False)
-        right = b if isinstance(b, Variable) else Variable(b, requires_grad=False)
-        operation = Dot()
-        return Variable._apply_operation(operation, (left, right))
+    A graph value on either side applies the product through the graph:
+    Variables calculate it now, and a vertex records it for a program that
+    runs later. A Tensor beside one enters the graph as a non-gradient leaf.
+    """
+    from ..graph.expression import (
+        apply_operation, as_graph_operand, is_graph_operand,
+    )
+
+    if is_graph_operand(a) or is_graph_operand(b):
+        return apply_operation(
+            Dot(),
+            (as_graph_operand(a), as_graph_operand(b)),
+        )
 
     left = a if isinstance(a, Tensor) else Tensor(a)
     right = b if isinstance(b, Tensor) else Tensor(b)

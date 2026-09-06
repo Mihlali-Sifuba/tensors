@@ -243,6 +243,10 @@ class Variable:
     # resulting tensor-tensor promotion reproduces it exactly.
 
     def __add__(self, other: TensorOperand) -> Variable:
+        if isinstance(other, VariableNode):
+            # A structural expression belongs to the vertex: it records
+            # the operation instead of calculating a value.
+            return NotImplemented
         dtype = result_dtype(self.dtype, other)
         if isinstance(other, Variable):
             operand = other
@@ -261,6 +265,10 @@ class Variable:
         return self + other
 
     def __sub__(self, other: TensorOperand) -> Variable:
+        if isinstance(other, VariableNode):
+            # A structural expression belongs to the vertex: it records
+            # the operation instead of calculating a value.
+            return NotImplemented
         dtype = result_dtype(self.dtype, other)
         if isinstance(other, Variable):
             operand = other
@@ -279,6 +287,10 @@ class Variable:
         return (-self) + other
 
     def __mul__(self, other: TensorOperand) -> Variable:
+        if isinstance(other, VariableNode):
+            # A structural expression belongs to the vertex: it records
+            # the operation instead of calculating a value.
+            return NotImplemented
         dtype = result_dtype(self.dtype, other)
         if isinstance(other, Variable):
             operand = other
@@ -297,6 +309,10 @@ class Variable:
         return self * other
 
     def __truediv__(self, other: TensorOperand) -> Variable:
+        if isinstance(other, VariableNode):
+            # A structural expression belongs to the vertex: it records
+            # the operation instead of calculating a value.
+            return NotImplemented
         dtype = result_dtype(self.dtype, other, division=True)
         if isinstance(other, Variable):
             operand = other
@@ -328,6 +344,10 @@ class Variable:
         return self._apply_operation(operation, (numerator, self))
 
     def __pow__(self, other: TensorOperand) -> Variable:
+        if isinstance(other, VariableNode):
+            # A structural expression belongs to the vertex: it records
+            # the operation instead of calculating a value.
+            return NotImplemented
         dtype = _power_dtype(self.data, other)
         if isinstance(other, Variable):
             exponent = other

@@ -9,7 +9,16 @@ from ..tensor import Tensor
 from .dot import dot
 
 if TYPE_CHECKING:
+    from ..graph.node import VariableNode
     from ..variable import Variable
+
+
+@overload
+def matmul(a: VariableNode, b: TensorLike | VariableNode) -> VariableNode: ...
+
+
+@overload
+def matmul(a: TensorLike, b: VariableNode) -> VariableNode: ...
 
 
 @overload
@@ -24,8 +33,11 @@ def matmul(a: TensorLike, b: Variable) -> Variable: ...
 def matmul(a: TensorData, b: TensorData) -> Tensor: ...
 
 
-def matmul(a: TensorLike, b: TensorLike) -> TensorResult:
-    """Return the general matrix product of two tensors or Variables."""
+def matmul(
+    a: TensorLike | VariableNode,
+    b: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Return the general matrix product of two graph values or tensors."""
     return dot(a, b)
 
 

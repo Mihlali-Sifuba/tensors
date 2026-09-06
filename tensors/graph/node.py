@@ -12,12 +12,16 @@ concrete subclasses, and execution state belongs to
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, NoReturn
 from weakref import ReferenceType, ref
 
+from ..ops import Add, Div, Mul, Neg, Pow, Slice, Sub
+
 if TYPE_CHECKING:
-    from .._typing import VariableData
+    from .._typing import GraphOperand, TensorIndex, VariableData
     from ..variable import Variable
+    from ..tensor import Tensor
     from .edge import Edge
     from ..ops.operation import Operation
 
@@ -116,6 +120,10 @@ class VariableNode(Node):
                                    ▼
                             VariableNode(c)   # bound after Add has run
 
+    A vertex also takes part in structural expressions: ``a + b`` over two
+    vertices records an addition and returns the unbound vertex naming its
+    result, without calculating anything.
+
     Binding is one-time and symmetric: a vertex names at most one Variable
     and that Variable names it back, so ``variable.node.variable is variable``
     holds from materialization onwards for leaves, for normalized Tensor and
@@ -202,6 +210,79 @@ class VariableNode(Node):
         """Return the operation vertex that calculated this value, if any."""
         edges = self._in_edges
         return _as_operation_node(edges[0].source) if edges else None
+
+    # -- structural expressions ----------------------------------------
+    #
+    # An operator over vertices describes a graph instead of calculating a
+    # value: it records the operation and returns the unbound vertex naming
+    # the result. A runtime Variable operand takes part as the vertex it was
+    # materialized against, so a model parameter can appear in a structural
+    # expression without its value being read.
+
+    def _record(
+        self,
+        operation: Operation,
+        operands: Sequence[GraphOperand | Tensor],
+    ) -> VariableNode:
+        """Record ``operation`` over ``operands`` without executing it."""
+        from .expression import record_structurally
+
+        return record_structurally(operation, operands)
+
+    def __add__(self, other: GraphOperand | Tensor) -> VariableNode:
+        return self._record(Add(), (self, other))
+
+    def __radd__(self, other: GraphOperand | Tensor) -> VariableNode:
+        return self._record(Add(), (other, self))
+
+    def __sub__(self, other: GraphOperand | Tensor) -> VariableNode:
+        return self._record(Sub(), (self, other))
+
+    def __rsub__(self, other: GraphOperand | Tensor) -> VariableNode:
+        return self._record(Sub(), (other, self))
+
+    def __mul__(self, other: GraphOperand | Tensor) -> VariableNode:
+        return self._record(Mul(), (self, other))
+
+    def __rmul__(self, other: GraphOperand | Tensor) -> VariableNode:
+        return self._record(Mul(), (other, self))
+
+    def __truediv__(self, other: GraphOperand | Tensor) -> VariableNode:
+        return self._record(Div(), (self, other))
+
+    def __rtruediv__(self, other: GraphOperand | Tensor) -> VariableNode:
+        # Operand order carries the semantics: the numerator is input_0.
+        return self._record(Div(), (other, self))
+
+    def __pow__(self, other: GraphOperand | Tensor) -> VariableNode:
+        return self._record(Pow(), (self, other))
+
+    def __rpow__(self, other: GraphOperand | Tensor) -> VariableNode:
+        return self._record(Pow(), (other, self))
+
+    def __matmul__(self, other: GraphOperand | Tensor) -> VariableNode:
+        from ..linalg.dot import Dot
+
+        return self._record(Dot(), (self, other))
+
+    def __rmatmul__(self, other: GraphOperand | Tensor) -> VariableNode:
+        from ..linalg.dot import Dot
+
+        return self._record(Dot(), (other, self))
+
+    def __neg__(self) -> VariableNode:
+        return self._record(Neg(), (self,))
+
+    def __getitem__(self, key: TensorIndex) -> VariableNode:
+        return self._record(Slice(key=key), (self,))
+
+    def __iter__(self) -> NoReturn:
+        # Without this, Python would iterate a vertex through __getitem__ and
+        # record slices forever: nothing bounds a value that does not exist.
+        raise TypeError(
+            f"{self!r} is not iterable. Index it explicitly to record a "
+            "slice of the value it names."
+        )
 
 
 class OperationNode(Node):
