@@ -10,6 +10,7 @@ from ..backend import execute_logsumexp, execute_logsumexp_gradient
 from ..dtype import float64
 from ..ops.operation import Operation, UNARY_DEMAND
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._reduction import (
     Axis,
     keepdims_shape,
@@ -328,8 +329,7 @@ def logsumexp(
     if isinstance(value, Variable):
         operation = LogSumExp(axis=axis, keepdims=keepdims)
         return Variable._apply_operation(operation, (value,))
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
+    value = as_tensor_operand(value)
     return LogSumExp(axis=axis, keepdims=keepdims).forward(value)
 
 

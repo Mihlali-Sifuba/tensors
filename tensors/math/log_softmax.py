@@ -11,6 +11,7 @@ from ..backend import execute_normalization, execute_normalization_gradient
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._normalization import shifted_normalization
 from .softmax import (
     Softmax,
@@ -253,8 +254,7 @@ def log_softmax(value: TensorLike, axis: int = -1) -> TensorResult:
     if isinstance(value, Variable):
         operation = LogSoftmax(axis=axis)
         return Variable._apply_operation(operation, (value,))
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
+    value = as_tensor_operand(value)
     return LogSoftmax(axis=axis).forward(value)
 
 

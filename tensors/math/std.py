@@ -8,6 +8,7 @@ from ..backend import execute_reduction, execute_reduction_gradient
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._reduction import (
     Axis,
     immutable_axis,
@@ -215,8 +216,7 @@ def std(
     if isinstance(value, Variable):
         operation = Std(axis=axis, keepdims=keepdims)
         return Variable._apply_operation(operation, (value,))
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
+    value = as_tensor_operand(value)
     return Std(axis=axis, keepdims=keepdims).forward(value)
 
 

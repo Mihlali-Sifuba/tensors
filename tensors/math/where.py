@@ -10,6 +10,7 @@ from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ..utils.broadcasting import broadcast_to
 
 if TYPE_CHECKING:
@@ -28,7 +29,7 @@ def _tensor(value: Any, *, dtype=None) -> Tensor:
         if dtype is not None and isinstance(value, (int, float))
         else None
     )
-    return Tensor(value, dtype=scalar_dtype)
+    return as_tensor_operand(value, dtype=scalar_dtype)
 
 
 class Where(Operation):

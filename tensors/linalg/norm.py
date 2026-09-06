@@ -8,6 +8,7 @@ from ..backend import execute_reduction
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ..math._reduction import (
     Axis,
     immutable_axis,
@@ -173,8 +174,7 @@ def norm(
     if isinstance(value, Variable):
         operation = Norm(axis=axis, keepdims=keepdims)
         return Variable._apply_operation(operation, (value,))
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
+    value = as_tensor_operand(value)
     return Norm(axis=axis, keepdims=keepdims).forward(value)
 
 

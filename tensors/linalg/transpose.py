@@ -5,6 +5,7 @@ from typing import Any, List, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from .dot import _transpose_impl
 
 
@@ -77,7 +78,7 @@ def transpose(
         operation = Transpose(axes=axes)
         return Variable._apply_operation(operation, (value,))
     return Transpose(axes=axes).forward(
-        value if isinstance(value, Tensor) else Tensor(value)
+        as_tensor_operand(value)
     )
 
 

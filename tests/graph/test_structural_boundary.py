@@ -295,5 +295,42 @@ class GraphStructuralMetadataTests(unittest.TestCase):
         )
 
 
+class TensorLayerIndependenceTests(unittest.TestCase):
+    """The numerical layer stays unaware of the graph layer above it."""
+
+    def test_tensor_names_nothing_from_the_graph_layer(self):
+        import tensors.tensor as tensor_module
+
+        source = inspect.getsource(tensor_module)
+        for name in (
+            "graph",
+            "VariableNode",
+            "UnsupportedStructuralExpression",
+        ):
+            with self.subTest(name=name):
+                self.assertNotIn(name, source)
+
+    def test_tensor_imports_nothing_from_the_graph_layer(self):
+        import tensors.tensor as tensor_module
+
+        for name in runtime_imported_names(tensor_module):
+            with self.subTest(name=name):
+                self.assertNotIn("graph", name)
+
+    def test_tensor_treats_a_vertex_as_ordinary_unsupported_data(self):
+        from tensors.graph.expression import UnsupportedStructuralExpression
+        from tensors.graph.node import VariableNode
+
+        with self.assertRaisesRegex(TypeError, "Unsupported data type"):
+            ts.Tensor(VariableNode())
+        with self.assertRaises(TypeError) as caught:
+            ts.Tensor(VariableNode())
+        # Constructing a Tensor from an unsupported object is a value error
+        # like any other; only the graph layer knows what a vertex means.
+        self.assertNotIsInstance(
+            caught.exception, UnsupportedStructuralExpression
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

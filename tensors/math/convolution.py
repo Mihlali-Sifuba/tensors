@@ -19,6 +19,7 @@ from ..dtype import DataType, result_dtype
 from ..strides import Strides
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from .sum import _stable_float_sum, _stable_product_sum
 
 if TYPE_CHECKING:
@@ -65,7 +66,7 @@ def _as_tensor(value: TensorLike) -> Tensor:
         return value
     if isinstance(value, Variable):
         return value.data
-    return Tensor(value)
+    return as_tensor_operand(value)
 
 
 @dataclass(frozen=True)

@@ -10,6 +10,7 @@ from ..backend import execute_clip, execute_clip_gradient
 from ..dtype import result_dtype
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 
 
 def _validate_bound(name: str, value: int | float | None) -> None:
@@ -178,8 +179,7 @@ def clip(
     if isinstance(value, Variable):
         operation = Clip(min_value=min_value, max_value=max_value)
         return Variable._apply_operation(operation, (value,))
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
+    value = as_tensor_operand(value)
     return Clip(min_value=min_value, max_value=max_value).forward(value)
 
 

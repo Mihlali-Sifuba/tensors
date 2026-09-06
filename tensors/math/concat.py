@@ -11,6 +11,7 @@ from ..backend import execute_concat
 from ..dtype import result_dtype
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -46,7 +47,7 @@ class Concat(Operation):
         if not tensors:
             raise ValueError("concat requires at least one tensor")
 
-        converted = [value if isinstance(value, Tensor) else Tensor(value) for value in tensors]
+        converted = [as_tensor_operand(value) for value in tensors]
         reference = converted[0]
         if reference.ndim == 0:
             if axis < 0:

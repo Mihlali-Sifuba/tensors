@@ -4,6 +4,9 @@ from unittest.mock import patch
 import tensors as ts
 from tensors.graph import Computation
 from tensors.graph.computation.compiler import Compiler
+from tensors.graph.expression import (
+    UnsupportedStructuralExpression, as_tensor_operand,
+)
 from tensors.graph.node import OperationNode, VariableNode
 from tensors.graph.state import (
     GraphState, get_graph_state, reset_graph_state,
@@ -272,6 +275,61 @@ class RuntimeApplicationIsUnchangedTests(unittest.TestCase):
 
         self.assertEqual(left.grad.tolist(), [3.0, 4.0])
         self.assertEqual(right.grad.tolist(), [7.0, 10.0])
+
+
+class TensorOperandBoundaryTests(unittest.TestCase):
+    """The graph layer decides what an executing operation may run on."""
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_the_boundary_rejects_a_vertex(self):
+        with self.assertRaises(UnsupportedStructuralExpression):
+            as_tensor_operand(VariableNode())
+
+    def test_the_boundary_still_coerces_ordinary_data(self):
+        tensor = ts.Tensor([1.0, 2.0])
+
+        self.assertIs(as_tensor_operand(tensor), tensor)
+        self.assertEqual(as_tensor_operand([1.0, 2.0]).tolist(), [1.0, 2.0])
+        self.assertEqual(as_tensor_operand(3.0).item(), 3.0)
+        self.assertEqual(
+            as_tensor_operand(3, dtype=ts.float32).dtype, ts.float32
+        )
+
+    def test_an_operation_without_a_structural_form_signals(self):
+        vertex = VariableNode()
+        calls = {
+            "sigmoid": lambda: ts.sigmoid(vertex),
+            "sum": lambda: ts.sum(vertex),
+            "transpose": lambda: ts.transpose(vertex),
+            "concat": lambda: ts.concat([vertex, ts.Tensor([1.0])]),
+            "where": lambda: ts.where(
+                ts.Tensor([True]), vertex, ts.Tensor([1.0])
+            ),
+            "maximum": lambda: ts.maximum(vertex, ts.Tensor([1.0])),
+            "conv1d": lambda: ts.conv1d(vertex, ts.ones((1, 1, 2))),
+        }
+        for name, call in calls.items():
+            with self.subTest(operation=name):
+                with self.assertRaises(UnsupportedStructuralExpression):
+                    call()
+
+    def test_eager_tensor_behaviour_is_unchanged(self):
+        tensor = ts.Tensor([[-1.0, 2.0]])
+
+        self.assertEqual(ts.relu(tensor).tolist(), [0.0, 2.0])
+        self.assertEqual(ts.sigmoid(ts.Tensor([0.0])).tolist(), [0.5])
+        self.assertEqual(ts.sum([1.0, 2.0, 3.0]).item(), 6.0)
+        self.assertEqual(ts.transpose(tensor).shape, (2, 1))
+        self.assertEqual(
+            ts.concat([[1.0], ts.Tensor([2.0])]).tolist(), [1.0, 2.0]
+        )
+        with self.assertRaisesRegex(TypeError, "Unsupported data type"):
+            ts.Tensor(object())
 
 
 if __name__ == "__main__":
