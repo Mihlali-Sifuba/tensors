@@ -235,11 +235,7 @@ def _log_softmax_vjp(grad, value, axis: int):
     from ..variable import Variable
 
     operation = LogSoftmaxGradient(axis=axis)
-    return Variable._record_operation(
-        operation.forward(grad.data, value.data),
-        operation,
-        (grad, value),
-    )
+    return Variable._apply_operation(operation, (grad, value))
 
 
 @overload
@@ -256,11 +252,7 @@ def log_softmax(value: TensorLike, axis: int = -1) -> TensorResult:
 
     if isinstance(value, Variable):
         operation = LogSoftmax(axis=axis)
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
+        return Variable._apply_operation(operation, (value,))
     if not isinstance(value, Tensor):
         value = Tensor(value)
     return LogSoftmax(axis=axis).forward(value)

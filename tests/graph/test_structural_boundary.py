@@ -247,10 +247,22 @@ class GraphStructuralMetadataTests(unittest.TestCase):
 
         with patch.object(Compiler, "compile", counted):
             model(value)
+            eager = len(compilations)
             nodes = model.nodes
+            traced = len(compilations)
             edges = model.edges
 
-        self.assertEqual(len(compilations), 1)
+        # Each eager operation compiles its own one-instruction fragment as
+        # it runs.
+        self.assertEqual(
+            [len(compiler.instructions) for compiler in compilations[:eager]],
+            [1, 1],
+        )
+        # The trace compiles one plan spanning them, and reading further
+        # structural metadata from it compiles nothing more.
+        self.assertEqual(traced, eager + 1)
+        self.assertEqual(len(compilations[-1].instructions), 2)
+        self.assertEqual(len(compilations), traced)
         self.assertEqual(len(nodes), 7)
         self.assertTrue(edges)
 

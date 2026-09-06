@@ -69,11 +69,7 @@ def sin(value: TensorLike) -> TensorResult:
 
     if isinstance(value, Variable):
         operation = Sin()
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
+        return Variable._apply_operation(operation, (value,))
     if not isinstance(value, Tensor):
         value = Tensor(value)
     return Sin().forward(value)

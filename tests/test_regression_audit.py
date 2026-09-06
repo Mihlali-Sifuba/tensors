@@ -94,11 +94,7 @@ class AutogradRegressionTests(unittest.TestCase):
 
         value = ts.Variable([1.0])
         operation = MetadataOperation(scalar=2.0)
-        output = ts.Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
+        output = ts.Variable._apply_operation(operation, (value,))
         value.data = ts.Tensor([4.0])
 
         replayed = Computation(output).forward()
