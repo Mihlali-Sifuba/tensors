@@ -214,11 +214,7 @@ def std(
 
     if isinstance(value, Variable):
         operation = Std(axis=axis, keepdims=keepdims)
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
+        return Variable._apply_operation(operation, (value,))
     if not isinstance(value, Tensor):
         value = Tensor(value)
     return Std(axis=axis, keepdims=keepdims).forward(value)

@@ -257,8 +257,7 @@ def where(
             else Variable(right_tensor, requires_grad=False)
         )
         operation = Where()
-        return Variable._record_operation(
-            operation.forward(condition_variable.data, left_variable.data, right_variable.data),
+        return Variable._apply_operation(
             operation,
             (condition_variable, left_variable, right_variable),
         )

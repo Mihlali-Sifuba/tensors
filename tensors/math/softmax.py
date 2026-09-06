@@ -405,22 +405,14 @@ def _softmax_centered(grad, value, axis: int):
     from ..variable import Variable
 
     operation = SoftmaxCentered(axis=axis)
-    return Variable._record_operation(
-        operation.forward(grad.data, value.data),
-        operation,
-        (grad, value),
-    )
+    return Variable._apply_operation(operation, (grad, value))
 
 
 def _softmax_vjp(grad, value, axis: int):
     from ..variable import Variable
 
     operation = SoftmaxGradient(axis=axis)
-    return Variable._record_operation(
-        operation.forward(grad.data, value.data),
-        operation,
-        (grad, value),
-    )
+    return Variable._apply_operation(operation, (grad, value))
 
 
 @overload
@@ -437,11 +429,7 @@ def softmax(value: TensorLike, axis: int = -1) -> TensorResult:
 
     if isinstance(value, Variable):
         operation = Softmax(axis=axis)
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
+        return Variable._apply_operation(operation, (value,))
     if not isinstance(value, Tensor):
         value = Tensor(value)
     return Softmax(axis=axis).forward(value)

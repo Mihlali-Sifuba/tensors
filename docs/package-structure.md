@@ -90,7 +90,7 @@ tensors/
 ├── shape.py               # immutable logical tensor extents
 ├── strides.py             # immutable physical storage movement
 ├── tensor.py              # Tensor storage, construction, and indexing
-├── variable.py            # differentiable value type
+├── variable.py            # differentiable value type; eager operations
 ├── dtype.py               # dtype definitions and promotion
 ├── casting.py             # storage conversion helpers
 ├── creation.py            # tensor-value constructors

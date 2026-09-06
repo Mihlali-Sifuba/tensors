@@ -622,15 +622,7 @@ def _convolve(
             dilation=dilations,
             groups=groups,
         )
-        result: TensorResult = Variable._record_operation(
-            operation.forward(
-                values[0],
-                values[1],
-                values[2] if len(values) > 2 else None,
-            ),
-            operation,
-            variables,
-        )
+        result: TensorResult = Variable._apply_operation(operation, variables)
         return result
 
     tensors = [_as_tensor(operand) for operand in operands]

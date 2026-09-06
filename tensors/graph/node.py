@@ -89,11 +89,10 @@ class Node:
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self.label}, #{self.id})"
 
-    def __hash__(self) -> int:
-        return self.id
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, Node) and self.id == other.id
+    # A vertex is its own identity: ids are unique, so comparing them would
+    # say exactly what comparing objects already says. Leaving the default
+    # identity hash in place also keeps the dictionaries and sets that
+    # compilation and execution key by vertex on the interpreter's fast path.
 
 
 

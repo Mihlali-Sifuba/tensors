@@ -505,8 +505,7 @@ def cross_entropy(
             else Variable(_tensor(prepared_targets), requires_grad=False)
         )
         operation = CrossEntropy(axis=axis, reduction=reduction)
-        return Variable._record_operation(
-            operation.forward(logits_variable.data, targets_variable.data),
+        return Variable._apply_operation(
             operation,
             (logits_variable, targets_variable),
         )

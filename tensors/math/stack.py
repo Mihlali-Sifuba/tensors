@@ -162,11 +162,7 @@ def stack(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult:
             for value in tensors
         ]
         operation = Stack(axis=axis)
-        return Variable._record_operation(
-            operation.forward(*(variable.data for variable in variables)),
-            operation,
-            variables,
-        )
+        return Variable._apply_operation(operation, variables)
     return Stack(axis=axis).forward(*tensors)
 
 

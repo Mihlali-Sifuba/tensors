@@ -410,8 +410,7 @@ def binary_cross_entropy(
             else Variable(target_tensor, requires_grad=False)
         )
         operation = BinaryCrossEntropy(from_logits=from_logits, reduction=reduction)
-        return Variable._record_operation(
-            operation.forward(prediction_variable.data, target_variable.data),
+        return Variable._apply_operation(
             operation,
             (prediction_variable, target_variable),
         )

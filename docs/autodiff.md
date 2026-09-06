@@ -107,6 +107,33 @@ structural for the same reason: an execution slot is numbered by the vertex
 naming a value, so a graph compiles whether or not that value exists.
 Executing the compiled program is what still needs one.
 
+### Eager operations execute through the graph
+
+An eager expression is not a shortcut past the graph; it is the graph, run one
+operation at a time:
+
+```text
+c = a + b
+  -> normalize the operands into Variables
+  -> record VariableNode(c) and OperationNode(Add) and wire them
+  -> Compiler numbers that fragment's slots
+  -> Computation executes it and calls Add.forward(a.data, b.data)
+  -> the result Tensor materializes c against VariableNode(c)
+```
+
+`Variable._apply_operation` is the single path every operator and every
+`math` and `linalg` function takes. None of them calls `Operation.forward`
+itself, and the result Variable is materialized by the Computation rather
+than constructed around a value that was calculated first.
+
+The operands of a new operation already hold their values, so they are the
+boundaries of its compiled fragment. Compiling `d = c * b` emits one
+instruction over `c` and `b`, and the `a + b` behind `c` is not re-executed,
+so a chain of `n` eager operations costs `n` fragments rather than `n`
+growing replays. Boundaries only limit that forward program: the structural
+graph still records every operation, so differentiating a later result
+compiles the complete history behind it.
+
 ### Operands are graph values, configuration is not
 
 A runtime operand always enters an operation through the graph. Writing

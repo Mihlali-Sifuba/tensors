@@ -471,11 +471,7 @@ def dot(a: TensorLike, b: TensorLike) -> TensorResult:
         left = a if isinstance(a, Variable) else Variable(a, requires_grad=False)
         right = b if isinstance(b, Variable) else Variable(b, requires_grad=False)
         operation = Dot()
-        return Variable._record_operation(
-            operation.forward(left.data, right.data),
-            operation,
-            (left, right),
-        )
+        return Variable._apply_operation(operation, (left, right))
 
     left = a if isinstance(a, Tensor) else Tensor(a)
     right = b if isinstance(b, Tensor) else Tensor(b)

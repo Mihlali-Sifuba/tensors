@@ -251,6 +251,14 @@ class Compiler:
         the compiled program. Resolving one into the other here is what lets
         the runtime hold an execution view without reading the graph.
         """
+        if len(self.output_nodes) == 1:
+            # The traversal started at this output, so everything it reached
+            # belongs to that output's view and every slot is part of it.
+            self.view_nodes = (self.nodes,)
+            self.view_slots = (tuple(range(len(self.variable_nodes))),)
+            self.view_instructions = (self.instructions,)
+            return
+
         slots = self.node_slots
         view_nodes: list[tuple[Node, ...]] = []
         view_slots: list[tuple[int, ...]] = []
