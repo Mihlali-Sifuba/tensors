@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from contextlib import contextmanager
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING
 
 from ._weak_registry import WeakRegistry
@@ -14,6 +14,21 @@ from ..ops.operation import Operation
 
 if TYPE_CHECKING:
     from ..variable import Variable
+
+
+#: The edge labels naming an operation's ordered operands. Operand order is
+#: expressed by edges, so the labels carrying it belong to the graph layer.
+_INPUT_LABELS = ("input_0", "input_1", "input_2", "input_3", "input_4")
+
+#: The edge label naming the value an operation produces.
+_RESULT_LABEL = "result"
+
+
+def _operand_labels(count: int) -> tuple[str, ...]:
+    """Return the edge labels naming an operation's ordered operands."""
+    if count <= len(_INPUT_LABELS):
+        return _INPUT_LABELS[:count]
+    return tuple(f"input_{index}" for index in range(count))
 
 
 class GraphState:
@@ -62,6 +77,38 @@ class GraphState:
         if self._record_registries:
             self._nodes.add(node)
         return node
+
+    def record_operation(
+        self,
+        operation: Operation,
+        inputs: Sequence[VariableNode],
+    ) -> VariableNode:
+        """Record one operation invocation and return the vertex it produces.
+
+        This is structure and nothing else: the vertex naming the result, the
+        vertex recording the invocation, and the edges that order the
+        operands and carry the result::
+
+            input_0 ──┐
+                      ▼
+                 OperationNode
+                      ▲
+            input_1 ──┘
+                      │
+                   result
+                      ▼
+                 VariableNode
+
+        The result vertex comes back unbound. Recording an operation says
+        that the graph performs it, not that anything has calculated it, so
+        nothing here reads a value, runs the operation, or compiles it.
+        """
+        result = self.add_variable_node()
+        node = self.add_operation_node(operation)
+        for label, operand in zip(_operand_labels(len(inputs)), inputs):
+            self.add_edge(operand, node, label=label)
+        self.add_edge(node, result, label=_RESULT_LABEL)
+        return result
 
     def add_edge(
         self,

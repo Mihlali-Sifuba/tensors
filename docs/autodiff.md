@@ -115,16 +115,20 @@ operation at a time:
 ```text
 c = a + b
   -> normalize the operands into Variables
-  -> record VariableNode(c) and OperationNode(Add) and wire them
+  -> GraphState records the invocation: VariableNode(c), OperationNode(Add),
+     and the edges ordering the operands and carrying the result
   -> Compiler numbers that fragment's slots
   -> Computation executes it and calls Add.forward(a.data, b.data)
   -> the result Tensor materializes c against VariableNode(c)
 ```
 
+`GraphState.record_operation` is where that structure is assembled, so the
+graph can record an operation without anything executing it.
 `Variable._apply_operation` is the single path every operator and every
-`math` and `linalg` function takes. None of them calls `Operation.forward`
-itself, and the result Variable is materialized by the Computation rather
-than constructed around a value that was calculated first.
+`math` and `linalg` function takes, and it only orders the layers. None of
+them calls `Operation.forward` itself, and the result Variable is
+materialized by the Computation rather than constructed around a value that
+was calculated first.
 
 The operands of a new operation already hold their values, so they are the
 boundaries of its compiled fragment. Compiling `d = c * b` emits one

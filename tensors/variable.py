@@ -32,14 +32,6 @@ from .graph.state import get_graph_state
 
 
 _SCALAR_SHAPE = Shape()
-_INPUT_LABELS = ("input_0", "input_1", "input_2", "input_3", "input_4")
-
-
-def _operand_labels(count: int) -> tuple[str, ...]:
-    """Return the edge labels naming an operation's ordered operands."""
-    if count <= len(_INPUT_LABELS):
-        return _INPUT_LABELS[:count]
-    return tuple(f"input_{index}" for index in range(count))
 
 
 def _cast_dtype(dtype: str | DataType) -> DataType:
@@ -113,13 +105,12 @@ class Variable:
     ) -> Variable:
         """Record ``operation`` in the graph and execute it there.
 
-        Structure comes first. The vertex naming the result and the vertex
-        recording the invocation are wired before anything runs, always as
-        ``VariableNode -> OperationNode -> VariableNode``: every operand
-        arrives through an incoming edge and the result leaves through the
-        single outgoing edge. Compiling and executing that fragment is what
-        calculates the value and materializes the result Variable, so an
-        eager operation takes the same path as every other computation.
+        Structure comes first, and each layer contributes its own part of
+        it: the graph records the invocation, the compiler turns that
+        fragment into a program, and executing the program is what
+        calculates the value and materializes the result Variable. An eager
+        operation therefore takes the same path as every other computation,
+        and this method only orders the three steps.
 
         Only the new fragment runs. Its operands already hold their values,
         so they bound the compiled program: the graph behind them stays
@@ -128,16 +119,12 @@ class Variable:
         """
         from .graph.computation import Computation
 
-        graph = get_graph_state()
-        result_node = graph.add_variable_node()
-        node = graph.add_operation_node(operation)
-        for label, operand in zip(_operand_labels(len(inputs)), inputs):
-            graph.add_edge(operand.node, node, label=label)
-        graph.add_edge(node, result_node, label="result")
+        operands = tuple(operand.node for operand in inputs)
+        result_node = get_graph_state().record_operation(operation, operands)
 
         fragment, = Computation.from_nodes(
             (result_node,),
-            boundaries=tuple(operand.node for operand in inputs),
+            boundaries=operands,
         )
         fragment.forward()
         return result_node.variable
