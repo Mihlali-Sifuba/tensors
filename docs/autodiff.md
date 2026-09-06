@@ -32,7 +32,7 @@ Responsibilities divide as follows:
 | Object | Responsibility |
 | --- | --- |
 | `Variable` | the differentiable runtime value |
-| `VariableNode` | the graph representation of one `Variable` |
+| `VariableNode` | the graph identity of one value it may predate |
 | `Operation` | one concrete mathematical invocation (owned by `ts.ops`) |
 | `OperationNode` | the graph representation of that invocation |
 | `Edge` | a graph relationship and its data flow |
@@ -58,22 +58,53 @@ Computation
     determines which local derivatives are required
 ```
 
-`Node` itself carries only identity and connectivity. `VariableNode` adds its
-`variable`, and `OperationNode` adds its `operation`; neither stores execution
-state.
+`Node` itself carries only identity and connectivity. `VariableNode` adds the
+value it names, and `OperationNode` adds its `operation`; neither stores
+execution state.
 
 ### Variables and their nodes
 
-Every `Variable` owns exactly one `VariableNode`, and the relationship is
-strong in both directions:
+A `VariableNode` is the graph identity of a value. It can exist before that
+value has been calculated, which is the order execution works in:
+
+```text
+construct graph -> compile -> Computation executes Instructions
+    -> Tensor result -> Variable materialized against its VariableNode
+```
+
+A leaf already holds its value, so constructing a `Variable` records a vertex
+already bound to it. A value the graph only names is recorded unbound and
+materialized once execution produces it:
 
 ```python
-variable.node.variable is variable  # always true
+node = VariableNode()                   # the graph names a value
+node.is_bound                           # False
+node.variable                           # UnboundVariableNodeError
+
+result = node.materialize(tensor, "c")  # execution produced the value
+node.variable is result                 # True
+result.node is node                     # True
+```
+
+Binding is one-time and symmetric, so a vertex names at most one `Variable`
+and that `Variable` names it back:
+
+```python
+variable.node.variable is variable  # true from materialization onwards
 ```
 
 This holds for leaves, for Tensor operands wrapped on the way into an
 operation, for normalized scalar operands, and for operation results.
-`Variable.node` is never an `OperationNode`.
+`Variable.node` is never an `OperationNode`. Rebinding a vertex, or binding a
+`Variable` that already has one, raises rather than silently replacing the
+relationship.
+
+Reading structure never requires a materialized value: `producer`,
+`operand_nodes`, and `result_node` describe edges. `operands` and `result`
+resolve the Variables those vertices name, and raise
+`UnboundVariableNodeError` while one is still pending. Compilation currently
+requires every vertex it reaches to be materialized, because an execution
+slot is numbered by the `Variable` occupying it.
 
 ### Operands are graph values, configuration is not
 

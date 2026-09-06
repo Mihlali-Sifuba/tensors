@@ -15,13 +15,11 @@ class GraphStateTests(unittest.TestCase):
         reset_graph_state()
 
     def test_state_connects_new_edges_to_their_source_and_target_nodes(self):
-        # Constructing a Variable registers its node, so start from a clean
-        # state and register the vertices under test explicitly.
-        variables = [ts.Variable([1.0]), ts.Variable([1.0])]
-        reset_graph_state()
+        # The registry records vertices, not values: a graph can be connected
+        # before anything has been materialized into it.
         state = get_graph_state()
-        source = state.add_variable_node(variables[0])
-        target = state.add_variable_node(variables[1])
+        source = state.add_variable_node()
+        target = state.add_variable_node()
         edge = state.add_edge(source, target, label="value")
 
         self.assertEqual(state.nodes, [source, target])
@@ -30,24 +28,20 @@ class GraphStateTests(unittest.TestCase):
         self.assertEqual(target.inputs, [source])
 
     def test_adding_an_edge_registers_external_nodes_with_the_state(self):
-        variables = [ts.Variable([1.0]), ts.Variable([1.0])]
-        reset_graph_state()
         first_state = get_graph_state()
-        source = first_state.add_variable_node(variables[0])
+        source = first_state.add_variable_node()
         reset_graph_state()
         state = get_graph_state()
-        target = state.add_variable_node(variables[1])
+        target = state.add_variable_node()
 
         state.add_edge(source, target)
 
         self.assertEqual(state.nodes, [target, source])
 
     def test_adding_edges_does_not_duplicate_registered_nodes(self):
-        variables = [ts.Variable([1.0]), ts.Variable([1.0])]
-        reset_graph_state()
         state = get_graph_state()
-        source = state.add_variable_node(variables[0])
-        target = state.add_variable_node(variables[1])
+        source = state.add_variable_node()
+        target = state.add_variable_node()
 
         state.add_edge(source, target)
         state.add_edge(source, target)
@@ -56,7 +50,7 @@ class GraphStateTests(unittest.TestCase):
 
     def test_outer_trace_scope_resets_state_and_nested_scope_reuses_it(self):
         previous = get_graph_state()
-        previous.add_variable_node(ts.Variable([1.0], name="stale"))
+        previous.add_variable_node()
 
         outer = TraceScope()
         active = get_graph_state()

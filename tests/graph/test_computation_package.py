@@ -131,8 +131,8 @@ class PublicApiTests(unittest.TestCase):
             sorted(ts.graph.__all__),
             [
                 "Computation", "Edge", "GradcheckError", "Graph", "Node",
-                "OperationNode", "VariableNode", "backward", "grad",
-                "gradcheck", "hessian", "jacobian",
+                "OperationNode", "UnboundVariableNodeError", "VariableNode",
+                "backward", "grad", "gradcheck", "hessian", "jacobian",
             ],
         )
         for name in ts.graph.__all__:

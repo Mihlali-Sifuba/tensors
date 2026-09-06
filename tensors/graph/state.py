@@ -5,12 +5,15 @@ from __future__ import annotations
 import threading
 from contextlib import contextmanager
 from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING
 
 from ._weak_registry import WeakRegistry
 from .edge import Edge
 from .node import Node, OperationNode, VariableNode
 from ..ops.operation import Operation
+
+if TYPE_CHECKING:
+    from ..variable import Variable
 
 
 class GraphState:
@@ -38,8 +41,16 @@ class GraphState:
         """Return the live edges in registration order."""
         return self._edges.values()
 
-    def add_variable_node(self, variable: Any) -> VariableNode:
-        """Record the graph vertex representing one Variable."""
+    def add_variable_node(
+        self,
+        variable: Variable | None = None,
+    ) -> VariableNode:
+        """Record the graph vertex naming one value.
+
+        A vertex is recorded whether or not its value exists yet: pass the
+        Variable to bind a value that already does, and omit it for a value
+        the graph names before a Computation calculates it.
+        """
         node = VariableNode(variable)
         if self._record_registries:
             self._nodes.add(node)

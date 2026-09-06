@@ -2,7 +2,9 @@
 
 from typing import Any
 
-from .node import Node, OperationNode, VariableNode
+from .node import (
+    Node, OperationNode, UnboundVariableNodeError, VariableNode,
+)
 from .edge import Edge
 from .computation import (
     Computation, GradcheckError, backward, grad, gradcheck, hessian, jacobian,
@@ -10,7 +12,8 @@ from .computation import (
 
 __all__ = [
     "Graph", "Computation", "Node", "OperationNode", "VariableNode", "Edge",
-    "GradcheckError", "backward", "grad", "gradcheck", "hessian", "jacobian",
+    "GradcheckError", "UnboundVariableNodeError", "backward", "grad",
+    "gradcheck", "hessian", "jacobian",
 ]
 
 

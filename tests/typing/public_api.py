@@ -5,6 +5,7 @@ from typing import Literal
 from typing_extensions import assert_type
 
 import tensors as ts
+from tensors.graph import VariableNode
 from tensors.storage import Storage
 
 
@@ -31,6 +32,10 @@ assert_type(tensor.contiguous(), ts.Tensor)
 assert_type(tensor.item(), int | float)
 assert_type(variable.data, ts.Tensor)
 assert_type(variable.requires_grad, bool)
+assert_type(variable.node, VariableNode)
+assert_type(variable.node.is_bound, bool)
+assert_type(variable.node.variable, ts.Variable)
+assert_type(VariableNode().materialize([1.0]), ts.Variable)
 
 assert_type(tensor + tensor, ts.Tensor)
 assert_type(tensor + variable, ts.Variable)
