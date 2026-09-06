@@ -138,6 +138,38 @@ growing replays. Boundaries only limit that forward program: the structural
 graph still records every operation, so differentiating a later result
 compiles the complete history behind it.
 
+### Structural expressions
+
+The same operators also apply to a `VariableNode`, and there they describe a
+graph instead of calculating one:
+
+```python
+x = VariableNode()          # a value the graph names but nothing holds
+h = x @ weight              # weight is an ordinary Variable parameter
+y = relu(h + bias)
+
+y.is_bound                  # False, and no kernel has run
+```
+
+The operands decide which application happens. Every operand being a runtime
+Variable makes the expression a calculation; a single `VariableNode` operand
+makes the whole expression structural, because a value that does not exist
+yet cannot take part in one that runs now. A Variable in a structural
+expression takes part as the vertex it was materialized against, so a
+parameter's value is never read while a graph is being described.
+
+A Tensor operand becomes a non-gradient leaf, since it is a value that
+already exists. A Python scalar is rejected: an eager scalar is typed by
+promotion against the value beside it, and a structural expression has not
+calculated that value, so recording one would mean inventing a dtype. Pass a
+typed `Tensor` or `Variable` instead.
+
+The recorded structure is an ordinary graph, so it compiles like any other:
+
+```python
+Compiler((y,), boundaries=(x,)).compile()   # dot, add, relu
+```
+
 ### Operands are graph values, configuration is not
 
 A runtime operand always enters an operation through the graph. Writing

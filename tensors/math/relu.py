@@ -1,12 +1,15 @@
 """Elementwise rectified linear unit and its differentiation rule."""
 
 import math
-from typing import Any, List, overload
+from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..ops.operation import Operation
 from ..tensor import Tensor
 from ._unary import unary_backward, unary_forward
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class ReLU(Operation):
@@ -49,6 +52,10 @@ class ReLU(Operation):
 
 
 @overload
+def relu(value: VariableNode) -> VariableNode: ...
+
+
+@overload
 def relu(value: TensorValue) -> TensorValue: ...
 
 
@@ -56,13 +63,19 @@ def relu(value: TensorValue) -> TensorValue: ...
 def relu(value: TensorData) -> Tensor: ...
 
 
-def relu(value: TensorLike) -> TensorResult:
-    """Return the elementwise rectified linear unit as a Tensor or Variable."""
-    from ..variable import Variable
+def relu(
+    value: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Return the elementwise rectified linear unit of a graph value or Tensor.
 
-    if isinstance(value, Variable):
-        operation = ReLU()
-        return Variable._apply_operation(operation, (value,))
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
+
+    if is_graph_operand(value):
+        return apply_operation(ReLU(), (value,))
     if not isinstance(value, Tensor):
         value = Tensor(value)
     return ReLU().forward(value)
