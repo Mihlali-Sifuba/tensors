@@ -17,6 +17,18 @@ if TYPE_CHECKING:
     from ..variable import Variable
 
 
+def _operands(tensors: Sequence[Any]) -> tuple[Any, ...]:
+    """Read a lone list argument as the operands it holds.
+
+    A caller may name one tensor per argument or pass a single list of
+    them; both the public function and :meth:`Concat.forward` read that
+    shape the same way.
+    """
+    if len(tensors) == 1 and isinstance(tensors[0], list):
+        return tuple(tensors[0])
+    return tuple(tensors)
+
+
 class Concat(Operation):
     """Concatenate tensors along an existing axis."""
 
@@ -32,7 +44,7 @@ class Concat(Operation):
         object.__setattr__(self, "axis", axis)
         object.__setattr__(self, "keepdims", keepdims)
 
-    def forward(self, *tensors: Tensor | list[Any]) -> Tensor:
+    def forward(self, *tensors: Tensor | list[Tensor]) -> Tensor:
         """Concatenate one or more tensors along ``axis``."""
         axis = self.axis
         keepdims = self.keepdims
@@ -42,12 +54,10 @@ class Concat(Operation):
             raise ValueError("concat does not support keepdims")
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("concat axis must be an integer")
-        if len(tensors) == 1 and isinstance(tensors[0], list):
-            tensors = tuple(tensors[0])
-        if not tensors:
+        converted: tuple[Tensor, ...] = _operands(tensors)
+        if not converted:
             raise ValueError("concat requires at least one tensor")
 
-        converted = [as_tensor_operand(value) for value in tensors]
         reference = converted[0]
         if reference.ndim == 0:
             if axis < 0:
@@ -211,7 +221,9 @@ def concat(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult:
         ]
         operation = Concat(axis=axis)
         return Variable._apply_operation(operation, variables)
-    return Concat(axis=axis).forward(*tensors)
+    return Concat(axis=axis).forward(
+        *(as_tensor_operand(value) for value in _operands(tensors))
+    )
 
 
 __all__ = ["Concat", "concat"]

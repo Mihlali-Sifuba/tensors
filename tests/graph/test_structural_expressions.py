@@ -307,6 +307,7 @@ class TensorOperandBoundaryTests(unittest.TestCase):
             "sum": lambda: ts.sum(vertex),
             "transpose": lambda: ts.transpose(vertex),
             "concat": lambda: ts.concat([vertex, ts.Tensor([1.0])]),
+            "stack": lambda: ts.stack([vertex, ts.Tensor([1.0])]),
             "where": lambda: ts.where(
                 ts.Tensor([True]), vertex, ts.Tensor([1.0])
             ),
@@ -327,6 +328,9 @@ class TensorOperandBoundaryTests(unittest.TestCase):
         self.assertEqual(ts.transpose(tensor).shape, (2, 1))
         self.assertEqual(
             ts.concat([[1.0], ts.Tensor([2.0])]).tolist(), [1.0, 2.0]
+        )
+        self.assertEqual(
+            ts.stack([[1.0], ts.Tensor([2.0])]).shape, (2, 1)
         )
         with self.assertRaisesRegex(TypeError, "Unsupported data type"):
             ts.Tensor(object())

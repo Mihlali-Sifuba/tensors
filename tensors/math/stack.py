@@ -17,6 +17,18 @@ if TYPE_CHECKING:
     from ..variable import Variable
 
 
+def _operands(tensors: Sequence[Any]) -> tuple[Any, ...]:
+    """Read a lone list argument as the operands it holds.
+
+    A caller may name one tensor per argument or pass a single list of
+    them; both the public function and :meth:`Stack.forward` read that
+    shape the same way.
+    """
+    if len(tensors) == 1 and isinstance(tensors[0], list):
+        return tuple(tensors[0])
+    return tuple(tensors)
+
+
 class Stack(Operation):
     """Stack tensors along a new axis and split gradients back to inputs."""
 
@@ -30,21 +42,13 @@ class Stack(Operation):
     ) -> None:
         object.__setattr__(self, "axis", axis)
 
-    def forward(self, *tensors: Tensor | list[Any]) -> Tensor:
+    def forward(self, *tensors: Tensor | list[Tensor]) -> Tensor:
         axis = self.axis
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("stack axis must be an integer")
-        if len(tensors) == 1 and isinstance(tensors[0], list):
-            tensors = tuple(tensors[0])
-        if not tensors:
+        converted: tuple[Tensor, ...] = _operands(tensors)
+        if not converted:
             raise ValueError("stack requires at least one tensor")
-
-        converted = []
-        for t in tensors:
-            if isinstance(t, Tensor):
-                converted.append(t)
-            else:
-                converted.append(as_tensor_operand(t))
 
         elem_shape = converted[0].shape
         n = len(converted)
@@ -164,7 +168,9 @@ def stack(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult:
         ]
         operation = Stack(axis=axis)
         return Variable._apply_operation(operation, variables)
-    return Stack(axis=axis).forward(*tensors)
+    return Stack(axis=axis).forward(
+        *(as_tensor_operand(value) for value in _operands(tensors))
+    )
 
 
 __all__ = ["Stack", "stack"]
