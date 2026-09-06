@@ -395,8 +395,7 @@ class Graph:
                             variable.requires_grad,
                         )
                         for variable in (
-                            state.computations[0]._variables[slot]
-                            for slot in state.computations[0]._leaf_slots
+                            state.computations[0]._leaf_variables()
                         )
                     ),
                 )

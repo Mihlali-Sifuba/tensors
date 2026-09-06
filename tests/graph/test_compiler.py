@@ -383,7 +383,7 @@ class NodeIdentityCompilationTests(unittest.TestCase):
         self.assertNotIn(b.node, compiler.nodes)
         self.assertIn(a.node, compiler.nodes)
 
-    def test_a_materialized_graph_projects_its_slots_onto_variables(self):
+    def test_a_materialized_graph_still_compiles_to_the_same_slots(self):
         value = ts.Variable([2.0])
         output = ts.sum(value * 3.0)
 
@@ -391,48 +391,37 @@ class NodeIdentityCompilationTests(unittest.TestCase):
         compiler.compile()
 
         self.assertEqual(
-            compiler.variables,
-            tuple(node.variable for node in compiler.variable_nodes),
-        )
-        self.assertEqual(
-            compiler.variable_slots,
+            compiler.node_slots,
             {
-                node.variable: slot
-                for node, slot in compiler.node_slots.items()
+                node: slot
+                for slot, node in enumerate(compiler.variable_nodes)
             },
         )
-        # The projection is resolved once and shared by every view of it.
-        self.assertIs(compiler.variables, compiler.variables)
-        self.assertIs(compiler.variable_slots, compiler.variable_slots)
+        # Binding a value changes nothing about the program: a compilation
+        # keeps no projection of its slots onto runtime Variables.
+        for name in ("variables", "variable_slots"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(compiler, name))
 
-    def test_no_compile_path_reads_a_runtime_value(self):
-        compile_path = {
-            "compile",
-            "_resolve_dependencies",
-            "_traverse",
-            "_reachability_masks",
-            "_assign_slots",
-            "_emit_instructions",
-            "_resolve_views",
-        }
+    def test_the_compiler_never_reads_a_runtime_value(self):
         value_reads = {"variable", "operands", "result", "data", "grad"}
 
-        for function in ast.walk(ast.parse(inspect.getsource(compiler_module))):
+        tree = ast.parse(inspect.getsource(compiler_module))
+        for definition in ast.walk(tree):
             if (
-                not isinstance(function, ast.FunctionDef)
-                or function.name not in compile_path
+                not isinstance(definition, ast.ClassDef)
+                or definition.name != "Compiler"
             ):
                 continue
-            with self.subTest(function=function.name):
-                self.assertEqual(
-                    [
-                        node.attr
-                        for node in ast.walk(function)
-                        if isinstance(node, ast.Attribute)
-                        and node.attr in value_reads
-                    ],
-                    [],
-                )
+            self.assertEqual(
+                [
+                    node.attr
+                    for node in ast.walk(definition)
+                    if isinstance(node, ast.Attribute)
+                    and node.attr in value_reads
+                ],
+                [],
+            )
 
 
 class CompiledComputationTests(unittest.TestCase):
@@ -468,8 +457,8 @@ class CompiledComputationTests(unittest.TestCase):
 
         computation = Computation(output)
 
-        self.assertEqual(computation._variables, compiler.variables)
-        self.assertEqual(computation._variable_slots, compiler.variable_slots)
+        self.assertEqual(computation._variable_nodes, compiler.variable_nodes)
+        self.assertEqual(computation._node_slots, compiler.node_slots)
         self.assertEqual(computation._leaf_slots, compiler.leaf_slots)
         self.assertEqual(computation._output_slot, compiler.output_slots[0])
         self.assertEqual(
@@ -492,8 +481,8 @@ class CompiledComputationTests(unittest.TestCase):
 
         # One compilation: the program and its slot map are the same objects.
         self.assertIs(one._instructions, two._instructions)
-        self.assertIs(one._variables, two._variables)
-        self.assertIs(one._variable_slots, two._variable_slots)
+        self.assertIs(one._variable_nodes, two._variable_nodes)
+        self.assertIs(one._node_slots, two._node_slots)
         self.assertIs(one._fusions, two._fusions)
         self.assertIs(one._fusion_starts, two._fusion_starts)
         # Each view still executes only its own output.
@@ -516,8 +505,8 @@ class CompiledComputationTests(unittest.TestCase):
         self.assertEqual(
             [i.operation.name for i in two._view_instructions], ["add"]
         )
-        self.assertIn(one._variable_slots[only_first], one._view_slots)
-        self.assertNotIn(two._variable_slots[only_first], two._view_slots)
+        self.assertIn(one._node_slots[only_first.node], one._view_slots)
+        self.assertNotIn(two._node_slots[only_first.node], two._view_slots)
         self.assertIn(first.node, one.nodes)
         self.assertNotIn(first.node, two.nodes)
 

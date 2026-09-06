@@ -288,8 +288,8 @@ class ReverseDemandPlanningTests(unittest.TestCase):
 
         # Demand is resolved per reverse call, so the live slots reflect the
         # Variables' current state rather than the state traced with.
-        value_slot = computation._variable_slots[value]
-        weight_slot = computation._variable_slots[weight]
+        value_slot = computation._node_slots[value.node]
+        weight_slot = computation._node_slots[weight.node]
         self.assertEqual(
             computation._live_slots((weight,)) & {value_slot, weight_slot},
             {weight_slot},
