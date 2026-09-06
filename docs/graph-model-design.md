@@ -145,17 +145,33 @@ graphs, or more substantial behaviour.
 
 ## Execution Lifecycle
 
-The lifecycle is:
+A subclass model is built as it is constructed:
 
-1. Construct the model and its persistent parameters.
-2. On every call, convert Tensor inputs to non-trainable Variables and execute
-   `forward` eagerly.
-3. Record the operations created by that call and capture the nodes and edges
-   reachable from each returned Variable.
-4. Store the outputs and computations as the calling thread's latest Graph
-   execution metadata.
+1. `Model()` allocates the instance and runs the subclass `__init__`, which
+   creates the parameters.
+2. Once `__init__` has returned, `Graph` records the model's graph: vertices
+   stand in for its inputs, `forward` runs structurally over them and the
+   parameters' own vertices, and nothing is calculated.
+3. The recorded graph is compiled into the `Computation` the model owns from
+   then on, with its input vertices as the program's boundaries.
+4. `model(x)` binds the call's Tensors to those input vertices and replays
+   the program, so the Python `forward` body is not run again.
 
-Calling the model normally records a new computation. `compile(*args,
+Because one program is replayed, a built model returns the same output
+Variable object on every call, holding that call's value, and its graph
+identity is stable. `model.nodes`, `model.edges` and `model.computation`
+therefore describe the model from construction onwards, before its first
+call.
+
+A model keeps the earlier tracing lifecycle when it cannot be described
+before its values exist: the functional `@Graph` form, a `forward` taking
+configuration arguments whose values are only known per call, and a `forward`
+whose expression needs a value to record — a Python scalar operand, or
+anything read off an input. A `Variable` input also traces, because its
+autograd identity belongs to the caller rather than to the model's own input
+vertex.
+
+Traced calls behave as before: each records a new computation. `compile(*args,
 **kwargs)` explicitly enables guarded replay for Tensor inputs on the calling
 thread. Matching backend, shape, dtype, keyword layout, and static-argument
 guards rebind the recorded input Variables and execute the existing plan.
