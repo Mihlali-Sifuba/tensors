@@ -130,7 +130,7 @@ tensors/
     ├── graph.py           # reusable callable model abstraction
     ├── node.py            # Node, VariableNode, and OperationNode
     ├── edge.py
-    ├── state.py
+    ├── state.py          # tracing registry; records operation topology
     └── computation/       # the executable, differentiable form of a graph
         ├── instruction.py   # one executable operation invocation
         ├── compiler.py      # Node/Edge topology to slots, instructions, views
@@ -209,7 +209,9 @@ The folders have deliberately narrow responsibilities:
   relationship is an `Edge`. `Node` holds only identity and connectivity;
   `VariableNode` is the graph identity of one value and binds the `Variable`
   materializing it, which may happen after the vertex is recorded, and
-  `OperationNode` adds its `Operation`.
+  `OperationNode` adds its `Operation`. `GraphState.record_operation` is
+  where one invocation's vertices and ordered edges are assembled, so a
+  graph can record an operation without anything executing it.
   An operation defines how a local derivative is calculated; `Computation`
   decides which local derivatives a reverse pass requires and supplies that
   demand as `needs_input_grad`. See [Automatic differentiation](autodiff.md) for

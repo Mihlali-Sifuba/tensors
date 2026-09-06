@@ -63,16 +63,16 @@ print("materialized result:", c.name, c.data.tolist())
 print("operation result is that Variable:", sum_node.result is c)
 print("the vertex and its Variable name each other:", c.node is c_node)
 
-# A GraphState registers vertices and edges without owning their lifetime.
+# A GraphState registers vertices and edges without owning their lifetime,
+# and records a whole operation invocation as one structural step.
 graph = GraphState()
 state_x = graph.add_variable_node()
 state_y = graph.add_variable_node()
-state_add = graph.add_operation_node(Add())
-state_z = graph.add_variable_node()
+state_z = graph.record_operation(Add(), (state_x, state_y))
 
-graph.add_edge(state_x, state_add, label="input_0")
-graph.add_edge(state_y, state_add, label="input_1")
-graph.add_edge(state_add, state_z, label="result")
+print("\nrecorded operation:", state_z.producer)
+print("recorded operands:", state_z.producer.operand_nodes)
+print("recorded result holds a value:", state_z.is_bound)
 
 print("\ngraph-state nodes:", graph.nodes)
 print("graph-state edges:", graph.edges)

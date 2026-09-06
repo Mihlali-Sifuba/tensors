@@ -8,7 +8,7 @@ from unittest.mock import patch
 import tensors as ts
 from tensors import variable as variable_module
 from tensors.graph.computation.compiler import Compiler
-from tensors.graph.state import reset_graph_state
+from tensors.graph.state import GraphState, reset_graph_state
 from tensors.ops import Add, Mul, Neg, Operation
 
 
@@ -282,6 +282,63 @@ class EagerExecutionPathTests(unittest.TestCase):
                             offenders.append(
                                 f"{path.name}:{node.lineno}"
                             )
+        self.assertEqual(offenders, [])
+
+
+class EagerDelegationTests(unittest.TestCase):
+    """Eager execution orders the layers; it does not do their work."""
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_topology_is_recorded_by_the_graph_layer(self):
+        left = ts.Variable([1.0], name="left")
+        right = ts.Variable([2.0], name="right")
+        recorded = []
+        original = GraphState.record_operation
+
+        def watched(self, operation, inputs):
+            recorded.append((operation, tuple(inputs)))
+            return original(self, operation, inputs)
+
+        with patch.object(GraphState, "record_operation", watched):
+            total = left + right
+
+        (operation, inputs), = recorded
+        self.assertIsInstance(operation, Add)
+        self.assertEqual(inputs, (left.node, right.node))
+        self.assertIs(total.node.producer.operation, operation)
+        self.assertEqual(total.data.tolist(), [3.0])
+
+    def test_apply_operation_assembles_no_topology_itself(self):
+        source = inspect.getsource(ts.Variable._apply_operation)
+
+        for name in ("add_variable_node", "add_operation_node", "add_edge"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, source)
+        self.assertIn("record_operation", source)
+
+    def test_operation_topology_has_one_owner(self):
+        # Assembling an operation's vertices and edges belongs to the graph
+        # layer, so nothing else in the package may do it.
+        builders = {"add_operation_node", "add_edge"}
+        owner = pathlib.Path(inspect.getsourcefile(GraphState))
+        offenders = []
+        root = pathlib.Path(inspect.getsourcefile(ts)).parent
+        for path in sorted(root.rglob("*.py")):
+            if path == owner:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in builders
+                ):
+                    offenders.append(f"{path.name}:{node.lineno}")
         self.assertEqual(offenders, [])
 
 
