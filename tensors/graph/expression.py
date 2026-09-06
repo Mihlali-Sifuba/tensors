@@ -23,6 +23,7 @@ from .state import get_graph_state
 
 if TYPE_CHECKING:
     from .._typing import GraphOperand, TensorLike
+    from ..dtype import DataType
     from ..ops.operation import Operation
     from ..tensor import Tensor
     from ..variable import Variable
@@ -95,6 +96,30 @@ def _reject_guessed_constant(value: object) -> NoReturn:
     )
 
 
+def as_tensor_operand(
+    value: TensorLike | VariableNode,
+    *,
+    dtype: str | DataType | None = None,
+) -> Tensor:
+    """Return the Tensor an operation executes over, given one operand.
+
+    A public function reaches here when it is about to run rather than
+    record, so an operand naming a value that does not exist yet cannot be
+    served: that operation has no structural form. This is where the graph
+    layer says so, keeping the numerical layer below it unaware of vertices.
+    """
+    from ..tensor import Tensor
+
+    if isinstance(value, VariableNode):
+        raise UnsupportedStructuralExpression(
+            f"{type(value).__name__} names a value that does not exist yet, "
+            "and this operation has no structural form to record instead."
+        )
+    if isinstance(value, Tensor):
+        return value
+    return Tensor(value, dtype=dtype)
+
+
 def record_structurally(
     operation: Operation,
     operands: Sequence[GraphOperand | Tensor],
@@ -135,6 +160,7 @@ __all__ = [
     "UnsupportedStructuralExpression",
     "apply_operation",
     "as_graph_operand",
+    "as_tensor_operand",
     "is_graph_operand",
     "structural_node",
     "record_structurally",

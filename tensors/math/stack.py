@@ -11,6 +11,7 @@ from ..backend import execute_stack
 from ..dtype import result_dtype
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -43,7 +44,7 @@ class Stack(Operation):
             if isinstance(t, Tensor):
                 converted.append(t)
             else:
-                converted.append(Tensor(t))
+                converted.append(as_tensor_operand(t))
 
         elem_shape = converted[0].shape
         n = len(converted)

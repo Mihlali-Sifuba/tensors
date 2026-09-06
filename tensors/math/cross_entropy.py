@@ -17,6 +17,7 @@ from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..shape import Shape
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ..utils.broadcasting import broadcast_tensors
 from ..utils.coordinates import (
     coordinates_to_linear_index,
@@ -48,7 +49,7 @@ def _tensor(value: Any) -> Tensor:
 
     if isinstance(value, Variable):
         return value.data
-    return value if isinstance(value, Tensor) else Tensor(value)
+    return as_tensor_operand(value)
 
 
 def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:

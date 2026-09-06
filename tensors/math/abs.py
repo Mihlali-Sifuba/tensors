@@ -9,6 +9,7 @@ from typing import Any, overload
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._unary import unary_backward, unary_forward
 
 
@@ -85,8 +86,7 @@ def abs(value: TensorLike) -> TensorResult:
     if isinstance(value, Variable):
         operation = Abs()
         return Variable._apply_operation(operation, (value,))
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
+    value = as_tensor_operand(value)
     return Abs().forward(value)
 
 

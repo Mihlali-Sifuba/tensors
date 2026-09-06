@@ -6,6 +6,7 @@ from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..shape import Shape
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 
 
 class Reshape(Operation):
@@ -63,8 +64,7 @@ def reshape(tensor: TensorLike, shape: tuple[int, ...]) -> TensorResult:
     if isinstance(tensor, Variable):
         operation = Reshape(shape=shape)
         return Variable._apply_operation(operation, (tensor,))
-    if not isinstance(tensor, Tensor):
-        tensor = Tensor(tensor)
+    tensor = as_tensor_operand(tensor)
     return Reshape(shape=shape).forward(tensor)
 
 

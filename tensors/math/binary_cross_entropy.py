@@ -15,6 +15,7 @@ from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..shape import Shape
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ..utils.broadcasting import broadcast_tensors
 from .cross_entropy import Reduction, _validate_reduction
 from .mean import _stable_float_mean
@@ -392,10 +393,10 @@ def binary_cross_entropy(
     prediction_is_variable = isinstance(prediction, Variable)
     target_is_variable = isinstance(target, Variable)
     prediction_tensor = prediction.data if prediction_is_variable else (
-        prediction if isinstance(prediction, Tensor) else Tensor(prediction)
+        as_tensor_operand(prediction)
     )
     target_tensor = target.data if target_is_variable else (
-        target if isinstance(target, Tensor) else Tensor(target)
+        as_tensor_operand(target)
     )
 
     if prediction_is_variable or target_is_variable:
