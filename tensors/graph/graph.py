@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from functools import partial
 import threading
 from typing import Any
-from inspect import getclosurevars, isfunction, ismethod
+from inspect import Parameter, getclosurevars, isfunction, ismethod, signature
 
 from ..tensor import Tensor
 from ..variable import Variable
@@ -20,7 +20,8 @@ from .computation import Computation
 from .computation.compiler import (
     Compiler, resolve_boundaries, resolve_outputs,
 )
-from .state import TraceScope
+from .node import VariableNode
+from .state import TraceScope, get_graph_state
 
 
 _UNCACHEABLE = object()
@@ -55,6 +56,108 @@ class GraphExecutionState:
     compiled: _CompiledTrace | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _ModelStructure:
+    """A subclass model's structural graph and the program compiled from it.
+
+    The graph is built once, from vertices standing in for the model's
+    inputs, so it exists before any value does. Calling the model binds the
+    input vertices to the call's Tensors and replays the program.
+    """
+
+    inputs: tuple[VariableNode, ...]
+    outputs: Any
+    computations: tuple[Computation, ...]
+    nodes: tuple[Any, ...]
+    edges: tuple[Any, ...]
+    generation: int
+
+
+class _GraphMeta(type):
+    """Builds a subclass model's graph once its ``__init__`` has returned.
+
+    A model's structure is written in terms of its parameters, so it can only
+    be recorded after the subclass has finished creating them. Construction
+    therefore ends with the build rather than deferring it to the first call.
+    """
+
+    def __call__(cls, *args: Any, **kwargs: Any) -> Any:
+        instance = super().__call__(*args, **kwargs)
+        if isinstance(instance, Graph):
+            instance._build_model_structure()
+        return instance
+
+
+def _structural_value(value: Any) -> Variable:
+    """Return the runtime Variable a structural output names."""
+    if isinstance(value, VariableNode):
+        return value.variable
+    if isinstance(value, Variable):
+        return value
+    raise TypeError(
+        "Graph.forward() must return a Variable or a tuple/list of Variables"
+    )
+
+
+def _structural_outputs(outputs: Any) -> Any:
+    """Return ``outputs`` with every vertex replaced by the value it names.
+
+    Containers are rebuilt with an explicit stack, so a deeply nested output
+    does not depend on Python's recursion limit.
+    """
+    if not isinstance(outputs, (tuple, list)):
+        return _structural_value(outputs)
+
+    built: dict[int, Any] = {}
+    pending: list[tuple[Any, bool]] = [(outputs, False)]
+    while pending:
+        item, expanded = pending.pop()
+        if expanded:
+            built[id(item)] = type(item)(
+                built[id(child)]
+                if isinstance(child, (tuple, list))
+                else _structural_value(child)
+                for child in item
+            )
+            continue
+        pending.append((item, True))
+        pending.extend(
+            (child, False)
+            for child in reversed(item)
+            if isinstance(child, (tuple, list))
+        )
+    return built[id(outputs)]
+
+
+def _iter_output_nodes(outputs: Any) -> Iterator[VariableNode]:
+    """Yield the vertex naming each value a structural forward returned."""
+    pending = [(outputs, False)]
+    active_containers: set[int] = set()
+    while pending:
+        output, leaving = pending.pop()
+        if leaving:
+            active_containers.remove(id(output))
+            continue
+        if isinstance(output, VariableNode):
+            yield output
+            continue
+        if isinstance(output, Variable):
+            yield output.node
+            continue
+        if not isinstance(output, (tuple, list)):
+            raise TypeError(
+                "Graph.forward() must return a Variable or a tuple/list "
+                "of Variables"
+            )
+
+        identity = id(output)
+        if identity in active_containers:
+            raise ValueError("Graph outputs cannot contain cyclic containers")
+        active_containers.add(identity)
+        pending.append((output, True))
+        pending.extend((item, False) for item in reversed(output))
+
+
 class GraphThreadState(threading.local):
     """Thread-local storage with a typed Graph execution state."""
 
@@ -64,7 +167,7 @@ class GraphThreadState(threading.local):
         self.execution = None
 
 
-class Graph:
+class Graph(metaclass=_GraphMeta):
     """A callable differentiable model that records its latest computation.
 
     Every call executes ``forward`` eagerly and captures the Variables
@@ -82,6 +185,7 @@ class Graph:
         if name not in {
             "_function",
             "_thread_state",
+            "_structure",
             "_structure_generation",
             "_parameter_cache",
             "_parameter_graph_generations",
@@ -96,6 +200,7 @@ class Graph:
             raise TypeError("Graph expects a callable function or no argument")
 
         object.__setattr__(self, "_structure_generation", 0)
+        object.__setattr__(self, "_structure", None)
         object.__setattr__(self, "_function", function)
         object.__setattr__(self, "_thread_state", GraphThreadState())
         object.__setattr__(self, "_parameter_cache", None)
@@ -119,6 +224,139 @@ class Graph:
         """Execute eagerly, or replay a matching explicitly compiled trace."""
         return self._execute(args, kwargs)
 
+    # -- structural model construction ---------------------------------
+
+    def _build_model_structure(self) -> None:
+        """Build and compile this model's graph once ``__init__`` has run.
+
+        A subclass states its computation over its own parameters, so the
+        graph can be recorded as soon as those exist. Vertices stand in for
+        the model's inputs, the structural ``forward`` records the topology
+        without calculating anything, and the result is compiled into the
+        program every call replays.
+
+        A model that cannot be described before its values exist keeps the
+        tracing lifecycle it had: a functional graph, a ``forward`` taking
+        configuration arguments whose values are only known per call, and a
+        ``forward`` whose expression needs a value to record at all — a
+        Python scalar operand, or anything read off an input. Such a build
+        is abandoned rather than reported here, because the same expression
+        runs again on the first call and raises there if it is genuinely
+        wrong.
+        """
+        inputs = self._structural_input_count()
+        if inputs is None:
+            return
+        try:
+            structure = self._record_structure(inputs)
+        except Exception:
+            return
+        object.__setattr__(self, "_structure", structure)
+
+    def _structural_input_count(self) -> int | None:
+        """Return how many inputs a structural build passes, if it can."""
+        if self._function is not None or type(self).forward is Graph.forward:
+            return None
+        parameters = list(signature(type(self).forward).parameters.values())
+        count = 0
+        for parameter in parameters[1:]:
+            if parameter.kind not in (
+                Parameter.POSITIONAL_ONLY,
+                Parameter.POSITIONAL_OR_KEYWORD,
+            ) or parameter.default is not Parameter.empty:
+                # A configuration argument is only known per call, so the
+                # model keeps tracing rather than guessing a value for it.
+                return None
+            count += 1
+        return count or None
+
+    def _record_structure(self, inputs: int) -> _ModelStructure:
+        """Record and compile the graph of one structural forward pass."""
+        generation = self._structure_generation
+        graph = get_graph_state()
+        input_nodes = tuple(graph.add_variable_node() for _ in range(inputs))
+        outputs = self.forward(*input_nodes)
+        output_nodes = tuple(_iter_output_nodes(outputs))
+        if not output_nodes:
+            raise TypeError(
+                "Graph.forward() must return a Variable or a tuple/list of "
+                "Variables"
+            )
+        compiler = Compiler(output_nodes, boundaries=input_nodes)
+        compiler.compile()
+        return _ModelStructure(
+            inputs=input_nodes,
+            outputs=outputs,
+            computations=Computation._from_compiler(compiler),
+            nodes=compiler.nodes,
+            edges=compiler.edges,
+            generation=generation,
+        )
+
+    def _structure_for_replay(
+        self,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> _ModelStructure | None:
+        """Return the built structure this call can replay, if any.
+
+        A Variable input keeps the tracing lifecycle, because its autograd
+        identity belongs to the caller and a built input vertex already names
+        a value of its own.
+        """
+        structure = self._structure
+        if (
+            structure is None
+            or kwargs
+            or len(args) != len(structure.inputs)
+            or not all(isinstance(value, Tensor) for value in args)
+        ):
+            return None
+        if structure.generation != self._structure_generation or any(
+            computation._released for computation in structure.computations
+        ):
+            structure = self._record_structure(len(structure.inputs))
+            object.__setattr__(self, "_structure", structure)
+        return structure
+
+    def _replay_structure(
+        self,
+        structure: _ModelStructure,
+        args: tuple[Any, ...],
+    ) -> Any:
+        """Bind this call's inputs to the built graph and replay its program."""
+        for node, value in zip(structure.inputs, args):
+            if node.is_bound:
+                variable = node.variable
+                if variable.data is not value:
+                    variable.data = value
+            else:
+                node.materialize(value, requires_grad=False)
+        for computation in structure.computations:
+            computation.forward()
+
+        state = self._state()
+        state.outputs = _structural_outputs(structure.outputs)
+        state.computations = structure.computations
+        state.nodes = structure.nodes
+        state.edges = structure.edges
+        state.pending_outputs = ()
+        state.pending_boundaries = ()
+        return state.outputs
+
+    def _apply_structurally(
+        self,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        """Record this model's operations into the graph being described.
+
+        A model called with vertices is part of a larger structural
+        expression, so its ``forward`` records into that graph and nothing
+        executes.
+        """
+        return self.forward(*args, **kwargs)
+
     def _execute(
         self,
         args: tuple[Any, ...],
@@ -127,6 +365,15 @@ class Graph:
         force_retrace: bool = False,
         require_cacheable: bool = False,
     ) -> Any:
+        if any(
+            isinstance(value, VariableNode)
+            for value in (*args, *kwargs.values())
+        ):
+            return self._apply_structurally(args, kwargs)
+        if not force_retrace:
+            structure = self._structure_for_replay(args, kwargs)
+            if structure is not None:
+                return self._replay_structure(structure, args)
         scope = TraceScope()
         try:
             state = self._state()
@@ -209,6 +456,7 @@ class Graph:
         state.pending_boundaries = ()
         state.compile_enabled = False
         state.compiled = None
+        object.__setattr__(self, "_structure", None)
 
     @property
     def nodes(self) -> list[Any]:
@@ -258,6 +506,7 @@ class Graph:
             if name not in {
                 "_function",
                 "_thread_state",
+                "_structure",
                 "_structure_generation",
                 "_parameter_cache",
                 "_parameter_graph_generations",
@@ -292,6 +541,7 @@ class Graph:
                     if name not in {
                         "_function",
                         "_thread_state",
+                        "_structure",
                         "_structure_generation",
                         "_parameter_cache",
                         "_parameter_graph_generations",
@@ -517,6 +767,20 @@ class Graph:
     def _materialize_state(self) -> GraphExecutionState:
         """Compile the latest nested trace only when its metadata is requested."""
         state = self._state()
+        structure = self._structure
+        if (
+            structure is not None
+            and not state.computations
+            and not state.pending_outputs
+        ):
+            # A built model owns its graph from construction, so its
+            # metadata is available before the first call. A trace waiting
+            # to be compiled describes a more recent call, so it wins.
+            state.outputs = None
+            state.computations = structure.computations
+            state.nodes = structure.nodes
+            state.edges = structure.edges
+            return state
         if state.pending_outputs:
             self._record_state(
                 state,
