@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..._typing import TensorLike
 from ...tensor import Tensor
-from .compiler import Compiler
+from .compiler import Compiler, resolve_boundaries, resolve_outputs
 from .fusion import execute_fused_backward, execute_fused_forward, plan_fusions
 from .gradients import (
     gradient_seed,
@@ -40,8 +40,9 @@ class Computation:
     A :class:`~tensors.graph.computation.compiler.Compiler` turns the graph
     rooted at an output Variable into ordered
     :class:`~tensors.graph.computation.instruction.Instruction` objects over
-    numbered Variable slots, and resolves the part of that program each
-    output needs. A Computation holds one such compiled program together with
+    numbered value slots, and resolves the part of that program each output
+    needs. Those slots are numbered structurally, so a Computation is where
+    they are projected onto the runtime Variables they execute over. A Computation holds one such compiled program together with
     its own execution view and executes it: :meth:`forward` replays it and
     :meth:`backward` differentiates it.
 
@@ -51,7 +52,7 @@ class Computation:
     """
 
     def __init__(self, output: Variable) -> None:
-        compiler = Compiler((output,))
+        compiler = Compiler(resolve_outputs((output,)))
         compiler.compile()
         self._adopt_program(compiler, 0, _fusion_plan(compiler))
 
@@ -63,7 +64,10 @@ class Computation:
         boundaries: Iterable[Variable] = (),
     ) -> tuple[Computation, ...]:
         """Build output views over one shared multi-root compiled program."""
-        compiler = Compiler(outputs, boundaries=boundaries)
+        compiler = Compiler(
+            resolve_outputs(outputs),
+            boundaries=resolve_boundaries(boundaries),
+        )
         compiler.compile()
         return cls._from_compiler(compiler)
 
@@ -77,7 +81,7 @@ class Computation:
         """
         fusion = _fusion_plan(compiler)
         computations = []
-        for index in range(len(compiler.outputs)):
+        for index in range(len(compiler.output_nodes)):
             computation = cls.__new__(cls)
             computation._adopt_program(compiler, index, fusion)
             computations.append(computation)
@@ -95,7 +99,10 @@ class Computation:
         multiple outputs share their instructions, slots and fusion metadata
         while each keeps its own view of them.
         """
-        self.output = compiler.outputs[index]
+        # Compilation is structural; execution is not. Resolving the
+        # output vertex to its Variable here is where this view stops being
+        # a program over slots and starts being a runnable one.
+        self.output = compiler.output_nodes[index].variable
         self._variables = compiler.variables
         self._variable_slots = compiler.variable_slots
         self._leaf_slots = compiler.leaf_slots

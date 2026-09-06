@@ -108,7 +108,7 @@ class CompiledViewTests(unittest.TestCase):
         first = shared * only_first
         second = shared + 1.0
 
-        compiler = Compiler((first, second))
+        compiler = Compiler((first.node, second.node))
         compiler.compile()
 
         self.assertEqual(len(compiler.view_slots), 2)
@@ -120,17 +120,16 @@ class CompiledViewTests(unittest.TestCase):
         self.assertEqual(
             [i.operation.name for i in compiler.view_instructions[1]], ["add"]
         )
-        self.assertIn(compiler.variable_slots[only_first], compiler.view_slots[0])
-        self.assertNotIn(
-            compiler.variable_slots[only_first], compiler.view_slots[1]
-        )
+        slot = compiler.node_slots[only_first.node]
+        self.assertIn(slot, compiler.view_slots[0])
+        self.assertNotIn(slot, compiler.view_slots[1])
 
     def test_computation_takes_the_view_it_was_given(self):
         shared = ts.Variable([2.0])
         first = shared * 3.0
         second = shared + 1.0
 
-        compiler = Compiler((first, second))
+        compiler = Compiler((first.node, second.node))
         compiler.compile()
         one, two = Computation._from_compiler(compiler)
 
@@ -168,7 +167,7 @@ class CompiledViewTests(unittest.TestCase):
     def test_nodes_property_stays_behaviourally_compatible(self):
         value = ts.Variable([2.0])
         output = (value + 1.0) * 3.0
-        compiler = Compiler((output,))
+        compiler = Compiler((output.node,))
         compiler.compile()
 
         computation = Computation(output)
@@ -220,8 +219,8 @@ class GraphStructuralMetadataTests(unittest.TestCase):
         model(value)
 
         compiler = Compiler(
-            (model._materialize_state().computations[0].output,),
-            boundaries=(value,),
+            (model._materialize_state().computations[0].output.node,),
+            boundaries=(value.node,),
         )
         compiler.compile()
 

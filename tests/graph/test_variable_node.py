@@ -146,21 +146,23 @@ class UnmaterializedGraphStructureTests(unittest.TestCase):
         value = operation.operation.forward(a.data, b.data)
         c = result.materialize(value, "c")
 
-        compiler = Compiler((c,))
+        compiler = Compiler((result,))
         compiler.compile()
-        slots = compiler.variable_slots
+        slots = compiler.node_slots
         instruction = compiler.instructions[0]
 
         self.assertEqual(len(compiler.instructions), 1)
         self.assertIs(instruction.operation, operation.operation)
-        self.assertEqual(instruction.input_slots, (slots[a], slots[b]))
-        self.assertEqual(instruction.output_slot, slots[c])
+        self.assertEqual(
+            instruction.input_slots, (slots[a.node], slots[b.node])
+        )
+        self.assertEqual(instruction.output_slot, slots[c.node])
         self.assertEqual(Computation(c).forward().tolist(), [5.0, 7.0, 9.0])
 
-    def test_compiling_an_unmaterialized_operand_is_reported(self):
-        # The compiler numbers slots by Variable, so it still requires every
-        # vertex it reaches to have been materialized. That is the assumption
-        # the graph-first execution stage has to lift.
+    def test_an_unmaterialized_operand_does_not_block_compilation(self):
+        # Slots are numbered by vertex, so a pending operand compiles into
+        # one like any other value. Only the runtime projection of that
+        # program, and the Computation built from it, need the value itself.
         pending = VariableNode()
         leaf = ts.Variable([2.0], name="leaf")
         operation = OperationNode(Add())
@@ -170,8 +172,22 @@ class UnmaterializedGraphStructureTests(unittest.TestCase):
         Edge(operation, result, label="result")
         output = result.materialize([0.0], "output")
 
+        compiler = Compiler((result,))
+        instruction, = compiler.compile()
+
+        self.assertIn(pending, compiler.node_slots)
+        self.assertIn(compiler.node_slots[pending], compiler.leaf_slots)
+        self.assertEqual(
+            instruction.input_slots,
+            (compiler.node_slots[pending], compiler.node_slots[leaf.node]),
+        )
+        self.assertEqual(
+            compiler.output_slots, (compiler.node_slots[output.node],)
+        )
         with self.assertRaises(UnboundVariableNodeError):
-            Compiler((output,)).compile()
+            compiler.variables
+        with self.assertRaises(UnboundVariableNodeError):
+            Computation(output)
 
 
 class EagerRecordingLifecycleTests(unittest.TestCase):
