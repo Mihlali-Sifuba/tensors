@@ -207,7 +207,9 @@ The folders have deliberately narrow responsibilities:
   differentiable form of that structure. A recorded graph
   alternates `VariableNode -> OperationNode -> VariableNode`, and every
   relationship is an `Edge`. `Node` holds only identity and connectivity;
-  `VariableNode` adds its `Variable` and `OperationNode` adds its `Operation`.
+  `VariableNode` is the graph identity of one value and binds the `Variable`
+  materializing it, which may happen after the vertex is recorded, and
+  `OperationNode` adds its `Operation`.
   An operation defines how a local derivative is calculated; `Computation`
   decides which local derivatives a reverse pass requires and supplies that
   demand as `needs_input_grad`. See [Automatic differentiation](autodiff.md) for

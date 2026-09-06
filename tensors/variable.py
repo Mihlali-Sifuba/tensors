@@ -27,6 +27,7 @@ from .shape import Shape
 from .tensor import Tensor
 from .ops import Add, Sub, Mul, Div, Pow, Neg, Operation, Slice, Cast
 from .ops.pow import _power_dtype
+from .graph.node import VariableNode
 from .graph.state import get_graph_state
 
 
@@ -48,13 +49,22 @@ class Variable:
         data: Initial data (Tensor, list, or number).
         name: Optional label for debugging and graph inspection.
         requires_grad: Whether gradients should be accumulated for this leaf.
+        node: The graph vertex this value materializes. A fresh vertex is
+            recorded when it is omitted; passing one materializes a value the
+            graph already named.
     """
+
+    #: The graph identity of this value. It may predate the Variable, so it
+    #: is bound rather than created when one is supplied.
+    node: VariableNode
 
     def __init__(
         self,
         data: VariableData,
         name: str | None = None,
         requires_grad: bool = True,
+        *,
+        node: VariableNode | None = None,
     ) -> None:
         self._data_generation = 0
         self.requires_grad = requires_grad
@@ -67,7 +77,16 @@ class Variable:
         self._forward_state: Any = None
         self._cached_computation: Any = None
 
-        self.node = get_graph_state().add_variable_node(self)
+        # A value's graph identity can exist before the value does. A leaf
+        # has its value now, so it records a vertex already bound to it; a
+        # value the graph named earlier binds to the vertex that named it.
+        # Binding is what assigns ``self.node``.
+        if node is None:
+            get_graph_state().add_variable_node(self)
+        else:
+            if not isinstance(node, VariableNode):
+                raise TypeError("node must be a VariableNode")
+            node.bind(self)
 
     @classmethod
     def _record_operation(
@@ -79,9 +98,14 @@ class Variable:
         """Record an executed ``operation`` and return its result Variable.
 
         The operation has already run: this writes it into graph history by
-        creating the result Variable, adding the operation vertex, joining
-        each operand to it, joining it to the result, and capturing the
-        result's forward state.
+        naming the result, adding the operation vertex, joining each operand
+        to it, joining it to the result, and materializing the result
+        Variable against the vertex now naming it.
+
+        Structure comes first even though eager execution already produced
+        the value: the result vertex exists and is connected before any
+        Variable holds that value, which is the order a compiled computation
+        will produce results in.
 
         The recorded topology is always
         ``VariableNode -> OperationNode -> VariableNode``: every operand
@@ -89,14 +113,16 @@ class Variable:
         single outgoing edge.
         """
         graph = get_graph_state()
-        result = cls(
-            data,
-            requires_grad=any(operand.requires_grad for operand in inputs),
-        )
+        result_node = graph.add_variable_node()
         node = graph.add_operation_node(operation)
         for label, operand in zip(_operand_labels(len(inputs)), inputs):
             graph.add_edge(operand.node, node, label=label)
-        graph.add_edge(node, result.node, label="result")
+        graph.add_edge(node, result_node, label="result")
+        result = cls(
+            data,
+            requires_grad=any(operand.requires_grad for operand in inputs),
+            node=result_node,
+        )
         result._capture_forward_state(inputs)
         return result
 

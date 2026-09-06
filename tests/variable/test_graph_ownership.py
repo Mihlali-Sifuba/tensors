@@ -19,6 +19,7 @@ class VariableGraphOwnershipTests(unittest.TestCase):
         self.assertEqual(variable.name, "weight")
         self.assertIsInstance(variable.node, VariableNode)
         self.assertEqual(variable.node.label, "var")
+        self.assertTrue(variable.node.is_bound)
         self.assertIs(variable.node.variable, variable)
         self.assertEqual(variable.node.inputs, [])
 
@@ -46,6 +47,7 @@ class VariableGraphOwnershipTests(unittest.TestCase):
         for variable in operands:
             with self.subTest(variable=variable.name):
                 self.assertIsInstance(variable.node, VariableNode)
+                self.assertTrue(variable.node.is_bound)
                 self.assertIs(variable.node.variable, variable)
                 self.assertNotIsInstance(variable.node, OperationNode)
 

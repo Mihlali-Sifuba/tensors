@@ -166,7 +166,14 @@ class Compiler:
         return tuple(masks[node] for node in self.nodes)
 
     def _assign_slots(self) -> None:
-        """Number every Variable the traversal reached."""
+        """Number every Variable the traversal reached.
+
+        A slot is numbered by the Variable occupying it, so compilation
+        currently requires every vertex the traversal reached to have been
+        materialized. An unbound vertex raises
+        :class:`~tensors.graph.node.UnboundVariableNodeError` rather than
+        compiling into a slot that names nothing.
+        """
         variables = tuple(
             node.variable
             for node in self.nodes
@@ -198,8 +205,7 @@ class Compiler:
                 Instruction(
                     operation=producer.operation,
                     input_slots=tuple(
-                        slots[edge.source.variable]
-                        for edge in producer._in_edges
+                        slots[operand] for operand in producer.operands
                     ),
                     output_slot=output_slot,
                 )
