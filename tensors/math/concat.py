@@ -14,6 +14,7 @@ from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
 
 if TYPE_CHECKING:
+    from ..graph.node import VariableNode
     from ..variable import Variable
 
 
@@ -199,6 +200,13 @@ class Concat(Operation):
 
 
 @overload
+def concat(
+    tensors: Sequence[VariableNode],
+    axis: int = 0,
+) -> VariableNode: ...
+
+
+@overload
 def concat(tensors: Sequence[Variable], axis: int = 0) -> Variable: ...
 
 
@@ -210,17 +218,35 @@ def concat(tensors: Sequence[TensorData], axis: int = 0) -> Tensor: ...
 def concat(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult: ...
 
 
-def concat(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult:
-    """Concatenate Tensors or Variables along an existing axis."""
-    from ..variable import Variable
+@overload
+def concat(
+    tensors: Sequence[TensorLike | VariableNode],
+    axis: int = 0,
+) -> TensorResult | VariableNode: ...
 
-    if any(isinstance(value, Variable) for value in tensors):
-        variables = [
-            value if isinstance(value, Variable) else Variable(value, requires_grad=False)
-            for value in tensors
-        ]
-        operation = Concat(axis=axis)
-        return Variable._apply_operation(operation, variables)
+
+def concat(
+    tensors: Sequence[TensorLike | VariableNode],
+    axis: int = 0,
+) -> TensorResult | VariableNode:
+    """Concatenate graph values, Tensors or Variables along an existing axis.
+
+    The operands are a sequence, so the graph is asked about each element
+    rather than about the sequence itself. One graph value anywhere in it
+    applies the whole expression through the graph, contributing one
+    operand per element in the order given: Variables calculate the result
+    now, a vertex records the operation for a program that runs later, and
+    a Tensor beside either enters the graph as a non-gradient leaf.
+    """
+    from ..graph.expression import (
+        apply_operation, as_graph_operand, is_graph_operand,
+    )
+
+    if any(is_graph_operand(value) for value in tensors):
+        return apply_operation(
+            Concat(axis=axis),
+            tuple(as_graph_operand(value) for value in tensors),
+        )
     return Concat(axis=axis).forward(
         *(as_tensor_operand(value) for value in _operands(tensors))
     )

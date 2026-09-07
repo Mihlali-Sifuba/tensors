@@ -14,6 +14,7 @@ from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
 
 if TYPE_CHECKING:
+    from ..graph.node import VariableNode
     from ..variable import Variable
 
 
@@ -146,6 +147,13 @@ class Stack(Operation):
 
 
 @overload
+def stack(
+    tensors: Sequence[VariableNode],
+    axis: int = 0,
+) -> VariableNode: ...
+
+
+@overload
 def stack(tensors: Sequence[Variable], axis: int = 0) -> Variable: ...
 
 
@@ -157,17 +165,35 @@ def stack(tensors: Sequence[TensorData], axis: int = 0) -> Tensor: ...
 def stack(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult: ...
 
 
-def stack(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult:
-    """Stack a sequence of Tensors or Variables along a new axis."""
-    from ..variable import Variable
+@overload
+def stack(
+    tensors: Sequence[TensorLike | VariableNode],
+    axis: int = 0,
+) -> TensorResult | VariableNode: ...
 
-    if any(isinstance(value, Variable) for value in tensors):
-        variables = [
-            value if isinstance(value, Variable) else Variable(value, requires_grad=False)
-            for value in tensors
-        ]
-        operation = Stack(axis=axis)
-        return Variable._apply_operation(operation, variables)
+
+def stack(
+    tensors: Sequence[TensorLike | VariableNode],
+    axis: int = 0,
+) -> TensorResult | VariableNode:
+    """Stack a sequence of graph values, Tensors or Variables on a new axis.
+
+    The operands are a sequence, so the graph is asked about each element
+    rather than about the sequence itself. One graph value anywhere in it
+    applies the whole expression through the graph, contributing one
+    operand per element in the order given: Variables calculate the result
+    now, a vertex records the operation for a program that runs later, and
+    a Tensor beside either enters the graph as a non-gradient leaf.
+    """
+    from ..graph.expression import (
+        apply_operation, as_graph_operand, is_graph_operand,
+    )
+
+    if any(is_graph_operand(value) for value in tensors):
+        return apply_operation(
+            Stack(axis=axis),
+            tuple(as_graph_operand(value) for value in tensors),
+        )
     return Stack(axis=axis).forward(
         *(as_tensor_operand(value) for value in _operands(tensors))
     )
