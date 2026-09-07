@@ -14,7 +14,9 @@ from tensors.graph.expression import UnsupportedStructuralExpression
 from tensors.graph.node import VariableNode
 from tensors.graph.state import reset_graph_state
 from tensors.math.concat import Concat
+from tensors.math.elementwise_extrema import Maximum
 from tensors.math.stack import Stack
+from tensors.math.where import Where
 
 # The math package binds each public function over its module, so the module
 # holding the coercion boundary has to be named directly.
@@ -470,8 +472,16 @@ class OperationForwardIndependenceTests(unittest.TestCase):
             raise AssertionError("a vertex must never reach forward()")
 
         calls = {
-            "concat": (Concat, lambda: ts.concat([VariableNode(), [1.0]])),
-            "stack": (Stack, lambda: ts.stack([VariableNode(), [1.0]])),
+            "maximum": (
+                Maximum,
+                lambda: ts.maximum(VariableNode(), ts.Tensor([1.0])),
+            ),
+            "where": (
+                Where,
+                lambda: ts.where(
+                    ts.Tensor([True]), VariableNode(), ts.Tensor([1.0])
+                ),
+            ),
         }
         for name, (operation, call) in calls.items():
             with self.subTest(operation=name):

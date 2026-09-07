@@ -13,6 +13,7 @@ from tensors.graph.state import (
 )
 from tensors.linalg.dot import Dot
 from tensors.linalg.norm import Norm
+from tensors.linalg.transpose import Transpose
 from tensors.linalg.outer import Outer
 from tensors.math.abs import Abs
 from tensors.math.arccos import ArcCos
@@ -24,6 +25,7 @@ from tensors.math.arctanh import ArcTanh
 from tensors.math.cos import Cos
 from tensors.math.cosh import Cosh
 from tensors.math.exp import Exp
+from tensors.math.concat import Concat
 from tensors.math.log import Log
 from tensors.math.log_softmax import LogSoftmax
 from tensors.math.logsumexp import LogSumExp
@@ -31,7 +33,9 @@ from tensors.math.max import Max
 from tensors.math.mean import Mean
 from tensors.math.min import Min
 from tensors.math.prod import Prod
+from tensors.math.reshape import Reshape
 from tensors.math.softmax import Softmax
+from tensors.math.stack import Stack
 from tensors.math.std import Std
 from tensors.math.sum import Sum
 from tensors.math.variance import Variance
@@ -646,6 +650,238 @@ class ReductionFamilyStructuralTests(unittest.TestCase):
                 self.assertEqual(variable.grad.shape, variable.shape)
 
 
+class ShapeStructuralTests(unittest.TestCase):
+    """reshape and transpose record the layout they were configured with."""
+
+    #: A call, the operation it records, and the state that operation holds.
+    CASES = (
+        ("reshape tuple",
+         lambda value: ts.reshape(value, (3, 2)), Reshape, "shape", (3, 2)),
+        ("reshape list",
+         lambda value: ts.reshape(value, [2, 3]), Reshape, "shape", (2, 3)),
+        ("transpose default",
+         lambda value: ts.transpose(value), Transpose, "axes", None),
+        ("transpose tuple",
+         lambda value: ts.transpose(value, (1, 0)), Transpose, "axes", (1, 0)),
+        ("transpose list",
+         lambda value: ts.transpose(value, [1, 0]), Transpose, "axes", (1, 0)),
+    )
+
+    VALUES = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_a_vertex_records_the_configured_operation(self):
+        for label, apply, operation, attribute, expected in self.CASES:
+            with self.subTest(case=label):
+                reset_graph_state()
+                node = VariableNode()
+                calls = []
+                original = operation.forward
+
+                def counted(self, *args, _original=original, _calls=calls):
+                    _calls.append(args)
+                    return _original(self, *args)
+
+                with patch.object(operation, "forward", counted):
+                    result = apply(node)
+
+                self.assertIsInstance(result, VariableNode)
+                self.assertFalse(result.is_bound)
+                recorded = result.producer.operation
+                self.assertIsInstance(recorded, operation)
+                # The layout is the operation's own state, normalized the
+                # way the eager call normalizes it.
+                self.assertEqual(getattr(recorded, attribute), expected)
+                self.assertEqual(result.producer.operand_nodes, (node,))
+                self.assertEqual(calls, [])
+                self.assertFalse(node.is_bound)
+
+    def test_a_recorded_program_replays_what_eager_calculates(self):
+        values = ts.Tensor(self.VALUES)
+        for label, apply, _, _, _ in self.CASES:
+            with self.subTest(case=label):
+                reset_graph_state()
+                expected = apply(values)
+
+                node = VariableNode()
+                output = apply(node)
+                compiler = Compiler((output,), boundaries=(node,))
+                compiler.compile()
+                computations = Computation._from_compiler(compiler)
+                node.materialize(values, requires_grad=False)
+                for computation in computations:
+                    computation.forward()
+
+                replayed = output.variable.data
+                self.assertEqual(replayed.tolist(), expected.tolist())
+                self.assertEqual(replayed.shape, expected.shape)
+                self.assertIs(replayed.dtype, expected.dtype)
+
+    def test_eager_application_is_unchanged(self):
+        values = ts.Tensor(self.VALUES)
+        for label, apply, _, _, _ in self.CASES:
+            with self.subTest(case=label):
+                reset_graph_state()
+                tensor_result = apply(values)
+                self.assertIsInstance(tensor_result, ts.Tensor)
+
+                variable = ts.Variable(self.VALUES, name="value")
+                variable_result = apply(variable)
+                self.assertIsInstance(variable_result, ts.Variable)
+                self.assertEqual(
+                    variable_result.data.tolist(), tensor_result.tolist()
+                )
+
+                ts.backward(ts.sum(variable_result))
+                self.assertIsNotNone(variable.grad)
+                self.assertEqual(variable.grad.shape, variable.shape)
+
+
+class SequenceStructuralTests(unittest.TestCase):
+    """concat and stack are asked about each operand, not the sequence."""
+
+    FAMILY = (("concat", Concat), ("stack", Stack))
+
+    #: Each operand sequence built around one vertex, and the positions the
+    #: vertices occupy in it.
+    LAYOUTS = (
+        ("[vertex, Tensor]",
+         lambda node: [node, ts.Tensor([1.0])], (0,)),
+        ("[Tensor, vertex]",
+         lambda node: [ts.Tensor([1.0]), node], (1,)),
+        ("[vertex, Variable]",
+         lambda node: [node, ts.Variable([2.0], name="right")], (0,)),
+        ("[Variable, vertex]",
+         lambda node: [ts.Variable([2.0], name="left"), node], (1,)),
+        ("[vertex, vertex]",
+         lambda node: [node, VariableNode()], (0, 1)),
+        ("[Tensor, vertex, Variable]",
+         lambda node: [
+             ts.Tensor([1.0]), node, ts.Variable([3.0], name="third")
+         ], (1,)),
+        ("(vertex, Tensor) tuple",
+         lambda node: (node, ts.Tensor([1.0])), (0,)),
+        ("[vertex, data]",
+         lambda node: [node, [1.0]], (0,)),
+    )
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_a_sequence_holding_a_vertex_records_in_order(self):
+        for name, operation in self.FAMILY:
+            for label, build, positions in self.LAYOUTS:
+                with self.subTest(function=name, operands=label):
+                    reset_graph_state()
+                    node = VariableNode()
+                    sequence = build(node)
+                    calls = []
+                    original = operation.forward
+
+                    def counted(self, *args, _original=original, _calls=calls):
+                        _calls.append(args)
+                        return _original(self, *args)
+
+                    with patch.object(operation, "forward", counted):
+                        result = getattr(ts, name)(sequence, axis=0)
+
+                    self.assertIsInstance(result, VariableNode)
+                    self.assertFalse(result.is_bound)
+                    self.assertIsInstance(result.producer.operation, operation)
+
+                    operands = result.producer.operand_nodes
+                    # One operand per element, in the order given.
+                    self.assertEqual(len(operands), len(sequence))
+                    self.assertIs(operands[positions[0]], node)
+                    for index, operand in enumerate(operands):
+                        if index in positions:
+                            # A vertex names a value that does not exist.
+                            self.assertFalse(operand.is_bound)
+                        else:
+                            # A runtime operand beside it is a bound leaf.
+                            self.assertTrue(operand.is_bound)
+                    self.assertEqual(calls, [])
+                    self.assertFalse(node.is_bound)
+
+    def test_a_tensor_operand_becomes_a_non_gradient_leaf(self):
+        for name, _ in self.FAMILY:
+            with self.subTest(function=name):
+                reset_graph_state()
+                node = VariableNode()
+                parameter = ts.Variable([2.0], name="parameter")
+                result = getattr(ts, name)(
+                    [node, parameter, ts.Tensor([9.0])], axis=0
+                )
+
+                first, second, third = result.producer.operand_nodes
+                self.assertIs(first, node)
+                # A Variable keeps its own gradient flag; a Tensor does not.
+                self.assertIs(second.variable, parameter)
+                self.assertTrue(second.variable.requires_grad)
+                self.assertTrue(third.is_bound)
+                self.assertFalse(third.variable.requires_grad)
+
+    def test_a_recorded_sequence_replays_what_eager_calculates(self):
+        left = ts.Tensor([[1.0, 2.0]])
+        right = ts.Tensor([[3.0, 4.0]])
+        for name, _ in self.FAMILY:
+            for axis in (0, 1):
+                with self.subTest(function=name, axis=axis):
+                    reset_graph_state()
+                    function = getattr(ts, name)
+                    expected = function([left, right], axis=axis)
+
+                    node = VariableNode()
+                    output = function([node, right], axis=axis)
+                    compiler = Compiler((output,), boundaries=(node,))
+                    compiler.compile()
+                    computations = Computation._from_compiler(compiler)
+                    node.materialize(left, requires_grad=False)
+                    for computation in computations:
+                        computation.forward()
+
+                    replayed = output.variable.data
+                    self.assertEqual(replayed.tolist(), expected.tolist())
+                    self.assertEqual(replayed.shape, expected.shape)
+
+    def test_a_sequence_without_a_vertex_is_unchanged(self):
+        for name, _ in self.FAMILY:
+            with self.subTest(function=name):
+                reset_graph_state()
+                function = getattr(ts, name)
+                left = ts.Variable([[1.0, 2.0]], name="left")
+                right = ts.Variable([[3.0, 4.0]], name="right")
+
+                tensors = function(
+                    [ts.Tensor([[1.0, 2.0]]), ts.Tensor([[3.0, 4.0]])]
+                )
+                self.assertIsInstance(tensors, ts.Tensor)
+
+                variables = function([left, right])
+                self.assertIsInstance(variables, ts.Variable)
+                self.assertEqual(variables.data.tolist(), tensors.tolist())
+
+                ts.backward(ts.sum(function([left, right])))
+                self.assertIsNotNone(left.grad)
+                self.assertIsNotNone(right.grad)
+
+    def test_an_invalid_sequence_still_fails(self):
+        # Structural dispatch must not let a malformed sequence through.
+        for name, _ in self.FAMILY:
+            with self.subTest(function=name):
+                reset_graph_state()
+                with self.assertRaises(ValueError):
+                    getattr(ts, name)([])
+
+
 class RuntimeApplicationIsUnchangedTests(unittest.TestCase):
     """Runtime expressions still calculate through a Computation."""
 
@@ -753,9 +989,6 @@ class TensorOperandBoundaryTests(unittest.TestCase):
     def test_an_operation_without_a_structural_form_signals(self):
         vertex = VariableNode()
         calls = {
-            "transpose": lambda: ts.transpose(vertex),
-            "concat": lambda: ts.concat([vertex, ts.Tensor([1.0])]),
-            "stack": lambda: ts.stack([vertex, ts.Tensor([1.0])]),
             "where": lambda: ts.where(
                 ts.Tensor([True]), vertex, ts.Tensor([1.0])
             ),

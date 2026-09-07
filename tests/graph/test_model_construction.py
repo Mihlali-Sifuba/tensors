@@ -280,20 +280,20 @@ class StructuralBuildFallbackTests(unittest.TestCase):
             VariableNode() + 1.0
 
     def test_a_function_without_a_structural_form_keeps_tracing(self):
-        class Transposed(ts.Graph):
+        class Bounded(ts.Graph):
             def __init__(self):
                 super().__init__()
                 self.w = ts.Variable([[2.0]], name="w")
 
             def forward(self, x):
-                return ts.transpose(x @ self.w)
+                return ts.maximum(x @ self.w, ts.Tensor([1.0]))
 
-        model = Transposed()
+        model = Bounded()
 
         self.assertIsNone(model._structure)
         self.assertEqual(model(ts.Tensor([[1.0]])).data.item(), 2.0)
         with self.assertRaises(UnsupportedStructuralExpression):
-            ts.transpose(VariableNode())
+            ts.maximum(VariableNode(), ts.Tensor([1.0]))
 
     def test_the_signal_is_narrower_than_a_type_error(self):
         # Existing callers still see a TypeError, but the build only treats
@@ -519,15 +519,15 @@ class LinalgModelConstructionTests(unittest.TestCase):
 
     def test_the_fallback_signal_is_still_the_only_one_caught(self):
         # A function with no structural form keeps the tracing lifecycle.
-        class Transposed(ts.Graph):
+        class Bounded(ts.Graph):
             def __init__(self):
                 super().__init__()
                 self.w = ts.Variable([[2.0], [3.0]], name="w")
 
             def forward(self, x):
-                return ts.transpose(x @ self.w)
+                return ts.maximum(x @ self.w, ts.Tensor([1.0]))
 
-        traced = Transposed()
+        traced = Bounded()
         self.assertIsNone(traced._structure)
         self.assertEqual(traced(ts.Tensor([[1.0, 1.0]])).data.item(), 5.0)
 
@@ -631,8 +631,10 @@ class UnaryModelConstructionTests(unittest.TestCase):
         # These families are not migrated yet, so a model using one must
         # still fall back rather than build.
         for name, forward in (
-            ("transpose", lambda self, x: ts.transpose(x @ self.w)),
             ("maximum", lambda self, x: ts.maximum(x @ self.w, ts.Tensor([1.0]))),
+            ("where", lambda self, x: ts.where(
+                ts.Tensor([True]), x @ self.w, ts.Tensor([1.0])
+            )),
         ):
             with self.subTest(function=name):
                 reset_graph_state()
@@ -778,6 +780,170 @@ class ReductionModelConstructionTests(unittest.TestCase):
                         for instruction in program._instructions
                     ],
                     ["dot", name],
+                )
+
+
+
+class ShapeModelConstructionTests(unittest.TestCase):
+    """Shape and sequence operations build a model's program too."""
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    class Reshaped(ts.Graph):
+        """dot -> reshape -> transpose."""
+
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable([[1.0, 0.5, 2.0], [0.5, 1.0, 1.5]], name="w")
+
+        def forward(self, x):
+            return ts.transpose(ts.reshape(x @ self.w, (3, 2)))
+
+    class Branched(ts.Graph):
+        """Two parameter branches joined by a concatenation."""
+
+        def __init__(self):
+            super().__init__()
+            self.left = ts.Variable([[1.0], [2.0]], name="left")
+            self.right = ts.Variable([[3.0], [4.0]], name="right")
+
+        def forward(self, x):
+            return ts.concat([x @ self.left, x @ self.right], axis=1)
+
+    class Stacked(ts.Graph):
+        """Two parameter branches joined on a new axis."""
+
+        def __init__(self):
+            super().__init__()
+            self.left = ts.Variable([[1.0], [2.0]], name="left")
+            self.right = ts.Variable([[3.0], [4.0]], name="right")
+
+        def forward(self, x):
+            return ts.stack([x @ self.left, x @ self.right], axis=0)
+
+    INPUTS = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
+
+    def test_the_models_build_during_construction(self):
+        expected = {
+            "Reshaped": ["dot", "reshape", "transpose"],
+            "Branched": ["dot", "dot", "concat"],
+            "Stacked": ["dot", "dot", "stack"],
+        }
+        for model in (self.Reshaped(), self.Branched(), self.Stacked()):
+            with self.subTest(model=type(model).__name__):
+                self.assertIsNotNone(model._structure)
+                program = model._structure.computations[0]
+                self.assertEqual(
+                    [
+                        instruction.operation.name
+                        for instruction in program._instructions
+                    ],
+                    expected[type(model).__name__],
+                )
+
+    def test_the_built_programs_replay_what_eager_calculates(self):
+        for factory, forward in (
+            (
+                self.Reshaped,
+                lambda m, x: ts.transpose(ts.reshape(x @ m.w.data, (3, 2))),
+            ),
+            (
+                self.Branched,
+                lambda m, x: ts.concat(
+                    [x @ m.left.data, x @ m.right.data], axis=1
+                ),
+            ),
+            (
+                self.Stacked,
+                lambda m, x: ts.stack(
+                    [x @ m.left.data, x @ m.right.data], axis=0
+                ),
+            ),
+        ):
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+                for inputs in (
+                    self.INPUTS,
+                    ts.Tensor([[-1.0, 0.5], [2.0, -3.0]]),
+                    ts.Tensor([[10.0, -20.0], [0.5, 1.5]]),
+                ):
+                    replayed = model(inputs).data
+                    expected = forward(model, inputs)
+                    self.assertEqual(replayed.tolist(), expected.tolist())
+                    self.assertEqual(replayed.shape, expected.shape)
+
+    def test_gradients_reach_every_branch(self):
+        for factory in (self.Reshaped, self.Branched, self.Stacked):
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+                ts.backward(ts.sum(model(self.INPUTS)))
+                parameters = model.parameters()
+                self.assertTrue(parameters)
+                for parameter in parameters:
+                    self.assertIsNotNone(parameter.grad)
+                    self.assertEqual(parameter.grad.shape, parameter.shape)
+
+    def test_replay_reuses_the_output_variable(self):
+        # The identity semantics a built model already has are unchanged by
+        # a sequence operation producing the output.
+        model = self.Branched()
+
+        first = model(self.INPUTS)
+        second = model(ts.Tensor([[3.0, 4.0], [5.0, 6.0]]))
+
+        self.assertIs(first, second)
+        self.assertEqual(
+            first.data.tolist(),
+            ts.concat(
+                [
+                    ts.Tensor([[3.0, 4.0], [5.0, 6.0]]) @ model.left.data,
+                    ts.Tensor([[3.0, 4.0], [5.0, 6.0]]) @ model.right.data,
+                ],
+                axis=1,
+            ).tolist(),
+        )
+
+    def test_each_migrated_function_builds_a_model_of_its_own(self):
+        cases = (
+            ("reshape", lambda self, x: ts.reshape(x @ self.w, (2, 1))),
+            ("transpose", lambda self, x: ts.transpose(x @ self.w)),
+            ("concat", lambda self, x: ts.concat([x @ self.w, x @ self.w])),
+            ("stack", lambda self, x: ts.stack([x @ self.w, x @ self.w])),
+        )
+        for name, forward in cases:
+            with self.subTest(function=name):
+                reset_graph_state()
+                model = type(
+                    "Single",
+                    (ts.Graph,),
+                    {
+                        "__init__": lambda self: (
+                            ts.Graph.__init__(self),
+                            setattr(
+                                self,
+                                "w",
+                                ts.Variable([[1.0, 0.5], [0.5, 1.0]], name="w"),
+                            ),
+                        )[0],
+                        "forward": forward,
+                    },
+                )()
+
+                self.assertIsNotNone(model._structure)
+                program = model._structure.computations[0]
+                names = [
+                    instruction.operation.name
+                    for instruction in program._instructions
+                ]
+                self.assertEqual(names[-1], name)
+                self.assertIsInstance(
+                    model(ts.Tensor([[1.0, 2.0]])), ts.Variable
                 )
 
 

@@ -1,12 +1,17 @@
 """Differentiable tensor transpose."""
 
-from typing import Any, List, overload
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
 from .dot import _transpose_impl
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class Transpose(Operation):
@@ -53,6 +58,13 @@ class Transpose(Operation):
 
 @overload
 def transpose(
+    value: VariableNode,
+    axes: tuple[int, ...] | list[int] | None = None,
+) -> VariableNode: ...
+
+
+@overload
+def transpose(
     value: TensorValue,
     axes: tuple[int, ...] | list[int] | None = None,
 ) -> TensorValue: ...
@@ -66,20 +78,24 @@ def transpose(
 
 
 def transpose(
-    value: TensorLike,
+    value: TensorLike | VariableNode,
     axes: tuple[int, ...] | list[int] | None = None,
-) -> TensorResult:
-    """Permute axes, or transpose the final two matrix axes by default."""
-    from ..variable import Variable
+) -> TensorResult | VariableNode:
+    """Permute axes of a graph value or Tensor, or transpose the last two.
+
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later. The permutation is the operation's own state, so a recorded
+    transpose replays the axes it was written with.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
 
     axes = tuple(axes) if isinstance(axes, list) else axes
+    operation = Transpose(axes=axes)
 
-    if isinstance(value, Variable):
-        operation = Transpose(axes=axes)
-        return Variable._apply_operation(operation, (value,))
-    return Transpose(axes=axes).forward(
-        as_tensor_operand(value)
-    )
+    if is_graph_operand(value):
+        return apply_operation(operation, (value,))
+    return operation.forward(as_tensor_operand(value))
 
 
 __all__ = ["Transpose", "transpose"]
