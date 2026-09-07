@@ -1,7 +1,9 @@
 """Differentiable Euclidean norm."""
 
+from __future__ import annotations
+
 import math
-from typing import Any, List, overload
+from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_reduction
@@ -17,6 +19,9 @@ from ..math._reduction import (
     reduction_groups,
     reduction_shape,
 )
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 def _scaled_norm(
@@ -147,6 +152,14 @@ class Norm(Operation):
 
 @overload
 def norm(
+    value: VariableNode,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> VariableNode: ...
+
+
+@overload
+def norm(
     value: TensorValue,
     axis: Axis = None,
     keepdims: bool = False,
@@ -162,20 +175,24 @@ def norm(
 
 
 def norm(
-    value: TensorLike,
+    value: TensorLike | VariableNode,
     axis: Axis = None,
     keepdims: bool = False,
-) -> TensorResult:
-    """Compute Euclidean norms over one, several, or all axes."""
-    from ..variable import Variable
+) -> TensorResult | VariableNode:
+    """Compute Euclidean norms of a graph value or Tensor.
 
-    axis = immutable_axis(axis)
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later. The reduction the operation was configured with is the one every
+    application uses, so a recorded norm replays the call it was written as.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
 
-    if isinstance(value, Variable):
-        operation = Norm(axis=axis, keepdims=keepdims)
-        return Variable._apply_operation(operation, (value,))
-    value = as_tensor_operand(value)
-    return Norm(axis=axis, keepdims=keepdims).forward(value)
+    operation = Norm(axis=immutable_axis(axis), keepdims=keepdims)
+
+    if is_graph_operand(value):
+        return apply_operation(operation, (value,))
+    return operation.forward(as_tensor_operand(value))
 
 
 __all__ = ["Norm", "norm"]

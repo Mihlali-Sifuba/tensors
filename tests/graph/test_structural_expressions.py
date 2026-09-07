@@ -12,6 +12,8 @@ from tensors.graph.state import (
     GraphState, get_graph_state, reset_graph_state,
 )
 from tensors.linalg.dot import Dot
+from tensors.linalg.norm import Norm
+from tensors.linalg.outer import Outer
 from tensors.math.relu import ReLU
 from tensors.math.sigmoid import Sigmoid
 from tensors.ops import Add, Div, Mul, Pow, Sub
@@ -116,6 +118,73 @@ class StructuralExpressionTests(unittest.TestCase):
                 self.assertTrue(operands[0].is_bound)
                 self.assertFalse(operands[0].variable.requires_grad)
                 # Nothing was calculated.
+                self.assertEqual(calls, [])
+
+    def test_outer_records_structurally_in_either_position(self):
+        """An outer product records whichever side names a graph value."""
+        operands = (
+            ("vertex, Tensor", lambda node: (node, ts.Tensor([3.0, 4.0]))),
+            ("Tensor, vertex", lambda node: (ts.Tensor([3.0, 4.0]), node)),
+            ("vertex, Variable",
+             lambda node: (node, ts.Variable([3.0, 4.0], name="right"))),
+            ("Variable, vertex",
+             lambda node: (ts.Variable([3.0, 4.0], name="left"), node)),
+            ("vertex, vertex", lambda node: (node, VariableNode())),
+            ("vertex, data", lambda node: (node, [3.0, 4.0])),
+        )
+        for label, build in operands:
+            with self.subTest(operands=label):
+                reset_graph_state()
+                node = VariableNode()
+                calls = []
+                original = Outer.forward
+
+                def counted(self, *args, _original=original, _calls=calls):
+                    _calls.append(args)
+                    return _original(self, *args)
+
+                left, right = build(node)
+                with patch.object(Outer, "forward", counted):
+                    result = ts.outer(left, right)
+
+                self.assertIsInstance(result, VariableNode)
+                self.assertFalse(result.is_bound)
+                self.assertIsInstance(result.producer.operation, Outer)
+                self.assertEqual(len(result.producer.operand_nodes), 2)
+                self.assertIn(node, result.producer.operand_nodes)
+                # Nothing was calculated.
+                self.assertEqual(calls, [])
+
+    def test_norm_records_structurally_with_its_configuration(self):
+        """A recorded norm keeps the reduction the call was written with."""
+        configurations = (
+            ({}, None, False),
+            ({"axis": 1}, 1, False),
+            ({"axis": 0, "keepdims": True}, 0, True),
+        )
+        for keywords, axis, keepdims in configurations:
+            with self.subTest(**keywords):
+                reset_graph_state()
+                node = VariableNode()
+                calls = []
+                original = Norm.forward
+
+                def counted(self, *args, _original=original, _calls=calls):
+                    _calls.append(args)
+                    return _original(self, *args)
+
+                with patch.object(Norm, "forward", counted):
+                    result = ts.norm(node, **keywords)
+
+                self.assertIsInstance(result, VariableNode)
+                self.assertFalse(result.is_bound)
+                operation = result.producer.operation
+                self.assertIsInstance(operation, Norm)
+                # The configuration is the operation's, not the caller's.
+                self.assertEqual(operation.axis, axis)
+                self.assertEqual(operation.keepdims, keepdims)
+                self.assertEqual(result.producer.operand_nodes, (node,))
+                # The vertex names no value, and none was read.
                 self.assertEqual(calls, [])
 
     def test_pow_records_structurally_in_both_operand_orders(self):
@@ -359,6 +428,29 @@ class RuntimeApplicationIsUnchangedTests(unittest.TestCase):
 
         for gradient in value.grad.tolist():
             self.assertAlmostEqual(gradient, 0.25)
+
+    def test_outer_and_norm_still_apply_to_the_runtime_kinds(self):
+        self.assertEqual(
+            ts.outer([1.0, 2.0], [3.0, 4.0]).tolist(), [3.0, 4.0, 6.0, 8.0]
+        )
+        self.assertIsInstance(ts.outer([1.0, 2.0], [3.0, 4.0]), ts.Tensor)
+        self.assertEqual(ts.norm([3.0, 4.0]).item(), 5.0)
+        self.assertIsInstance(ts.norm([3.0, 4.0]), ts.Tensor)
+
+        left = ts.Variable([1.0, 2.0], name="left")
+        right = ts.Variable([3.0, 4.0], name="right")
+        product = ts.outer(left, right)
+        magnitude = ts.norm(ts.Variable([3.0, 4.0], name="vector"))
+
+        self.assertIsInstance(product, ts.Variable)
+        self.assertTrue(product.node.is_bound)
+        self.assertEqual(product.data.tolist(), [3.0, 4.0, 6.0, 8.0])
+        self.assertIsInstance(magnitude, ts.Variable)
+        self.assertEqual(magnitude.data.item(), 5.0)
+
+        ts.backward(ts.sum(ts.outer(left, right)))
+        self.assertEqual(left.grad.tolist(), [7.0, 7.0])
+        self.assertEqual(right.grad.tolist(), [3.0, 3.0])
 
     def test_backward_still_reaches_the_leaves(self):
         left = ts.Variable([1.0, 2.0], name="left")

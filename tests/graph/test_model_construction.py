@@ -433,5 +433,117 @@ class SigmoidModelConstructionTests(unittest.TestCase):
                 self.assertEqual(parameter.grad.shape, parameter.shape)
 
 
+class LinalgModelConstructionTests(unittest.TestCase):
+    """An outer product or a norm no longer breaks the structural build."""
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    class OuterModel(ts.Graph):
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable([1.0, 2.0, 3.0], name="w")
+
+        def forward(self, x):
+            return ts.outer(x, self.w)
+
+    class NormModel(ts.Graph):
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable([[2.0], [3.0]], name="w")
+
+        def forward(self, x):
+            return ts.norm(x @ self.w)
+
+    def test_an_outer_model_builds_during_construction(self):
+        # Constructing this model used to raise a plain TypeError, which the
+        # build cannot treat as a fallback signal, so the model could not be
+        # created at all.
+        model = self.OuterModel()
+
+        self.assertIsNotNone(model._structure)
+        program = model._structure.computations[0]
+        self.assertEqual(
+            [
+                instruction.operation.name
+                for instruction in program._instructions
+            ],
+            ["outer"],
+        )
+
+    def test_a_norm_model_builds_during_construction(self):
+        model = self.NormModel()
+
+        self.assertIsNotNone(model._structure)
+        program = model._structure.computations[0]
+        self.assertEqual(
+            [
+                instruction.operation.name
+                for instruction in program._instructions
+            ],
+            ["dot", "norm"],
+        )
+
+    def test_the_built_programs_replay_and_differentiate(self):
+        outer_model = self.OuterModel()
+
+        self.assertEqual(
+            outer_model(ts.Tensor([1.0, 2.0])).data.tolist(),
+            [1.0, 2.0, 3.0, 2.0, 4.0, 6.0],
+        )
+        # A second call replays the same program with the new input.
+        self.assertEqual(
+            outer_model(ts.Tensor([10.0, 20.0])).data.tolist(),
+            [10.0, 20.0, 30.0, 20.0, 40.0, 60.0],
+        )
+
+        norm_model = self.NormModel()
+        self.assertEqual(
+            norm_model(ts.Tensor([[3.0, 4.0]])).data.tolist(), [18.0]
+        )
+
+        for model, inputs in (
+            (self.OuterModel(), ts.Tensor([1.0, 2.0])),
+            (self.NormModel(), ts.Tensor([[3.0, 4.0]])),
+        ):
+            with self.subTest(model=type(model).__name__):
+                ts.backward(ts.sum(model(inputs)))
+                for parameter in model.parameters():
+                    self.assertIsNotNone(parameter.grad)
+                    self.assertEqual(
+                        parameter.grad.shape, parameter.shape
+                    )
+
+    def test_the_fallback_signal_is_still_the_only_one_caught(self):
+        # A function with no structural form keeps the tracing lifecycle.
+        class Reduced(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.w = ts.Variable([[2.0], [3.0]], name="w")
+
+            def forward(self, x):
+                return ts.sum(x @ self.w)
+
+        traced = Reduced()
+        self.assertIsNone(traced._structure)
+        self.assertEqual(traced(ts.Tensor([[1.0, 1.0]])).data.item(), 5.0)
+
+        # Anything else is a real error and construction reports it, so the
+        # build must not have widened to catch TypeError generally.
+        class Failing(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.w = ts.Variable([[1.0]], name="w")
+
+            def forward(self, x):
+                raise TypeError("a real bug in forward")
+
+        with self.assertRaisesRegex(TypeError, "a real bug in forward"):
+            Failing()
+
+
 if __name__ == "__main__":
     unittest.main()
