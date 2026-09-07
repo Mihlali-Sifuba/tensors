@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List, overload
+from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_logsumexp, execute_logsumexp_gradient
@@ -19,6 +19,9 @@ from ._reduction import (
     reduction_shape,
 )
 from ._normalization import shifted_normalization
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 def _group_value(a: Tensor, indices: list[int]) -> float:
@@ -301,6 +304,14 @@ class LogSumExpGradient(Operation):
 
 @overload
 def logsumexp(
+    value: VariableNode,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> VariableNode: ...
+
+
+@overload
+def logsumexp(
     value: TensorValue,
     axis: Axis = None,
     keepdims: bool = False,
@@ -316,21 +327,27 @@ def logsumexp(
 
 
 def logsumexp(
-    value: TensorLike,
+    value: TensorLike | VariableNode,
     axis: Axis = None,
     keepdims: bool = False,
-) -> TensorResult:
-    """Compute ``log(sum(exp(value)))`` stably over selected axes."""
-    from ..variable import Variable
+) -> TensorResult | VariableNode:
+    """Compute ``log(sum(exp(value)))`` stably over selected axes.
+
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later. The configuration the operation is built with is the one every
+    application uses, so a recorded call replays what it was written as.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
 
     if isinstance(axis, list):
         axis = tuple(axis)
 
-    if isinstance(value, Variable):
-        operation = LogSumExp(axis=axis, keepdims=keepdims)
-        return Variable._apply_operation(operation, (value,))
-    value = as_tensor_operand(value)
-    return LogSumExp(axis=axis, keepdims=keepdims).forward(value)
+    operation = LogSumExp(axis=axis, keepdims=keepdims)
+
+    if is_graph_operand(value):
+        return apply_operation(operation, (value,))
+    return operation.forward(as_tensor_operand(value))
 
 
 __all__ = ["LogSumExp", "logsumexp"]
