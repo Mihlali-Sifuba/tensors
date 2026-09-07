@@ -186,11 +186,29 @@ Guard misses retrace and replace the cached plan. Variable inputs always trace
 freshly so their autograd identity is preserved.
 
 `rebuild(*args, **kwargs)` bypasses a matching compiled trace and refreshes it;
-`uncompile()` restores ordinary fresh tracing. Compiled calls reuse their
-returned Variable objects and update their Tensor values. Previously returned
-Variables from fresh traces retain their own computation history when kept by
-the caller. `release()` drops both the latest execution and any compiled trace
-on the calling thread.
+`uncompile()` restores ordinary fresh tracing. `release()` drops both the
+latest execution and any compiled trace on the calling thread.
+
+Whether a call returns a new output Variable or writes into the previous one
+follows from which of the three lifecycles ran it:
+
+- A fresh traced call records a new computation and returns its own output
+  Variable. Previously returned Variables retain their own computation
+  history when the caller keeps them.
+- An explicitly compiled call reuses the Variable its trace returned and
+  updates that object's Tensor value.
+- An automatically built model replays its structure on every ordinary
+  `model(x)` call, so it reuses its output Variable the same way, without
+  the caller compiling anything. A structurally buildable subclass is built
+  and compiled during construction, so replay is that model's default rather
+  than something opted into.
+
+Reuse follows from replaying one program, not from how the replay was
+requested, which is why the last two cases agree. It also means an output a
+caller retains across a later call is the same object that call writes to:
+its `.data` holds the newer value afterwards. Code that needs a value to
+outlive the next call keeps that value's Tensor, or something derived from
+it, rather than the output Variable.
 
 ## Training Is External
 
