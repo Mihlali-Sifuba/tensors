@@ -280,20 +280,20 @@ class StructuralBuildFallbackTests(unittest.TestCase):
             VariableNode() + 1.0
 
     def test_a_function_without_a_structural_form_keeps_tracing(self):
-        class Reduced(ts.Graph):
+        class Transposed(ts.Graph):
             def __init__(self):
                 super().__init__()
                 self.w = ts.Variable([[2.0]], name="w")
 
             def forward(self, x):
-                return ts.sum(x @ self.w)
+                return ts.transpose(x @ self.w)
 
-        model = Reduced()
+        model = Transposed()
 
         self.assertIsNone(model._structure)
         self.assertEqual(model(ts.Tensor([[1.0]])).data.item(), 2.0)
         with self.assertRaises(UnsupportedStructuralExpression):
-            ts.sum(VariableNode())
+            ts.transpose(VariableNode())
 
     def test_the_signal_is_narrower_than_a_type_error(self):
         # Existing callers still see a TypeError, but the build only treats
@@ -519,15 +519,15 @@ class LinalgModelConstructionTests(unittest.TestCase):
 
     def test_the_fallback_signal_is_still_the_only_one_caught(self):
         # A function with no structural form keeps the tracing lifecycle.
-        class Reduced(ts.Graph):
+        class Transposed(ts.Graph):
             def __init__(self):
                 super().__init__()
                 self.w = ts.Variable([[2.0], [3.0]], name="w")
 
             def forward(self, x):
-                return ts.sum(x @ self.w)
+                return ts.transpose(x @ self.w)
 
-        traced = Reduced()
+        traced = Transposed()
         self.assertIsNone(traced._structure)
         self.assertEqual(traced(ts.Tensor([[1.0, 1.0]])).data.item(), 5.0)
 
@@ -631,7 +631,6 @@ class UnaryModelConstructionTests(unittest.TestCase):
         # These families are not migrated yet, so a model using one must
         # still fall back rather than build.
         for name, forward in (
-            ("sum", lambda self, x: ts.sum(x @ self.w)),
             ("transpose", lambda self, x: ts.transpose(x @ self.w)),
             ("maximum", lambda self, x: ts.maximum(x @ self.w, ts.Tensor([1.0]))),
         ):
@@ -657,6 +656,128 @@ class UnaryModelConstructionTests(unittest.TestCase):
                 # The model is still usable through eager tracing.
                 self.assertIsInstance(
                     model(ts.Tensor([[1.0, 1.0]])), ts.Variable
+                )
+
+
+class ReductionModelConstructionTests(unittest.TestCase):
+    """A model reducing or normalizing its values compiles at construction."""
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    class Classifier(ts.Graph):
+        """dot -> log_softmax, the shape a classifier head is written in."""
+
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable([[1.0, 0.5], [0.5, 1.0]], name="w")
+
+        def forward(self, x):
+            return ts.log_softmax(x @ self.w, axis=-1)
+
+    class Pooled(ts.Graph):
+        """dot -> mean over an axis -> softmax over what remains."""
+
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable([[1.0, 0.5], [0.5, 1.0]], name="w")
+
+        def forward(self, x):
+            return ts.softmax(ts.mean(x @ self.w, axis=0), axis=-1)
+
+    class Scored(ts.Graph):
+        """A configured reduction reaching a scalar."""
+
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable([[1.0, 0.5], [0.5, 1.0]], name="w")
+
+        def forward(self, x):
+            return ts.sum(ts.std(x @ self.w, axis=1, keepdims=True))
+
+    INPUTS = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
+
+    def test_the_models_build_during_construction(self):
+        expected = {
+            "Classifier": ["dot", "log_softmax"],
+            "Pooled": ["dot", "mean", "softmax"],
+            "Scored": ["dot", "std", "sum"],
+        }
+        for model in (self.Classifier(), self.Pooled(), self.Scored()):
+            with self.subTest(model=type(model).__name__):
+                self.assertIsNotNone(model._structure)
+                program = model._structure.computations[0]
+                self.assertEqual(
+                    [
+                        instruction.operation.name
+                        for instruction in program._instructions
+                    ],
+                    expected[type(model).__name__],
+                )
+
+    def test_the_built_programs_replay_what_eager_calculates(self):
+        for factory, forward in (
+            (self.Classifier, lambda w, x: ts.log_softmax(x @ w, axis=-1)),
+            (self.Pooled, lambda w, x: ts.softmax(ts.mean(x @ w, axis=0), axis=-1)),
+            (self.Scored, lambda w, x: ts.sum(ts.std(x @ w, axis=1, keepdims=True))),
+        ):
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+                for inputs in (
+                    self.INPUTS,
+                    ts.Tensor([[-1.0, 0.5], [2.0, -3.0]]),
+                ):
+                    replayed = model(inputs).data
+                    expected = forward(model.w.data, inputs)
+                    self.assertEqual(replayed.tolist(), expected.tolist())
+                    self.assertEqual(replayed.shape, expected.shape)
+
+    def test_gradients_reach_the_parameters_through_the_program(self):
+        for factory in (self.Classifier, self.Pooled, self.Scored):
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+                ts.backward(ts.sum(model(self.INPUTS)))
+                for parameter in model.parameters():
+                    self.assertIsNotNone(parameter.grad)
+                    self.assertEqual(parameter.grad.shape, parameter.shape)
+
+    def test_every_migrated_reduction_builds_a_model_of_its_own(self):
+        names = (
+            "sum", "mean", "prod", "max", "min", "std", "variance",
+            "logsumexp", "softmax", "log_softmax",
+        )
+        for name in names:
+            with self.subTest(function=name):
+                reset_graph_state()
+                function = getattr(ts, name)
+
+                # Captured by closure: a defaulted parameter would read as a
+                # configuration argument and the model would keep tracing.
+                class Single(ts.Graph):
+                    def __init__(self):
+                        super().__init__()
+                        self.w = ts.Variable(
+                            [[1.0, 0.5], [0.5, 1.0]], name="w"
+                        )
+
+                    def forward(self, x):
+                        return function(x @ self.w)
+
+                model = Single()
+
+                self.assertIsNotNone(model._structure)
+                program = model._structure.computations[0]
+                self.assertEqual(
+                    [
+                        instruction.operation.name
+                        for instruction in program._instructions
+                    ],
+                    ["dot", name],
                 )
 
 

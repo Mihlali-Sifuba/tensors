@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, List, overload
+from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_normalization, execute_normalization_gradient
@@ -12,6 +12,9 @@ from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
 from ._normalization import shifted_normalization
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 def _normalize_axis(tensor: Tensor, axis: int) -> int:
@@ -417,6 +420,10 @@ def _softmax_vjp(grad, value, axis: int):
 
 
 @overload
+def softmax(value: VariableNode, axis: int = -1) -> VariableNode: ...
+
+
+@overload
 def softmax(value: TensorValue, axis: int = -1) -> TensorValue: ...
 
 
@@ -424,15 +431,24 @@ def softmax(value: TensorValue, axis: int = -1) -> TensorValue: ...
 def softmax(value: TensorData, axis: int = -1) -> Tensor: ...
 
 
-def softmax(value: TensorLike, axis: int = -1) -> TensorResult:
-    """Return softmax probabilities for a Tensor or differentiable Variable."""
-    from ..variable import Variable
+def softmax(
+    value: TensorLike | VariableNode,
+    axis: int = -1,
+) -> TensorResult | VariableNode:
+    """Return softmax probabilities for a Tensor or differentiable Variable.
 
-    if isinstance(value, Variable):
-        operation = Softmax(axis=axis)
-        return Variable._apply_operation(operation, (value,))
-    value = as_tensor_operand(value)
-    return Softmax(axis=axis).forward(value)
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later. The configuration the operation is built with is the one every
+    application uses, so a recorded call replays what it was written as.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
+
+    operation = Softmax(axis=axis)
+
+    if is_graph_operand(value):
+        return apply_operation(operation, (value,))
+    return operation.forward(as_tensor_operand(value))
 
 
 __all__ = ["Softmax", "softmax"]

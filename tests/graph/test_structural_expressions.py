@@ -25,6 +25,16 @@ from tensors.math.cos import Cos
 from tensors.math.cosh import Cosh
 from tensors.math.exp import Exp
 from tensors.math.log import Log
+from tensors.math.log_softmax import LogSoftmax
+from tensors.math.logsumexp import LogSumExp
+from tensors.math.max import Max
+from tensors.math.mean import Mean
+from tensors.math.min import Min
+from tensors.math.prod import Prod
+from tensors.math.softmax import Softmax
+from tensors.math.std import Std
+from tensors.math.sum import Sum
+from tensors.math.variance import Variance
 from tensors.math.relu import ReLU
 from tensors.math.sign import Sign
 from tensors.math.sin import Sin
@@ -491,6 +501,151 @@ class UnaryFamilyStructuralTests(unittest.TestCase):
                 self.assertEqual(variable.grad.shape, variable.shape)
 
 
+class ReductionFamilyStructuralTests(unittest.TestCase):
+    """A reduction or normalization records the call it was configured by."""
+
+    #: Each public reduction and the operation it records.
+    REDUCTIONS = (
+        ("sum", Sum), ("mean", Mean), ("prod", Prod), ("max", Max),
+        ("min", Min), ("std", Std), ("variance", Variance),
+        ("logsumexp", LogSumExp),
+    )
+    #: Each public normalization and the operation it records.
+    NORMALIZATIONS = (("softmax", Softmax), ("log_softmax", LogSoftmax))
+
+    #: Reduction keywords paired with the configuration they must record.
+    CONFIGURATIONS = (
+        ({}, None, False),
+        ({"axis": 0}, 0, False),
+        ({"axis": 1}, 1, False),
+        ({"axis": 1, "keepdims": True}, 1, True),
+        ({"axis": (0, 1)}, (0, 1), False),
+        ({"axis": (0, 1), "keepdims": True}, (0, 1), True),
+    )
+
+    VALUES = [[1.0, 2.0], [3.0, 4.0]]
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_the_tables_cover_the_migrated_surface(self):
+        self.assertEqual(len(self.REDUCTIONS), 8)
+        self.assertEqual(len(self.NORMALIZATIONS), 2)
+        for name, operation in self.REDUCTIONS + self.NORMALIZATIONS:
+            with self.subTest(function=name):
+                self.assertTrue(hasattr(ts, name))
+                self.assertEqual(operation().name, name)
+
+    def test_a_reduction_records_its_configuration(self):
+        for name, operation in self.REDUCTIONS:
+            for keywords, axis, keepdims in self.CONFIGURATIONS:
+                with self.subTest(function=name, **keywords):
+                    reset_graph_state()
+                    node = VariableNode()
+                    calls = []
+                    original = operation.forward
+
+                    def counted(self, *args, _original=original, _calls=calls):
+                        _calls.append(args)
+                        return _original(self, *args)
+
+                    with patch.object(operation, "forward", counted):
+                        result = getattr(ts, name)(node, **keywords)
+
+                    self.assertIsInstance(result, VariableNode)
+                    self.assertFalse(result.is_bound)
+                    recorded = result.producer.operation
+                    self.assertIsInstance(recorded, operation)
+                    # The reduction is the operation's own state, recorded
+                    # exactly as the call configured it.
+                    self.assertEqual(recorded.axis, axis)
+                    self.assertEqual(recorded.keepdims, keepdims)
+                    self.assertEqual(result.producer.operand_nodes, (node,))
+                    # Nothing ran, and the vertex still names no value.
+                    self.assertEqual(calls, [])
+                    self.assertFalse(node.is_bound)
+
+    def test_a_normalization_records_its_axis(self):
+        for name, operation in self.NORMALIZATIONS:
+            for axis in (-1, 0, 1):
+                with self.subTest(function=name, axis=axis):
+                    reset_graph_state()
+                    node = VariableNode()
+                    calls = []
+                    original = operation.forward
+
+                    def counted(self, *args, _original=original, _calls=calls):
+                        _calls.append(args)
+                        return _original(self, *args)
+
+                    with patch.object(operation, "forward", counted):
+                        result = getattr(ts, name)(node, axis=axis)
+
+                    self.assertIsInstance(result, VariableNode)
+                    self.assertFalse(result.is_bound)
+                    recorded = result.producer.operation
+                    self.assertIsInstance(recorded, operation)
+                    self.assertEqual(recorded.axis, axis)
+                    self.assertEqual(result.producer.operand_nodes, (node,))
+                    self.assertEqual(calls, [])
+                    self.assertFalse(node.is_bound)
+
+    def test_a_recorded_program_replays_what_eager_calculates(self):
+        values = ts.Tensor(self.VALUES)
+        cases = [
+            (name, keywords)
+            for name, _ in self.REDUCTIONS
+            for keywords, _, _ in self.CONFIGURATIONS
+        ] + [
+            (name, {"axis": axis})
+            for name, _ in self.NORMALIZATIONS
+            for axis in (-1, 0, 1)
+        ]
+        for name, keywords in cases:
+            with self.subTest(function=name, **keywords):
+                reset_graph_state()
+                function = getattr(ts, name)
+                expected = function(values, **keywords)
+
+                node = VariableNode()
+                output = function(node, **keywords)
+                compiler = Compiler((output,), boundaries=(node,))
+                compiler.compile()
+                computations = Computation._from_compiler(compiler)
+                node.materialize(values, requires_grad=False)
+                for computation in computations:
+                    computation.forward()
+
+                replayed = output.variable.data
+                # Replay is the same program, so it is exact rather than close.
+                self.assertEqual(replayed.tolist(), expected.tolist())
+                self.assertIs(replayed.dtype, expected.dtype)
+                self.assertEqual(replayed.shape, expected.shape)
+
+    def test_eager_application_is_unchanged(self):
+        values = ts.Tensor(self.VALUES)
+        for name, _ in self.REDUCTIONS + self.NORMALIZATIONS:
+            with self.subTest(function=name):
+                reset_graph_state()
+                function = getattr(ts, name)
+                tensor_result = function(values)
+                self.assertIsInstance(tensor_result, ts.Tensor)
+
+                variable = ts.Variable(self.VALUES, name="value")
+                variable_result = function(variable)
+                self.assertIsInstance(variable_result, ts.Variable)
+                self.assertEqual(
+                    variable_result.data.tolist(), tensor_result.tolist()
+                )
+
+                ts.backward(ts.sum(variable_result))
+                self.assertIsNotNone(variable.grad)
+                self.assertEqual(variable.grad.shape, variable.shape)
+
+
 class RuntimeApplicationIsUnchangedTests(unittest.TestCase):
     """Runtime expressions still calculate through a Computation."""
 
@@ -598,7 +753,6 @@ class TensorOperandBoundaryTests(unittest.TestCase):
     def test_an_operation_without_a_structural_form_signals(self):
         vertex = VariableNode()
         calls = {
-            "sum": lambda: ts.sum(vertex),
             "transpose": lambda: ts.transpose(vertex),
             "concat": lambda: ts.concat([vertex, ts.Tensor([1.0])]),
             "stack": lambda: ts.stack([vertex, ts.Tensor([1.0])]),
