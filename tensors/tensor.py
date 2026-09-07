@@ -832,6 +832,20 @@ class Tensor:
         return format(self.item(), format_spec)
 
     # ---------- Operator Overloads (delegate to ops) ----------
+    @staticmethod
+    def _handles_arithmetic(other: object) -> bool:
+        """Whether Tensor arithmetic can evaluate ``other`` directly.
+
+        Arithmetic is defined here for another Tensor and for a Python
+        scalar, which is what the operations below accept. An operand
+        outside that set is not an error by itself: Python's binary
+        operator protocol still owes the right-hand operand its reflected
+        turn, and an operand that knows how to combine itself with a
+        Tensor answers there. Reporting a failure is left to Python, which
+        does so only once neither side has handled the operation.
+        """
+        return isinstance(other, (int, float, Tensor))
+
     @overload
     def __add__(self, other: Variable) -> Variable: ...
 
@@ -842,6 +856,8 @@ class Tensor:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__radd__(self)
+        if not self._handles_arithmetic(other):
+            return NotImplemented
         from .ops import Ops
         return Ops.add(self, other)
 
@@ -864,6 +880,8 @@ class Tensor:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rsub__(self)
+        if not self._handles_arithmetic(other):
+            return NotImplemented
         from .ops import Ops
         return Ops.subtract(self, other)
 
@@ -880,6 +898,8 @@ class Tensor:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rmul__(self)
+        if not self._handles_arithmetic(other):
+            return NotImplemented
         from .ops import Ops
         return Ops.multiply(self, other)
 
@@ -897,6 +917,8 @@ class Tensor:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rtruediv__(self)
+        if not self._handles_arithmetic(other):
+            return NotImplemented
         from .ops import Ops
         return Ops.divide(self, other)
 
@@ -914,6 +936,8 @@ class Tensor:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rpow__(self)
+        if not self._handles_arithmetic(other):
+            return NotImplemented
         from .ops import power
         return power(self, other)
 

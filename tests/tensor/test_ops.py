@@ -137,17 +137,49 @@ class TensorOpsTests(unittest.TestCase):
         self.assertEqual((left * right).tolist(), [10.0, 40.0, 90.0, 40.0, 100.0, 180.0])
         self.assertEqual((left / right).tolist(), [0.1, 0.1, 0.1, 0.4, 0.25, 0.2])
 
+    #: The binary arithmetic operators and how to apply each one.
+    ARITHMETIC = (
+        ("+", lambda left, right: left + right),
+        ("-", lambda left, right: left - right),
+        ("*", lambda left, right: left * right),
+        ("/", lambda left, right: left / right),
+        ("**", lambda left, right: left ** right),
+    )
+
     def test_operations_reject_unsupported_operand_types(self):
         tensor = ts.Tensor([1, 2])
 
-        with self.assertRaisesRegex(TypeError, "Unsupported"):
+        # An operand the arithmetic cannot evaluate is left to Python's
+        # binary operator protocol, which reports a TypeError itself once
+        # neither operand has handled the operation. The wording is Python's
+        # to choose: an operand that implements a reflected operator of its
+        # own, such as sequence repetition, rejects the Tensor there.
+        for symbol, operation in self.ARITHMETIC:
+            for label, operand in (
+                ("str", "bad"), ("none", None), ("dict", {}), ("list", [1, 2])
+            ):
+                with self.subTest(operator=symbol, operand=label):
+                    with self.assertRaises(TypeError):
+                        operation(tensor, operand)
+
+        # Where nothing handles the operation, the protocol names both sides.
+        with self.assertRaisesRegex(TypeError, "unsupported operand type"):
             _ = tensor + "bad"
-        with self.assertRaisesRegex(TypeError, "Unsupported"):
-            _ = tensor - "bad"
-        with self.assertRaisesRegex(TypeError, "Unsupported"):
-            _ = tensor * "bad"
-        with self.assertRaisesRegex(TypeError, "Unsupported"):
-            _ = tensor / "bad"
+
+    def test_deferring_an_operand_preserves_real_arithmetic_errors(self):
+        # Only an operand the arithmetic cannot evaluate is deferred. An
+        # error raised while evaluating a supported operand is a genuine
+        # failure and still surfaces as itself.
+        with self.assertRaises(ValueError):
+            _ = ts.Tensor([1.0, 2.0]) + ts.Tensor([1.0, 2.0, 3.0])
+        with self.assertRaises(ZeroDivisionError):
+            _ = ts.Tensor([1.0, 2.0]) / 0
+
+        # Supported operands are unaffected by the deferral.
+        self.assertEqual((ts.Tensor([1.0]) + ts.Tensor([2.0])).tolist(), [3.0])
+        self.assertEqual((ts.Tensor([1.0]) + 2).tolist(), [3.0])
+        self.assertEqual((ts.Tensor([1.0]) + True).tolist(), [2.0])
+        self.assertEqual((ts.Tensor([3.0]) ** 2).tolist(), [9.0])
 
 
 if __name__ == "__main__":

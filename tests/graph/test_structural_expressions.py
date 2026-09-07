@@ -14,7 +14,7 @@ from tensors.graph.state import (
 from tensors.linalg.dot import Dot
 from tensors.math.relu import ReLU
 from tensors.math.sigmoid import Sigmoid
-from tensors.ops import Add, Mul
+from tensors.ops import Add, Div, Mul, Pow, Sub
 
 
 class StructuralExpressionTests(unittest.TestCase):
@@ -77,6 +77,60 @@ class StructuralExpressionTests(unittest.TestCase):
         self.assertIsInstance(result.producer.operation, Mul)
         # Operand order follows the expression, not the operand kinds.
         self.assertEqual(result.producer.operand_nodes, (variable.node, node))
+
+    def test_a_tensor_on_the_left_records_through_the_reflected_operator(self):
+        """Tensor arithmetic defers a vertex to the operator protocol.
+
+        A Tensor cannot evaluate an expression against a value that does not
+        exist yet, so it declines the operation and the vertex records it
+        through its reflected operator instead.
+        """
+        operators = (
+            ("+", lambda left, right: left + right, Add),
+            ("-", lambda left, right: left - right, Sub),
+            ("*", lambda left, right: left * right, Mul),
+            ("/", lambda left, right: left / right, Div),
+            ("**", lambda left, right: left ** right, Pow),
+        )
+        for symbol, apply, operation in operators:
+            with self.subTest(operator=symbol):
+                reset_graph_state()
+                node = VariableNode()
+                calls = []
+                original = operation.forward
+
+                def counted(self, *args, _original=original, _calls=calls):
+                    _calls.append(args)
+                    return _original(self, *args)
+
+                with patch.object(operation, "forward", counted):
+                    result = apply(ts.Tensor([2.0, 4.0]), node)
+
+                self.assertIsInstance(result, VariableNode)
+                self.assertFalse(result.is_bound)
+                self.assertIsInstance(result.producer.operation, operation)
+                # The vertex keeps its place as the right-hand operand.
+                operands = result.producer.operand_nodes
+                self.assertIs(operands[1], node)
+                # The Tensor took part as a non-gradient leaf.
+                self.assertTrue(operands[0].is_bound)
+                self.assertFalse(operands[0].variable.requires_grad)
+                # Nothing was calculated.
+                self.assertEqual(calls, [])
+
+    def test_pow_records_structurally_in_both_operand_orders(self):
+        reset_graph_state()
+        base_vertex = ts.pow(VariableNode(), ts.Tensor([2.0, 2.0]))
+        reset_graph_state()
+        exponent_vertex = ts.pow(ts.Tensor([2.0, 2.0]), VariableNode())
+
+        for label, result in (
+            ("base", base_vertex), ("exponent", exponent_vertex)
+        ):
+            with self.subTest(vertex=label):
+                self.assertIsInstance(result, VariableNode)
+                self.assertFalse(result.is_bound)
+                self.assertIsInstance(result.producer.operation, Pow)
 
     def test_matmul_with_a_parameter_records_a_dot(self):
         inputs = VariableNode()
