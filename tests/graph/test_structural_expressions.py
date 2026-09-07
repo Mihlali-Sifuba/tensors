@@ -25,6 +25,7 @@ from tensors.math.arctanh import ArcTanh
 from tensors.math.cos import Cos
 from tensors.math.cosh import Cosh
 from tensors.math.exp import Exp
+from tensors.math.binary_cross_entropy import BinaryCrossEntropy
 from tensors.math.clip import Clip
 from tensors.math.concat import Concat
 from tensors.math.convolution import ConvND
@@ -1339,6 +1340,229 @@ class ConvolutionStructuralTests(unittest.TestCase):
                 self.assertEqual(variable.grad.shape, variable.shape)
 
 
+class BinaryCrossEntropyStructuralTests(unittest.TestCase):
+    """Binary cross-entropy records over a vertex in either position."""
+
+    PREDICTION = [0.8, 0.2, 0.5]
+    TARGET = [1.0, 0.0, 1.0]
+
+    #: Each operand sequence and the positions its vertices occupy.
+    LAYOUTS = (
+        ("[vertex, Tensor]",
+         lambda node: (node, ts.Tensor([1.0, 0.0, 1.0])), (0,)),
+        ("[Tensor, vertex]",
+         lambda node: (ts.Tensor([0.8, 0.2, 0.5]), node), (1,)),
+        ("[vertex, Variable]",
+         lambda node: (node, ts.Variable([1.0, 0.0, 1.0], name="target")),
+         (0,)),
+        ("[Variable, vertex]",
+         lambda node: (ts.Variable([0.8, 0.2, 0.5], name="prediction"), node),
+         (1,)),
+        ("[vertex, vertex]", lambda node: (node, VariableNode()), (0, 1)),
+        ("[vertex, data]", lambda node: (node, [1.0, 0.0, 1.0]), (0,)),
+    )
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_a_vertex_records_in_either_position(self):
+        for label, build, positions in self.LAYOUTS:
+            with self.subTest(operands=label):
+                reset_graph_state()
+                node = VariableNode()
+                prediction, target = build(node)
+                calls = []
+                original = BinaryCrossEntropy.forward
+
+                def counted(self, *args, _original=original, _calls=calls):
+                    _calls.append(args)
+                    return _original(self, *args)
+
+                with patch.object(BinaryCrossEntropy, "forward", counted):
+                    result = ts.binary_cross_entropy(prediction, target)
+
+                self.assertIsInstance(result, VariableNode)
+                self.assertFalse(result.is_bound)
+                self.assertIsInstance(
+                    result.producer.operation, BinaryCrossEntropy
+                )
+
+                operands = result.producer.operand_nodes
+                # Prediction first, target second.
+                self.assertEqual(len(operands), 2)
+                self.assertIs(operands[positions[0]], node)
+                for index, operand in enumerate(operands):
+                    if index in positions:
+                        self.assertFalse(operand.is_bound)
+                    else:
+                        self.assertTrue(operand.is_bound)
+                self.assertEqual(calls, [])
+                self.assertFalse(node.is_bound)
+
+    def test_the_recorded_operation_keeps_its_configuration(self):
+        for from_logits in (False, True):
+            for reduction in ("none", "mean", "sum"):
+                with self.subTest(from_logits=from_logits, reduction=reduction):
+                    reset_graph_state()
+                    result = ts.binary_cross_entropy(
+                        VariableNode(),
+                        ts.Tensor(self.TARGET),
+                        from_logits=from_logits,
+                        reduction=reduction,
+                    )
+                    recorded = result.producer.operation
+                    self.assertEqual(recorded.from_logits, from_logits)
+                    self.assertEqual(recorded.reduction, reduction)
+
+    def test_runtime_operands_keep_their_gradient_semantics(self):
+        reset_graph_state()
+        node = VariableNode()
+        target = ts.Variable(self.TARGET, name="target")
+
+        result = ts.binary_cross_entropy(node, target)
+        prediction_node, target_node = result.producer.operand_nodes
+
+        self.assertIs(prediction_node, node)
+        self.assertIs(target_node.variable, target)
+        self.assertTrue(target_node.variable.requires_grad)
+
+        # A Tensor target is a non-gradient leaf instead.
+        reset_graph_state()
+        constant = ts.binary_cross_entropy(
+            VariableNode(), ts.Tensor(self.TARGET)
+        )
+        leaf = constant.producer.operand_nodes[1]
+        self.assertTrue(leaf.is_bound)
+        self.assertFalse(leaf.variable.requires_grad)
+
+    def test_a_scalar_target_is_still_typed_against_the_prediction(self):
+        # The eager path accepts a bare scalar target. A vertex has no value
+        # to type one against, so that form is reported rather than guessed.
+        prediction = ts.Variable(self.PREDICTION, name="prediction")
+        self.assertIsInstance(
+            ts.binary_cross_entropy(prediction, 1.0), ts.Variable
+        )
+        with self.assertRaises(UnsupportedStructuralExpression):
+            ts.binary_cross_entropy(VariableNode(), 1.0)
+
+    def test_a_recorded_loss_replays_what_eager_calculates(self):
+        target = ts.Tensor(self.TARGET)
+        for reduction in ("none", "mean", "sum"):
+            for from_logits in (False, True):
+                with self.subTest(reduction=reduction, from_logits=from_logits):
+                    reset_graph_state()
+                    values = ts.Tensor(
+                        [5.0, -5.0, 0.0] if from_logits else self.PREDICTION
+                    )
+                    expected = ts.binary_cross_entropy(
+                        values, target,
+                        from_logits=from_logits, reduction=reduction,
+                    )
+
+                    node = VariableNode()
+                    output = ts.binary_cross_entropy(
+                        node, target,
+                        from_logits=from_logits, reduction=reduction,
+                    )
+                    compiler = Compiler((output,), boundaries=(node,))
+                    compiler.compile()
+                    computations = Computation._from_compiler(compiler)
+                    node.materialize(values, requires_grad=False)
+                    for computation in computations:
+                        computation.forward()
+
+                    replayed = output.variable.data
+                    self.assertEqual(replayed.tolist(), expected.tolist())
+                    self.assertEqual(replayed.shape, expected.shape)
+                    self.assertIs(replayed.dtype, expected.dtype)
+
+    def test_eager_application_is_unchanged(self):
+        target = ts.Tensor(self.TARGET)
+        tensor_result = ts.binary_cross_entropy(
+            ts.Tensor(self.PREDICTION), target
+        )
+        self.assertIsInstance(tensor_result, ts.Tensor)
+
+        prediction = ts.Variable(self.PREDICTION, name="prediction")
+        variable_result = ts.binary_cross_entropy(prediction, target)
+        self.assertIsInstance(variable_result, ts.Variable)
+        self.assertEqual(
+            variable_result.data.tolist(), tensor_result.tolist()
+        )
+
+        ts.backward(variable_result)
+        self.assertIsNotNone(prediction.grad)
+        self.assertEqual(prediction.grad.shape, prediction.shape)
+
+
+class CrossEntropyStaysUnsupportedTests(unittest.TestCase):
+    """cross_entropy cannot be recorded before its operands have values.
+
+    The public function reads the logits to normalize the class axis and to
+    decide whether the targets are class indices or a dense distribution,
+    expanding indices to the logits' own shape. A vertex has neither shape
+    nor values, so the operands the operation would receive cannot be
+    prepared while recording.
+    """
+
+    LOGITS = [[2.0, 1.0, 0.1]]
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_a_vertex_is_reported_in_either_position(self):
+        for label, call in (
+            ("logits", lambda: ts.cross_entropy(
+                VariableNode(), ts.Tensor([0], dtype=ts.int64))),
+            ("targets", lambda: ts.cross_entropy(
+                ts.Tensor(self.LOGITS), VariableNode())),
+            ("both", lambda: ts.cross_entropy(
+                VariableNode(), VariableNode())),
+        ):
+            with self.subTest(vertex=label):
+                reset_graph_state()
+                # The signal the build treats as its fallback, not a hard
+                # error, so a model using it stays on tracing.
+                with self.assertRaises(UnsupportedStructuralExpression):
+                    call()
+
+    def test_its_target_semantics_are_unchanged(self):
+        logits = ts.Tensor(self.LOGITS)
+        # Class indices, in either integer width, and dense distributions.
+        for label, targets in (
+            ("int64 indices", ts.Tensor([0], dtype=ts.int64)),
+            ("int32 indices", ts.Tensor([0], dtype=ts.int32)),
+            ("dense distribution", ts.Tensor([[1.0, 0.0, 0.0]])),
+        ):
+            with self.subTest(targets=label):
+                reset_graph_state()
+                self.assertIsInstance(
+                    ts.cross_entropy(logits, targets), ts.Tensor
+                )
+
+        # A target that requires gradients is permitted and receives one.
+        reset_graph_state()
+        prediction = ts.Variable(self.LOGITS, name="logits")
+        target = ts.Variable([[1.0, 0.0, 0.0]], name="target")
+        ts.backward(ts.cross_entropy(prediction, target))
+        self.assertIsNotNone(prediction.grad)
+        self.assertIsNotNone(target.grad)
+
+        # A frozen target receives none.
+        reset_graph_state()
+        frozen = ts.Variable(
+            ts.Tensor([[1.0, 0.0, 0.0]]), requires_grad=False
+        )
+        ts.backward(ts.cross_entropy(ts.Variable(self.LOGITS, name="l"), frozen))
+        self.assertIsNone(frozen.grad)
+
+
 class RuntimeApplicationIsUnchangedTests(unittest.TestCase):
     """Runtime expressions still calculate through a Computation."""
 
@@ -1446,11 +1670,10 @@ class TensorOperandBoundaryTests(unittest.TestCase):
     def test_an_operation_without_a_structural_form_signals(self):
         vertex = VariableNode()
         calls = {
+            # cross_entropy prepares its operands from the logits'
+            # own shape and values, which a vertex does not have.
             "cross_entropy": lambda: ts.cross_entropy(
                 vertex, ts.Tensor([0], dtype=ts.int64)
-            ),
-            "binary_cross_entropy": lambda: ts.binary_cross_entropy(
-                vertex, ts.Tensor([1.0])
             ),
             "argmax": lambda: ts.argmax(vertex),
             "argmin": lambda: ts.argmin(vertex),

@@ -14,7 +14,6 @@ from tensors.graph.expression import UnsupportedStructuralExpression
 from tensors.graph.node import VariableNode
 from tensors.graph.state import reset_graph_state
 from tensors.math.concat import Concat
-from tensors.math.binary_cross_entropy import BinaryCrossEntropy
 from tensors.math.cross_entropy import CrossEntropy
 from tensors.math.stack import Stack
 
@@ -476,12 +475,6 @@ class OperationForwardIndependenceTests(unittest.TestCase):
                 CrossEntropy,
                 lambda: ts.cross_entropy(
                     VariableNode(), ts.Tensor([0], dtype=ts.int64)
-                ),
-            ),
-            "binary_cross_entropy": (
-                BinaryCrossEntropy,
-                lambda: ts.binary_cross_entropy(
-                    VariableNode(), ts.Tensor([1.0])
                 ),
             ),
         }

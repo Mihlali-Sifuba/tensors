@@ -23,6 +23,7 @@ from .sigmoid import _sigmoid
 from .sum import _stable_float_sum
 
 if TYPE_CHECKING:
+    from ..graph.node import VariableNode
     from ..variable import Variable
 
 
@@ -352,6 +353,26 @@ class BinaryCrossEntropy(Operation):
 
 @overload
 def binary_cross_entropy(
+    prediction: VariableNode,
+    target: TensorLike | VariableNode,
+    *,
+    from_logits: bool = False,
+    reduction: Reduction = "mean",
+) -> VariableNode: ...
+
+
+@overload
+def binary_cross_entropy(
+    prediction: TensorLike,
+    target: VariableNode,
+    *,
+    from_logits: bool = False,
+    reduction: Reduction = "mean",
+) -> VariableNode: ...
+
+
+@overload
+def binary_cross_entropy(
     prediction: Variable,
     target: TensorLike,
     *,
@@ -381,14 +402,34 @@ def binary_cross_entropy(
 
 
 def binary_cross_entropy(
-    prediction: TensorLike,
-    target: TensorLike,
+    prediction: TensorLike | VariableNode,
+    target: TensorLike | VariableNode,
     *,
     from_logits: bool = False,
     reduction: Reduction = "mean",
-) -> TensorResult:
-    """Compute binary cross-entropy with optional stable logits input."""
+) -> TensorResult | VariableNode:
+    """Compute binary cross-entropy with optional stable logits input.
+
+    A vertex in either position is answered first, because it names a
+    value that does not exist and the coercions below read one. The
+    prediction and the target are recorded as the first and second
+    operands, and the operation keeps the ``from_logits`` and
+    ``reduction`` configuration every application uses.
+    """
+    from ..graph.expression import apply_operation, as_graph_operand
+    from ..graph.node import VariableNode
     from ..variable import Variable
+
+    if isinstance(prediction, VariableNode) or isinstance(
+        target, VariableNode
+    ):
+        return apply_operation(
+            BinaryCrossEntropy(
+                from_logits=from_logits,
+                reduction=reduction,
+            ),
+            (as_graph_operand(prediction), as_graph_operand(target)),
+        )
 
     prediction_is_variable = isinstance(prediction, Variable)
     target_is_variable = isinstance(target, Variable)

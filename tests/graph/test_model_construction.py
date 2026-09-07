@@ -640,14 +640,16 @@ class UnaryModelConstructionTests(unittest.TestCase):
     def test_a_later_migration_group_still_keeps_tracing(self):
         # These families are not migrated yet, so a model using one must
         # still fall back rather than build.
+        # argmax and argmin are unsupported too, but they return a
+        # Tensor rather than a Variable, so a model cannot end in one.
+        # cross_entropy blocks on either target form.
         for name, forward in (
-            ("cross_entropy", lambda self, x: ts.cross_entropy(
+            ("class indices", lambda self, x: ts.cross_entropy(
                 x @ self.w, ts.Tensor([0], dtype=ts.int64)
             )),
-            ("binary_cross_entropy",
-             lambda self, x: ts.binary_cross_entropy(
-                 ts.sigmoid(x @ self.w), ts.Tensor([[1.0, 0.0]])
-             )),
+            ("dense targets", lambda self, x: ts.cross_entropy(
+                x @ self.w, ts.Tensor([[1.0]])
+            )),
         ):
             with self.subTest(function=name):
                 reset_graph_state()
@@ -1264,6 +1266,173 @@ class ConvolutionModelConstructionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(TypeError, "a real bug in forward"):
             Broken()
+
+
+
+class LossModelConstructionTests(unittest.TestCase):
+    """A binary cross-entropy head builds; a cross-entropy head still traces."""
+
+    INPUTS = (
+        ts.Tensor([[1.0, 2.0]]),
+        ts.Tensor([[-2.0, 0.5]]),
+        ts.Tensor([[3.0, -1.0]]),
+    )
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    class Classifier(ts.Graph):
+        """dot -> sigmoid -> binary_cross_entropy against a fixed target."""
+
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable([[1.0], [0.5]], name="w")
+
+        def forward(self, x):
+            return ts.binary_cross_entropy(
+                ts.sigmoid(x @ self.w), ts.Tensor([[1.0]])
+            )
+
+    class Logits(ts.Graph):
+        """The stable form, taking the logits directly."""
+
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable([[1.0], [0.5]], name="w")
+
+        def forward(self, x):
+            return ts.binary_cross_entropy(
+                x @ self.w, ts.Tensor([[1.0]]), from_logits=True
+            )
+
+    class Trainable(ts.Graph):
+        """A target that is itself a parameter, so it takes gradients."""
+
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable([[1.0], [0.5]], name="w")
+            self.target = ts.Variable([[0.75]], name="target")
+
+        def forward(self, x):
+            return ts.binary_cross_entropy(
+                ts.sigmoid(x @ self.w), self.target
+            )
+
+    def test_the_models_build_during_construction(self):
+        expected = {
+            "Classifier": ["dot", "sigmoid", "binary_cross_entropy"],
+            "Logits": ["dot", "binary_cross_entropy"],
+            "Trainable": ["dot", "sigmoid", "binary_cross_entropy"],
+        }
+        for model in (self.Classifier(), self.Logits(), self.Trainable()):
+            with self.subTest(model=type(model).__name__):
+                self.assertIsNotNone(model._structure)
+                program = model._structure.computations[0]
+                self.assertEqual(
+                    [
+                        instruction.operation.name
+                        for instruction in program._instructions
+                    ],
+                    expected[type(model).__name__],
+                )
+
+    def test_the_built_programs_replay_what_eager_calculates(self):
+        for factory, forward in (
+            (
+                self.Classifier,
+                lambda m, x: ts.binary_cross_entropy(
+                    ts.sigmoid(x @ m.w.data), ts.Tensor([[1.0]])
+                ),
+            ),
+            (
+                self.Logits,
+                lambda m, x: ts.binary_cross_entropy(
+                    x @ m.w.data, ts.Tensor([[1.0]]), from_logits=True
+                ),
+            ),
+            (
+                self.Trainable,
+                lambda m, x: ts.binary_cross_entropy(
+                    ts.sigmoid(x @ m.w.data), m.target.data
+                ),
+            ),
+        ):
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+                for value in self.INPUTS:
+                    replayed = model(value).data
+                    expected = forward(model, value)
+                    self.assertEqual(replayed.tolist(), expected.tolist())
+                    self.assertEqual(replayed.shape, expected.shape)
+
+    def test_gradients_reach_the_prediction_parameters(self):
+        for factory in (self.Classifier, self.Logits):
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+                ts.backward(model(self.INPUTS[0]))
+                self.assertIsNotNone(model.w.grad)
+                self.assertEqual(model.w.grad.shape, model.w.shape)
+
+    def test_a_trainable_target_still_takes_a_gradient(self):
+        # The target's differentiability is the operation's own rule, and
+        # recording it structurally does not change which side receives one.
+        model = self.Trainable()
+
+        ts.backward(model(self.INPUTS[0]))
+
+        self.assertIsNotNone(model.w.grad)
+        self.assertIsNotNone(model.target.grad)
+        self.assertEqual(model.target.grad.shape, model.target.shape)
+
+    def test_a_constant_target_takes_no_gradient(self):
+        model = self.Classifier()
+
+        ts.backward(model(self.INPUTS[0]))
+
+        target_leaf = model._structure.computations[0]._variable_nodes
+        constants = [
+            node.variable
+            for node in target_leaf
+            if node.is_bound and not node.variable.requires_grad
+        ]
+        self.assertTrue(constants)
+        for constant in constants:
+            self.assertIsNone(constant.grad)
+
+    def test_replay_reuses_the_output_variable(self):
+        model = self.Classifier()
+
+        first = model(self.INPUTS[0])
+        second = model(self.INPUTS[1])
+
+        self.assertIs(first, second)
+
+    def test_a_cross_entropy_head_still_keeps_tracing(self):
+        # cross_entropy prepares its operands from the logits' shape and
+        # values, so it cannot be recorded and the model stays on tracing.
+        class Multiclass(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.w = ts.Variable([[1.0, 0.5], [0.5, 1.0]], name="w")
+
+            def forward(self, x):
+                return ts.cross_entropy(
+                    x @ self.w, ts.Tensor([0], dtype=ts.int64)
+                )
+
+        model = Multiclass()
+
+        self.assertIsNone(model._structure)
+        # Still usable, and still differentiable, through tracing.
+        loss = model(ts.Tensor([[1.0, 2.0]]))
+        self.assertIsInstance(loss, ts.Variable)
+        ts.backward(loss)
+        self.assertIsNotNone(model.w.grad)
 
 
 if __name__ == "__main__":
