@@ -133,6 +133,9 @@ assert_type(
     ts.binary_cross_entropy(tensor, structural), VariableNode
 )
 assert_type(ts.binary_cross_entropy(variable, tensor), ts.Variable)
+assert_type(ts.cross_entropy(structural, targets), VariableNode)
+assert_type(ts.cross_entropy(variable, structural), VariableNode)
+assert_type(ts.cross_entropy(variable, targets), ts.Variable)
 assert_type(ts.backward(loss), None)
 assert_type(ts.grad(loss, variable), ts.Tensor | ts.Variable | None)
 assert_type(

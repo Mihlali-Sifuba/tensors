@@ -14,7 +14,7 @@ from tensors.graph.expression import UnsupportedStructuralExpression
 from tensors.graph.node import VariableNode
 from tensors.graph.state import reset_graph_state
 from tensors.math.concat import Concat
-from tensors.math.cross_entropy import CrossEntropy
+from tensors.math.arg_extrema import ArgMax, ArgMin
 from tensors.math.stack import Stack
 
 # The math package binds each public function over its module, so the module
@@ -471,12 +471,8 @@ class OperationForwardIndependenceTests(unittest.TestCase):
             raise AssertionError("a vertex must never reach forward()")
 
         calls = {
-            "cross_entropy": (
-                CrossEntropy,
-                lambda: ts.cross_entropy(
-                    VariableNode(), ts.Tensor([0], dtype=ts.int64)
-                ),
-            ),
+            "argmax": (ArgMax, lambda: ts.argmax(VariableNode())),
+            "argmin": (ArgMin, lambda: ts.argmin(VariableNode())),
         }
         for name, (operation, call) in calls.items():
             with self.subTest(operation=name):
