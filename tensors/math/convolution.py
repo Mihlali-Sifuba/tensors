@@ -23,6 +23,7 @@ from ..graph.expression import as_tensor_operand
 from .sum import _stable_float_sum, _stable_product_sum
 
 if TYPE_CHECKING:
+    from ..graph.node import VariableNode
     from ..variable import Variable
 
 
@@ -586,16 +587,26 @@ class ConvND(Operation):
 
 def _convolve(
     rank: int,
-    inputs: TensorLike,
-    kernel: TensorLike,
-    bias: TensorLike | None,
+    inputs: TensorLike | VariableNode,
+    kernel: TensorLike | VariableNode,
+    bias: TensorLike | VariableNode | None,
     stride: SpatialArgument,
     padding: SpatialArgument,
     dilation: SpatialArgument,
     groups: int,
-) -> TensorResult:
-    """Dispatch a convolution over Tensor or Variable operands."""
-    from ..variable import Variable
+) -> TensorResult | VariableNode:
+    """Dispatch a convolution over graph values or Tensors.
+
+    Every rank reaches this one boundary, so a graph value in any
+    operand position is answered here: Variables calculate the result
+    now, a vertex records the operation for a program that runs later,
+    and a Tensor beside either enters the graph as a non-gradient leaf.
+    An absent bias stays absent rather than becoming a placeholder
+    operand, which is the shape ConvND.forward reads.
+    """
+    from ..graph.expression import (
+        apply_operation, as_graph_operand, is_graph_operand,
+    )
 
     # Normalize before tracing so replayed graph metadata is immutable and
     # does not need to be revalidated against the original argument forms.
@@ -604,29 +615,9 @@ def _convolve(
     dilations = _spatial_argument(
         dilation, rank, "dilation", minimum=1
     )
-    operands: list[TensorLike] = [inputs, kernel]
+    operands: list[TensorLike | VariableNode] = [inputs, kernel]
     if bias is not None:
         operands.append(bias)
-
-    if any(isinstance(operand, Variable) for operand in operands):
-        variables = [
-            operand
-            if isinstance(operand, Variable)
-            else Variable(operand, requires_grad=False)
-            for operand in operands
-        ]
-        values = [variable.data for variable in variables]
-        operation = ConvND(
-            rank=rank,
-            stride=strides,
-            padding=paddings,
-            dilation=dilations,
-            groups=groups,
-        )
-        result: TensorResult = Variable._apply_operation(operation, variables)
-        return result
-
-    tensors = [_as_tensor(operand) for operand in operands]
     operation = ConvND(
         rank=rank,
         stride=strides,
@@ -634,11 +625,58 @@ def _convolve(
         dilation=dilations,
         groups=groups,
     )
+
+    if any(is_graph_operand(operand) for operand in operands):
+        return apply_operation(
+            operation,
+            tuple(as_graph_operand(operand) for operand in operands),
+        )
+
+    tensors = [_as_tensor(operand) for operand in operands]
     return operation.forward(
         tensors[0],
         tensors[1],
         tensors[2] if len(tensors) > 2 else None,
     )
+
+
+@overload
+def conv1d(
+    inputs: VariableNode,
+    kernel: TensorLike | VariableNode,
+    bias: TensorLike | VariableNode | None = ...,
+    *,
+    stride: SpatialArgument = ...,
+    padding: SpatialArgument = ...,
+    dilation: SpatialArgument = ...,
+    groups: int = ...,
+) -> VariableNode: ...
+
+
+@overload
+def conv1d(
+    inputs: TensorLike,
+    kernel: VariableNode,
+    bias: TensorLike | VariableNode | None = ...,
+    *,
+    stride: SpatialArgument = ...,
+    padding: SpatialArgument = ...,
+    dilation: SpatialArgument = ...,
+    groups: int = ...,
+) -> VariableNode: ...
+
+
+@overload
+def conv1d(
+    inputs: TensorLike,
+    kernel: TensorLike,
+    bias: VariableNode,
+    *,
+    stride: SpatialArgument = ...,
+    padding: SpatialArgument = ...,
+    dilation: SpatialArgument = ...,
+    groups: int = ...,
+) -> VariableNode: ...
 
 
 @overload
@@ -694,15 +732,15 @@ def conv1d(
 
 
 def conv1d(
-    inputs: TensorLike,
-    kernel: TensorLike,
-    bias: TensorLike | None = None,
+    inputs: TensorLike | VariableNode,
+    kernel: TensorLike | VariableNode,
+    bias: TensorLike | VariableNode | None = None,
     *,
     stride: SpatialArgument = 1,
     padding: SpatialArgument = 0,
     dilation: SpatialArgument = 1,
     groups: int = 1,
-) -> TensorResult:
+) -> TensorResult | VariableNode:
     """Correlate a batched or unbatched 1D signal with a kernel.
 
     Args:
@@ -729,6 +767,45 @@ def conv1d(
 
 @overload
 def conv2d(
+    inputs: VariableNode,
+    kernel: TensorLike | VariableNode,
+    bias: TensorLike | VariableNode | None = ...,
+    *,
+    stride: SpatialArgument = ...,
+    padding: SpatialArgument = ...,
+    dilation: SpatialArgument = ...,
+    groups: int = ...,
+) -> VariableNode: ...
+
+
+@overload
+def conv2d(
+    inputs: TensorLike,
+    kernel: VariableNode,
+    bias: TensorLike | VariableNode | None = ...,
+    *,
+    stride: SpatialArgument = ...,
+    padding: SpatialArgument = ...,
+    dilation: SpatialArgument = ...,
+    groups: int = ...,
+) -> VariableNode: ...
+
+
+@overload
+def conv2d(
+    inputs: TensorLike,
+    kernel: TensorLike,
+    bias: VariableNode,
+    *,
+    stride: SpatialArgument = ...,
+    padding: SpatialArgument = ...,
+    dilation: SpatialArgument = ...,
+    groups: int = ...,
+) -> VariableNode: ...
+
+
+@overload
+def conv2d(
     inputs: Variable,
     kernel: TensorLike,
     bias: TensorLike | None = ...,
@@ -780,15 +857,15 @@ def conv2d(
 
 
 def conv2d(
-    inputs: TensorLike,
-    kernel: TensorLike,
-    bias: TensorLike | None = None,
+    inputs: TensorLike | VariableNode,
+    kernel: TensorLike | VariableNode,
+    bias: TensorLike | VariableNode | None = None,
     *,
     stride: SpatialArgument = 1,
     padding: SpatialArgument = 0,
     dilation: SpatialArgument = 1,
     groups: int = 1,
-) -> TensorResult:
+) -> TensorResult | VariableNode:
     """Correlate a batched or unbatched 2D signal with a kernel.
 
     The kernel is not reversed, so for one group and unit stride and dilation
@@ -827,6 +904,45 @@ def conv2d(
 
 @overload
 def conv3d(
+    inputs: VariableNode,
+    kernel: TensorLike | VariableNode,
+    bias: TensorLike | VariableNode | None = ...,
+    *,
+    stride: SpatialArgument = ...,
+    padding: SpatialArgument = ...,
+    dilation: SpatialArgument = ...,
+    groups: int = ...,
+) -> VariableNode: ...
+
+
+@overload
+def conv3d(
+    inputs: TensorLike,
+    kernel: VariableNode,
+    bias: TensorLike | VariableNode | None = ...,
+    *,
+    stride: SpatialArgument = ...,
+    padding: SpatialArgument = ...,
+    dilation: SpatialArgument = ...,
+    groups: int = ...,
+) -> VariableNode: ...
+
+
+@overload
+def conv3d(
+    inputs: TensorLike,
+    kernel: TensorLike,
+    bias: VariableNode,
+    *,
+    stride: SpatialArgument = ...,
+    padding: SpatialArgument = ...,
+    dilation: SpatialArgument = ...,
+    groups: int = ...,
+) -> VariableNode: ...
+
+
+@overload
+def conv3d(
     inputs: Variable,
     kernel: TensorLike,
     bias: TensorLike | None = ...,
@@ -878,15 +994,15 @@ def conv3d(
 
 
 def conv3d(
-    inputs: TensorLike,
-    kernel: TensorLike,
-    bias: TensorLike | None = None,
+    inputs: TensorLike | VariableNode,
+    kernel: TensorLike | VariableNode,
+    bias: TensorLike | VariableNode | None = None,
     *,
     stride: SpatialArgument = 1,
     padding: SpatialArgument = 0,
     dilation: SpatialArgument = 1,
     groups: int = 1,
-) -> TensorResult:
+) -> TensorResult | VariableNode:
     """Correlate a batched or unbatched 3D volume with a kernel."""
     return _convolve(
         3, inputs, kernel, bias, stride, padding, dilation, groups

@@ -280,23 +280,26 @@ class StructuralBuildFallbackTests(unittest.TestCase):
             VariableNode() + 1.0
 
     def test_a_function_without_a_structural_form_keeps_tracing(self):
-        class Convolved(ts.Graph):
+        class Scored(ts.Graph):
             def __init__(self):
                 super().__init__()
-                self.bias = ts.Variable([0.5], name="bias")
+                self.w = ts.Variable([[1.0, 0.5], [0.5, 1.0]], name="w")
 
             def forward(self, x):
-                return ts.conv1d(x, ts.ones((1, 1, 2))) + self.bias
+                return ts.cross_entropy(
+                    x @ self.w, ts.Tensor([0], dtype=ts.int64)
+                )
 
-        model = Convolved()
+        model = Scored()
 
         self.assertIsNone(model._structure)
-        self.assertEqual(
-            model(ts.Tensor([[[1.0, 2.0, 3.0]]])).data.tolist(),
-            [3.5, 5.5],
+        self.assertIsInstance(
+            model(ts.Tensor([[1.0, 2.0]])), ts.Variable
         )
         with self.assertRaises(UnsupportedStructuralExpression):
-            ts.conv1d(VariableNode(), ts.ones((1, 1, 2)))
+            ts.cross_entropy(
+                VariableNode(), ts.Tensor([0], dtype=ts.int64)
+            )
 
     def test_the_signal_is_narrower_than_a_type_error(self):
         # Existing callers still see a TypeError, but the build only treats
@@ -522,18 +525,20 @@ class LinalgModelConstructionTests(unittest.TestCase):
 
     def test_the_fallback_signal_is_still_the_only_one_caught(self):
         # A function with no structural form keeps the tracing lifecycle.
-        class Convolved(ts.Graph):
+        class Scored(ts.Graph):
             def __init__(self):
                 super().__init__()
-                self.bias = ts.Variable([0.5], name="bias")
+                self.w = ts.Variable([[2.0, 1.0], [3.0, 1.0]], name="w")
 
             def forward(self, x):
-                return ts.conv1d(x, ts.ones((1, 1, 2))) + self.bias
+                return ts.cross_entropy(
+                    x @ self.w, ts.Tensor([0], dtype=ts.int64)
+                )
 
-        traced = Convolved()
+        traced = Scored()
         self.assertIsNone(traced._structure)
-        self.assertEqual(
-            traced(ts.Tensor([[[1.0, 2.0, 3.0]]])).data.tolist(), [3.5, 5.5]
+        self.assertIsInstance(
+            traced(ts.Tensor([[1.0, 1.0]])), ts.Variable
         )
 
         # Anything else is a real error and construction reports it, so the
@@ -636,12 +641,13 @@ class UnaryModelConstructionTests(unittest.TestCase):
         # These families are not migrated yet, so a model using one must
         # still fall back rather than build.
         for name, forward in (
-            ("conv1d", lambda self, x: ts.conv1d(
-                ts.reshape(x @ self.w, (1, 1, 1)), ts.ones((1, 1, 1))
-            )),
             ("cross_entropy", lambda self, x: ts.cross_entropy(
                 x @ self.w, ts.Tensor([0], dtype=ts.int64)
             )),
+            ("binary_cross_entropy",
+             lambda self, x: ts.binary_cross_entropy(
+                 ts.sigmoid(x @ self.w), ts.Tensor([[1.0, 0.0]])
+             )),
         ):
             with self.subTest(function=name):
                 reset_graph_state()
@@ -1129,6 +1135,135 @@ class SelectionModelConstructionTests(unittest.TestCase):
                 ]
                 self.assertEqual(names[-1], name)
                 self.assertIsInstance(model(self.INPUTS), ts.Variable)
+
+
+
+class ConvolutionModelConstructionTests(unittest.TestCase):
+    """A convolution with trainable weights builds the model's program.
+
+    Constructing these models used to raise a plain TypeError: a Variable
+    kernel took the convolution's own wrapping branch, which handed the
+    input vertex to Tensor construction, and that is not the signal the
+    build treats as a fallback.
+    """
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    class Signal(ts.Graph):
+        def __init__(self):
+            super().__init__()
+            self.kernel = ts.Variable([[[1.0, -1.0]]], name="kernel")
+            self.bias = ts.Variable([0.5], name="bias")
+
+        def forward(self, x):
+            return ts.conv1d(x, self.kernel, self.bias)
+
+    class Image(ts.Graph):
+        def __init__(self):
+            super().__init__()
+            self.kernel = ts.Variable(
+                [[[[1.0, 0.0], [0.0, -1.0]]]], name="kernel"
+            )
+
+        def forward(self, x):
+            return ts.conv2d(x, self.kernel)
+
+    class Volume(ts.Graph):
+        def __init__(self):
+            super().__init__()
+            self.kernel = ts.Variable(
+                [[[[[1.0, 1.0], [1.0, 1.0]], [[1.0, 1.0], [1.0, 1.0]]]]],
+                name="kernel",
+            )
+
+        def forward(self, x):
+            return ts.conv3d(x, self.kernel)
+
+    SIGNALS = (
+        ts.Tensor([[[1.0, 2.0, 3.0, 4.0]]]),
+        ts.Tensor([[[-1.0, 0.5, 2.0, -3.0]]]),
+    )
+    IMAGES = (
+        ts.Tensor([[[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]]]),
+        ts.Tensor([[[[0.5, -1.0, 2.0], [3.0, 0.0, -2.0], [1.0, 1.0, 1.0]]]]),
+    )
+    VOLUMES = (
+        ts.Tensor([[[[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]]]),
+        ts.Tensor([[[[[0.0, 1.0], [2.0, 3.0]], [[4.0, 5.0], [6.0, 7.0]]]]]),
+    )
+
+    def _cases(self):
+        return (
+            (self.Signal, "conv1d", self.SIGNALS,
+             lambda m, x: ts.conv1d(x, m.kernel.data, m.bias.data)),
+            (self.Image, "conv2d", self.IMAGES,
+             lambda m, x: ts.conv2d(x, m.kernel.data)),
+            (self.Volume, "conv3d", self.VOLUMES,
+             lambda m, x: ts.conv3d(x, m.kernel.data)),
+        )
+
+    def test_a_convolution_model_builds_during_construction(self):
+        for factory, name, _, _ in self._cases():
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+
+                self.assertIsNotNone(model._structure)
+                program = model._structure.computations[0]
+                self.assertEqual(
+                    [
+                        instruction.operation.name
+                        for instruction in program._instructions
+                    ],
+                    [name],
+                )
+
+    def test_the_built_programs_replay_what_eager_calculates(self):
+        for factory, _, inputs, forward in self._cases():
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+                for value in inputs:
+                    replayed = model(value).data
+                    expected = forward(model, value)
+                    self.assertEqual(replayed.tolist(), expected.tolist())
+                    self.assertEqual(replayed.shape, expected.shape)
+
+    def test_gradients_reach_the_kernel_and_bias(self):
+        for factory, _, inputs, _ in self._cases():
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+                ts.backward(ts.sum(model(inputs[0])))
+                parameters = model.parameters()
+                self.assertTrue(parameters)
+                for parameter in parameters:
+                    self.assertIsNotNone(parameter.grad)
+                    self.assertEqual(parameter.grad.shape, parameter.shape)
+
+    def test_replay_reuses_the_output_variable(self):
+        model = self.Signal()
+
+        first = model(self.SIGNALS[0])
+        second = model(self.SIGNALS[1])
+
+        self.assertIs(first, second)
+
+    def test_a_real_type_error_in_forward_still_propagates(self):
+        class Broken(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.kernel = ts.Variable([[[1.0, 1.0]]], name="kernel")
+
+            def forward(self, x):
+                raise TypeError("a real bug in forward")
+
+        with self.assertRaisesRegex(TypeError, "a real bug in forward"):
+            Broken()
 
 
 if __name__ == "__main__":

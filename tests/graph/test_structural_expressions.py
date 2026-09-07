@@ -27,6 +27,7 @@ from tensors.math.cosh import Cosh
 from tensors.math.exp import Exp
 from tensors.math.clip import Clip
 from tensors.math.concat import Concat
+from tensors.math.convolution import ConvND
 from tensors.math.elementwise_extrema import Maximum, Minimum
 from tensors.math.log import Log
 from tensors.math.log_softmax import LogSoftmax
@@ -1145,6 +1146,199 @@ class SelectionStructuralTests(unittest.TestCase):
                 self.assertEqual(variable.grad.shape, variable.shape)
 
 
+class ConvolutionStructuralTests(unittest.TestCase):
+    """Every convolution rank records through the one shared boundary."""
+
+    #: Rank, a small input, a kernel, and a per-channel bias.
+    RANKS = (
+        ("conv1d", 1, [[[1.0, 2.0, 3.0, 4.0]]], [[[1.0, -1.0]]]),
+        ("conv2d", 2, [[[[1.0, 2.0], [3.0, 4.0]]]],
+         [[[[1.0, 0.0], [0.0, 1.0]]]]),
+        ("conv3d", 3, [[[[[1.0, 2.0], [3.0, 4.0]],
+                         [[5.0, 6.0], [7.0, 8.0]]]]],
+         [[[[[1.0, 1.0], [1.0, 1.0]], [[1.0, 1.0], [1.0, 1.0]]]]]),
+    )
+    BIAS = [0.5]
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_a_vertex_records_in_any_operand_position(self):
+        for name, rank, inputs, kernel in self.RANKS:
+            layouts = (
+                ("vertex input, Tensor kernel",
+                 lambda node, k=kernel: (node, ts.Tensor(k), None), (0,), 2),
+                ("Tensor input, vertex kernel",
+                 lambda node, i=inputs: (ts.Tensor(i), node, None), (1,), 2),
+                ("vertex input, Variable kernel",
+                 lambda node, k=kernel: (
+                     node, ts.Variable(k, name="kernel"), None), (0,), 2),
+                ("Variable input, vertex kernel",
+                 lambda node, i=inputs: (
+                     ts.Variable(i, name="inputs"), node, None), (1,), 2),
+                ("vertex input, vertex kernel",
+                 lambda node: (node, VariableNode(), None), (0, 1), 2),
+                ("vertex input, kernel, vertex bias",
+                 lambda node, k=kernel: (
+                     node, ts.Tensor(k), VariableNode()), (0, 2), 3),
+                ("vertex input, kernel, Tensor bias",
+                 lambda node, k=kernel: (
+                     node, ts.Tensor(k), ts.Tensor(self.BIAS)), (0,), 3),
+            )
+            for label, build, positions, count in layouts:
+                with self.subTest(function=name, operands=label):
+                    reset_graph_state()
+                    node = VariableNode()
+                    given_inputs, given_kernel, given_bias = build(node)
+                    calls = []
+                    original = ConvND.forward
+
+                    def counted(self, *args, _original=original, _calls=calls):
+                        _calls.append(args)
+                        return _original(self, *args)
+
+                    function = getattr(ts, name)
+                    with patch.object(ConvND, "forward", counted):
+                        if given_bias is None:
+                            result = function(given_inputs, given_kernel)
+                        else:
+                            result = function(
+                                given_inputs, given_kernel, given_bias
+                            )
+
+                    self.assertIsInstance(result, VariableNode)
+                    self.assertFalse(result.is_bound)
+                    recorded = result.producer.operation
+                    self.assertIsInstance(recorded, ConvND)
+                    self.assertEqual(recorded.rank, rank)
+                    self.assertEqual(recorded.name, name)
+
+                    operands = result.producer.operand_nodes
+                    # Input, kernel, and bias only when one was given.
+                    self.assertEqual(len(operands), count)
+                    self.assertIs(operands[positions[0]], node)
+                    for index, operand in enumerate(operands):
+                        if index in positions:
+                            self.assertFalse(operand.is_bound)
+                        else:
+                            self.assertTrue(operand.is_bound)
+                    self.assertEqual(calls, [])
+                    self.assertFalse(node.is_bound)
+
+    def test_an_absent_bias_stays_absent(self):
+        for name, _, _, kernel in self.RANKS:
+            with self.subTest(function=name):
+                reset_graph_state()
+                function = getattr(ts, name)
+                without = function(VariableNode(), ts.Tensor(kernel))
+                self.assertEqual(len(without.producer.operand_nodes), 2)
+
+                reset_graph_state()
+                given = function(
+                    VariableNode(), ts.Tensor(kernel), ts.Tensor(self.BIAS)
+                )
+                self.assertEqual(len(given.producer.operand_nodes), 3)
+
+    def test_runtime_operands_keep_their_gradient_semantics(self):
+        reset_graph_state()
+        node = VariableNode()
+        kernel = ts.Variable([[[1.0, -1.0]]], name="kernel")
+        bias = ts.Variable(self.BIAS, name="bias")
+
+        result = ts.conv1d(node, kernel, bias)
+        inputs_node, kernel_node, bias_node = result.producer.operand_nodes
+
+        self.assertIs(inputs_node, node)
+        self.assertIs(kernel_node.variable, kernel)
+        self.assertTrue(kernel_node.variable.requires_grad)
+        self.assertIs(bias_node.variable, bias)
+        self.assertTrue(bias_node.variable.requires_grad)
+
+        # A Tensor in the same position is a non-gradient leaf instead.
+        reset_graph_state()
+        constant = ts.conv1d(
+            VariableNode(), ts.Tensor([[[1.0, -1.0]]]), ts.Tensor(self.BIAS)
+        )
+        for operand in constant.producer.operand_nodes[1:]:
+            self.assertTrue(operand.is_bound)
+            self.assertFalse(operand.variable.requires_grad)
+
+    def test_the_recorded_operation_keeps_its_configuration(self):
+        reset_graph_state()
+        result = ts.conv2d(
+            VariableNode(),
+            ts.Tensor([[[[1.0, 0.0], [0.0, 1.0]]]]),
+            stride=2,
+            padding=1,
+            dilation=2,
+            groups=1,
+        )
+        recorded = result.producer.operation
+        # The spatial arguments are normalized once, before recording.
+        self.assertEqual(recorded.rank, 2)
+        self.assertEqual(recorded.stride, (2, 2))
+        self.assertEqual(recorded.padding, (1, 1))
+        self.assertEqual(recorded.dilation, (2, 2))
+        self.assertEqual(recorded.groups, 1)
+
+    def test_a_recorded_convolution_replays_what_eager_calculates(self):
+        for name, _, inputs, kernel in self.RANKS:
+            for label, bias in (("no bias", None), ("bias", self.BIAS)):
+                with self.subTest(function=name, bias=label):
+                    reset_graph_state()
+                    function = getattr(ts, name)
+                    values = ts.Tensor(inputs)
+                    weights = ts.Tensor(kernel)
+                    offsets = None if bias is None else ts.Tensor(bias)
+
+                    if offsets is None:
+                        expected = function(values, weights)
+                    else:
+                        expected = function(values, weights, offsets)
+
+                    node = VariableNode()
+                    if offsets is None:
+                        output = function(node, weights)
+                    else:
+                        output = function(node, weights, offsets)
+                    compiler = Compiler((output,), boundaries=(node,))
+                    compiler.compile()
+                    computations = Computation._from_compiler(compiler)
+                    node.materialize(values, requires_grad=False)
+                    for computation in computations:
+                        computation.forward()
+
+                    replayed = output.variable.data
+                    self.assertEqual(replayed.tolist(), expected.tolist())
+                    self.assertEqual(replayed.shape, expected.shape)
+                    self.assertIs(replayed.dtype, expected.dtype)
+
+    def test_eager_application_is_unchanged(self):
+        for name, _, inputs, kernel in self.RANKS:
+            with self.subTest(function=name):
+                reset_graph_state()
+                function = getattr(ts, name)
+                values = ts.Tensor(inputs)
+                weights = ts.Tensor(kernel)
+
+                tensor_result = function(values, weights)
+                self.assertIsInstance(tensor_result, ts.Tensor)
+
+                variable = ts.Variable(inputs, name="inputs")
+                variable_result = function(variable, weights)
+                self.assertIsInstance(variable_result, ts.Variable)
+                self.assertEqual(
+                    variable_result.data.tolist(), tensor_result.tolist()
+                )
+
+                ts.backward(ts.sum(variable_result))
+                self.assertIsNotNone(variable.grad)
+                self.assertEqual(variable.grad.shape, variable.shape)
+
+
 class RuntimeApplicationIsUnchangedTests(unittest.TestCase):
     """Runtime expressions still calculate through a Computation."""
 
@@ -1252,14 +1446,14 @@ class TensorOperandBoundaryTests(unittest.TestCase):
     def test_an_operation_without_a_structural_form_signals(self):
         vertex = VariableNode()
         calls = {
-            "conv1d": lambda: ts.conv1d(vertex, ts.ones((1, 1, 2))),
-            "conv2d": lambda: ts.conv2d(vertex, ts.ones((1, 1, 2, 2))),
             "cross_entropy": lambda: ts.cross_entropy(
                 vertex, ts.Tensor([0], dtype=ts.int64)
             ),
             "binary_cross_entropy": lambda: ts.binary_cross_entropy(
                 vertex, ts.Tensor([1.0])
             ),
+            "argmax": lambda: ts.argmax(vertex),
+            "argmin": lambda: ts.argmin(vertex),
         }
         for name, call in calls.items():
             with self.subTest(operation=name):
