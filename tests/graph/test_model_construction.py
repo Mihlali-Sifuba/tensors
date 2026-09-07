@@ -545,5 +545,120 @@ class LinalgModelConstructionTests(unittest.TestCase):
             Failing()
 
 
+class UnaryModelConstructionTests(unittest.TestCase):
+    """A model built from elementwise unary functions compiles at once."""
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    class Activated(ts.Graph):
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable([[1.0], [1.0]], name="w")
+
+        def forward(self, x):
+            hidden = ts.tanh(x @ self.w)
+            return ts.sqrt(ts.abs(ts.exp(hidden)) + ts.softplus(hidden))
+
+    def test_a_unary_model_builds_during_construction(self):
+        model = self.Activated()
+
+        self.assertIsNotNone(model._structure)
+        program = model._structure.computations[0]
+        self.assertEqual(
+            [
+                instruction.operation.name
+                for instruction in program._instructions
+            ],
+            ["dot", "tanh", "exp", "abs", "softplus", "add", "sqrt"],
+        )
+
+    def test_the_built_program_replays_and_differentiates(self):
+        model = self.Activated()
+
+        first = model(ts.Tensor([[0.5, 0.25]])).data.tolist()
+        second = model(ts.Tensor([[1.0, 1.0]])).data.tolist()
+        self.assertNotEqual(first, second)
+        # Replay is numerically the eager result of the same expression.
+        hidden = ts.tanh(ts.Tensor([[1.0, 1.0]]) @ model.w.data)
+        expected = ts.sqrt(ts.abs(ts.exp(hidden)) + ts.softplus(hidden))
+        self.assertEqual(second, expected.tolist())
+
+        ts.backward(ts.sum(model(ts.Tensor([[0.5, 0.25]]))))
+        for parameter in model.parameters():
+            with self.subTest(parameter=parameter.name):
+                self.assertIsNotNone(parameter.grad)
+                self.assertEqual(parameter.grad.shape, parameter.shape)
+
+    def test_each_unary_function_builds_a_model_of_its_own(self):
+        names = (
+            "abs", "sign", "sin", "cos", "tan", "sinh", "cosh", "tanh",
+            "exp", "log", "sqrt", "softplus", "arcsin", "arccos", "arctan",
+            "arcsinh", "arccosh", "arctanh",
+        )
+        for name in names:
+            with self.subTest(function=name):
+                reset_graph_state()
+                function = getattr(ts, name)
+
+                # The function is captured by closure: an extra parameter
+                # with a default would read as a configuration argument and
+                # the model would keep tracing instead of building.
+                class Single(ts.Graph):
+                    def __init__(self):
+                        super().__init__()
+                        self.w = ts.Variable([[1.0], [1.0]], name="w")
+
+                    def forward(self, x):
+                        return function(x @ self.w)
+
+                model = Single()
+
+                self.assertIsNotNone(model._structure)
+                program = model._structure.computations[0]
+                self.assertEqual(
+                    [
+                        instruction.operation.name
+                        for instruction in program._instructions
+                    ],
+                    ["dot", name],
+                )
+
+    def test_a_later_migration_group_still_keeps_tracing(self):
+        # These families are not migrated yet, so a model using one must
+        # still fall back rather than build.
+        for name, forward in (
+            ("sum", lambda self, x: ts.sum(x @ self.w)),
+            ("transpose", lambda self, x: ts.transpose(x @ self.w)),
+            ("maximum", lambda self, x: ts.maximum(x @ self.w, ts.Tensor([1.0]))),
+        ):
+            with self.subTest(function=name):
+                reset_graph_state()
+                model = type(
+                    "Later",
+                    (ts.Graph,),
+                    {
+                        "__init__": lambda self: (
+                            ts.Graph.__init__(self),
+                            setattr(
+                                self,
+                                "w",
+                                ts.Variable([[2.0], [3.0]], name="w"),
+                            ),
+                        )[0],
+                        "forward": forward,
+                    },
+                )()
+
+                self.assertIsNone(model._structure)
+                # The model is still usable through eager tracing.
+                self.assertIsInstance(
+                    model(ts.Tensor([[1.0, 1.0]])), ts.Variable
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

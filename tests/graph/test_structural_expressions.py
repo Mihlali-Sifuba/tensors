@@ -14,7 +14,25 @@ from tensors.graph.state import (
 from tensors.linalg.dot import Dot
 from tensors.linalg.norm import Norm
 from tensors.linalg.outer import Outer
+from tensors.math.abs import Abs
+from tensors.math.arccos import ArcCos
+from tensors.math.arccosh import ArcCosh
+from tensors.math.arcsin import ArcSin
+from tensors.math.arcsinh import ArcSinh
+from tensors.math.arctan import ArcTan
+from tensors.math.arctanh import ArcTanh
+from tensors.math.cos import Cos
+from tensors.math.cosh import Cosh
+from tensors.math.exp import Exp
+from tensors.math.log import Log
 from tensors.math.relu import ReLU
+from tensors.math.sign import Sign
+from tensors.math.sin import Sin
+from tensors.math.sinh import Sinh
+from tensors.math.softplus import Softplus
+from tensors.math.sqrt import Sqrt
+from tensors.math.tan import Tan
+from tensors.math.tanh import Tanh
 from tensors.math.sigmoid import Sigmoid
 from tensors.ops import Add, Div, Mul, Pow, Sub
 
@@ -379,6 +397,98 @@ class StructuralExpressionTests(unittest.TestCase):
         self.assertIsInstance(operation, Add)
         self.assertEqual(inputs, (left, right))
         self.assertIs(total.producer.operation, operation)
+
+
+class UnaryFamilyStructuralTests(unittest.TestCase):
+    """Every elementwise unary function applies across all three kinds."""
+
+    #: Each public unary function, the operation it records, and an input
+    #: inside its domain.
+    FAMILY = (
+        ("abs", Abs, [-0.5, 0.5]),
+        ("sign", Sign, [-0.5, 0.5]),
+        ("sin", Sin, [0.5, 0.25]),
+        ("cos", Cos, [0.5, 0.25]),
+        ("tan", Tan, [0.5, 0.25]),
+        ("sinh", Sinh, [0.5, 0.25]),
+        ("cosh", Cosh, [0.5, 0.25]),
+        ("tanh", Tanh, [0.5, 0.25]),
+        ("exp", Exp, [0.5, 0.25]),
+        ("log", Log, [1.0, 2.0]),
+        ("sqrt", Sqrt, [1.0, 4.0]),
+        ("softplus", Softplus, [0.5, 0.25]),
+        ("arcsin", ArcSin, [0.5, 0.25]),
+        ("arccos", ArcCos, [0.5, 0.25]),
+        ("arctan", ArcTan, [0.5, 0.25]),
+        ("arcsinh", ArcSinh, [0.5, 0.25]),
+        ("arccosh", ArcCosh, [1.5, 2.5]),
+        ("arctanh", ArcTanh, [0.5, 0.25]),
+    )
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_the_family_is_the_whole_exported_unary_surface(self):
+        # A function added to the family without a case here would go
+        # uncovered, so the table states its own completeness.
+        self.assertEqual(len(self.FAMILY), 18)
+        for name, operation, _ in self.FAMILY:
+            with self.subTest(function=name):
+                self.assertTrue(hasattr(ts, name))
+                self.assertEqual(operation().name, name)
+
+    def test_a_vertex_records_the_operation(self):
+        for name, operation, _ in self.FAMILY:
+            with self.subTest(function=name):
+                reset_graph_state()
+                node = VariableNode()
+                calls = []
+                original = operation.forward
+
+                def counted(self, *args, _original=original, _calls=calls):
+                    _calls.append(args)
+                    return _original(self, *args)
+
+                with patch.object(operation, "forward", counted):
+                    result = getattr(ts, name)(node)
+
+                self.assertIsInstance(result, VariableNode)
+                self.assertFalse(result.is_bound)
+                self.assertIsInstance(result.producer.operation, operation)
+                self.assertEqual(result.producer.operand_nodes, (node,))
+                # Nothing was calculated, and the vertex still names a
+                # value that does not exist.
+                self.assertEqual(calls, [])
+                self.assertFalse(node.is_bound)
+
+    def test_a_tensor_still_calculates_eagerly(self):
+        for name, _, sample in self.FAMILY:
+            with self.subTest(function=name):
+                reset_graph_state()
+                result = getattr(ts, name)(ts.Tensor(sample))
+                self.assertIsInstance(result, ts.Tensor)
+                self.assertEqual(result.shape, (2,))
+
+    def test_a_variable_still_calculates_and_differentiates(self):
+        for name, _, sample in self.FAMILY:
+            with self.subTest(function=name):
+                reset_graph_state()
+                function = getattr(ts, name)
+                expected = function(ts.Tensor(sample))
+                variable = ts.Variable(sample, name="value")
+                result = function(variable)
+
+                self.assertIsInstance(result, ts.Variable)
+                self.assertTrue(result.node.is_bound)
+                # The graph path calculates exactly what the Tensor path does.
+                self.assertEqual(result.data.tolist(), expected.tolist())
+
+                ts.backward(ts.sum(result))
+                self.assertIsNotNone(variable.grad)
+                self.assertEqual(variable.grad.shape, variable.shape)
 
 
 class RuntimeApplicationIsUnchangedTests(unittest.TestCase):

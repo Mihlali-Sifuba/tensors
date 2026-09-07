@@ -1,7 +1,9 @@
 """Elementwise exponential and its differentiation rule."""
 
+from __future__ import annotations
+
 import math as _math
-from typing import Any, List, overload
+from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
@@ -9,6 +11,9 @@ from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
 from ._unary import unary_backward, unary_forward
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class Exp(Operation):
@@ -48,6 +53,10 @@ class Exp(Operation):
 
 
 @overload
+def exp(value: VariableNode) -> VariableNode: ...
+
+
+@overload
 def exp(value: TensorValue) -> TensorValue: ...
 
 
@@ -55,13 +64,19 @@ def exp(value: TensorValue) -> TensorValue: ...
 def exp(value: TensorData) -> Tensor: ...
 
 
-def exp(value: TensorLike) -> TensorResult:
-    """Return the elementwise exponential as a Tensor or differentiable Variable."""
-    from ..variable import Variable
+def exp(
+    value: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Return the elementwise exponential of a graph value or Tensor.
 
-    if isinstance(value, Variable):
-        operation = Exp()
-        return Variable._apply_operation(operation, (value,))
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
+
+    if is_graph_operand(value):
+        return apply_operation(Exp(), (value,))
     value = as_tensor_operand(value)
     return Exp().forward(value)
 
