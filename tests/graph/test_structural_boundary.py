@@ -14,9 +14,9 @@ from tensors.graph.expression import UnsupportedStructuralExpression
 from tensors.graph.node import VariableNode
 from tensors.graph.state import reset_graph_state
 from tensors.math.concat import Concat
-from tensors.math.elementwise_extrema import Maximum
+from tensors.math.convolution import ConvND
+from tensors.math.cross_entropy import CrossEntropy
 from tensors.math.stack import Stack
-from tensors.math.where import Where
 
 # The math package binds each public function over its module, so the module
 # holding the coercion boundary has to be named directly.
@@ -472,14 +472,14 @@ class OperationForwardIndependenceTests(unittest.TestCase):
             raise AssertionError("a vertex must never reach forward()")
 
         calls = {
-            "maximum": (
-                Maximum,
-                lambda: ts.maximum(VariableNode(), ts.Tensor([1.0])),
+            "conv1d": (
+                ConvND,
+                lambda: ts.conv1d(VariableNode(), ts.ones((1, 1, 2))),
             ),
-            "where": (
-                Where,
-                lambda: ts.where(
-                    ts.Tensor([True]), VariableNode(), ts.Tensor([1.0])
+            "cross_entropy": (
+                CrossEntropy,
+                lambda: ts.cross_entropy(
+                    VariableNode(), ts.Tensor([0], dtype=ts.int64)
                 ),
             ),
         }

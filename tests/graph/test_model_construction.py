@@ -280,20 +280,23 @@ class StructuralBuildFallbackTests(unittest.TestCase):
             VariableNode() + 1.0
 
     def test_a_function_without_a_structural_form_keeps_tracing(self):
-        class Bounded(ts.Graph):
+        class Convolved(ts.Graph):
             def __init__(self):
                 super().__init__()
-                self.w = ts.Variable([[2.0]], name="w")
+                self.bias = ts.Variable([0.5], name="bias")
 
             def forward(self, x):
-                return ts.maximum(x @ self.w, ts.Tensor([1.0]))
+                return ts.conv1d(x, ts.ones((1, 1, 2))) + self.bias
 
-        model = Bounded()
+        model = Convolved()
 
         self.assertIsNone(model._structure)
-        self.assertEqual(model(ts.Tensor([[1.0]])).data.item(), 2.0)
+        self.assertEqual(
+            model(ts.Tensor([[[1.0, 2.0, 3.0]]])).data.tolist(),
+            [3.5, 5.5],
+        )
         with self.assertRaises(UnsupportedStructuralExpression):
-            ts.maximum(VariableNode(), ts.Tensor([1.0]))
+            ts.conv1d(VariableNode(), ts.ones((1, 1, 2)))
 
     def test_the_signal_is_narrower_than_a_type_error(self):
         # Existing callers still see a TypeError, but the build only treats
@@ -519,17 +522,19 @@ class LinalgModelConstructionTests(unittest.TestCase):
 
     def test_the_fallback_signal_is_still_the_only_one_caught(self):
         # A function with no structural form keeps the tracing lifecycle.
-        class Bounded(ts.Graph):
+        class Convolved(ts.Graph):
             def __init__(self):
                 super().__init__()
-                self.w = ts.Variable([[2.0], [3.0]], name="w")
+                self.bias = ts.Variable([0.5], name="bias")
 
             def forward(self, x):
-                return ts.maximum(x @ self.w, ts.Tensor([1.0]))
+                return ts.conv1d(x, ts.ones((1, 1, 2))) + self.bias
 
-        traced = Bounded()
+        traced = Convolved()
         self.assertIsNone(traced._structure)
-        self.assertEqual(traced(ts.Tensor([[1.0, 1.0]])).data.item(), 5.0)
+        self.assertEqual(
+            traced(ts.Tensor([[[1.0, 2.0, 3.0]]])).data.tolist(), [3.5, 5.5]
+        )
 
         # Anything else is a real error and construction reports it, so the
         # build must not have widened to catch TypeError generally.
@@ -631,9 +636,11 @@ class UnaryModelConstructionTests(unittest.TestCase):
         # These families are not migrated yet, so a model using one must
         # still fall back rather than build.
         for name, forward in (
-            ("maximum", lambda self, x: ts.maximum(x @ self.w, ts.Tensor([1.0]))),
-            ("where", lambda self, x: ts.where(
-                ts.Tensor([True]), x @ self.w, ts.Tensor([1.0])
+            ("conv1d", lambda self, x: ts.conv1d(
+                ts.reshape(x @ self.w, (1, 1, 1)), ts.ones((1, 1, 1))
+            )),
+            ("cross_entropy", lambda self, x: ts.cross_entropy(
+                x @ self.w, ts.Tensor([0], dtype=ts.int64)
             )),
         ):
             with self.subTest(function=name):
@@ -945,6 +952,183 @@ class ShapeModelConstructionTests(unittest.TestCase):
                 self.assertIsInstance(
                     model(ts.Tensor([[1.0, 2.0]])), ts.Variable
                 )
+
+
+
+class SelectionModelConstructionTests(unittest.TestCase):
+    """Extrema, clipping and selection build a model's program."""
+
+    INPUTS = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
+    MASK = ts.Tensor([[1, 0], [0, 1]], dtype=ts.uint8)
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    class Rectified(ts.Graph):
+        """dot -> maximum against a floor parameter."""
+
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable([[1.0, -0.5], [-0.5, 1.0]], name="w")
+            self.floor = ts.Variable([[0.0, 0.0], [0.0, 0.0]], name="floor")
+
+        def forward(self, x):
+            return ts.maximum(x @ self.w, self.floor)
+
+    class Bounded(ts.Graph):
+        """dot -> minimum against a constant, then clipped."""
+
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable([[1.0, -0.5], [-0.5, 1.0]], name="w")
+
+        def forward(self, x):
+            capped = ts.minimum(x @ self.w, ts.Tensor([[2.0, 2.0]]))
+            return ts.clip(capped, -1.0, 1.0)
+
+    class Selected(ts.Graph):
+        """A condition arrives as the model's own input vertex."""
+
+        def __init__(self):
+            super().__init__()
+            self.chosen = ts.Variable([[1.0, 2.0], [3.0, 4.0]], name="chosen")
+            self.fallback = ts.Variable(
+                [[9.0, 9.0], [9.0, 9.0]], name="fallback"
+            )
+
+        def forward(self, condition):
+            return ts.where(condition, self.chosen, self.fallback)
+
+    def test_the_models_build_during_construction(self):
+        expected = {
+            "Rectified": ["dot", "maximum"],
+            "Bounded": ["dot", "minimum", "clip"],
+            "Selected": ["where"],
+        }
+        for model in (self.Rectified(), self.Bounded(), self.Selected()):
+            with self.subTest(model=type(model).__name__):
+                self.assertIsNotNone(model._structure)
+                program = model._structure.computations[0]
+                self.assertEqual(
+                    [
+                        instruction.operation.name
+                        for instruction in program._instructions
+                    ],
+                    expected[type(model).__name__],
+                )
+
+    def test_the_built_programs_replay_what_eager_calculates(self):
+        for factory, forward, inputs in (
+            (
+                self.Rectified,
+                lambda m, x: ts.maximum(x @ m.w.data, m.floor.data),
+                (self.INPUTS, ts.Tensor([[-5.0, -6.0], [7.0, -8.0]])),
+            ),
+            (
+                self.Bounded,
+                lambda m, x: ts.clip(
+                    ts.minimum(x @ m.w.data, ts.Tensor([[2.0, 2.0]])),
+                    -1.0,
+                    1.0,
+                ),
+                (self.INPUTS, ts.Tensor([[0.25, -0.5], [1.0, 2.0]])),
+            ),
+            (
+                self.Selected,
+                lambda m, c: ts.where(c, m.chosen.data, m.fallback.data),
+                (self.MASK, ts.Tensor([[0, 1], [1, 0]], dtype=ts.uint8)),
+            ),
+        ):
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+                for value in inputs:
+                    replayed = model(value).data
+                    expected = forward(model, value)
+                    self.assertEqual(replayed.tolist(), expected.tolist())
+                    self.assertEqual(replayed.shape, expected.shape)
+
+    def test_gradients_reach_the_differentiable_parameters(self):
+        for factory, inputs in (
+            (self.Rectified, self.INPUTS),
+            (self.Bounded, self.INPUTS),
+            (self.Selected, self.MASK),
+        ):
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+                ts.backward(ts.sum(model(inputs)))
+                parameters = model.parameters()
+                self.assertTrue(parameters)
+                for parameter in parameters:
+                    self.assertIsNotNone(parameter.grad)
+                    self.assertEqual(parameter.grad.shape, parameter.shape)
+
+    def test_a_recorded_condition_receives_no_gradient(self):
+        # ``where`` refuses a differentiable condition and its rule never
+        # propagates through one. Recording the condition as a vertex does
+        # not change that.
+        model = self.Selected()
+
+        ts.backward(ts.sum(model(self.MASK)))
+
+        condition_leaf = model._structure.inputs[0]
+        self.assertTrue(condition_leaf.is_bound)
+        self.assertFalse(condition_leaf.variable.requires_grad)
+        self.assertIsNone(condition_leaf.variable.grad)
+        # Both value branches did receive one.
+        self.assertIsNotNone(model.chosen.grad)
+        self.assertIsNotNone(model.fallback.grad)
+
+    def test_replay_reuses_the_output_variable(self):
+        model = self.Rectified()
+
+        first = model(self.INPUTS)
+        second = model(ts.Tensor([[-5.0, -6.0], [7.0, -8.0]]))
+
+        self.assertIs(first, second)
+
+    def test_each_migrated_function_builds_a_model_of_its_own(self):
+        cases = (
+            ("maximum", lambda self, x: ts.maximum(x @ self.w, self.floor)),
+            ("minimum", lambda self, x: ts.minimum(x @ self.w, self.floor)),
+            ("clip", lambda self, x: ts.clip(x @ self.w, -1.0, 1.0)),
+            ("where", lambda self, x: ts.where(
+                ts.Tensor([[1, 0], [0, 1]], dtype=ts.uint8),
+                x @ self.w,
+                self.floor,
+            )),
+        )
+        for name, forward in cases:
+            with self.subTest(function=name):
+                reset_graph_state()
+
+                def __init__(self):
+                    ts.Graph.__init__(self)
+                    self.w = ts.Variable(
+                        [[1.0, -0.5], [-0.5, 1.0]], name="w"
+                    )
+                    self.floor = ts.Variable(
+                        [[0.0, 0.0], [0.0, 0.0]], name="floor"
+                    )
+
+                model = type(
+                    "Single",
+                    (ts.Graph,),
+                    {"__init__": __init__, "forward": forward},
+                )()
+
+                self.assertIsNotNone(model._structure)
+                program = model._structure.computations[0]
+                names = [
+                    instruction.operation.name
+                    for instruction in program._instructions
+                ]
+                self.assertEqual(names[-1], name)
+                self.assertIsInstance(model(self.INPUTS), ts.Variable)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, overload
+from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_clip, execute_clip_gradient
@@ -11,6 +11,9 @@ from ..dtype import result_dtype
 from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 def _validate_bound(name: str, value: int | float | None) -> None:
@@ -153,6 +156,14 @@ class Clip(Operation):
 
 @overload
 def clip(
+    value: VariableNode,
+    min_value: int | float | None = None,
+    max_value: int | float | None = None,
+) -> VariableNode: ...
+
+
+@overload
+def clip(
     value: TensorValue,
     min_value: int | float | None = None,
     max_value: int | float | None = None,
@@ -168,19 +179,26 @@ def clip(
 
 
 def clip(
-    value: TensorLike,
+    value: TensorLike | VariableNode,
     min_value: int | float | None = None,
     max_value: int | float | None = None,
-) -> TensorResult:
-    """Clip each value to the inclusive interval defined by the bounds."""
-    from ..variable import Variable
+) -> TensorResult | VariableNode:
+    """Clip each value to the inclusive interval defined by the bounds.
+
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later. The bounds are configuration rather than operands, so they stay
+    on the operation and a recorded clip replays the interval it was
+    written with.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
 
     _validate_bounds(min_value, max_value)
-    if isinstance(value, Variable):
-        operation = Clip(min_value=min_value, max_value=max_value)
-        return Variable._apply_operation(operation, (value,))
-    value = as_tensor_operand(value)
-    return Clip(min_value=min_value, max_value=max_value).forward(value)
+    operation = Clip(min_value=min_value, max_value=max_value)
+
+    if is_graph_operand(value):
+        return apply_operation(operation, (value,))
+    return operation.forward(as_tensor_operand(value))
 
 
 __all__ = ["Clip", "clip"]

@@ -25,7 +25,9 @@ from tensors.math.arctanh import ArcTanh
 from tensors.math.cos import Cos
 from tensors.math.cosh import Cosh
 from tensors.math.exp import Exp
+from tensors.math.clip import Clip
 from tensors.math.concat import Concat
+from tensors.math.elementwise_extrema import Maximum, Minimum
 from tensors.math.log import Log
 from tensors.math.log_softmax import LogSoftmax
 from tensors.math.logsumexp import LogSumExp
@@ -36,6 +38,7 @@ from tensors.math.prod import Prod
 from tensors.math.reshape import Reshape
 from tensors.math.softmax import Softmax
 from tensors.math.stack import Stack
+from tensors.math.where import Where
 from tensors.math.std import Std
 from tensors.math.sum import Sum
 from tensors.math.variance import Variance
@@ -882,6 +885,266 @@ class SequenceStructuralTests(unittest.TestCase):
                     getattr(ts, name)([])
 
 
+class SelectionStructuralTests(unittest.TestCase):
+    """Extrema, clipping and selection record over vertices."""
+
+    MASK = [[1, 0], [0, 1]]
+    LEFT = [[1.0, -2.0], [3.0, -4.0]]
+    RIGHT = [[9.0, 9.0], [9.0, 9.0]]
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def _mask(self):
+        return ts.Tensor(self.MASK, dtype=ts.uint8)
+
+    # -- maximum and minimum ------------------------------------------
+
+    def test_an_extremum_records_from_either_position(self):
+        layouts = (
+            ("[vertex, Tensor]",
+             lambda node: (node, ts.Tensor(self.RIGHT)), (0,)),
+            ("[Tensor, vertex]",
+             lambda node: (ts.Tensor(self.RIGHT), node), (1,)),
+            ("[vertex, Variable]",
+             lambda node: (node, ts.Variable(self.RIGHT, name="right")), (0,)),
+            ("[Variable, vertex]",
+             lambda node: (ts.Variable(self.RIGHT, name="left"), node), (1,)),
+            ("[vertex, vertex]",
+             lambda node: (node, VariableNode()), (0, 1)),
+            ("[vertex, data]",
+             lambda node: (node, [[0.0, 0.0], [0.0, 0.0]]), (0,)),
+        )
+        for name, operation in (("maximum", Maximum), ("minimum", Minimum)):
+            for label, build, positions in layouts:
+                with self.subTest(function=name, operands=label):
+                    reset_graph_state()
+                    node = VariableNode()
+                    left, right = build(node)
+                    calls = []
+                    original = operation.forward
+
+                    def counted(self, *args, _original=original, _calls=calls):
+                        _calls.append(args)
+                        return _original(self, *args)
+
+                    with patch.object(operation, "forward", counted):
+                        result = getattr(ts, name)(left, right)
+
+                    self.assertIsInstance(result, VariableNode)
+                    self.assertFalse(result.is_bound)
+                    self.assertIsInstance(result.producer.operation, operation)
+
+                    operands = result.producer.operand_nodes
+                    self.assertEqual(len(operands), 2)
+                    self.assertIs(operands[positions[0]], node)
+                    for index, operand in enumerate(operands):
+                        if index in positions:
+                            self.assertFalse(operand.is_bound)
+                        else:
+                            self.assertTrue(operand.is_bound)
+                    self.assertEqual(calls, [])
+                    self.assertFalse(node.is_bound)
+
+    def test_an_extremum_still_promotes_a_scalar_for_runtime_operands(self):
+        # The eager path types a Python scalar against the operand beside
+        # it. A vertex has no value to type against, so the scalar form is
+        # reported rather than guessed.
+        value = ts.Variable(
+            ts.Tensor(self.LEFT, dtype=ts.float32), name="value"
+        )
+        self.assertIs(ts.maximum(value, 0.0).data.dtype, ts.float32)
+        self.assertIs(ts.minimum(0.0, value).data.dtype, ts.float32)
+        with self.assertRaises(UnsupportedStructuralExpression):
+            ts.maximum(VariableNode(), 0.0)
+
+    # -- clip ----------------------------------------------------------
+
+    def test_clip_records_its_bounds_as_configuration(self):
+        for label, keywords, low, high in (
+            ("both", {"min_value": -1.0, "max_value": 1.0}, -1.0, 1.0),
+            ("min only", {"min_value": 0.0}, 0.0, None),
+            ("max only", {"max_value": 0.5}, None, 0.5),
+            ("integers", {"min_value": -1, "max_value": 1}, -1, 1),
+        ):
+            with self.subTest(bounds=label):
+                reset_graph_state()
+                node = VariableNode()
+                calls = []
+                original = Clip.forward
+
+                def counted(self, *args, _original=original, _calls=calls):
+                    _calls.append(args)
+                    return _original(self, *args)
+
+                with patch.object(Clip, "forward", counted):
+                    result = ts.clip(node, **keywords)
+
+                self.assertIsInstance(result, VariableNode)
+                self.assertFalse(result.is_bound)
+                recorded = result.producer.operation
+                self.assertIsInstance(recorded, Clip)
+                # The bounds are configuration, not operands.
+                self.assertEqual(recorded.min_value, low)
+                self.assertEqual(recorded.max_value, high)
+                self.assertEqual(result.producer.operand_nodes, (node,))
+                self.assertEqual(calls, [])
+                self.assertFalse(node.is_bound)
+
+    def test_clip_still_validates_its_bounds_before_recording(self):
+        for label, keywords, error in (
+            ("no bounds", {}, ValueError),
+            ("inverted", {"min_value": 1.0, "max_value": -1.0}, ValueError),
+            ("tensor bound", {"min_value": ts.Tensor([0.0])}, TypeError),
+        ):
+            with self.subTest(bounds=label):
+                reset_graph_state()
+                with self.assertRaises(error):
+                    ts.clip(VariableNode(), **keywords)
+
+    # -- where ---------------------------------------------------------
+
+    def test_where_records_a_vertex_in_any_position(self):
+        layouts = (
+            ("condition",
+             lambda node: (node, ts.Tensor(self.LEFT), ts.Tensor(self.RIGHT)),
+             (0,)),
+            ("true branch",
+             lambda node: (self._mask(), node, ts.Tensor(self.RIGHT)), (1,)),
+            ("false branch",
+             lambda node: (self._mask(), ts.Tensor(self.LEFT), node), (2,)),
+            ("all three",
+             lambda node: (node, VariableNode(), VariableNode()), (0, 1, 2)),
+            ("condition and a Variable branch",
+             lambda node: (
+                 node, ts.Variable(self.LEFT, name="chosen"),
+                 ts.Tensor(self.RIGHT),
+             ), (0,)),
+        )
+        for label, build, positions in layouts:
+            with self.subTest(vertex=label):
+                reset_graph_state()
+                node = VariableNode()
+                condition, left, right = build(node)
+                calls = []
+                original = Where.forward
+
+                def counted(self, *args, _original=original, _calls=calls):
+                    _calls.append(args)
+                    return _original(self, *args)
+
+                with patch.object(Where, "forward", counted):
+                    result = ts.where(condition, left, right)
+
+                self.assertIsInstance(result, VariableNode)
+                self.assertFalse(result.is_bound)
+                self.assertIsInstance(result.producer.operation, Where)
+
+                operands = result.producer.operand_nodes
+                # Condition, chosen branch, rejected branch, in that order.
+                self.assertEqual(len(operands), 3)
+                self.assertIs(operands[positions[0]], node)
+                for index, operand in enumerate(operands):
+                    if index in positions:
+                        self.assertFalse(operand.is_bound)
+                    else:
+                        self.assertTrue(operand.is_bound)
+                # The condition is never evaluated.
+                self.assertEqual(calls, [])
+                self.assertFalse(node.is_bound)
+
+    def test_where_keeps_a_variable_branch_and_constifies_a_tensor(self):
+        reset_graph_state()
+        node = VariableNode()
+        chosen = ts.Variable(self.LEFT, name="chosen")
+        result = ts.where(node, chosen, ts.Tensor(self.RIGHT))
+
+        condition, true_branch, false_branch = result.producer.operand_nodes
+        self.assertIs(condition, node)
+        self.assertIs(true_branch.variable, chosen)
+        self.assertTrue(true_branch.variable.requires_grad)
+        self.assertTrue(false_branch.is_bound)
+        self.assertFalse(false_branch.variable.requires_grad)
+
+    def test_where_still_rejects_a_differentiable_condition(self):
+        reset_graph_state()
+        with self.assertRaisesRegex(TypeError, "cannot require gradients"):
+            ts.where(
+                ts.Variable(self.MASK, name="condition"),
+                VariableNode(),
+                ts.Tensor(self.RIGHT),
+            )
+
+    def test_a_comparison_condition_is_still_outside_the_graph(self):
+        # This step records ``where`` itself. Building its condition from a
+        # comparison over a vertex remains unsupported until comparisons
+        # are designed into the graph.
+        reset_graph_state()
+        with self.assertRaises(TypeError):
+            ts.greater(VariableNode(), 0.0)
+
+    # -- replay --------------------------------------------------------
+
+    def test_a_recorded_selection_replays_what_eager_calculates(self):
+        left = ts.Tensor(self.LEFT)
+        right = ts.Tensor(self.RIGHT)
+        cases = (
+            ("maximum", lambda value: ts.maximum(value, right), left),
+            ("minimum", lambda value: ts.minimum(value, right), left),
+            ("clip", lambda value: ts.clip(value, -1.0, 1.0), left),
+            ("where condition",
+             lambda value: ts.where(value, left, right), self._mask()),
+            ("where branch",
+             lambda value: ts.where(self._mask(), value, right), left),
+        )
+        for label, apply, binding in cases:
+            with self.subTest(case=label):
+                reset_graph_state()
+                expected = apply(binding)
+
+                node = VariableNode()
+                output = apply(node)
+                compiler = Compiler((output,), boundaries=(node,))
+                compiler.compile()
+                computations = Computation._from_compiler(compiler)
+                node.materialize(binding, requires_grad=False)
+                for computation in computations:
+                    computation.forward()
+
+                replayed = output.variable.data
+                self.assertEqual(replayed.tolist(), expected.tolist())
+                self.assertEqual(replayed.shape, expected.shape)
+                self.assertIs(replayed.dtype, expected.dtype)
+
+    def test_eager_application_is_unchanged(self):
+        left = ts.Tensor(self.LEFT)
+        right = ts.Tensor(self.RIGHT)
+        for label, apply in (
+            ("maximum", lambda value: ts.maximum(value, right)),
+            ("minimum", lambda value: ts.minimum(value, right)),
+            ("clip", lambda value: ts.clip(value, -1.0, 1.0)),
+            ("where", lambda value: ts.where(self._mask(), value, right)),
+        ):
+            with self.subTest(function=label):
+                reset_graph_state()
+                tensor_result = apply(left)
+                self.assertIsInstance(tensor_result, ts.Tensor)
+
+                variable = ts.Variable(self.LEFT, name="value")
+                variable_result = apply(variable)
+                self.assertIsInstance(variable_result, ts.Variable)
+                self.assertEqual(
+                    variable_result.data.tolist(), tensor_result.tolist()
+                )
+
+                ts.backward(ts.sum(variable_result))
+                self.assertIsNotNone(variable.grad)
+                self.assertEqual(variable.grad.shape, variable.shape)
+
+
 class RuntimeApplicationIsUnchangedTests(unittest.TestCase):
     """Runtime expressions still calculate through a Computation."""
 
@@ -989,11 +1252,14 @@ class TensorOperandBoundaryTests(unittest.TestCase):
     def test_an_operation_without_a_structural_form_signals(self):
         vertex = VariableNode()
         calls = {
-            "where": lambda: ts.where(
-                ts.Tensor([True]), vertex, ts.Tensor([1.0])
-            ),
-            "maximum": lambda: ts.maximum(vertex, ts.Tensor([1.0])),
             "conv1d": lambda: ts.conv1d(vertex, ts.ones((1, 1, 2))),
+            "conv2d": lambda: ts.conv2d(vertex, ts.ones((1, 1, 2, 2))),
+            "cross_entropy": lambda: ts.cross_entropy(
+                vertex, ts.Tensor([0], dtype=ts.int64)
+            ),
+            "binary_cross_entropy": lambda: ts.binary_cross_entropy(
+                vertex, ts.Tensor([1.0])
+            ),
         }
         for name, call in calls.items():
             with self.subTest(operation=name):

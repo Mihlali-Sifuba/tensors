@@ -15,6 +15,7 @@ from ..graph.expression import as_tensor_operand
 from ..utils.broadcasting import broadcast_tensors
 
 if TYPE_CHECKING:
+    from ..graph.node import VariableNode
     from ..variable import Variable
 
 
@@ -232,7 +233,22 @@ class Minimum(_ElementwiseExtremum):
 
 
 def _extremum(operation: Operation, left: Any, right: Any) -> Any:
+    """Apply an extremum as the kinds of its two operands imply.
+
+    A vertex is answered first and on its own terms: it names a value
+    that does not exist, so neither operand can be read for the dtype a
+    Python scalar is promoted against below, and the expression is
+    recorded instead of calculated.
+    """
+    from ..graph.expression import apply_operation, as_graph_operand
+    from ..graph.node import VariableNode
     from ..variable import Variable
+
+    if isinstance(left, VariableNode) or isinstance(right, VariableNode):
+        return apply_operation(
+            operation,
+            (as_graph_operand(left), as_graph_operand(right)),
+        )
 
     left_is_variable = isinstance(left, Variable)
     right_is_variable = isinstance(right, Variable)
@@ -260,6 +276,17 @@ def _extremum(operation: Operation, left: Any, right: Any) -> Any:
 
 
 @overload
+def maximum(
+    left: VariableNode,
+    right: TensorLike | VariableNode,
+) -> VariableNode: ...
+
+
+@overload
+def maximum(left: TensorLike, right: VariableNode) -> VariableNode: ...
+
+
+@overload
 def maximum(left: Variable, right: TensorLike) -> Variable: ...
 
 
@@ -271,9 +298,23 @@ def maximum(left: TensorLike, right: Variable) -> Variable: ...
 def maximum(left: TensorData, right: TensorData) -> Tensor: ...
 
 
-def maximum(left: TensorLike, right: TensorLike) -> TensorResult:
+def maximum(
+    left: TensorLike | VariableNode,
+    right: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
     """Return the broadcasting elementwise maximum of two values."""
     return _extremum(Maximum(), left, right)
+
+
+@overload
+def minimum(
+    left: VariableNode,
+    right: TensorLike | VariableNode,
+) -> VariableNode: ...
+
+
+@overload
+def minimum(left: TensorLike, right: VariableNode) -> VariableNode: ...
 
 
 @overload
@@ -288,7 +329,10 @@ def minimum(left: TensorLike, right: Variable) -> Variable: ...
 def minimum(left: TensorData, right: TensorData) -> Tensor: ...
 
 
-def minimum(left: TensorLike, right: TensorLike) -> TensorResult:
+def minimum(
+    left: TensorLike | VariableNode,
+    right: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
     """Return the broadcasting elementwise minimum of two values."""
     return _extremum(Minimum(), left, right)
 
