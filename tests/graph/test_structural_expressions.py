@@ -29,6 +29,7 @@ from tensors.math.binary_cross_entropy import BinaryCrossEntropy
 from tensors.math.clip import Clip
 from tensors.math.concat import Concat
 from tensors.math.convolution import ConvND
+from tensors.math.cross_entropy import CrossEntropy
 from tensors.math.elementwise_extrema import Maximum, Minimum
 from tensors.math.log import Log
 from tensors.math.log_softmax import LogSoftmax
@@ -1498,17 +1499,18 @@ class BinaryCrossEntropyStructuralTests(unittest.TestCase):
         self.assertEqual(prediction.grad.shape, prediction.shape)
 
 
-class CrossEntropyStaysUnsupportedTests(unittest.TestCase):
-    """cross_entropy cannot be recorded before its operands have values.
+class CrossEntropyStructuralTests(unittest.TestCase):
+    """Cross-entropy records its raw targets and reads them when it runs.
 
-    The public function reads the logits to normalize the class axis and to
-    decide whether the targets are class indices or a dense distribution,
-    expanding indices to the logits' own shape. A vertex has neither shape
-    nor values, so the operands the operation would receive cannot be
-    prepared while recording.
+    The operation prepares its own targets, so the public function no longer
+    needs the logits' shape or the targets' values to record the call, and a
+    vertex is valid in either position.
     """
 
-    LOGITS = [[2.0, 1.0, 0.1]]
+    LOGITS = [[2.0, 1.0, 0.1], [0.5, -1.0, 3.0]]
+    INDICES = [0, 2]
+    DENSE = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+    SOFT = [[0.7, 0.2, 0.1], [0.1, 0.1, 0.8]]
 
     def setUp(self):
         reset_graph_state()
@@ -1516,52 +1518,243 @@ class CrossEntropyStaysUnsupportedTests(unittest.TestCase):
     def tearDown(self):
         reset_graph_state()
 
-    def test_a_vertex_is_reported_in_either_position(self):
-        for label, call in (
-            ("logits", lambda: ts.cross_entropy(
-                VariableNode(), ts.Tensor([0], dtype=ts.int64))),
-            ("targets", lambda: ts.cross_entropy(
-                ts.Tensor(self.LOGITS), VariableNode())),
-            ("both", lambda: ts.cross_entropy(
-                VariableNode(), VariableNode())),
-        ):
-            with self.subTest(vertex=label):
-                reset_graph_state()
-                # The signal the build treats as its fallback, not a hard
-                # error, so a model using it stays on tracing.
-                with self.assertRaises(UnsupportedStructuralExpression):
-                    call()
+    def _indices(self):
+        return ts.Tensor(self.INDICES, dtype=ts.int64)
 
-    def test_its_target_semantics_are_unchanged(self):
+    def _layouts(self):
+        return (
+            ("vertex logits, index targets",
+             lambda node: (node, self._indices()), (0,)),
+            ("vertex logits, dense targets",
+             lambda node: (node, ts.Tensor(self.DENSE)), (0,)),
+            ("Tensor logits, vertex targets",
+             lambda node: (ts.Tensor(self.LOGITS), node), (1,)),
+            ("vertex logits, Variable targets",
+             lambda node: (node, ts.Variable(self.DENSE, name="target")),
+             (0,)),
+            ("Variable logits, vertex targets",
+             lambda node: (ts.Variable(self.LOGITS, name="logits"), node),
+             (1,)),
+            ("vertex logits, vertex targets",
+             lambda node: (node, VariableNode()), (0, 1)),
+        )
+
+    def test_a_vertex_records_in_either_position(self):
+        for label, build, positions in self._layouts():
+            with self.subTest(operands=label):
+                reset_graph_state()
+                node = VariableNode()
+                logits, targets = build(node)
+                calls = []
+                original = CrossEntropy.forward
+
+                def counted(self, *args, _original=original, _calls=calls):
+                    _calls.append(args)
+                    return _original(self, *args)
+
+                with patch.object(CrossEntropy, "forward", counted):
+                    result = ts.cross_entropy(logits, targets)
+
+                self.assertIsInstance(result, VariableNode)
+                self.assertFalse(result.is_bound)
+                self.assertIsInstance(result.producer.operation, CrossEntropy)
+
+                operands = result.producer.operand_nodes
+                # Logits first, raw targets second.
+                self.assertEqual(len(operands), 2)
+                self.assertIs(operands[positions[0]], node)
+                for index, operand in enumerate(operands):
+                    if index in positions:
+                        self.assertFalse(operand.is_bound)
+                    else:
+                        self.assertTrue(operand.is_bound)
+                # Nothing was calculated and no target was expanded.
+                self.assertEqual(calls, [])
+                self.assertFalse(node.is_bound)
+
+    def test_the_graph_records_the_raw_targets(self):
+        reset_graph_state()
+        result = ts.cross_entropy(VariableNode(), self._indices())
+
+        target_leaf = result.producer.operand_nodes[1]
+        recorded = target_leaf.variable.data
+        # The class indices themselves, not a dense expansion of them.
+        self.assertIs(recorded.dtype, ts.int64)
+        self.assertEqual(recorded.shape, (2,))
+        self.assertEqual(recorded.tolist(), self.INDICES)
+        self.assertFalse(target_leaf.variable.requires_grad)
+
+    def test_the_recorded_operation_keeps_the_axis_it_was_given(self):
+        for axis in (-1, 1, 0):
+            for reduction in ("none", "mean", "sum"):
+                with self.subTest(axis=axis, reduction=reduction):
+                    reset_graph_state()
+                    result = ts.cross_entropy(
+                        VariableNode(),
+                        self._indices(),
+                        axis=axis,
+                        reduction=reduction,
+                    )
+                    recorded = result.producer.operation
+                    # The axis is normalized where the rank is known, which
+                    # is when the operation runs, so it is recorded as given.
+                    self.assertEqual(recorded.axis, axis)
+                    self.assertEqual(recorded.reduction, reduction)
+
+    def test_a_runtime_variable_keeps_its_identity(self):
+        reset_graph_state()
+        node = VariableNode()
+        target = ts.Variable(self.DENSE, name="target")
+
+        result = ts.cross_entropy(node, target)
+        logits_node, target_node = result.producer.operand_nodes
+
+        self.assertIs(logits_node, node)
+        self.assertIs(target_node.variable, target)
+        self.assertTrue(target_node.variable.requires_grad)
+
+    def test_the_configuration_is_still_validated_while_recording(self):
+        for label, keywords, error in (
+            ("reduction", {"reduction": "median"}, ValueError),
+            ("reduction type", {"reduction": 5}, TypeError),
+            ("axis type", {"axis": True}, TypeError),
+        ):
+            with self.subTest(invalid=label):
+                reset_graph_state()
+                with self.assertRaises(error):
+                    ts.cross_entropy(
+                        VariableNode(), self._indices(), **keywords
+                    )
+
+    def test_a_recorded_loss_replays_what_eager_calculates(self):
         logits = ts.Tensor(self.LOGITS)
-        # Class indices, in either integer width, and dense distributions.
+        cases = (
+            ("indices", self._indices(), "mean"),
+            ("indices none", self._indices(), "none"),
+            ("indices sum", self._indices(), "sum"),
+            ("dense", ts.Tensor(self.DENSE), "mean"),
+            ("soft", ts.Tensor(self.SOFT), "mean"),
+            ("soft none", ts.Tensor(self.SOFT), "none"),
+        )
+        for label, targets, reduction in cases:
+            with self.subTest(case=label):
+                reset_graph_state()
+                expected = ts.cross_entropy(
+                    logits, targets, reduction=reduction
+                )
+
+                node = VariableNode()
+                output = ts.cross_entropy(
+                    node, targets, reduction=reduction
+                )
+                compiler = Compiler((output,), boundaries=(node,))
+                compiler.compile()
+                computations = Computation._from_compiler(compiler)
+                node.materialize(logits, requires_grad=False)
+                for computation in computations:
+                    computation.forward()
+
+                replayed = output.variable.data
+                self.assertEqual(replayed.tolist(), expected.tolist())
+                self.assertEqual(replayed.shape, expected.shape)
+                self.assertIs(replayed.dtype, expected.dtype)
+
+    def test_the_target_reading_survives_replay(self):
+        # The same operation replays against different target values, so
+        # the reading has to come from each pass rather than be remembered.
+        node = VariableNode()
+        targets = VariableNode()
+        output = ts.cross_entropy(node, targets)
+        compiler = Compiler((output,), boundaries=(node, targets))
+        compiler.compile()
+        computations = Computation._from_compiler(compiler)
+
+        logits = ts.Tensor(self.LOGITS)
+        node.materialize(logits, requires_grad=False)
+        targets.materialize(self._indices(), requires_grad=False)
+        for computation in computations:
+            computation.forward()
+        self.assertEqual(
+            output.variable.data.tolist(),
+            ts.cross_entropy(logits, self._indices()).tolist(),
+        )
+
+    def test_eager_application_is_unchanged(self):
+        logits = ts.Tensor(self.LOGITS)
         for label, targets in (
-            ("int64 indices", ts.Tensor([0], dtype=ts.int64)),
-            ("int32 indices", ts.Tensor([0], dtype=ts.int32)),
-            ("dense distribution", ts.Tensor([[1.0, 0.0, 0.0]])),
+            ("indices", self._indices()),
+            ("dense", ts.Tensor(self.DENSE)),
         ):
             with self.subTest(targets=label):
                 reset_graph_state()
-                self.assertIsInstance(
-                    ts.cross_entropy(logits, targets), ts.Tensor
+                tensor_result = ts.cross_entropy(logits, targets)
+                self.assertIsInstance(tensor_result, ts.Tensor)
+
+                variable = ts.Variable(self.LOGITS, name="logits")
+                variable_result = ts.cross_entropy(variable, targets)
+                self.assertIsInstance(variable_result, ts.Variable)
+                self.assertEqual(
+                    variable_result.data.tolist(), tensor_result.tolist()
                 )
 
-        # A target that requires gradients is permitted and receives one.
+                ts.backward(variable_result)
+                self.assertIsNotNone(variable.grad)
+                self.assertEqual(variable.grad.shape, variable.shape)
+
+    def test_a_dense_target_is_still_differentiable(self):
         reset_graph_state()
-        prediction = ts.Variable(self.LOGITS, name="logits")
-        target = ts.Variable([[1.0, 0.0, 0.0]], name="target")
-        ts.backward(ts.cross_entropy(prediction, target))
-        self.assertIsNotNone(prediction.grad)
+        logits = ts.Variable(self.LOGITS, name="logits")
+        target = ts.Variable(self.DENSE, name="target")
+
+        ts.backward(ts.cross_entropy(logits, target))
+
+        self.assertIsNotNone(logits.grad)
         self.assertIsNotNone(target.grad)
+        self.assertEqual(target.grad.shape, target.shape)
 
-        # A frozen target receives none.
+    def test_class_index_targets_are_still_refused_as_variables(self):
+        # Class indices name a choice, not a quantity, so they cannot be a
+        # Variable the loss might differentiate.
         reset_graph_state()
-        frozen = ts.Variable(
-            ts.Tensor([[1.0, 0.0, 0.0]]), requires_grad=False
-        )
-        ts.backward(ts.cross_entropy(ts.Variable(self.LOGITS, name="l"), frozen))
-        self.assertIsNone(frozen.grad)
+        with self.assertRaisesRegex(TypeError, "Class-index targets"):
+            ts.cross_entropy(
+                ts.Tensor(self.LOGITS),
+                ts.Variable(
+                    ts.Tensor(self.INDICES, dtype=ts.int64),
+                    requires_grad=False,
+                ),
+            )
+        reset_graph_state()
+        with self.assertRaisesRegex(TypeError, "Class-index targets"):
+            ts.cross_entropy(
+                ts.Variable(self.LOGITS, name="logits"),
+                ts.Variable([0.0, 2.0], name="target"),
+            )
 
+    def test_a_gradient_is_refused_for_recorded_class_indices(self):
+        # A vertex hides the target's kind while recording, so the refusal
+        # is the reverse pass's to make once the values are there.
+        logits = ts.Variable(self.LOGITS, name="logits")
+        targets = ts.Variable([0.0, 2.0], name="targets")
+        operation = CrossEntropy(axis=-1, reduction="mean")
+
+        with self.assertRaisesRegex(TypeError, "Class-index targets"):
+            operation.backward(
+                ts.Tensor([1.0]),
+                logits.data,
+                targets.data,
+                needs_input_grad=(True, True),
+            )
+
+        # Without that demand the same pass is fine.
+        gradients = operation.backward(
+            ts.Tensor([1.0]),
+            logits.data,
+            targets.data,
+            needs_input_grad=(True, False),
+        )
+        self.assertIsNotNone(gradients[0])
+        self.assertIsNone(gradients[1])
 
 class RuntimeApplicationIsUnchangedTests(unittest.TestCase):
     """Runtime expressions still calculate through a Computation."""
@@ -1670,11 +1863,6 @@ class TensorOperandBoundaryTests(unittest.TestCase):
     def test_an_operation_without_a_structural_form_signals(self):
         vertex = VariableNode()
         calls = {
-            # cross_entropy prepares its operands from the logits'
-            # own shape and values, which a vertex does not have.
-            "cross_entropy": lambda: ts.cross_entropy(
-                vertex, ts.Tensor([0], dtype=ts.int64)
-            ),
             "argmax": lambda: ts.argmax(vertex),
             "argmin": lambda: ts.argmin(vertex),
         }

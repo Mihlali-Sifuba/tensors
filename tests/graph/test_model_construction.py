@@ -280,26 +280,22 @@ class StructuralBuildFallbackTests(unittest.TestCase):
             VariableNode() + 1.0
 
     def test_a_function_without_a_structural_form_keeps_tracing(self):
-        class Scored(ts.Graph):
+        # A Python scalar operand is the standing example: its dtype
+        # depends on the value beside it, which is not calculated yet.
+        class Offset(ts.Graph):
             def __init__(self):
                 super().__init__()
-                self.w = ts.Variable([[1.0, 0.5], [0.5, 1.0]], name="w")
+                self.w = ts.Variable([[2.0]], name="w")
 
             def forward(self, x):
-                return ts.cross_entropy(
-                    x @ self.w, ts.Tensor([0], dtype=ts.int64)
-                )
+                return x @ self.w + 2.0
 
-        model = Scored()
+        model = Offset()
 
         self.assertIsNone(model._structure)
-        self.assertIsInstance(
-            model(ts.Tensor([[1.0, 2.0]])), ts.Variable
-        )
+        self.assertEqual(model(ts.Tensor([[1.0]])).data.item(), 4.0)
         with self.assertRaises(UnsupportedStructuralExpression):
-            ts.cross_entropy(
-                VariableNode(), ts.Tensor([0], dtype=ts.int64)
-            )
+            VariableNode() + 2.0
 
     def test_the_signal_is_narrower_than_a_type_error(self):
         # Existing callers still see a TypeError, but the build only treats
@@ -525,20 +521,18 @@ class LinalgModelConstructionTests(unittest.TestCase):
 
     def test_the_fallback_signal_is_still_the_only_one_caught(self):
         # A function with no structural form keeps the tracing lifecycle.
-        class Scored(ts.Graph):
+        class Offset(ts.Graph):
             def __init__(self):
                 super().__init__()
-                self.w = ts.Variable([[2.0, 1.0], [3.0, 1.0]], name="w")
+                self.w = ts.Variable([[2.0], [3.0]], name="w")
 
             def forward(self, x):
-                return ts.cross_entropy(
-                    x @ self.w, ts.Tensor([0], dtype=ts.int64)
-                )
+                return x @ self.w + 2.0
 
-        traced = Scored()
+        traced = Offset()
         self.assertIsNone(traced._structure)
-        self.assertIsInstance(
-            traced(ts.Tensor([[1.0, 1.0]])), ts.Variable
+        self.assertEqual(
+            traced(ts.Tensor([[1.0, 1.0]])).data.item(), 7.0
         )
 
         # Anything else is a real error and construction reports it, so the
@@ -642,14 +636,11 @@ class UnaryModelConstructionTests(unittest.TestCase):
         # still fall back rather than build.
         # argmax and argmin are unsupported too, but they return a
         # Tensor rather than a Variable, so a model cannot end in one.
-        # cross_entropy blocks on either target form.
+        # A Python scalar operand is the remaining expression that a
+        # model can be written around.
         for name, forward in (
-            ("class indices", lambda self, x: ts.cross_entropy(
-                x @ self.w, ts.Tensor([0], dtype=ts.int64)
-            )),
-            ("dense targets", lambda self, x: ts.cross_entropy(
-                x @ self.w, ts.Tensor([[1.0]])
-            )),
+            ("scalar addition", lambda self, x: x @ self.w + 2.0),
+            ("scalar power", lambda self, x: (x @ self.w) ** 2.0),
         ):
             with self.subTest(function=name):
                 reset_graph_state()
@@ -1412,9 +1403,7 @@ class LossModelConstructionTests(unittest.TestCase):
 
         self.assertIs(first, second)
 
-    def test_a_cross_entropy_head_still_keeps_tracing(self):
-        # cross_entropy prepares its operands from the logits' shape and
-        # values, so it cannot be recorded and the model stays on tracing.
+    def test_a_cross_entropy_head_now_builds_too(self):
         class Multiclass(ts.Graph):
             def __init__(self):
                 super().__init__()
@@ -1427,12 +1416,156 @@ class LossModelConstructionTests(unittest.TestCase):
 
         model = Multiclass()
 
-        self.assertIsNone(model._structure)
-        # Still usable, and still differentiable, through tracing.
+        self.assertIsNotNone(model._structure)
+        program = model._structure.computations[0]
+        self.assertEqual(
+            [
+                instruction.operation.name
+                for instruction in program._instructions
+            ],
+            ["dot", "cross_entropy"],
+        )
         loss = model(ts.Tensor([[1.0, 2.0]]))
         self.assertIsInstance(loss, ts.Variable)
         ts.backward(loss)
         self.assertIsNotNone(model.w.grad)
+
+
+
+class CrossEntropyModelConstructionTests(unittest.TestCase):
+    """A cross-entropy head builds whichever target form it was written with."""
+
+    INPUTS = (
+        ts.Tensor([[1.0, 2.0]]),
+        ts.Tensor([[-1.0, 0.5]]),
+        ts.Tensor([[3.0, -2.0]]),
+    )
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    class Indexed(ts.Graph):
+        """A trainable path scored against one fixed class per sample."""
+
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable(
+                [[1.0, 0.5, 0.0], [0.5, 1.0, 0.5]], name="w"
+            )
+
+        def forward(self, x):
+            return ts.cross_entropy(
+                x @ self.w, ts.Tensor([0], dtype=ts.int64)
+            )
+
+    class Dense(ts.Graph):
+        """The same path scored against a fixed distribution."""
+
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable(
+                [[1.0, 0.5, 0.0], [0.5, 1.0, 0.5]], name="w"
+            )
+
+        def forward(self, x):
+            return ts.cross_entropy(
+                x @ self.w, ts.Tensor([[0.6, 0.3, 0.1]])
+            )
+
+    class TrainableTarget(ts.Graph):
+        """A distribution that is itself a parameter, so it takes gradients."""
+
+        def __init__(self):
+            super().__init__()
+            self.w = ts.Variable(
+                [[1.0, 0.5, 0.0], [0.5, 1.0, 0.5]], name="w"
+            )
+            self.target = ts.Variable([[0.6, 0.3, 0.1]], name="target")
+
+        def forward(self, x):
+            return ts.cross_entropy(x @ self.w, self.target)
+
+    def _cases(self):
+        return (
+            (self.Indexed,
+             lambda m, x: ts.cross_entropy(
+                 x @ m.w.data, ts.Tensor([0], dtype=ts.int64))),
+            (self.Dense,
+             lambda m, x: ts.cross_entropy(
+                 x @ m.w.data, ts.Tensor([[0.6, 0.3, 0.1]]))),
+            (self.TrainableTarget,
+             lambda m, x: ts.cross_entropy(x @ m.w.data, m.target.data)),
+        )
+
+    def test_the_models_build_during_construction(self):
+        for factory, _ in self._cases():
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+
+                self.assertIsNotNone(model._structure)
+                program = model._structure.computations[0]
+                self.assertEqual(
+                    [
+                        instruction.operation.name
+                        for instruction in program._instructions
+                    ],
+                    ["dot", "cross_entropy"],
+                )
+
+    def test_the_built_programs_replay_what_eager_calculates(self):
+        for factory, forward in self._cases():
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+                for value in self.INPUTS:
+                    replayed = model(value).data
+                    expected = forward(model, value)
+                    self.assertEqual(replayed.tolist(), expected.tolist())
+                    self.assertEqual(replayed.shape, expected.shape)
+
+    def test_gradients_reach_the_logits_path(self):
+        for factory, _ in self._cases():
+            with self.subTest(model=factory.__name__):
+                reset_graph_state()
+                model = factory()
+                ts.backward(model(self.INPUTS[0]))
+                self.assertIsNotNone(model.w.grad)
+                self.assertEqual(model.w.grad.shape, model.w.shape)
+
+    def test_a_trainable_distribution_takes_a_gradient(self):
+        model = self.TrainableTarget()
+
+        ts.backward(model(self.INPUTS[0]))
+
+        self.assertIsNotNone(model.target.grad)
+        self.assertEqual(model.target.grad.shape, model.target.shape)
+
+    def test_class_index_targets_take_no_gradient(self):
+        model = self.Indexed()
+
+        ts.backward(model(self.INPUTS[0]))
+
+        # The indices were recorded raw, as a frozen leaf, and stayed one.
+        frozen = [
+            node.variable
+            for node in model._structure.computations[0]._variable_nodes
+            if node.is_bound and not node.variable.requires_grad
+        ]
+        self.assertTrue(frozen)
+        for constant in frozen:
+            self.assertIsNone(constant.grad)
+
+    def test_replay_reuses_the_output_variable(self):
+        model = self.Indexed()
+
+        first = model(self.INPUTS[0])
+        second = model(self.INPUTS[1])
+
+        self.assertIs(first, second)
 
 
 if __name__ == "__main__":
