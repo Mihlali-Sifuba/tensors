@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, overload
+from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
@@ -11,6 +11,9 @@ from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
 from ._unary import unary_backward, unary_forward
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class Cosh(Operation):
@@ -52,6 +55,10 @@ class Cosh(Operation):
 
 
 @overload
+def cosh(value: VariableNode) -> VariableNode: ...
+
+
+@overload
 def cosh(value: TensorValue) -> TensorValue: ...
 
 
@@ -59,13 +66,19 @@ def cosh(value: TensorValue) -> TensorValue: ...
 def cosh(value: TensorData) -> Tensor: ...
 
 
-def cosh(value: TensorLike) -> TensorResult:
-    """Return the elementwise hyperbolic cosine."""
-    from ..variable import Variable
+def cosh(
+    value: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Return the elementwise hyperbolic cosine.
 
-    if isinstance(value, Variable):
-        operation = Cosh()
-        return Variable._apply_operation(operation, (value,))
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
+
+    if is_graph_operand(value):
+        return apply_operation(Cosh(), (value,))
     value = as_tensor_operand(value)
     return Cosh().forward(value)
 

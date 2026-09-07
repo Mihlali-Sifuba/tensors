@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, overload
+from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
@@ -11,6 +11,9 @@ from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
 from ._unary import unary_backward, unary_forward
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class ArcSin(Operation):
@@ -55,6 +58,10 @@ class ArcSin(Operation):
 
 
 @overload
+def arcsin(value: VariableNode) -> VariableNode: ...
+
+
+@overload
 def arcsin(value: TensorValue) -> TensorValue: ...
 
 
@@ -62,13 +69,19 @@ def arcsin(value: TensorValue) -> TensorValue: ...
 def arcsin(value: TensorData) -> Tensor: ...
 
 
-def arcsin(value: TensorLike) -> TensorResult:
-    """Return the elementwise inverse sine in radians."""
-    from ..variable import Variable
+def arcsin(
+    value: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Return the elementwise inverse sine in radians.
 
-    if isinstance(value, Variable):
-        operation = ArcSin()
-        return Variable._apply_operation(operation, (value,))
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
+
+    if is_graph_operand(value):
+        return apply_operation(ArcSin(), (value,))
     value = as_tensor_operand(value)
     return ArcSin().forward(value)
 
