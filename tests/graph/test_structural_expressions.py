@@ -13,6 +13,7 @@ from tensors.graph.state import (
 )
 from tensors.linalg.dot import Dot
 from tensors.math.relu import ReLU
+from tensors.math.sigmoid import Sigmoid
 from tensors.ops import Add, Mul
 
 
@@ -102,6 +103,26 @@ class StructuralExpressionTests(unittest.TestCase):
         self.assertFalse(activated.is_bound)
         self.assertIsInstance(activated.producer.operation, ReLU)
         self.assertEqual(activated.producer.operand_nodes, (node,))
+
+    def test_sigmoid_records_structurally(self):
+        node = VariableNode()
+        calls = []
+        original = Sigmoid.forward
+
+        def counted(self, *args):
+            calls.append(args)
+            return original(self, *args)
+
+        with patch.object(Sigmoid, "forward", counted):
+            activated = ts.sigmoid(node)
+
+        self.assertIsInstance(activated, VariableNode)
+        self.assertFalse(activated.is_bound)
+        self.assertIsInstance(activated.producer.operation, Sigmoid)
+        self.assertEqual(activated.producer.operand_nodes, (node,))
+        # The vertex names a value that does not exist yet, so the numerical
+        # forward never ran.
+        self.assertEqual(calls, [])
 
     def test_a_chain_records_the_whole_topology_unbound(self):
         inputs = VariableNode()
@@ -267,6 +288,24 @@ class RuntimeApplicationIsUnchangedTests(unittest.TestCase):
             ts.matmul(value, weight).data.tolist(), [-1.0, 2.0, 3.0, -4.0]
         )
 
+    def test_sigmoid_still_applies_to_both_runtime_kinds(self):
+        tensor = ts.sigmoid(ts.Tensor([0.0, 0.0]))
+
+        self.assertIsInstance(tensor, ts.Tensor)
+        self.assertEqual(tensor.tolist(), [0.5, 0.5])
+
+        value = ts.Variable([0.0, 0.0], name="value")
+        result = ts.sigmoid(value)
+
+        self.assertIsInstance(result, ts.Variable)
+        self.assertTrue(result.node.is_bound)
+        self.assertEqual(result.data.tolist(), [0.5, 0.5])
+
+        ts.backward(ts.sum(result))
+
+        for gradient in value.grad.tolist():
+            self.assertAlmostEqual(gradient, 0.25)
+
     def test_backward_still_reaches_the_leaves(self):
         left = ts.Variable([1.0, 2.0], name="left")
         right = ts.Variable([3.0, 4.0], name="right")
@@ -303,7 +342,6 @@ class TensorOperandBoundaryTests(unittest.TestCase):
     def test_an_operation_without_a_structural_form_signals(self):
         vertex = VariableNode()
         calls = {
-            "sigmoid": lambda: ts.sigmoid(vertex),
             "sum": lambda: ts.sum(vertex),
             "transpose": lambda: ts.transpose(vertex),
             "concat": lambda: ts.concat([vertex, ts.Tensor([1.0])]),

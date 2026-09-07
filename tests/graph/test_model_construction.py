@@ -280,20 +280,20 @@ class StructuralBuildFallbackTests(unittest.TestCase):
             VariableNode() + 1.0
 
     def test_a_function_without_a_structural_form_keeps_tracing(self):
-        class Activated(ts.Graph):
+        class Reduced(ts.Graph):
             def __init__(self):
                 super().__init__()
-                self.w = ts.Variable([[0.0]], name="w")
+                self.w = ts.Variable([[2.0]], name="w")
 
             def forward(self, x):
-                return ts.sigmoid(x @ self.w)
+                return ts.sum(x @ self.w)
 
-        model = Activated()
+        model = Reduced()
 
         self.assertIsNone(model._structure)
-        self.assertEqual(model(ts.Tensor([[1.0]])).data.tolist(), [0.5])
+        self.assertEqual(model(ts.Tensor([[1.0]])).data.item(), 2.0)
         with self.assertRaises(UnsupportedStructuralExpression):
-            ts.sigmoid(VariableNode())
+            ts.sum(VariableNode())
 
     def test_the_signal_is_narrower_than_a_type_error(self):
         # Existing callers still see a TypeError, but the build only treats
@@ -357,6 +357,80 @@ class StructuralBuildFallbackTests(unittest.TestCase):
             ["dot", "add"],
         )
         self.assertEqual(model(ts.Tensor([[3.0]])).data.tolist(), [7.0])
+
+
+class SigmoidModelConstructionTests(unittest.TestCase):
+    """A sigmoid activation no longer abandons the structural build."""
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_a_sigmoid_model_builds_during_construction(self):
+        class Activated(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.w = ts.Variable([[0.0]], name="w")
+
+            def forward(self, x):
+                return ts.sigmoid(x @ self.w)
+
+        model = Activated()
+
+        self.assertIsNotNone(model._structure)
+        program = model._structure.computations[0]
+        self.assertEqual(
+            [
+                instruction.operation.name
+                for instruction in program._instructions
+            ],
+            ["dot", "sigmoid"],
+        )
+        self.assertEqual(model(ts.Tensor([[1.0]])).data.tolist(), [0.5])
+
+    def test_the_xor_model_shape_builds_during_construction(self):
+        class MLP(ts.Graph):
+            def __init__(self):
+                super().__init__()
+                self.hidden_weight = ts.Variable(
+                    [[0.5, -0.5], [-0.5, 0.5]], name="hidden_weight"
+                )
+                self.hidden_bias = ts.Variable([0.0, 0.0], name="hidden_bias")
+                self.output_weight = ts.Variable(
+                    [[1.0], [1.0]], name="output_weight"
+                )
+                self.output_bias = ts.Variable([0.0], name="output_bias")
+
+            def forward(self, inputs):
+                hidden = ts.relu(
+                    inputs @ self.hidden_weight + self.hidden_bias
+                )
+                logits = hidden @ self.output_weight + self.output_bias
+                return ts.sigmoid(logits)
+
+        model = MLP()
+
+        self.assertIsNotNone(model._structure)
+        program = model._structure.computations[0]
+        self.assertEqual(
+            [
+                instruction.operation.name
+                for instruction in program._instructions
+            ],
+            ["dot", "add", "relu", "dot", "add", "sigmoid"],
+        )
+
+        predictions = model(ts.Tensor([[-1.0, 1.0], [1.0, 1.0]]))
+        self.assertEqual(predictions.shape, (2, 1))
+
+        # The built program is still differentiable end to end.
+        ts.backward(ts.sum(predictions))
+        for parameter in model.parameters():
+            with self.subTest(parameter=parameter.name):
+                self.assertIsNotNone(parameter.grad)
+                self.assertEqual(parameter.grad.shape, parameter.shape)
 
 
 if __name__ == "__main__":
