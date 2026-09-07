@@ -1756,6 +1756,215 @@ class CrossEntropyStructuralTests(unittest.TestCase):
         self.assertIsNotNone(gradients[0])
         self.assertIsNone(gradients[1])
 
+class CrossEntropyVariableTargetParityTests(unittest.TestCase):
+    """A Variable may stand for a distribution but never for class indices.
+
+    The rule is about how the target was written, not about whether a
+    gradient was asked for, so it has to hold whether the call runs now or
+    is recorded and replayed later. The graph keeps a Tensor constant and a
+    caller's Variable as the same kind of leaf, so the operation is told how
+    the call was written and reaches the same refusal when it runs.
+    """
+
+    LOGITS = [[2.0, 1.0, 0.1]]
+    INDICES = [0]
+    DENSE = [[1.0, 0.0, 0.0]]
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def _frozen_indices(self):
+        return ts.Variable(
+            ts.Tensor(self.INDICES, dtype=ts.int64), requires_grad=False
+        )
+
+    def _trainable_indices(self):
+        # A floating Variable of integral values reads as class indices.
+        return ts.Variable([0.0], name="targets")
+
+    def _tensor_indices(self):
+        return ts.Tensor(self.INDICES, dtype=ts.int64)
+
+    def _replay(self, targets):
+        """Record against a vertex, then run the recorded program."""
+        node = VariableNode()
+        output = ts.cross_entropy(node, targets)
+        compiler = Compiler((output,), boundaries=(node,))
+        compiler.compile()
+        computations = Computation._from_compiler(compiler)
+        node.materialize(ts.Tensor(self.LOGITS), requires_grad=False)
+        for computation in computations:
+            computation.forward()
+        return output.variable
+
+    def test_a_variable_of_class_indices_is_refused_everywhere(self):
+        cases = (
+            ("eager, Tensor logits, frozen",
+             lambda: ts.cross_entropy(
+                 ts.Tensor(self.LOGITS), self._frozen_indices())),
+            ("eager, Variable logits, frozen",
+             lambda: ts.cross_entropy(
+                 ts.Variable(self.LOGITS, name="logits"),
+                 self._frozen_indices())),
+            ("eager, Tensor logits, trainable",
+             lambda: ts.cross_entropy(
+                 ts.Tensor(self.LOGITS), self._trainable_indices())),
+            ("eager, Variable logits, trainable",
+             lambda: ts.cross_entropy(
+                 ts.Variable(self.LOGITS, name="logits"),
+                 self._trainable_indices())),
+            ("replay, vertex logits, frozen",
+             lambda: self._replay(self._frozen_indices())),
+            ("replay, vertex logits, trainable",
+             lambda: self._replay(self._trainable_indices())),
+        )
+        for label, call in cases:
+            with self.subTest(case=label):
+                reset_graph_state()
+                with self.assertRaisesRegex(
+                    TypeError, "Class-index targets"
+                ):
+                    call()
+
+    def test_a_model_written_that_way_is_refused_when_it_runs(self):
+        # A vertex hides the logits' rank, so the model still records; the
+        # refusal belongs to the pass that has the values.
+        for label, targets in (
+            ("frozen", self._frozen_indices()),
+            ("trainable", self._trainable_indices()),
+        ):
+            with self.subTest(targets=label):
+                reset_graph_state()
+                held = targets
+
+                class Head(ts.Graph):
+                    def __init__(self):
+                        super().__init__()
+                        self.w = ts.Variable(
+                            [[1.0, 0.5, 0.0], [0.5, 1.0, 0.5]], name="w"
+                        )
+
+                    def forward(self, x):
+                        return ts.cross_entropy(x @ self.w, held)
+
+                model = Head()
+                self.assertIsNotNone(model._structure)
+                with self.assertRaisesRegex(
+                    TypeError, "Class-index targets"
+                ):
+                    model(ts.Tensor([[1.0, 2.0]]))
+
+    def test_tensor_class_indices_stay_valid_everywhere(self):
+        indices = self._tensor_indices()
+        self.assertIsInstance(
+            ts.cross_entropy(ts.Tensor(self.LOGITS), indices), ts.Tensor
+        )
+        reset_graph_state()
+        self.assertIsInstance(
+            ts.cross_entropy(
+                ts.Variable(self.LOGITS, name="logits"), indices
+            ),
+            ts.Variable,
+        )
+        reset_graph_state()
+        replayed = self._replay(indices)
+        self.assertEqual(
+            replayed.data.tolist(),
+            ts.cross_entropy(ts.Tensor(self.LOGITS), indices).tolist(),
+        )
+
+        # The logits still take a gradient; the indices never do.
+        reset_graph_state()
+        logits = ts.Variable(self.LOGITS, name="logits")
+        ts.backward(ts.cross_entropy(logits, indices))
+        self.assertIsNotNone(logits.grad)
+        self.assertEqual(logits.grad.shape, logits.shape)
+
+    def test_a_dense_variable_target_stays_valid_everywhere(self):
+        for label, build in (
+            ("frozen",
+             lambda: ts.Variable(ts.Tensor(self.DENSE), requires_grad=False)),
+            ("trainable", lambda: ts.Variable(self.DENSE, name="targets")),
+        ):
+            with self.subTest(targets=label):
+                reset_graph_state()
+                self.assertIsInstance(
+                    ts.cross_entropy(ts.Tensor(self.LOGITS), build()),
+                    ts.Variable,
+                )
+                reset_graph_state()
+                self.assertIsInstance(
+                    ts.cross_entropy(
+                        ts.Variable(self.LOGITS, name="logits"), build()
+                    ),
+                    ts.Variable,
+                )
+                reset_graph_state()
+                self.assertIsInstance(self._replay(build()), ts.Variable)
+
+    def test_dense_target_gradients_follow_the_gradient_flag(self):
+        reset_graph_state()
+        logits = ts.Variable(self.LOGITS, name="logits")
+        trainable = ts.Variable(self.DENSE, name="targets")
+        ts.backward(ts.cross_entropy(logits, trainable))
+        self.assertIsNotNone(logits.grad)
+        self.assertIsNotNone(trainable.grad)
+        self.assertEqual(trainable.grad.shape, trainable.shape)
+
+        reset_graph_state()
+        logits = ts.Variable(self.LOGITS, name="logits")
+        frozen = ts.Variable(ts.Tensor(self.DENSE), requires_grad=False)
+        ts.backward(ts.cross_entropy(logits, frozen))
+        self.assertIsNotNone(logits.grad)
+        self.assertIsNone(frozen.grad)
+
+    def test_how_the_call_was_written_is_configuration_not_target_state(self):
+        # The flag says a Variable was supplied; which reading its values
+        # give is still decided by every pass, so one operation replays
+        # against changing targets.
+        recorded = ts.cross_entropy(
+            VariableNode(), ts.Tensor(self.INDICES, dtype=ts.int64)
+        )
+        self.assertFalse(recorded.producer.operation.targets_from_variable)
+
+        reset_graph_state()
+        recorded = ts.cross_entropy(
+            VariableNode(), ts.Variable(self.DENSE, name="targets")
+        )
+        self.assertTrue(recorded.producer.operation.targets_from_variable)
+
+        reset_graph_state()
+        logits_node = VariableNode()
+        targets_node = VariableNode()
+        output = ts.cross_entropy(logits_node, targets_node)
+        # A vertex is neither a caller's Variable nor a constant.
+        self.assertFalse(output.producer.operation.targets_from_variable)
+
+        compiler = Compiler(
+            (output,), boundaries=(logits_node, targets_node)
+        )
+        compiler.compile()
+        computations = Computation._from_compiler(compiler)
+        logits_node.materialize(
+            ts.Tensor(self.LOGITS), requires_grad=False
+        )
+        targets_node.materialize(
+            ts.Tensor(self.INDICES, dtype=ts.int64), requires_grad=False
+        )
+        for computation in computations:
+            computation.forward()
+        from_indices = output.variable.data.tolist()
+
+        # The same program, now handed the dense form of the same target.
+        targets_node.variable.data = ts.Tensor(self.DENSE)
+        for computation in computations:
+            computation.forward()
+        self.assertEqual(output.variable.data.tolist(), from_indices)
+
+
 class RuntimeApplicationIsUnchangedTests(unittest.TestCase):
     """Runtime expressions still calculate through a Computation."""
 

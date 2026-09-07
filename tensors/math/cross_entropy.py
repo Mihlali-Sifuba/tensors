@@ -189,10 +189,36 @@ def _validate_distributions(targets: Tensor, axis: int) -> None:
             )
 
 
-class CrossEntropy(Operation):
-    """Stable cross-entropy between logits and dense target distributions."""
+def _reject_variable_class_indices() -> None:
+    """Refuse class indices that were supplied as a Variable.
 
-    __slots__ = ("axis", "reduction")
+    Class indices name a choice rather than a quantity, so the public
+    contract does not let a Variable stand for them however its
+    gradient flag is set. Whether they are class indices is the values'
+    to say, so this is raised wherever that reading is reached.
+    """
+    raise TypeError(
+        "Class-index targets cannot be differentiable Variables"
+    )
+
+
+class CrossEntropy(Operation):
+    """Stable cross-entropy between logits and raw targets.
+
+    The second operand is the targets as the caller wrote them: either
+    one class index per sample, or dense probability distributions
+    broadcastable to the logits. Which of the two a target holds is
+    read from its values on every pass, so one operation replays
+    against changing targets.
+
+    ``targets_from_variable`` records how the call was written rather
+    than what its values turned out to be: the graph keeps a Tensor
+    constant and a caller's Variable as the same kind of leaf, so the
+    public rule that class indices may not be a Variable would
+    otherwise be unenforceable once the call is recorded.
+    """
+
+    __slots__ = ("axis", "reduction", "targets_from_variable")
     name = "cross_entropy"
 
     def __init__(
@@ -200,16 +226,22 @@ class CrossEntropy(Operation):
         *,
         axis: int = -1,
         reduction: Reduction = "mean",
+        targets_from_variable: bool = False,
     ) -> None:
         object.__setattr__(self, "axis", axis)
         object.__setattr__(self, "reduction", reduction)
+        object.__setattr__(
+            self, "targets_from_variable", targets_from_variable
+        )
 
     def forward(self, logits: Tensor, targets: Tensor) -> Tensor:
         axis = self.axis
         reduction = self.reduction
         _validate_reduction(reduction)
         axis = _normalize_axis(logits, axis)
-        targets, _ = _dense_targets(logits, targets, axis)
+        targets, from_class_indices = _dense_targets(logits, targets, axis)
+        if from_class_indices and self.targets_from_variable:
+            _reject_variable_class_indices()
         logits, targets = broadcast_tensors(logits, targets)
         _validate_distributions(targets, axis)
         output_shape = logits.shape[:axis] + logits.shape[axis + 1:]
@@ -266,10 +298,8 @@ class CrossEntropy(Operation):
         # is the raw target's, so it is read before preparation.
         target_shape = targets.shape
         targets, from_class_indices = _dense_targets(logits, targets, axis)
-        if from_class_indices and need_targets:
-            raise TypeError(
-                "Class-index targets cannot be differentiable Variables"
-            )
+        if from_class_indices and (need_targets or self.targets_from_variable):
+            _reject_variable_class_indices()
 
         expanded_logits, expanded_targets = broadcast_tensors(logits, targets)
         _validate_distributions(expanded_targets, axis)
@@ -416,10 +446,8 @@ class CrossEntropy(Operation):
             logits.data, targets.data, axis
         )
         if from_class_indices:
-            if need_targets:
-                raise TypeError(
-                    "Class-index targets cannot be differentiable Variables"
-                )
+            if need_targets or self.targets_from_variable:
+                _reject_variable_class_indices()
             # One class per sample is a constant here, so the expansion
             # enters the derivative as a non-gradient value.
             targets = Variable(dense, requires_grad=False)
@@ -556,11 +584,16 @@ def cross_entropy(
             targets.data,
             _normalize_axis(logits_tensor, axis),
         ):
-            raise TypeError(
-                "Class-index targets cannot be differentiable Variables"
-            )
+            _reject_variable_class_indices()
 
-    operation = CrossEntropy(axis=axis, reduction=reduction)
+    # A vertex hides the logits' rank, so the reading that decides the
+    # rule above cannot be reached yet. Recording how the call was
+    # written carries it to the pass that can.
+    operation = CrossEntropy(
+        axis=axis,
+        reduction=reduction,
+        targets_from_variable=isinstance(targets, Variable),
+    )
 
     if structural:
         return apply_operation(
