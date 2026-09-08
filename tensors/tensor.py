@@ -387,13 +387,6 @@ class Tensor:
             raise TypeError("Python storage conversion returned an invalid buffer")
         return storage.buffer
 
-    def _value_at_storage_index(self, index: int) -> Scalar:
-        """Read one physical position from authoritative host storage."""
-        storage = self._storage_for("python")
-        if not isinstance(storage, PythonStorage):
-            raise TypeError("Python storage conversion returned an invalid buffer")
-        return storage.buffer[index]
-
     def _create_storage(self, values: Iterable[Scalar]) -> array:
         """Create this tensor's backing storage."""
         if isinstance(values, array) and values.typecode == self.dtype.typecode:
@@ -447,7 +440,14 @@ class Tensor:
                     dtype=self.dtype,
                     shape=Shape(),
                 ).item()
-            return self._value_at_storage_index(storage_index)
+            storage = self._storage_for("python")
+
+            if not isinstance(storage, PythonStorage):
+                raise TypeError(
+                    "Python storage conversion returned an invalid buffer"
+                )
+
+            return storage.buffer[storage_index]
 
         ranges, output_shape = slice_ranges_and_shape_from_key(keys, self.shape)
         accelerated = execute_slice(self, key, output_shape=output_shape)

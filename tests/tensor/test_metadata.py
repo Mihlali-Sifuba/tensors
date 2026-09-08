@@ -121,7 +121,7 @@ class TensorMetadataTests(unittest.TestCase):
         )
         self.assertEqual(list(logical.buffer), [0.0, 3.0, 1.0, 4.0, 2.0, 5.0])
         self.assertEqual(list(tensor._data), list(logical.buffer))
-        self.assertEqual(tensor._value_at_storage_index(1), 1.0)
+        self.assertEqual(physical.buffer[1], 1.0)
         self.assertFalse(tensor._has_compact_storage)
 
     def test_nonzero_offset_storage_helpers_preserve_index_spaces(self):
