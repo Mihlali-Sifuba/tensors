@@ -387,16 +387,6 @@ class Tensor:
             raise TypeError("Python storage conversion returned an invalid buffer")
         return storage.buffer
 
-    def _create_storage(self, values: Iterable[Scalar]) -> array:
-        """Create this tensor's backing storage."""
-        if isinstance(values, array) and values.typecode == self.dtype.typecode:
-            return array(values.typecode, values)
-        if self.dtype.kind == "integer":
-            converted = (int(value) for value in values)
-        else:
-            converted = (float(value) for value in values)
-        return array(self.dtype.typecode, converted)
-
     def __getitem__(self, key: TensorIndex) -> Scalar | Tensor:
         """
         Support indexing and slicing for N-dimensional tensors.
@@ -510,7 +500,10 @@ class Tensor:
         """Validate and materialize values for an in-place slice assignment."""
         selection_size = Shape.from_iterable(selection_shape).size
         if isinstance(value, (int, float)):
-            return self._create_storage([value] * selection_size)
+            return PythonStorage.from_values(
+                [value] * selection_size,
+                self.dtype,
+            ).buffer
 
         if not isinstance(value, (Tensor, list, array)):
             raise TypeError(
@@ -529,7 +522,10 @@ class Tensor:
                 f"to slice shape {selection_shape}"
             ) from exc
 
-        return self._create_storage(assignment._data)
+        return PythonStorage.from_values(
+            assignment._data,
+            self.dtype,
+        ).buffer
 
     def _assign_slice_from_key(
         self,
@@ -621,7 +617,10 @@ class Tensor:
             return converted.item()
         if not isinstance(value, (int, float)):
             raise TypeError("Item assignment value must be numeric")
-        return self._create_storage([value])[0]
+        return PythonStorage.from_values(
+            [value],
+            self.dtype,
+        ).buffer[0]
 
     def __repr__(self) -> str:
         """String representation of the tensor."""
