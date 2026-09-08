@@ -659,10 +659,7 @@ class Tensor:
         lines = []
         for i in range(self.shape[dim]):
             sub_lines = self._format_nested_repr(dim + 1, offset + i * stride)
-            if dim == 0:
-                lines.extend(sub_lines)
-            else:
-                lines.extend(sub_lines)
+            lines.extend(sub_lines)
             if i < self.shape[dim] - 1 and dim < self.ndim - 2:
                 lines.append("")
 
