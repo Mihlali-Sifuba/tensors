@@ -3,7 +3,7 @@ from __future__ import annotations
 from array import array
 from itertools import product
 from collections.abc import Iterable, Iterator
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, Union, overload
 
 from . import dtype as _dtype
 from ._typing import (
@@ -11,8 +11,6 @@ from ._typing import (
     TensorData,
     TensorIndex,
     TensorLike,
-    TensorOperand,
-    TensorResult,
 )
 from .casting import cast_values
 from .shape import Shape
@@ -117,11 +115,6 @@ class Tensor:
             inferred_shape = data.shape
 
         elif isinstance(data, Storage):
-            if data.dtype != self.dtype:
-                raise TypeError(
-                    f"storage dtype {data.dtype.name!r} does not match "
-                    f"tensor dtype {self.dtype.name!r}"
-                )
             # Public construction always establishes independent ownership.
             # Internal producers that can transfer exclusive ownership use
             # ``_from_owned_storage`` instead.
@@ -304,7 +297,18 @@ class Tensor:
             )
 
     def _set_storage(self, storage: Storage) -> None:
-        """Install authoritative storage and invalidate other representations."""
+        """Install authoritative storage and invalidate other representations.
+
+        A Tensor's dtype and its storage's dtype state the same fact, so every
+        installation is the place that holds them to it. Callers that resolve
+        a dtype before the storage exists are relieved of repeating the check.
+        """
+        if storage.dtype != self.dtype:
+            raise TypeError(
+                f"storage dtype {storage.dtype.name!r} does not match "
+                f"tensor dtype {self.dtype.name!r}"
+            )
+
         self._storage = storage
         self._storage_cache: dict[StorageKind, Storage] = {
             storage.kind: storage,
@@ -832,19 +836,13 @@ class Tensor:
         return format(self.item(), format_spec)
 
     # ---------- Operator Overloads (delegate to ops) ----------
-    @staticmethod
-    def _handles_arithmetic(other: object) -> bool:
-        """Whether Tensor arithmetic can evaluate ``other`` directly.
-
-        Arithmetic is defined here for another Tensor and for a Python
-        scalar, which is what the operations below accept. An operand
-        outside that set is not an error by itself: Python's binary
-        operator protocol still owes the right-hand operand its reflected
-        turn, and an operand that knows how to combine itself with a
-        Tensor answers there. Reporting a failure is left to Python, which
-        does so only once neither side has handled the operation.
-        """
-        return isinstance(other, (int, float, Tensor))
+    # Arithmetic below is defined for another Tensor and for a Python scalar,
+    # which is what these operations accept. An operand outside that set is
+    # not an error by itself: Python's binary operator protocol still owes the
+    # right-hand operand its reflected turn, and an operand that knows how to
+    # combine itself with a Tensor answers there. Each method therefore
+    # returns NotImplemented, leaving the failure for Python to report once
+    # neither side has handled the operation.
 
     @overload
     def __add__(self, other: Variable) -> Variable: ...
@@ -852,11 +850,14 @@ class Tensor:
     @overload
     def __add__(self, other: Scalar | Tensor) -> Tensor: ...
 
-    def __add__(self, other: TensorOperand) -> TensorResult:
+    def __add__(
+        self,
+        other: Union[int, float, Tensor, Variable],
+    ) -> Union[Tensor, Variable]:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__radd__(self)
-        if not self._handles_arithmetic(other):
+        if not isinstance(other, (int, float, Tensor)):
             return NotImplemented
         from .ops import Ops
         return Ops.add(self, other)
@@ -867,7 +868,10 @@ class Tensor:
     @overload
     def __radd__(self, other: Scalar | Tensor) -> Tensor: ...
 
-    def __radd__(self, other: TensorOperand) -> TensorResult:
+    def __radd__(
+        self,
+        other: Union[int, float, Tensor, Variable],
+    ) -> Union[Tensor, Variable]:
         return self + other
 
     @overload
@@ -876,11 +880,14 @@ class Tensor:
     @overload
     def __sub__(self, other: Scalar | Tensor) -> Tensor: ...
 
-    def __sub__(self, other: TensorOperand) -> TensorResult:
+    def __sub__(
+        self,
+        other: Union[int, float, Tensor, Variable],
+    ) -> Union[Tensor, Variable]:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rsub__(self)
-        if not self._handles_arithmetic(other):
+        if not isinstance(other, (int, float, Tensor)):
             return NotImplemented
         from .ops import Ops
         return Ops.subtract(self, other)
@@ -894,11 +901,14 @@ class Tensor:
     @overload
     def __mul__(self, other: Scalar | Tensor) -> Tensor: ...
 
-    def __mul__(self, other: TensorOperand) -> TensorResult:
+    def __mul__(
+        self,
+        other: Union[int, float, Tensor, Variable],
+    ) -> Union[Tensor, Variable]:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rmul__(self)
-        if not self._handles_arithmetic(other):
+        if not isinstance(other, (int, float, Tensor)):
             return NotImplemented
         from .ops import Ops
         return Ops.multiply(self, other)
@@ -913,11 +923,14 @@ class Tensor:
     @overload
     def __truediv__(self, other: Scalar | Tensor) -> Tensor: ...
 
-    def __truediv__(self, other: TensorOperand) -> TensorResult:
+    def __truediv__(
+        self,
+        other: Union[int, float, Tensor, Variable],
+    ) -> Union[Tensor, Variable]:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rtruediv__(self)
-        if not self._handles_arithmetic(other):
+        if not isinstance(other, (int, float, Tensor)):
             return NotImplemented
         from .ops import Ops
         return Ops.divide(self, other)
@@ -932,11 +945,14 @@ class Tensor:
     @overload
     def __pow__(self, other: Scalar | Tensor) -> Tensor: ...
 
-    def __pow__(self, other: TensorOperand) -> TensorResult:
+    def __pow__(
+        self,
+        other: Union[int, float, Tensor, Variable],
+    ) -> Union[Tensor, Variable]:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rpow__(self)
-        if not self._handles_arithmetic(other):
+        if not isinstance(other, (int, float, Tensor)):
             return NotImplemented
         from .ops import power
         return power(self, other)
@@ -959,7 +975,10 @@ class Tensor:
     @overload
     def __matmul__(self, other: TensorData) -> Tensor: ...
 
-    def __matmul__(self, other: TensorLike) -> TensorResult:
+    def __matmul__(
+        self,
+        other: TensorLike,
+    ) -> Union[Tensor, Variable]:
         from .linalg import matmul
         return matmul(self, other)
 
@@ -969,6 +988,9 @@ class Tensor:
     @overload
     def __rmatmul__(self, other: TensorData) -> Tensor: ...
 
-    def __rmatmul__(self, other: TensorLike) -> TensorResult:
+    def __rmatmul__(
+        self,
+        other: TensorLike,
+    ) -> Union[Tensor, Variable]:
         from .linalg import matmul
         return matmul(other, self)
