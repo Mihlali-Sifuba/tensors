@@ -14,7 +14,7 @@ from ._typing import (
 )
 from .casting import cast_values
 from .shape import Shape
-from .storage import (
+from .backend.storage import (
     CudaStorage,
     NumPyStorage,
     PythonStorage,

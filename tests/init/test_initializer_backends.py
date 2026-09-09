@@ -2,7 +2,7 @@ import math
 import unittest
 
 import tensors as ts
-from tensors.storage import CudaStorage, NumPyStorage
+from tensors.backend.storage import CudaStorage, NumPyStorage
 
 
 def _variance(values):

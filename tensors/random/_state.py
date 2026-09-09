@@ -10,7 +10,7 @@ from typing import Any
 
 from ..backend import BackendName, get_backend
 from ..dtype import DataType
-from ..storage import CudaStorage, NumPyStorage, PythonStorage, Storage
+from ..backend.storage import CudaStorage, NumPyStorage, PythonStorage, Storage
 
 
 _lock = threading.RLock()

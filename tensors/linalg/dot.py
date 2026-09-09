@@ -13,7 +13,7 @@ from .._typing import TensorData, TensorLike, TensorResult
 from ..dtype import result_dtype
 from ..math.sum import _stable_product_sum
 from ..shape import Shape
-from ..storage import PythonStorage
+from ..backend.storage import PythonStorage
 from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..utils.coordinates import (
