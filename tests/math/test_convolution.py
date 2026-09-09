@@ -563,14 +563,7 @@ class ConvolutionBackendParityTests(unittest.TestCase):
 
 
     def test_accelerated_convolution_matches_when_forced_across_small_tiles(self):
-        import importlib
-
-        # The re-exported ``convolution`` kernel shadows the same-named
-        # submodule on the package, so reach the module itself to retune
-        # its column limit.
-        convolution_kernels = importlib.import_module(
-            "tensors.backend.kernels.convolution"
-        )
+        from tensors.backend.kernels.conv import common as conv_common
 
         inputs = self._ramp((2, 3, 7, 8), 0.5)
         kernel = self._ramp((4, 3, 3, 2), 0.25)
@@ -578,8 +571,8 @@ class ConvolutionBackendParityTests(unittest.TestCase):
         with ts.use_backend("python"):
             expected = ts.conv2d(inputs, kernel, **options)
 
-        original_limit = convolution_kernels._CONVOLUTION_COLUMN_MAX_ELEMENTS
-        convolution_kernels._CONVOLUTION_COLUMN_MAX_ELEMENTS = 64
+        original_limit = conv_common._CONVOLUTION_COLUMN_MAX_ELEMENTS
+        conv_common._CONVOLUTION_COLUMN_MAX_ELEMENTS = 64
         try:
             for backend in ts.available_backends():
                 if backend == "python":
@@ -590,7 +583,7 @@ class ConvolutionBackendParityTests(unittest.TestCase):
                 for actual, want in zip(result.tolist(), expected.tolist()):
                     self.assertAlmostEqual(actual, want, places=10)
         finally:
-            convolution_kernels._CONVOLUTION_COLUMN_MAX_ELEMENTS = original_limit
+            conv_common._CONVOLUTION_COLUMN_MAX_ELEMENTS = original_limit
 
 
 

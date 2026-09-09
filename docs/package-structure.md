@@ -84,15 +84,45 @@ tensors/
 │   ├── kernels/           # shared NumPy/CuPy kernel implementation
 │   │   ├── __init__.py    # internal kernel facade
 │   │   ├── core.py        # Tensor/Storage to native-array boundary
-│   │   ├── elementwise.py # elementwise kernels and their VJPs
-│   │   ├── fusion.py      # fused-chain compilation and execution
-│   │   ├── reductions.py  # reductions and stable summation
 │   │   ├── creation.py    # arrays built from parameters
 │   │   ├── manipulation.py# shape, layout, and indexing
-│   │   ├── linalg.py      # matrix and vector products
-│   │   ├── nn.py          # normalization, probability, and losses
-│   │   ├── convolution.py # grouped cross-correlation
-│   │   └── optim.py       # optimizer updates
+│   │   ├── elementwise/   # elementwise kernels and their VJPs
+│   │   │   ├── binary_ops.py
+│   │   │   ├── unary_ops.py
+│   │   │   ├── comparison_ops.py
+│   │   │   ├── selection.py
+│   │   │   ├── extrema.py
+│   │   │   └── clipping.py
+│   │   ├── fusion/        # fused-chain compilation and execution
+│   │   │   ├── expressions.py  # step, operand, and derivative expressions
+│   │   │   ├── source.py       # CUDA source assembly
+│   │   │   ├── errors.py       # domain guards and error reporting
+│   │   │   ├── common.py       # operand marshalling for both passes
+│   │   │   ├── forward.py
+│   │   │   └── backward.py
+│   │   ├── reductions/    # reductions and stable summation
+│   │   │   ├── stability.py    # summation guards, scaled accumulation
+│   │   │   ├── reduction_ops.py
+│   │   │   ├── extrema.py      # index-of-extremum reductions
+│   │   │   ├── shape.py        # summation down to a broadcast shape
+│   │   │   └── logsumexp_ops.py # log-sum-exp and its shared terms
+│   │   ├── linalg/        # matrix and vector products
+│   │   │   ├── matmul_ops.py
+│   │   │   └── outer_ops.py
+│   │   ├── nn/            # normalization, probability, and losses
+│   │   │   ├── normalization_ops.py
+│   │   │   ├── losses.py
+│   │   │   └── validation.py
+│   │   ├── conv/          # grouped cross-correlation
+│   │   │   ├── common.py       # padding, tiling, columns, storage
+│   │   │   ├── forward.py
+│   │   │   └── backward.py
+│   │   └── optim/         # optimizer updates
+│   │       ├── batching.py     # workspace reuse and parameter batching
+│   │       ├── cuda.py         # batched CUDA optimizer kernels
+│   │       ├── sgd.py
+│   │       ├── adam.py
+│   │       └── rmsprop.py
 │   ├── numpy.py
 │   ├── cuda.py
 │   └── storage/           # internal native storage implementations
@@ -191,13 +221,27 @@ The folders have deliberately narrow responsibilities:
   when a workload is worth accelerating, `loading` resolves a kernel for the
   selected backend, and `dispatch` holds the `execute_*` entry points.
 - `backend.kernels` owns the provider-neutral NumPy/CuPy kernels, split by
-  family. `core` is the only shared layer: it moves values between
-  Tensor/Storage and native arrays and selects the array module for the active
-  backend. Every family depends on `core`; beyond that, `linalg` reuses the
-  stable-summation helpers and `nn` reuses `reduction` and the shifted-
-  exponential terms, both from `reductions`. `numpy.py` and `cuda.py` import
-  the kernel surface from the package facade, which is what the backend loader
-  resolves names against.
+  family. The larger domains are packages whose modules each hold one
+  responsibility; `core`, `creation`, and `manipulation` stay single modules
+  because they are already cohesive. `core` is the only shared layer: it moves
+  values between Tensor/Storage and native arrays and selects the array module
+  for the active backend. Every family depends on `core`; beyond that, `linalg`
+  reuses `reductions.stability` and `nn` reuses `reductions.reduction` and
+  `reductions.logsumexp`. Nothing in `reductions` depends on `nn`.
+  Within a family package the lower modules never import the upper ones:
+  fusion's `expressions`, `source`, `errors`, and `common` are independent of
+  `forward` and `backward`, and optim's `batching` and `cuda` are independent
+  of `sgd`, `adam`, and `rmsprop`. The convolution package is named `conv` so
+  that the exported `convolution` kernel does not shadow a same-named module.
+  `numpy.py` and `cuda.py` import the kernel surface from the `kernels` facade,
+  which is what the backend loader resolves names against; they never import an
+  implementation module directly.
+- No kernels package exposes a submodule and an exported kernel under the same
+  name. Where an implementation module would have collided with the kernel it
+  defines, the module carries an `_ops` suffix, so `linalg.matmul` is the
+  kernel function and `linalg.matmul_ops` is the module holding it. `conv` is
+  named for the same reason. Module names that do not collide keep their plain
+  form.
 - `backend.storage` owns the internal Python, NumPy, and CUDA representations
   and their lazy conversion cache. Storage classes are not a second public
   tensor API.
