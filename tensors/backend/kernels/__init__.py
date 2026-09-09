@@ -13,7 +13,7 @@ ultimately resolves kernels against:
 - :mod:`~tensors.backend.kernels.manipulation` reshapes and re-lays out values;
 - :mod:`~tensors.backend.kernels.linalg` runs matrix and vector products;
 - :mod:`~tensors.backend.kernels.nn` runs normalization and loss kernels;
-- :mod:`~tensors.backend.kernels.convolution` runs grouped cross-correlation;
+- :mod:`~tensors.backend.kernels.conv` runs grouped cross-correlation;
 - :mod:`~tensors.backend.kernels.optim` runs optimizer updates.
 
 Names are re-exported as ``name as name`` so that the loader resolving
@@ -82,7 +82,7 @@ from .nn import (
     normalization as normalization,
     normalization_gradient as normalization_gradient,
 )
-from .convolution import (
+from .conv import (
     convolution as convolution,
     convolution_gradient as convolution_gradient,
 )
