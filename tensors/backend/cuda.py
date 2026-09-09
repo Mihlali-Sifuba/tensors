@@ -1,6 +1,6 @@
 """CUDA backend kernels implemented with CuPy."""
 
-from ._array import (
+from .kernels import (
     adam_update,
     adam_updates,
     arange,

@@ -81,7 +81,18 @@ tensors/
 │   ├── policy.py          # workload-size policy for acceleration
 │   ├── loading.py         # provider-module and kernel loading
 │   ├── dispatch.py        # execute_* dispatch entry points
-│   ├── _array.py          # shared NumPy/CuPy kernel implementation
+│   ├── kernels/           # shared NumPy/CuPy kernel implementation
+│   │   ├── __init__.py    # internal kernel facade
+│   │   ├── core.py        # Tensor/Storage to native-array boundary
+│   │   ├── elementwise.py # elementwise kernels and their VJPs
+│   │   ├── fusion.py      # fused-chain compilation and execution
+│   │   ├── reductions.py  # reductions and stable summation
+│   │   ├── creation.py    # arrays built from parameters
+│   │   ├── manipulation.py# shape, layout, and indexing
+│   │   ├── linalg.py      # matrix and vector products
+│   │   ├── nn.py          # normalization, probability, and losses
+│   │   ├── convolution.py # grouped cross-correlation
+│   │   └── optim.py       # optimizer updates
 │   ├── numpy.py
 │   ├── cuda.py
 │   └── storage/           # internal native storage implementations
@@ -179,6 +190,14 @@ The folders have deliberately narrow responsibilities:
   operations, `config` selects one and reports availability, `policy` decides
   when a workload is worth accelerating, `loading` resolves a kernel for the
   selected backend, and `dispatch` holds the `execute_*` entry points.
+- `backend.kernels` owns the provider-neutral NumPy/CuPy kernels, split by
+  family. `core` is the only shared layer: it moves values between
+  Tensor/Storage and native arrays and selects the array module for the active
+  backend. Every family depends on `core`; beyond that, `linalg` reuses the
+  stable-summation helpers and `nn` reuses `reduction` and the shifted-
+  exponential terms, both from `reductions`. `numpy.py` and `cuda.py` import
+  the kernel surface from the package facade, which is what the backend loader
+  resolves names against.
 - `backend.storage` owns the internal Python, NumPy, and CUDA representations
   and their lazy conversion cache. Storage classes are not a second public
   tensor API.
