@@ -80,7 +80,17 @@ tensors/
 │   ├── config.py          # selection, availability, and configuration
 │   ├── policy.py          # workload-size policy for acceleration
 │   ├── loading.py         # provider-module and kernel loading
-│   ├── dispatch.py        # execute_* dispatch entry points
+│   ├── dispatch/          # execute_* dispatch entry points
+│   │   ├── __init__.py    # dispatch facade
+│   │   ├── elementwise.py
+│   │   ├── creation.py
+│   │   ├── manipulation.py
+│   │   ├── reductions.py
+│   │   ├── linalg.py
+│   │   ├── convolution.py
+│   │   ├── fusion.py
+│   │   ├── nn.py
+│   │   └── optim.py
 │   ├── kernels/           # shared NumPy/CuPy kernel implementation
 │   │   ├── __init__.py    # internal kernel facade
 │   │   ├── core.py        # Tensor/Storage to native-array boundary
@@ -219,7 +229,11 @@ The folders have deliberately narrow responsibilities:
   points. Its package module is a facade: `types` names the backends and their
   operations, `config` selects one and reports availability, `policy` decides
   when a workload is worth accelerating, `loading` resolves a kernel for the
-  selected backend, and `dispatch` holds the `execute_*` entry points.
+  selected backend, and `dispatch` holds the `execute_*` entry points, grouped
+  by execution domain so each module sits beside the kernel family it reaches.
+  A dispatch module reads the policy and the loader; it never imports a
+  sibling, and returning `None` from an `execute_*` function still means the
+  caller should run its own Python fallback.
 - `backend.kernels` owns the provider-neutral NumPy/CuPy kernels, split by
   family. The larger domains are packages whose modules each hold one
   responsibility; `core`, `creation`, and `manipulation` stay single modules
