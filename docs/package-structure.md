@@ -75,7 +75,12 @@ should not need to import internal operation or graph-node classes.
 tensors/
 ├── __init__.py            # root public facade
 ├── backend/               # backend selection and optional kernels
-│   ├── __init__.py
+│   ├── __init__.py        # backend facade and re-exports
+│   ├── types.py           # backend and operation type aliases
+│   ├── config.py          # selection, availability, and configuration
+│   ├── policy.py          # workload-size policy for acceleration
+│   ├── loading.py         # provider-module and kernel loading
+│   ├── dispatch.py        # execute_* dispatch entry points
 │   ├── _array.py          # shared NumPy/CuPy kernel implementation
 │   ├── numpy.py
 │   ├── cuda.py
@@ -170,7 +175,10 @@ The folders have deliberately narrow responsibilities:
 
 - `backend` owns process and context-local selection, cached internal kernel
   dispatch, provider-neutral array kernels, and optional NumPy/CUDA entry
-  points.
+  points. Its package module is a facade: `types` names the backends and their
+  operations, `config` selects one and reports availability, `policy` decides
+  when a workload is worth accelerating, `loading` resolves a kernel for the
+  selected backend, and `dispatch` holds the `execute_*` entry points.
 - `backend.storage` owns the internal Python, NumPy, and CUDA representations
   and their lazy conversion cache. Storage classes are not a second public
   tensor API.
