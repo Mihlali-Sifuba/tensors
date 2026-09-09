@@ -78,14 +78,14 @@ tensors/
 │   ├── __init__.py
 │   ├── _array.py          # shared NumPy/CuPy kernel implementation
 │   ├── numpy.py
-│   └── cuda.py
-├── storage/               # internal native storage implementations
-│   ├── __init__.py
-│   ├── _base.py
-│   ├── _conversion.py
-│   ├── python.py
-│   ├── numpy.py
-│   └── cuda.py
+│   ├── cuda.py
+│   └── storage/           # internal native storage implementations
+│       ├── __init__.py
+│       ├── contract.py
+│       ├── conversion.py
+│       ├── python.py
+│       ├── numpy.py
+│       └── cuda.py
 ├── _typing.py             # shared public type aliases
 ├── shape.py               # immutable logical tensor extents
 ├── strides.py             # immutable physical storage movement
@@ -171,8 +171,9 @@ The folders have deliberately narrow responsibilities:
 - `backend` owns process and context-local selection, cached internal kernel
   dispatch, provider-neutral array kernels, and optional NumPy/CUDA entry
   points.
-- `storage` owns the internal Python, NumPy, and CUDA representations and their
-  lazy conversion cache. Storage classes are not a second public tensor API.
+- `backend.storage` owns the internal Python, NumPy, and CUDA representations
+  and their lazy conversion cache. Storage classes are not a second public
+  tensor API.
 - `Shape` owns logical dimensions, rank, size, tuple-like slicing of its
   dimension values (for example, `Shape(2, 3, 4)[1:]`), and pure
   broadcast-shape inference. `Strides` owns physical traversal metadata and

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, Union
 
 if TYPE_CHECKING:
     from .graph.node import VariableNode
-    from .storage._base import Storage
+    from .backend.storage import Storage
     from .tensor import Tensor
     from .variable import Variable
 

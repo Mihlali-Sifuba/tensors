@@ -5,7 +5,7 @@ from unittest.mock import patch
 import tensors as ts
 import tensors.backend as backend_state
 import tensors.backend.cuda as cuda_backend
-from tensors.storage import CudaStorage, PythonStorage
+from tensors.backend.storage import CudaStorage, PythonStorage
 
 from ._support import requires_cuda
 

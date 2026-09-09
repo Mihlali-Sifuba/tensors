@@ -6,7 +6,7 @@ import tensors as ts
 import tensors.backend as backend_state
 import tensors.backend.cuda as cuda_backend
 import tensors.backend.numpy as numpy_backend
-from tensors.storage import CudaStorage, NumPyStorage
+from tensors.backend.storage import CudaStorage, NumPyStorage
 
 from ._support import NumPyParityTestCase, requires_cuda, requires_numpy
 

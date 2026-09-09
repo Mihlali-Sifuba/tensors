@@ -6,7 +6,7 @@ from typing_extensions import assert_type
 
 import tensors as ts
 from tensors.graph import VariableNode
-from tensors.storage import Storage
+from tensors.backend.storage import Storage
 
 
 def tensor_from_storage(storage: Storage) -> ts.Tensor:

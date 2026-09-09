@@ -13,7 +13,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 from ..shape import Shape
-from ..storage import Storage
+from .storage import Storage
 
 if TYPE_CHECKING:
     from .._typing import Scalar, TensorIndex
@@ -361,7 +361,7 @@ def _execute_python_fused_elementwise(
     from array import array
     import operator
 
-    from ..storage import PythonStorage
+    from .storage import PythonStorage
 
     supported = {"add", "subtract", "multiply", "negate"}
     if (

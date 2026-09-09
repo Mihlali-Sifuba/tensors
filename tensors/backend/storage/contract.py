@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Literal, TypeAlias
 
-from ..dtype import DataType
+from ...dtype import DataType
 
 
 StorageKind: TypeAlias = Literal["python", "numpy", "cuda"]

@@ -354,7 +354,7 @@ eligibility, and measurement methodology.
 tensors/
 ├── tensors/
 │   ├── backend/           # backend selection and optional kernels
-│   ├── storage/           # Python, NumPy, and CUDA native storage
+│   │   └── storage/       # Python, NumPy, and CUDA native storage
 │   ├── graph/             # computation graphs and automatic differentiation
 │   ├── linalg/            # linear-algebra operations
 │   ├── math/              # reductions, activations, losses, and shape operations

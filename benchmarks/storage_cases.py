@@ -5,7 +5,7 @@ from __future__ import annotations
 from array import array
 
 import tensors as ts
-from tensors.storage import PythonStorage, convert_storage
+from tensors.backend.storage import PythonStorage, convert_storage
 
 from .runner import BenchmarkBackend, BenchmarkCase
 

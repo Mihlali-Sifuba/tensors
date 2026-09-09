@@ -2,7 +2,7 @@ import importlib
 import unittest
 
 import tensors as ts
-from tensors.storage import CudaStorage, NumPyStorage, PythonStorage
+from tensors.backend.storage import CudaStorage, NumPyStorage, PythonStorage
 
 
 def synthetic_tensor(

@@ -13,7 +13,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, cast
 
 from ..shape import Shape
-from ..storage import CudaStorage, NumPyStorage, Storage, StorageKind
+from .storage import CudaStorage, NumPyStorage, Storage, StorageKind
 from ..strides import Strides
 
 if TYPE_CHECKING:

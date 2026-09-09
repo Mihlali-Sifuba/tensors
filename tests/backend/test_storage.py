@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import tensors as ts
 import tensors.backend.cuda as cuda_backend
-from tensors.storage import CudaStorage, NumPyStorage, PythonStorage
+from tensors.backend.storage import CudaStorage, NumPyStorage, PythonStorage
 
 from ._support import requires_cuda, requires_numpy
 
