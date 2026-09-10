@@ -51,9 +51,9 @@ follows when applying the chain rule.
 
 `Graph` therefore represents a function; it is not an additional model-building
 procedure placed around one. Defining `forward` defines the function, and
-calling the `Graph` both evaluates that function eagerly and records its fresh
-computational representation. Parameters remain ordinary `Variable`
-attributes. There is no separate layer-registration, graph-construction, or
+calling the `Graph` evaluates it — replaying the computational representation
+the model already holds, or recording a fresh one for that call. Parameters
+remain ordinary `Variable` attributes. There is no separate layer-registration, graph-construction, or
 compilation ceremony required before stating the computation.
 
 For example, consider the affine function
@@ -241,10 +241,14 @@ print(prediction.data.tolist())
 print([parameter.name for parameter in model.parameters()])
 ```
 
-By default, each call executes `forward` eagerly and records a fresh
-computation. The latest outputs, nodes, edges, and computations are available
-for inspection on the calling thread. Stable Tensor-input workloads can opt
-into guarded replay:
+A subclass whose `forward` can be recorded structurally is built and compiled
+as it is constructed, so the call above replays that program rather than
+running `forward` again. A model that can only be traced — the functional
+form, or a `forward` whose arguments or expression are only known per call —
+executes eagerly and records a fresh computation instead. Either way the
+outputs, nodes, edges, and computations are available for inspection on the
+calling thread. A traced model with stable Tensor inputs can opt into guarded
+replay:
 
 ```python
 prediction = model.compile(inputs)  # trace and enable replay

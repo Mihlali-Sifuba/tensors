@@ -169,11 +169,25 @@ class GraphThreadState(threading.local):
 
 
 class Graph(metaclass=_GraphMeta):
-    """A callable differentiable model that records its latest computation.
+    """A callable differentiable model over a reusable computational graph.
 
-    Every call executes ``forward`` eagerly and captures the Variables
-    reachable from that call's output.  A subclass implements ``forward``;
-    ``Graph(function)`` and ``@Graph`` provide the functional form.
+    A subclass implements ``forward``; ``Graph(function)`` and ``@Graph``
+    provide the functional form.  What a call does depends on how the model
+    could be represented:
+
+    - A subclass whose ``forward`` can be recorded structurally is built and
+      compiled once, as construction ends.  A later call passing Tensors that
+      match those inputs binds them to the built input vertices and replays
+      the compiled program, so the Python ``forward`` body does not run
+      again.
+    - A model that cannot be described before its values exist keeps the
+      tracing lifecycle: the functional form, a ``forward`` whose arguments
+      are only known per call, and a ``forward`` stating an expression the
+      graph cannot record.  A ``Variable`` input also traces, because its
+      autograd identity belongs to the caller.  Each such call executes
+      ``forward`` and captures the Variables reachable from its output.
+    - :meth:`compile` opts a traced model into guarded replay for Tensor
+      inputs; a guard miss retraces and replaces the cached plan.
 
     Execution metadata is kept per thread, so concurrent callers do not
     overwrite one another's latest computation.  Model parameters and other
@@ -222,7 +236,7 @@ class Graph(metaclass=_GraphMeta):
         return self._function(*args, **kwargs)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        """Execute eagerly, or replay a matching explicitly compiled trace."""
+        """Replay a built or compiled program, or trace this call eagerly."""
         return self._execute(args, kwargs)
 
     # -- structural model construction ---------------------------------
