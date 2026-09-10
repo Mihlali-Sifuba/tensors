@@ -160,11 +160,7 @@ class DemandContractTests(unittest.TestCase):
         left = ts.Variable([2.0])
         right = ts.Variable([3.0], requires_grad=False)
         operation = Overeager()
-        output = ts.Variable._record_operation(
-            operation.forward(left.data, right.data),
-            operation,
-            (left, right),
-        )
+        output = ts.Variable._apply_operation(operation, (left, right))
 
         with self.assertRaisesRegex(RuntimeError, "did not request"):
             ts.grad(output, left)
@@ -182,11 +178,7 @@ class DemandContractTests(unittest.TestCase):
         left = ts.Variable([2.0])
         right = ts.Variable([3.0])
         operation = Forgetful()
-        output = ts.Variable._record_operation(
-            operation.forward(left.data, right.data),
-            operation,
-            (left, right),
-        )
+        output = ts.Variable._apply_operation(operation, (left, right))
 
         with self.assertRaisesRegex(RuntimeError, "requested"):
             ts.grad(output, left)
@@ -288,8 +280,8 @@ class ReverseDemandPlanningTests(unittest.TestCase):
 
         # Demand is resolved per reverse call, so the live slots reflect the
         # Variables' current state rather than the state traced with.
-        value_slot = computation._variable_slots[value]
-        weight_slot = computation._variable_slots[weight]
+        value_slot = computation._node_slots[value.node]
+        weight_slot = computation._node_slots[weight.node]
         self.assertEqual(
             computation._live_slots((weight,)) & {value_slot, weight_slot},
             {weight_slot},

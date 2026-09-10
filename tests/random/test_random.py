@@ -2,7 +2,7 @@ import random as python_random
 import unittest
 
 import tensors as ts
-from tensors.storage import CudaStorage, NumPyStorage, PythonStorage
+from tensors.backend.storage import CudaStorage, NumPyStorage, PythonStorage
 
 
 class RandomTests(unittest.TestCase):

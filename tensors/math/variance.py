@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import math
-from typing import Any, overload
+from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_reduction, execute_reduction_gradient
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._reduction import (
     Axis,
     immutable_axis,
@@ -18,6 +19,9 @@ from ._reduction import (
     reduction_shape,
 )
 from .std import _scaled_deviations
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class Variance(Operation):
@@ -163,6 +167,14 @@ class Variance(Operation):
 
 @overload
 def variance(
+    value: VariableNode,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> VariableNode: ...
+
+
+@overload
+def variance(
     value: TensorValue,
     axis: Axis = None,
     keepdims: bool = False,
@@ -178,24 +190,25 @@ def variance(
 
 
 def variance(
-    value: TensorLike,
+    value: TensorLike | VariableNode,
     axis: Axis = None,
     keepdims: bool = False,
-) -> TensorResult:
-    """Compute population variance over one, several, or all axes."""
-    from ..variable import Variable
+) -> TensorResult | VariableNode:
+    """Compute population variance over one, several, or all axes.
+
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later. The configuration the operation is built with is the one every
+    application uses, so a recorded call replays what it was written as.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
 
     axis = immutable_axis(axis)
-    if isinstance(value, Variable):
-        operation = Variance(axis=axis, keepdims=keepdims)
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
-    return Variance(axis=axis, keepdims=keepdims).forward(value)
+    operation = Variance(axis=axis, keepdims=keepdims)
+
+    if is_graph_operand(value):
+        return apply_operation(operation, (value,))
+    return operation.forward(as_tensor_operand(value))
 
 
 __all__ = ["Variance", "variance"]

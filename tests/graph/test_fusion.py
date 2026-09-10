@@ -27,7 +27,7 @@ class FusionPlanningTests(unittest.TestCase):
         # so planning them again outside the Computation reproduces the plan.
         fusions, fusion_starts = fusion.plan_fusions(
             computation._instructions,
-            computation._variables,
+            computation._require_materialized(),
         )
 
         self.assertEqual(fusions, computation._fusions)
@@ -59,7 +59,8 @@ class FusionPlanningTests(unittest.TestCase):
                 ("divide", None, True, 3),
             ),
         )
-        sourced = {computation._variables[slot] for slot in source_slots}
+        variables = computation._require_materialized()
+        sourced = {variables[slot] for slot in source_slots}
         self.assertEqual(len(source_slots), 4)
         self.assertTrue({left, right} <= sourced)
 

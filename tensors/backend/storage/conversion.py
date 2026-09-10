@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 from array import array
 
-from ._base import Storage, StorageKind
+from .contract import Storage, StorageKind
 from .cuda import CudaStorage
 from .numpy import NumPyStorage
 from .python import PythonStorage

@@ -10,7 +10,7 @@ from ..backend import get_backend
 from ..dtype import DataType
 from ..random import normal
 from ..shape import Shape as TensorShape
-from ..storage import CudaStorage, NumPyStorage, PythonStorage, Storage
+from ..backend.storage import CudaStorage, NumPyStorage, PythonStorage, Storage
 from ..tensor import Tensor
 from ._utils import DType, Shape, finite_number, floating_dtype
 from .initializer import Initializer

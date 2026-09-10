@@ -5,8 +5,8 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-from ..dtype import DataType
-from ._base import Storage
+from ...dtype import DataType
+from .contract import Storage
 
 
 class NumPyStorage(Storage):

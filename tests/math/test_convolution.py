@@ -563,7 +563,7 @@ class ConvolutionBackendParityTests(unittest.TestCase):
 
 
     def test_accelerated_convolution_matches_when_forced_across_small_tiles(self):
-        from tensors.backend import _array
+        from tensors.backend.kernels.conv import common as conv_common
 
         inputs = self._ramp((2, 3, 7, 8), 0.5)
         kernel = self._ramp((4, 3, 3, 2), 0.25)
@@ -571,8 +571,8 @@ class ConvolutionBackendParityTests(unittest.TestCase):
         with ts.use_backend("python"):
             expected = ts.conv2d(inputs, kernel, **options)
 
-        original_limit = _array._CONVOLUTION_COLUMN_MAX_ELEMENTS
-        _array._CONVOLUTION_COLUMN_MAX_ELEMENTS = 64
+        original_limit = conv_common._CONVOLUTION_COLUMN_MAX_ELEMENTS
+        conv_common._CONVOLUTION_COLUMN_MAX_ELEMENTS = 64
         try:
             for backend in ts.available_backends():
                 if backend == "python":
@@ -583,7 +583,7 @@ class ConvolutionBackendParityTests(unittest.TestCase):
                 for actual, want in zip(result.tolist(), expected.tolist()):
                     self.assertAlmostEqual(actual, want, places=10)
         finally:
-            _array._CONVOLUTION_COLUMN_MAX_ELEMENTS = original_limit
+            conv_common._CONVOLUTION_COLUMN_MAX_ELEMENTS = original_limit
 
 
 

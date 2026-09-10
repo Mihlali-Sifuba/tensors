@@ -11,9 +11,23 @@ from ..backend import execute_concat
 from ..dtype import result_dtype
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 
 if TYPE_CHECKING:
+    from ..graph.node import VariableNode
     from ..variable import Variable
+
+
+def _operands(tensors: Sequence[Any]) -> tuple[Any, ...]:
+    """Read a lone list argument as the operands it holds.
+
+    A caller may name one tensor per argument or pass a single list of
+    them; both the public function and :meth:`Concat.forward` read that
+    shape the same way.
+    """
+    if len(tensors) == 1 and isinstance(tensors[0], list):
+        return tuple(tensors[0])
+    return tuple(tensors)
 
 
 class Concat(Operation):
@@ -31,7 +45,7 @@ class Concat(Operation):
         object.__setattr__(self, "axis", axis)
         object.__setattr__(self, "keepdims", keepdims)
 
-    def forward(self, *tensors: Tensor | list[Any]) -> Tensor:
+    def forward(self, *tensors: Tensor | list[Tensor]) -> Tensor:
         """Concatenate one or more tensors along ``axis``."""
         axis = self.axis
         keepdims = self.keepdims
@@ -41,12 +55,10 @@ class Concat(Operation):
             raise ValueError("concat does not support keepdims")
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("concat axis must be an integer")
-        if len(tensors) == 1 and isinstance(tensors[0], list):
-            tensors = tuple(tensors[0])
-        if not tensors:
+        converted: tuple[Tensor, ...] = _operands(tensors)
+        if not converted:
             raise ValueError("concat requires at least one tensor")
 
-        converted = [value if isinstance(value, Tensor) else Tensor(value) for value in tensors]
         reference = converted[0]
         if reference.ndim == 0:
             if axis < 0:
@@ -188,6 +200,13 @@ class Concat(Operation):
 
 
 @overload
+def concat(
+    tensors: Sequence[VariableNode],
+    axis: int = 0,
+) -> VariableNode: ...
+
+
+@overload
 def concat(tensors: Sequence[Variable], axis: int = 0) -> Variable: ...
 
 
@@ -199,22 +218,38 @@ def concat(tensors: Sequence[TensorData], axis: int = 0) -> Tensor: ...
 def concat(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult: ...
 
 
-def concat(tensors: Sequence[TensorLike], axis: int = 0) -> TensorResult:
-    """Concatenate Tensors or Variables along an existing axis."""
-    from ..variable import Variable
+@overload
+def concat(
+    tensors: Sequence[TensorLike | VariableNode],
+    axis: int = 0,
+) -> TensorResult | VariableNode: ...
 
-    if any(isinstance(value, Variable) for value in tensors):
-        variables = [
-            value if isinstance(value, Variable) else Variable(value, requires_grad=False)
-            for value in tensors
-        ]
-        operation = Concat(axis=axis)
-        return Variable._record_operation(
-            operation.forward(*(variable.data for variable in variables)),
-            operation,
-            variables,
+
+def concat(
+    tensors: Sequence[TensorLike | VariableNode],
+    axis: int = 0,
+) -> TensorResult | VariableNode:
+    """Concatenate graph values, Tensors or Variables along an existing axis.
+
+    The operands are a sequence, so the graph is asked about each element
+    rather than about the sequence itself. One graph value anywhere in it
+    applies the whole expression through the graph, contributing one
+    operand per element in the order given: Variables calculate the result
+    now, a vertex records the operation for a program that runs later, and
+    a Tensor beside either enters the graph as a non-gradient leaf.
+    """
+    from ..graph.expression import (
+        apply_operation, as_graph_operand, is_graph_operand,
+    )
+
+    if any(is_graph_operand(value) for value in tensors):
+        return apply_operation(
+            Concat(axis=axis),
+            tuple(as_graph_operand(value) for value in tensors),
         )
-    return Concat(axis=axis).forward(*tensors)
+    return Concat(axis=axis).forward(
+        *(as_tensor_operand(value) for value in _operands(tensors))
+    )
 
 
 __all__ = ["Concat", "concat"]

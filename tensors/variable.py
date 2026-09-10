@@ -22,23 +22,33 @@ from types import NotImplementedType
 from typing import Any
 
 from ._typing import TensorData, TensorIndex, TensorLike, TensorOperand, VariableData
-from .dtype import DataType, result_dtype
+from .dtype import DataType, from_typecode, result_dtype
 from .shape import Shape
 from .tensor import Tensor
 from .ops import Add, Sub, Mul, Div, Pow, Neg, Operation, Slice, Cast
 from .ops.pow import _power_dtype
+from .graph.node import VariableNode
 from .graph.state import get_graph_state
 
 
 _SCALAR_SHAPE = Shape()
-_INPUT_LABELS = ("input_0", "input_1", "input_2", "input_3", "input_4")
 
 
-def _operand_labels(count: int) -> tuple[str, ...]:
-    """Return the edge labels naming an operation's ordered operands."""
-    if count <= len(_INPUT_LABELS):
-        return _INPUT_LABELS[:count]
-    return tuple(f"input_{index}" for index in range(count))
+def _cast_dtype(dtype: str | DataType) -> DataType:
+    """Resolve a public dtype argument into the one a Cast records.
+
+    A recorded operation states the conversion it performs, so the dtype is
+    resolved while the operation is built rather than read back off a result
+    the graph has not calculated yet.
+    """
+    if isinstance(dtype, str):
+        return from_typecode(dtype)
+    if not isinstance(dtype, DataType):
+        raise TypeError(
+            f"dtype must be a DataType, typecode or dtype string, "
+            f"got {type(dtype)}"
+        )
+    return dtype
 
 
 class Variable:
@@ -48,13 +58,22 @@ class Variable:
         data: Initial data (Tensor, list, or number).
         name: Optional label for debugging and graph inspection.
         requires_grad: Whether gradients should be accumulated for this leaf.
+        node: The graph vertex this value materializes. A fresh vertex is
+            recorded when it is omitted; passing one materializes a value the
+            graph already named.
     """
+
+    #: The graph identity of this value. It may predate the Variable, so it
+    #: is bound rather than created when one is supplied.
+    node: VariableNode
 
     def __init__(
         self,
         data: VariableData,
         name: str | None = None,
         requires_grad: bool = True,
+        *,
+        node: VariableNode | None = None,
     ) -> None:
         self._data_generation = 0
         self.requires_grad = requires_grad
@@ -67,38 +86,48 @@ class Variable:
         self._forward_state: Any = None
         self._cached_computation: Any = None
 
-        self.node = get_graph_state().add_variable_node(self)
+        # A value's graph identity can exist before the value does. A leaf
+        # has its value now, so it records a vertex already bound to it; a
+        # value the graph named earlier binds to the vertex that named it.
+        # Binding is what assigns ``self.node``.
+        if node is None:
+            get_graph_state().add_variable_node(self)
+        else:
+            if not isinstance(node, VariableNode):
+                raise TypeError("node must be a VariableNode")
+            node.bind(self)
 
     @classmethod
-    def _record_operation(
+    def _apply_operation(
         cls,
-        data: Tensor,
         operation: Operation,
         inputs: Sequence[Variable],
     ) -> Variable:
-        """Record an executed ``operation`` and return its result Variable.
+        """Record ``operation`` in the graph and execute it there.
 
-        The operation has already run: this writes it into graph history by
-        creating the result Variable, adding the operation vertex, joining
-        each operand to it, joining it to the result, and capturing the
-        result's forward state.
+        Structure comes first, and each layer contributes its own part of
+        it: the graph records the invocation, the compiler turns that
+        fragment into a program, and executing the program is what
+        calculates the value and materializes the result Variable. An eager
+        operation therefore takes the same path as every other computation,
+        and this method only orders the three steps.
 
-        The recorded topology is always
-        ``VariableNode -> OperationNode -> VariableNode``: every operand
-        arrives through an incoming edge and the result leaves through the
-        single outgoing edge.
+        Only the new fragment runs. Its operands already hold their values,
+        so they bound the compiled program: the graph behind them stays
+        intact for differentiation without being replayed for each new
+        operation.
         """
-        graph = get_graph_state()
-        result = cls(
-            data,
-            requires_grad=any(operand.requires_grad for operand in inputs),
+        from .graph.computation import Computation
+
+        operands = tuple(operand.node for operand in inputs)
+        result_node = get_graph_state().record_operation(operation, operands)
+
+        fragment, = Computation.from_nodes(
+            (result_node,),
+            boundaries=operands,
         )
-        node = graph.add_operation_node(operation)
-        for label, operand in zip(_operand_labels(len(inputs)), inputs):
-            graph.add_edge(operand.node, node, label=label)
-        graph.add_edge(node, result.node, label="result")
-        result._capture_forward_state(inputs)
-        return result
+        fragment.forward()
+        return result_node.variable
 
     def _capture_forward_state(self, operands: Iterable[Variable]) -> None:
         """Remember the operand and result states of the forward pass.
@@ -214,6 +243,10 @@ class Variable:
     # resulting tensor-tensor promotion reproduces it exactly.
 
     def __add__(self, other: TensorOperand) -> Variable:
+        if isinstance(other, VariableNode):
+            # A structural expression belongs to the vertex: it records
+            # the operation instead of calculating a value.
+            return NotImplemented
         dtype = result_dtype(self.dtype, other)
         if isinstance(other, Variable):
             operand = other
@@ -226,16 +259,16 @@ class Variable:
             )
 
         operation = Add()
-        return self._record_operation(
-            operation.forward(self.data, operand.data),
-            operation,
-            (self, operand),
-        )
+        return self._apply_operation(operation, (self, operand))
 
     def __radd__(self, other: int | float | Tensor) -> Variable:
         return self + other
 
     def __sub__(self, other: TensorOperand) -> Variable:
+        if isinstance(other, VariableNode):
+            # A structural expression belongs to the vertex: it records
+            # the operation instead of calculating a value.
+            return NotImplemented
         dtype = result_dtype(self.dtype, other)
         if isinstance(other, Variable):
             operand = other
@@ -248,16 +281,16 @@ class Variable:
             )
 
         operation = Sub()
-        return self._record_operation(
-            operation.forward(self.data, operand.data),
-            operation,
-            (self, operand),
-        )
+        return self._apply_operation(operation, (self, operand))
 
     def __rsub__(self, other: int | float | Tensor) -> Variable:
         return (-self) + other
 
     def __mul__(self, other: TensorOperand) -> Variable:
+        if isinstance(other, VariableNode):
+            # A structural expression belongs to the vertex: it records
+            # the operation instead of calculating a value.
+            return NotImplemented
         dtype = result_dtype(self.dtype, other)
         if isinstance(other, Variable):
             operand = other
@@ -270,16 +303,16 @@ class Variable:
             )
 
         operation = Mul()
-        return self._record_operation(
-            operation.forward(self.data, operand.data),
-            operation,
-            (self, operand),
-        )
+        return self._apply_operation(operation, (self, operand))
 
     def __rmul__(self, other: int | float | Tensor) -> Variable:
         return self * other
 
     def __truediv__(self, other: TensorOperand) -> Variable:
+        if isinstance(other, VariableNode):
+            # A structural expression belongs to the vertex: it records
+            # the operation instead of calculating a value.
+            return NotImplemented
         dtype = result_dtype(self.dtype, other, division=True)
         if isinstance(other, Variable):
             operand = other
@@ -292,11 +325,7 @@ class Variable:
             )
 
         operation = Div()
-        return self._record_operation(
-            operation.forward(self.data, operand.data),
-            operation,
-            (self, operand),
-        )
+        return self._apply_operation(operation, (self, operand))
 
     def __rtruediv__(self, other: int | float | Tensor) -> Variable:
         # Operand order carries the semantics: the numerator is input_0.
@@ -312,13 +341,13 @@ class Variable:
             )
 
         operation = Div()
-        return self._record_operation(
-            operation.forward(numerator.data, self.data),
-            operation,
-            (numerator, self),
-        )
+        return self._apply_operation(operation, (numerator, self))
 
     def __pow__(self, other: TensorOperand) -> Variable:
+        if isinstance(other, VariableNode):
+            # A structural expression belongs to the vertex: it records
+            # the operation instead of calculating a value.
+            return NotImplemented
         dtype = _power_dtype(self.data, other)
         if isinstance(other, Variable):
             exponent = other
@@ -331,11 +360,7 @@ class Variable:
             )
 
         operation = Pow()
-        return self._record_operation(
-            operation.forward(self.data, exponent.data),
-            operation,
-            (self, exponent),
-        )
+        return self._apply_operation(operation, (self, exponent))
 
     def __rpow__(
         self,
@@ -354,19 +379,11 @@ class Variable:
             )
 
         operation = Pow()
-        return self._record_operation(
-            operation.forward(base.data, self.data),
-            operation,
-            (base, self),
-        )
+        return self._apply_operation(operation, (base, self))
 
     def __neg__(self) -> Variable:
         operation = Neg()
-        return self._record_operation(
-            operation.forward(self.data),
-            operation,
-            (self,),
-        )
+        return self._apply_operation(operation, (self,))
 
     def __abs__(self) -> Variable:
         from .math import abs
@@ -382,13 +399,8 @@ class Variable:
 
     def __getitem__(self, key: TensorIndex) -> Variable:
         operation = Slice(key=key)
-        return self._record_operation(
-            operation.forward(self.data),
-            operation,
-            (self,),
-        )
+        return self._apply_operation(operation, (self,))
 
     def astype(self, dtype: str | DataType) -> "Variable":
         """Return a differentiable copy converted to ``dtype``."""
-        result = self.data.astype(dtype)
-        return self._record_operation(result, Cast(dtype=result.dtype), (self,))
+        return self._apply_operation(Cast(dtype=_cast_dtype(dtype)), (self,))

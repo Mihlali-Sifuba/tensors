@@ -17,6 +17,7 @@ from ..ops._utils import sum_to_shape, sum_to_shape_graph
 from ..shape import Shape
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ..utils.broadcasting import broadcast_tensors
 from ..utils.coordinates import (
     coordinates_to_linear_index,
@@ -30,6 +31,7 @@ from .softmax import Softmax, _normalize_axis
 from .sum import _stable_float_sum
 
 if TYPE_CHECKING:
+    from ..graph.node import VariableNode
     from ..variable import Variable
 
 
@@ -48,7 +50,7 @@ def _tensor(value: Any) -> Tensor:
 
     if isinstance(value, Variable):
         return value.data
-    return value if isinstance(value, Tensor) else Tensor(value)
+    return as_tensor_operand(value)
 
 
 def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:
@@ -96,75 +98,77 @@ def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:
     return Tensor(values, dtype=logits.dtype, shape=logits.shape)
 
 
-def _targets_for_logits(logits: Any, targets: Any, axis: int) -> Any:
-    """Return dense targets, retaining Variables when targets are trainable."""
-    from ..variable import Variable
+def _targets_are_class_indices(
+    logits: Tensor,
+    targets: Tensor,
+    axis: int,
+) -> bool:
+    """Whether ``targets`` names one class per sample.
 
-    logits_tensor = _tensor(logits)
-    target_tensor = _tensor(targets)
-    sample_shape = logits_tensor.shape[:axis] + logits_tensor.shape[axis + 1:]
-    scalar_target = sample_shape == () and target_tensor.size == 1
+    The decision is the values' to make, not the caller's: a target
+    shaped like the logits is already a distribution, and one shaped
+    like a sample is read as class indices unless it is floating,
+    broadcasts over the class axis, and either holds a non-integral
+    value or forms a valid distribution when expanded. Anything else
+    must broadcast to the logits, or it fits neither reading.
+    """
+    sample_shape = logits.shape[:axis] + logits.shape[axis + 1:]
+    scalar_target = sample_shape == () and targets.size == 1
 
-    if target_tensor.shape == logits_tensor.shape:
-        prepared = targets
-    elif target_tensor.shape == sample_shape or scalar_target:
-        dense_target = False
-        if target_tensor.dtype.kind == "floating":
-            try:
-                target_shape = target_tensor.shape.broadcast_with(
-                    logits_tensor.shape
-                )
-            except ValueError:
-                target_shape = None
+    if targets.shape == logits.shape:
+        return False
 
-            if target_shape == logits_tensor.shape:
-                values = [float(value) for value in target_tensor._data]
-                dense_target = any(
-                    not math.isfinite(value) or not value.is_integer()
-                    for value in values
-                )
-                if not dense_target:
-                    _, expanded_targets = broadcast_tensors(
-                        logits_tensor,
-                        target_tensor,
-                    )
-                    try:
-                        _validate_distributions(expanded_targets, axis)
-                    except ValueError:
-                        pass
-                    else:
-                        dense_target = True
-
-        if dense_target:
-            prepared = targets
-        else:
-            if isinstance(targets, Variable):
-                raise TypeError(
-                    "Class-index targets cannot be differentiable Variables"
-                )
-            prepared = _one_hot_targets(logits_tensor, target_tensor, axis)
-    else:
+    if targets.shape == sample_shape or scalar_target:
+        if targets.dtype.kind != "floating":
+            return True
         try:
-            target_shape = target_tensor.shape.broadcast_with(
-                logits_tensor.shape
-            )
-        except ValueError as exc:
-            raise ValueError(
-                f"Target shape {target_tensor.shape} is neither class-index shaped "
-                f"nor broadcastable to logits shape {logits_tensor.shape}"
-            ) from exc
-        if target_shape != logits_tensor.shape:
-            raise ValueError(
-                f"Target shape {target_tensor.shape} cannot broadcast to "
-                f"logits shape {logits_tensor.shape}"
-            )
-        prepared = targets
+            target_shape = targets.shape.broadcast_with(logits.shape)
+        except ValueError:
+            return True
+        if target_shape != logits.shape:
+            return True
+        values = [float(value) for value in targets._data]
+        if any(
+            not math.isfinite(value) or not value.is_integer()
+            for value in values
+        ):
+            return False
+        _, expanded_targets = broadcast_tensors(logits, targets)
+        try:
+            _validate_distributions(expanded_targets, axis)
+        except ValueError:
+            return True
+        return False
 
-    if isinstance(logits, Variable) and not isinstance(prepared, Variable):
-        return Variable(_tensor(prepared), requires_grad=False)
-    if isinstance(prepared, Variable):
-        return prepared
-    return _tensor(prepared)
+    try:
+        target_shape = targets.shape.broadcast_with(logits.shape)
+    except ValueError as exc:
+        raise ValueError(
+            f"Target shape {targets.shape} is neither class-index shaped "
+            f"nor broadcastable to logits shape {logits.shape}"
+        ) from exc
+    if target_shape != logits.shape:
+        raise ValueError(
+            f"Target shape {targets.shape} cannot broadcast to "
+            f"logits shape {logits.shape}"
+        )
+    return False
+
+
+def _dense_targets(
+    logits: Tensor,
+    targets: Tensor,
+    axis: int,
+) -> tuple[Tensor, bool]:
+    """Return dense targets and whether they came from class indices.
+
+    This is the operation's own preparation, so it runs from the values
+    each pass is handed rather than from anything remembered between
+    passes, and forward and backward reach the same reading.
+    """
+    if _targets_are_class_indices(logits, targets, axis):
+        return _one_hot_targets(logits, targets, axis), True
+    return targets, False
 
 
 def _validate_distributions(targets: Tensor, axis: int) -> None:
@@ -185,10 +189,36 @@ def _validate_distributions(targets: Tensor, axis: int) -> None:
             )
 
 
-class CrossEntropy(Operation):
-    """Stable cross-entropy between logits and dense target distributions."""
+def _reject_variable_class_indices() -> None:
+    """Refuse class indices that were supplied as a Variable.
 
-    __slots__ = ("axis", "reduction")
+    Class indices name a choice rather than a quantity, so the public
+    contract does not let a Variable stand for them however its
+    gradient flag is set. Whether they are class indices is the values'
+    to say, so this is raised wherever that reading is reached.
+    """
+    raise TypeError(
+        "Class-index targets cannot be differentiable Variables"
+    )
+
+
+class CrossEntropy(Operation):
+    """Stable cross-entropy between logits and raw targets.
+
+    The second operand is the targets as the caller wrote them: either
+    one class index per sample, or dense probability distributions
+    broadcastable to the logits. Which of the two a target holds is
+    read from its values on every pass, so one operation replays
+    against changing targets.
+
+    ``targets_from_variable`` records how the call was written rather
+    than what its values turned out to be: the graph keeps a Tensor
+    constant and a caller's Variable as the same kind of leaf, so the
+    public rule that class indices may not be a Variable would
+    otherwise be unenforceable once the call is recorded.
+    """
+
+    __slots__ = ("axis", "reduction", "targets_from_variable")
     name = "cross_entropy"
 
     def __init__(
@@ -196,15 +226,22 @@ class CrossEntropy(Operation):
         *,
         axis: int = -1,
         reduction: Reduction = "mean",
+        targets_from_variable: bool = False,
     ) -> None:
         object.__setattr__(self, "axis", axis)
         object.__setattr__(self, "reduction", reduction)
+        object.__setattr__(
+            self, "targets_from_variable", targets_from_variable
+        )
 
     def forward(self, logits: Tensor, targets: Tensor) -> Tensor:
         axis = self.axis
         reduction = self.reduction
         _validate_reduction(reduction)
         axis = _normalize_axis(logits, axis)
+        targets, from_class_indices = _dense_targets(logits, targets, axis)
+        if from_class_indices and self.targets_from_variable:
+            _reject_variable_class_indices()
         logits, targets = broadcast_tensors(logits, targets)
         _validate_distributions(targets, axis)
         output_shape = logits.shape[:axis] + logits.shape[axis + 1:]
@@ -257,6 +294,13 @@ class CrossEntropy(Operation):
         _validate_reduction(reduction)
         axis = _normalize_axis(logits, axis)
 
+        # The gradient is summed back to the operand's own shape, which
+        # is the raw target's, so it is read before preparation.
+        target_shape = targets.shape
+        targets, from_class_indices = _dense_targets(logits, targets, axis)
+        if from_class_indices and (need_targets or self.targets_from_variable):
+            _reject_variable_class_indices()
+
         expanded_logits, expanded_targets = broadcast_tensors(logits, targets)
         _validate_distributions(expanded_targets, axis)
         output_shape = (
@@ -297,7 +341,7 @@ class CrossEntropy(Operation):
                         dtype=grad.dtype,
                         shape=expanded_shape,
                     ),
-                    targets.shape,
+                    target_shape,
                 )
                 if targets_storage is not None
                 else None,
@@ -371,7 +415,7 @@ class CrossEntropy(Operation):
             else None,
             sum_to_shape(
                 Tensor(targets_gradient, dtype=grad.dtype, shape=expanded_shape),
-                targets.shape,
+                target_shape,
             )
             if need_targets
             else None,
@@ -387,13 +431,26 @@ class CrossEntropy(Operation):
         from .log_softmax import _log_softmax_vjp
         from .reshape import reshape
 
+        from ..variable import Variable
+
         logits, targets = inputs
+        need_logits, need_targets = needs_input_grad
         axis = self.axis
         reduction = self.reduction
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("cross_entropy axis must be an integer")
         _validate_reduction(reduction)
         axis = _normalize_axis(logits.data, axis)
+
+        dense, from_class_indices = _dense_targets(
+            logits.data, targets.data, axis
+        )
+        if from_class_indices:
+            if need_targets or self.targets_from_variable:
+                _reject_variable_class_indices()
+            # One class per sample is a constant here, so the expansion
+            # enters the derivative as a non-gradient value.
+            targets = Variable(dense, requires_grad=False)
 
         # Multiplying by finite ones expands targets without evaluating the
         # indeterminate expression ``infinite_logits * 0``. The logits VJP is
@@ -406,7 +463,6 @@ class CrossEntropy(Operation):
             shape=logits.shape,
         )
         expanded_targets = targets * ones
-        need_logits, need_targets = needs_input_grad
         logits_derivative = (
             _log_softmax_vjp(-expanded_targets, logits, axis)
             if need_logits
@@ -440,6 +496,26 @@ class CrossEntropy(Operation):
 
 @overload
 def cross_entropy(
+    logits: VariableNode,
+    targets: TensorLike | VariableNode,
+    *,
+    axis: int = -1,
+    reduction: Reduction = "mean",
+) -> VariableNode: ...
+
+
+@overload
+def cross_entropy(
+    logits: TensorLike,
+    targets: VariableNode,
+    *,
+    axis: int = -1,
+    reduction: Reduction = "mean",
+) -> VariableNode: ...
+
+
+@overload
+def cross_entropy(
     logits: Variable,
     targets: TensorLike,
     *,
@@ -469,50 +545,76 @@ def cross_entropy(
 
 
 def cross_entropy(
-    logits: TensorLike,
-    targets: TensorLike,
+    logits: TensorLike | VariableNode,
+    targets: TensorLike | VariableNode,
     *,
     axis: int = -1,
     reduction: Reduction = "mean",
-) -> TensorResult:
+) -> TensorResult | VariableNode:
     """Return stable multiclass cross-entropy from unnormalized ``logits``.
 
     ``targets`` may contain class indices with the class axis removed, or
     dense probability distributions broadcastable to the logits shape.
     In an otherwise ambiguous shape, an integer dtype selects class indices
     while a floating probability distribution selects dense targets.
+
+    Which reading applies is decided from the values, so the operation
+    makes it when it runs and this function only says what to record: a
+    graph value in either position applies the loss through the graph,
+    with the raw targets as the second operand.
     """
-    _validate_reduction(reduction)
+    from ..graph.expression import apply_operation, as_graph_operand
+    from ..graph.node import VariableNode
     from ..variable import Variable
 
-    logits_tensor = _tensor(logits)
+    _validate_reduction(reduction)
     if isinstance(axis, bool) or not isinstance(axis, int):
         raise TypeError("cross_entropy axis must be an integer")
-    axis = _normalize_axis(logits_tensor, axis)
-    prepared_targets = _targets_for_logits(logits, targets, axis)
 
-    logits_is_variable = isinstance(logits, Variable)
-    targets_are_variable = isinstance(prepared_targets, Variable)
-    if logits_is_variable or targets_are_variable:
-        logits_variable = (
-            logits
-            if isinstance(logits, Variable)
-            else Variable(logits_tensor, requires_grad=False)
-        )
-        targets_variable = (
-            prepared_targets
-            if isinstance(prepared_targets, Variable)
-            else Variable(_tensor(prepared_targets), requires_grad=False)
-        )
-        operation = CrossEntropy(axis=axis, reduction=reduction)
-        return Variable._record_operation(
-            operation.forward(logits_variable.data, targets_variable.data),
+    structural = isinstance(logits, VariableNode) or isinstance(
+        targets, VariableNode
+    )
+    if isinstance(targets, Variable) and not structural:
+        # A Variable target must be a distribution. Reading it needs the
+        # logits' shape, so the guard applies wherever that shape exists
+        # and otherwise waits for the pass that has it.
+        logits_tensor = _tensor(logits)
+        if _targets_are_class_indices(
+            logits_tensor,
+            targets.data,
+            _normalize_axis(logits_tensor, axis),
+        ):
+            _reject_variable_class_indices()
+
+    # A vertex hides the logits' rank, so the reading that decides the
+    # rule above cannot be reached yet. Recording how the call was
+    # written carries it to the pass that can.
+    operation = CrossEntropy(
+        axis=axis,
+        reduction=reduction,
+        targets_from_variable=isinstance(targets, Variable),
+    )
+
+    if structural:
+        return apply_operation(
             operation,
-            (logits_variable, targets_variable),
+            (as_graph_operand(logits), as_graph_operand(targets)),
         )
 
-    operation = CrossEntropy(axis=axis, reduction=reduction)
-    return operation.forward(logits_tensor, _tensor(prepared_targets))
+    if isinstance(logits, Variable) or isinstance(targets, Variable):
+        return Variable._apply_operation(
+            operation,
+            (
+                logits
+                if isinstance(logits, Variable)
+                else Variable(_tensor(logits), requires_grad=False),
+                targets
+                if isinstance(targets, Variable)
+                else Variable(_tensor(targets), requires_grad=False),
+            ),
+        )
+
+    return operation.forward(_tensor(logits), _tensor(targets))
 
 
 __all__ = ["CrossEntropy", "Reduction", "cross_entropy"]

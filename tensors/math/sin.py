@@ -1,13 +1,19 @@
 """Elementwise sine and its differentiation rule."""
 
+from __future__ import annotations
+
 import math as _math
-from typing import Any, List, overload
+from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._unary import unary_backward, unary_forward
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class Sin(Operation):
@@ -56,6 +62,10 @@ class Sin(Operation):
 
 
 @overload
+def sin(value: VariableNode) -> VariableNode: ...
+
+
+@overload
 def sin(value: TensorValue) -> TensorValue: ...
 
 
@@ -63,19 +73,20 @@ def sin(value: TensorValue) -> TensorValue: ...
 def sin(value: TensorData) -> Tensor: ...
 
 
-def sin(value: TensorLike) -> TensorResult:
-    """Return the elementwise sine as a Tensor or differentiable Variable."""
-    from ..variable import Variable
+def sin(
+    value: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Return the elementwise sine of a graph value or Tensor.
 
-    if isinstance(value, Variable):
-        operation = Sin()
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
+
+    if is_graph_operand(value):
+        return apply_operation(Sin(), (value,))
+    value = as_tensor_operand(value)
     return Sin().forward(value)
 
 

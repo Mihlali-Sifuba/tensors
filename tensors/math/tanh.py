@@ -1,13 +1,19 @@
 """Elementwise hyperbolic tangent and its differentiation rule."""
 
+from __future__ import annotations
+
 import math as _math
-from typing import Any, List, overload
+from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._unary import unary_backward, unary_forward
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class Tanh(Operation):
@@ -72,6 +78,10 @@ class Tanh(Operation):
 
 
 @overload
+def tanh(value: VariableNode) -> VariableNode: ...
+
+
+@overload
 def tanh(value: TensorValue) -> TensorValue: ...
 
 
@@ -79,19 +89,20 @@ def tanh(value: TensorValue) -> TensorValue: ...
 def tanh(value: TensorData) -> Tensor: ...
 
 
-def tanh(value: TensorLike) -> TensorResult:
-    """Return the elementwise hyperbolic tangent as a Tensor or Variable."""
-    from ..variable import Variable
+def tanh(
+    value: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Return the elementwise hyperbolic tangent of a graph value or Tensor.
 
-    if isinstance(value, Variable):
-        operation = Tanh()
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
+
+    if is_graph_operand(value):
+        return apply_operation(Tanh(), (value,))
+    value = as_tensor_operand(value)
     return Tanh().forward(value)
 
 

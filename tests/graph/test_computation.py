@@ -1,9 +1,14 @@
 import unittest
+from unittest.mock import patch
 
 import tensors as ts
-from tensors.graph import Computation
+from tensors.graph import Computation, UnboundVariableNodeError
 from tensors.graph.computation.instruction import Instruction
+from tensors.graph.edge import Edge
+from tensors.graph.node import OperationNode, VariableNode
 from tensors.graph.state import reset_graph_state
+from tensors.math.sin import Sin
+from tensors.ops import Add, Mul
 
 
 class ComputationTests(unittest.TestCase):
@@ -177,12 +182,12 @@ class ExecutionModelTests(unittest.TestCase):
         self.assertEqual(
             instruction.input_slots,
             (
-                computation._variable_slots[x],
-                computation._variable_slots[y],
+                computation._node_slots[x.node],
+                computation._node_slots[y.node],
             ),
         )
         self.assertEqual(
-            computation._variables[instruction.output_slot],
+            computation._variable_nodes[instruction.output_slot].variable,
             computation.output,
         )
 
@@ -276,6 +281,212 @@ class ExecutionModelTests(unittest.TestCase):
 
         self.assertEqual(failures, [])
         self.assertEqual(set(results), {7.0})
+
+
+class GraphFirstExecutionTests(unittest.TestCase):
+    """A compiled graph executes into slots and materializes what it names."""
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    @staticmethod
+    def _pending_program():
+        """Return the vertices of ``c = a + b`` and ``d = c * a``.
+
+        Only the leaves hold values: the graph names its results before
+        anything has produced them.
+        """
+        a = ts.Variable([1.0, 2.0, 3.0], name="a")
+        b = ts.Variable([4.0, 5.0, 6.0], name="b")
+        addition = OperationNode(Add())
+        product = OperationNode(Mul())
+        c = VariableNode()
+        d = VariableNode()
+        Edge(a.node, addition, label="input_0")
+        Edge(b.node, addition, label="input_1")
+        Edge(addition, c, label="result")
+        Edge(c, product, label="input_0")
+        Edge(a.node, product, label="input_1")
+        Edge(product, d, label="result")
+        return a, b, c, d
+
+    def test_a_computation_is_built_from_vertices_that_hold_no_value(self):
+        a, b, c, d = self._pending_program()
+
+        computation, = Computation.from_nodes((d,))
+
+        self.assertFalse(c.is_bound)
+        self.assertFalse(d.is_bound)
+        self.assertEqual(computation._variable_nodes, (a.node, b.node, c, d))
+        self.assertEqual(computation._output_slot, computation._node_slots[d])
+        self.assertEqual(
+            [i.operation.name for i in computation._instructions],
+            ["add", "mul"],
+        )
+
+    def test_construction_materializes_nothing(self):
+        _, _, c, d = self._pending_program()
+
+        computation, = Computation.from_nodes((d,))
+
+        self.assertIsNone(computation._variables)
+        self.assertFalse(c.is_bound or d.is_bound)
+        with self.assertRaises(UnboundVariableNodeError):
+            computation.output
+        with self.assertRaisesRegex(RuntimeError, "Run forward"):
+            computation.backward()
+
+    def test_forward_seeds_leaves_and_materializes_every_result(self):
+        a, b, c, d = self._pending_program()
+        computation, = Computation.from_nodes((d,))
+
+        result = computation.forward()
+
+        self.assertEqual(result.tolist(), [5.0, 14.0, 27.0])
+        self.assertTrue(c.is_bound and d.is_bound)
+        self.assertEqual(c.variable.data.tolist(), [5.0, 7.0, 9.0])
+        self.assertEqual(d.variable.data.tolist(), [5.0, 14.0, 27.0])
+        # Each materialized Variable belongs to the vertex that named it.
+        self.assertIs(c.variable.node, c)
+        self.assertIs(d.variable.node, d)
+        self.assertIs(computation.output, d.variable)
+        self.assertIs(computation.output.data, result)
+
+    def test_a_materialized_result_follows_its_operands_gradient_demand(self):
+        a, _, c, d = self._pending_program()
+        Computation.from_nodes((d,))[0].forward()
+        self.assertTrue(c.variable.requires_grad)
+
+        reset_graph_state()
+        left = ts.Variable([2.0], name="left", requires_grad=False)
+        right = ts.Variable([3.0], name="right", requires_grad=False)
+        operation = OperationNode(Add())
+        total = VariableNode()
+        Edge(left.node, operation, label="input_0")
+        Edge(right.node, operation, label="input_1")
+        Edge(operation, total, label="result")
+
+        Computation.from_nodes((total,))[0].forward()
+
+        self.assertFalse(total.variable.requires_grad)
+        self.assertEqual(total.variable.data.tolist(), [5.0])
+
+    def test_replay_updates_the_variable_a_vertex_already_names(self):
+        a, _, _, d = self._pending_program()
+        computation, = Computation.from_nodes((d,))
+        computation.forward()
+        materialized = d.variable
+
+        a.data = ts.Tensor([2.0, 2.0, 2.0])
+        replayed = computation.forward()
+
+        # A second pass updates the Variable the vertex names rather than
+        # binding another one to it.
+        self.assertIs(d.variable, materialized)
+        self.assertIs(computation.output, materialized)
+        self.assertEqual(replayed.tolist(), [12.0, 14.0, 16.0])
+        self.assertEqual(materialized.data.tolist(), [12.0, 14.0, 16.0])
+
+    def test_results_materialize_in_dependency_order(self):
+        _, _, c, d = self._pending_program()
+        computation, = Computation.from_nodes((d,))
+        observed = []
+        original = Mul.forward
+
+        def watched(self, *args):
+            observed.append((c.is_bound, d.is_bound))
+            return original(self, *args)
+
+        with patch.object(Mul, "forward", watched):
+            computation.forward()
+
+        # The product runs after the sum has given its vertex a value and
+        # before its own vertex has one.
+        self.assertEqual(observed, [(True, False)])
+
+    def test_an_unbound_leaf_is_reported_as_a_missing_value(self):
+        pending = VariableNode()
+        leaf = ts.Variable([2.0], name="leaf")
+        operation = OperationNode(Add())
+        result = VariableNode()
+        Edge(pending, operation, label="input_0")
+        Edge(leaf.node, operation, label="input_1")
+        Edge(operation, result, label="result")
+        computation, = Computation.from_nodes((result,))
+
+        with self.assertRaisesRegex(RuntimeError, "leaf slot .* no value"):
+            computation.forward()
+        self.assertFalse(result.is_bound)
+
+    def test_each_view_produces_its_own_output(self):
+        a, b, c, d = self._pending_program()
+
+        first, second = Computation.from_nodes((c, d))
+
+        self.assertIs(first._variable_nodes, second._variable_nodes)
+        self.assertEqual(
+            [i.operation.name for i in first._view_instructions], ["add"]
+        )
+        self.assertEqual(
+            [i.operation.name for i in second._view_instructions],
+            ["add", "mul"],
+        )
+        self.assertEqual(first.forward().tolist(), [5.0, 7.0, 9.0])
+        self.assertEqual(second.forward().tolist(), [5.0, 14.0, 27.0])
+        self.assertIs(first.output, c.variable)
+        self.assertIs(second.output, d.variable)
+
+    def test_a_graph_first_program_differentiates_after_it_has_run(self):
+        a, b, _, d = self._pending_program()
+        computation, = Computation.from_nodes((d,))
+        computation.forward()
+
+        computation.backward(ts.Tensor([1.0, 1.0, 1.0]))
+
+        # d = (a + b) * a, so dd/da = (a + b) + a and dd/db = a.
+        self.assertEqual(a.grad.tolist(), [6.0, 9.0, 12.0])
+        self.assertEqual(b.grad.tolist(), [1.0, 2.0, 3.0])
+
+    def test_adopting_a_program_resolves_no_runtime_values(self):
+        value = ts.Variable([2.0], requires_grad=True)
+        output = ts.sum(value * 3.0)
+
+        computation = Computation(output)
+
+        # Construction is structural even for a fully materialized graph:
+        # the Variables behind the slots are resolved by the pass that needs
+        # them, which for this program is differentiation.
+        self.assertIsNone(computation._variables)
+        computation.forward()
+        computation.backward()
+        self.assertEqual(
+            computation._variables,
+            tuple(node.variable for node in computation._variable_nodes),
+        )
+
+    def test_fusion_is_planned_once_the_program_holds_values(self):
+        value = ts.Variable(ts.full((4_096,), 0.5), name="value")
+        first_operation = OperationNode(Sin())
+        second_operation = OperationNode(Sin())
+        middle = VariableNode()
+        end = VariableNode()
+        Edge(value.node, first_operation, label="input_0")
+        Edge(first_operation, middle, label="result")
+        Edge(middle, second_operation, label="input_0")
+        Edge(second_operation, end, label="result")
+        computation, = Computation.from_nodes((end,))
+
+        # A fusible run is recognized from the shapes and dtypes its slots
+        # hold, so there is nothing to plan before the program has run.
+        self.assertEqual(computation._fusions, {})
+        expected = computation.forward().tolist()
+
+        self.assertEqual(list(computation._fusions), [0])
+        self.assertEqual(computation._fusion_starts, {1: 0})
+        self.assertEqual(computation.forward().tolist(), expected)
 
 
 if __name__ == "__main__":

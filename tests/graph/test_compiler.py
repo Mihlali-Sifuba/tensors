@@ -10,10 +10,14 @@ from tensors.graph import computation as computation_package
 from tensors.graph.computation import compiler as compiler_module
 from tensors.graph.computation import computation as computation_module
 from tensors.graph.computation import instruction as instruction_module
-from tensors.graph.computation.compiler import Compiler
+from tensors.graph.computation.compiler import (
+    Compiler, resolve_boundaries, resolve_outputs,
+)
 from tensors.graph.computation.instruction import Instruction
-from tensors.graph.node import VariableNode
+from tensors.graph.edge import Edge
+from tensors.graph.node import OperationNode, VariableNode
 from tensors.graph.state import reset_graph_state
+from tensors.ops import Add, Mul
 
 
 class InstructionModuleTests(unittest.TestCase):
@@ -59,7 +63,7 @@ class CompilerResponsibilityTests(unittest.TestCase):
         value = ts.Variable([2.0])
         output = ts.sum(value * 3.0 + 1.0)
 
-        compiler = Compiler((output,))
+        compiler = Compiler((output.node,))
         instructions = compiler.compile()
 
         self.assertIs(instructions, compiler.instructions)
@@ -74,7 +78,7 @@ class CompilerResponsibilityTests(unittest.TestCase):
         value = ts.Variable([2.0])
         output = (value + 1.0) * 3.0
 
-        compiler = Compiler((output,))
+        compiler = Compiler((output.node,))
         compiler.compile()
 
         # The traversal is dependency-first and reaches the output last.
@@ -89,29 +93,29 @@ class CompilerResponsibilityTests(unittest.TestCase):
         right = ts.Variable([3.0])
         output = left * right
 
-        compiler = Compiler((output,))
+        compiler = Compiler((output.node,))
         compiler.compile()
 
         self.assertEqual(
-            compiler.variables,
+            compiler.variable_nodes,
             tuple(
-                node.variable
+                node
                 for node in compiler.nodes
                 if isinstance(node, VariableNode)
             ),
         )
         self.assertEqual(
-            compiler.variable_slots,
-            {variable: index for index, variable in enumerate(compiler.variables)},
+            compiler.node_slots,
+            {node: index for index, node in enumerate(compiler.variable_nodes)},
         )
         self.assertEqual(
             sorted(compiler.leaf_slots),
             sorted(
-                compiler.variable_slots[variable] for variable in (left, right)
+                compiler.node_slots[value.node] for value in (left, right)
             ),
         )
         self.assertEqual(
-            compiler.output_slots, (compiler.variable_slots[output],)
+            compiler.output_slots, (compiler.node_slots[output.node],)
         )
 
     def test_compiler_emits_instructions_over_slots(self):
@@ -119,28 +123,28 @@ class CompilerResponsibilityTests(unittest.TestCase):
         right = ts.Variable([3.0])
         output = left * right
 
-        compiler = Compiler((output,))
+        compiler = Compiler((output.node,))
         instruction, = compiler.compile()
 
-        slots = compiler.variable_slots
+        slots = compiler.node_slots
         self.assertEqual(
-            instruction.input_slots, (slots[left], slots[right])
+            instruction.input_slots, (slots[left.node], slots[right.node])
         )
-        self.assertEqual(instruction.output_slot, slots[output])
+        self.assertEqual(instruction.output_slot, slots[output.node])
 
     def test_compiler_respects_boundaries(self):
         value = ts.Variable([2.0])
         hidden = value * 3.0
         output = hidden + 1.0
 
-        compiler = Compiler((output,), boundaries=(hidden,))
+        compiler = Compiler((output.node,), boundaries=(hidden.node,))
         instructions = compiler.compile()
 
         self.assertEqual(
             [instruction.operation.name for instruction in instructions], ["add"]
         )
         self.assertIn(hidden.node, compiler.boundary_nodes)
-        self.assertIn(compiler.variable_slots[hidden], compiler.leaf_slots)
+        self.assertIn(compiler.node_slots[hidden.node], compiler.leaf_slots)
         self.assertNotIn(value.node, compiler.nodes)
 
     def test_compiler_records_per_output_reachability(self):
@@ -149,7 +153,7 @@ class CompilerResponsibilityTests(unittest.TestCase):
         first = shared * only_first
         second = shared + 1.0
 
-        compiler = Compiler((first, second))
+        compiler = Compiler((first.node, second.node))
         compiler.compile()
 
         masks = dict(zip(compiler.nodes, compiler.node_masks))
@@ -159,20 +163,39 @@ class CompilerResponsibilityTests(unittest.TestCase):
         self.assertEqual(masks[only_first.node], 0b01)
         self.assertEqual(
             compiler.output_slots,
-            (compiler.variable_slots[first], compiler.variable_slots[second]),
+            (
+                compiler.node_slots[first.node],
+                compiler.node_slots[second.node],
+            ),
         )
 
     def test_compiler_validates_outputs(self):
         with self.assertRaisesRegex(ValueError, "at least one output"):
             Compiler(())
-        with self.assertRaisesRegex(TypeError, "graph node"):
+        with self.assertRaisesRegex(TypeError, "must be a VariableNode"):
             Compiler((ts.Tensor([1.0]),))
+
+    def test_runtime_outputs_are_resolved_to_their_vertices(self):
+        value = ts.Variable([2.0])
+        output = value * 3.0
+
+        self.assertEqual(resolve_outputs((output,)), (output.node,))
+        self.assertEqual(resolve_boundaries((value,)), (value.node,))
+        self.assertEqual(resolve_boundaries(()), ())
+        with self.assertRaisesRegex(ValueError, "at least one output"):
+            resolve_outputs(())
+        with self.assertRaisesRegex(TypeError, "output must have a graph node"):
+            resolve_outputs((ts.Tensor([1.0]),))
+        with self.assertRaisesRegex(
+            TypeError, "boundary must have a graph node"
+        ):
+            resolve_boundaries((ts.Tensor([1.0]),))
 
     def test_compiler_plans_no_fusion(self):
         value = ts.Variable(ts.full((4_096,), 0.5))
         output = ts.sum(ts.sin(value * 1.5) + 0.25)
 
-        compiler = Compiler((output,))
+        compiler = Compiler((output.node,))
         compiler.compile()
 
         # Fusion is an optimization over a compiled program, not part of
@@ -223,7 +246,7 @@ class CompilerResponsibilityTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_compiler_and_instruction_are_not_public_api(self):
-        for name in ("Compiler", "Instruction", "validate_outputs"):
+        for name in ("Compiler", "Instruction", "resolve_outputs"):
             with self.subTest(name=name):
                 self.assertNotIn(name, computation_package.__all__)
                 self.assertNotIn(name, ts.graph.__all__)
@@ -241,6 +264,164 @@ class CompilerResponsibilityTests(unittest.TestCase):
                 imported.add(node.module or "")
                 imported.update(alias.name for alias in node.names)
         return imported
+
+
+class NodeIdentityCompilationTests(unittest.TestCase):
+    """Slots are numbered by vertex, so a value need not exist to compile."""
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    @staticmethod
+    def _pending_graph():
+        """Return the vertices of ``c = a + b`` and ``d = c * a``, c and d
+        unbound."""
+        a = ts.Variable([1.0, 2.0, 3.0], name="a")
+        b = ts.Variable([4.0, 5.0, 6.0], name="b")
+        add = OperationNode(Add())
+        multiply = OperationNode(Mul())
+        c = VariableNode()
+        d = VariableNode()
+        Edge(a.node, add, label="input_0")
+        Edge(b.node, add, label="input_1")
+        Edge(add, c, label="result")
+        Edge(c, multiply, label="input_0")
+        Edge(a.node, multiply, label="input_1")
+        Edge(multiply, d, label="result")
+        return a, b, c, d
+
+    def test_an_unbound_result_vertex_receives_a_slot(self):
+        a, b, c, _ = self._pending_graph()
+
+        compiler = Compiler((c,))
+        compiler.compile()
+
+        self.assertFalse(c.is_bound)
+        self.assertEqual(compiler.variable_nodes, (a.node, b.node, c))
+        self.assertEqual(compiler.node_slots, {a.node: 0, b.node: 1, c: 2})
+        self.assertEqual(compiler.output_slots, (2,))
+
+    def test_bound_leaves_and_an_unbound_result_compile_together(self):
+        a, b, c, d = self._pending_graph()
+
+        compiler = Compiler((d,))
+        instructions = compiler.compile()
+
+        self.assertEqual(
+            [instruction.operation.name for instruction in instructions],
+            ["add", "mul"],
+        )
+        self.assertTrue(a.node.is_bound and b.node.is_bound)
+        self.assertFalse(c.is_bound or d.is_bound)
+
+    def test_instruction_slots_are_derived_from_vertex_identity(self):
+        a, b, c, d = self._pending_graph()
+
+        compiler = Compiler((d,))
+        addition, product = compiler.compile()
+        slots = compiler.node_slots
+
+        self.assertEqual(
+            addition.input_slots, (slots[a.node], slots[b.node])
+        )
+        self.assertEqual(addition.output_slot, slots[c])
+        self.assertEqual(product.input_slots, (slots[c], slots[a.node]))
+        self.assertEqual(product.output_slot, slots[d])
+        for node in slots:
+            with self.subTest(node=node):
+                self.assertIsInstance(node, VariableNode)
+
+    def test_leaf_slots_are_the_vertices_nothing_produces(self):
+        a, b, c, d = self._pending_graph()
+
+        compiler = Compiler((d,))
+        compiler.compile()
+        slots = compiler.node_slots
+
+        self.assertEqual(
+            sorted(compiler.leaf_slots), sorted((slots[a.node], slots[b.node]))
+        )
+        self.assertNotIn(slots[c], compiler.leaf_slots)
+        self.assertNotIn(slots[d], compiler.leaf_slots)
+
+
+    def test_multiple_unbound_outputs_each_resolve_their_own_view(self):
+        a, b, c, d = self._pending_graph()
+
+        compiler = Compiler((c, d))
+        compiler.compile()
+        slots = compiler.node_slots
+
+        self.assertEqual(compiler.output_slots, (slots[c], slots[d]))
+        self.assertEqual(
+            [i.operation.name for i in compiler.view_instructions[0]], ["add"]
+        )
+        self.assertEqual(
+            [i.operation.name for i in compiler.view_instructions[1]],
+            ["add", "mul"],
+        )
+        self.assertNotIn(slots[d], compiler.view_slots[0])
+        self.assertIn(slots[d], compiler.view_slots[1])
+        self.assertNotIn(d, compiler.view_nodes[0])
+
+    def test_a_boundary_vertex_still_stops_the_traversal(self):
+        a, b, c, d = self._pending_graph()
+
+        compiler = Compiler((d,), boundaries=(c,))
+        instructions = compiler.compile()
+        slots = compiler.node_slots
+
+        self.assertEqual(
+            [instruction.operation.name for instruction in instructions],
+            ["mul"],
+        )
+        self.assertIn(c, compiler.boundary_nodes)
+        self.assertIn(slots[c], compiler.leaf_slots)
+        self.assertNotIn(b.node, compiler.nodes)
+        self.assertIn(a.node, compiler.nodes)
+
+    def test_a_materialized_graph_still_compiles_to_the_same_slots(self):
+        value = ts.Variable([2.0])
+        output = ts.sum(value * 3.0)
+
+        compiler = Compiler((output.node,))
+        compiler.compile()
+
+        self.assertEqual(
+            compiler.node_slots,
+            {
+                node: slot
+                for slot, node in enumerate(compiler.variable_nodes)
+            },
+        )
+        # Binding a value changes nothing about the program: a compilation
+        # keeps no projection of its slots onto runtime Variables.
+        for name in ("variables", "variable_slots"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(compiler, name))
+
+    def test_the_compiler_never_reads_a_runtime_value(self):
+        value_reads = {"variable", "operands", "result", "data", "grad"}
+
+        tree = ast.parse(inspect.getsource(compiler_module))
+        for definition in ast.walk(tree):
+            if (
+                not isinstance(definition, ast.ClassDef)
+                or definition.name != "Compiler"
+            ):
+                continue
+            self.assertEqual(
+                [
+                    node.attr
+                    for node in ast.walk(definition)
+                    if isinstance(node, ast.Attribute)
+                    and node.attr in value_reads
+                ],
+                [],
+            )
 
 
 class CompiledComputationTests(unittest.TestCase):
@@ -271,13 +452,13 @@ class CompiledComputationTests(unittest.TestCase):
     def test_computation_stores_what_the_compiler_produced(self):
         value = ts.Variable([2.0])
         output = ts.sum(value * 3.0)
-        compiler = Compiler((output,))
+        compiler = Compiler((output.node,))
         compiler.compile()
 
         computation = Computation(output)
 
-        self.assertEqual(computation._variables, compiler.variables)
-        self.assertEqual(computation._variable_slots, compiler.variable_slots)
+        self.assertEqual(computation._variable_nodes, compiler.variable_nodes)
+        self.assertEqual(computation._node_slots, compiler.node_slots)
         self.assertEqual(computation._leaf_slots, compiler.leaf_slots)
         self.assertEqual(computation._output_slot, compiler.output_slots[0])
         self.assertEqual(
@@ -300,8 +481,8 @@ class CompiledComputationTests(unittest.TestCase):
 
         # One compilation: the program and its slot map are the same objects.
         self.assertIs(one._instructions, two._instructions)
-        self.assertIs(one._variables, two._variables)
-        self.assertIs(one._variable_slots, two._variable_slots)
+        self.assertIs(one._variable_nodes, two._variable_nodes)
+        self.assertIs(one._node_slots, two._node_slots)
         self.assertIs(one._fusions, two._fusions)
         self.assertIs(one._fusion_starts, two._fusion_starts)
         # Each view still executes only its own output.
@@ -324,8 +505,8 @@ class CompiledComputationTests(unittest.TestCase):
         self.assertEqual(
             [i.operation.name for i in two._view_instructions], ["add"]
         )
-        self.assertIn(one._variable_slots[only_first], one._view_slots)
-        self.assertNotIn(two._variable_slots[only_first], two._view_slots)
+        self.assertIn(one._node_slots[only_first.node], one._view_slots)
+        self.assertNotIn(two._node_slots[only_first.node], two._view_slots)
         self.assertIn(first.node, one.nodes)
         self.assertNotIn(first.node, two.nodes)
 

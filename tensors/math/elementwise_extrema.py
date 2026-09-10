@@ -11,9 +11,11 @@ from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ..utils.broadcasting import broadcast_tensors
 
 if TYPE_CHECKING:
+    from ..graph.node import VariableNode
     from ..variable import Variable
 
 
@@ -29,7 +31,7 @@ def _tensor(value: Any, *, dtype=None) -> Tensor:
         if dtype is not None and isinstance(value, (int, float))
         else None
     )
-    return Tensor(value, dtype=scalar_dtype)
+    return as_tensor_operand(value, dtype=scalar_dtype)
 
 
 def _is_nan(value: int | float) -> bool:
@@ -231,7 +233,22 @@ class Minimum(_ElementwiseExtremum):
 
 
 def _extremum(operation: Operation, left: Any, right: Any) -> Any:
+    """Apply an extremum as the kinds of its two operands imply.
+
+    A vertex is answered first and on its own terms: it names a value
+    that does not exist, so neither operand can be read for the dtype a
+    Python scalar is promoted against below, and the expression is
+    recorded instead of calculated.
+    """
+    from ..graph.expression import apply_operation, as_graph_operand
+    from ..graph.node import VariableNode
     from ..variable import Variable
+
+    if isinstance(left, VariableNode) or isinstance(right, VariableNode):
+        return apply_operation(
+            operation,
+            (as_graph_operand(left), as_graph_operand(right)),
+        )
 
     left_is_variable = isinstance(left, Variable)
     right_is_variable = isinstance(right, Variable)
@@ -251,12 +268,22 @@ def _extremum(operation: Operation, left: Any, right: Any) -> Any:
             right_tensor,
             requires_grad=False,
         )
-        return Variable._record_operation(
-            operation.forward(left_variable.data, right_variable.data),
+        return Variable._apply_operation(
             operation,
             (left_variable, right_variable),
         )
     return operation.forward(left_tensor, right_tensor)
+
+
+@overload
+def maximum(
+    left: VariableNode,
+    right: TensorLike | VariableNode,
+) -> VariableNode: ...
+
+
+@overload
+def maximum(left: TensorLike, right: VariableNode) -> VariableNode: ...
 
 
 @overload
@@ -271,9 +298,23 @@ def maximum(left: TensorLike, right: Variable) -> Variable: ...
 def maximum(left: TensorData, right: TensorData) -> Tensor: ...
 
 
-def maximum(left: TensorLike, right: TensorLike) -> TensorResult:
+def maximum(
+    left: TensorLike | VariableNode,
+    right: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
     """Return the broadcasting elementwise maximum of two values."""
     return _extremum(Maximum(), left, right)
+
+
+@overload
+def minimum(
+    left: VariableNode,
+    right: TensorLike | VariableNode,
+) -> VariableNode: ...
+
+
+@overload
+def minimum(left: TensorLike, right: VariableNode) -> VariableNode: ...
 
 
 @overload
@@ -288,7 +329,10 @@ def minimum(left: TensorLike, right: Variable) -> Variable: ...
 def minimum(left: TensorData, right: TensorData) -> Tensor: ...
 
 
-def minimum(left: TensorLike, right: TensorLike) -> TensorResult:
+def minimum(
+    left: TensorLike | VariableNode,
+    right: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
     """Return the broadcasting elementwise minimum of two values."""
     return _extremum(Minimum(), left, right)
 

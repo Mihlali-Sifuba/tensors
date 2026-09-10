@@ -5,9 +5,9 @@ from __future__ import annotations
 from array import array
 from collections.abc import Iterable
 
-from .._typing import Scalar
-from ..dtype import DataType
-from ._base import Storage
+from ..._typing import Scalar
+from ...dtype import DataType
+from .contract import Storage
 
 
 class PythonStorage(Storage):

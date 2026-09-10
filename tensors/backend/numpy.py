@@ -4,7 +4,7 @@ The implementations are shared with the CUDA backend because NumPy and CuPy
 provide the same array-operation surface used by tensors.
 """
 
-from ._array import (
+from .kernels import (
     adam_update,
     adam_updates,
     arange,

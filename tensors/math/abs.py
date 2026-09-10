@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import builtins
 import math
-from typing import Any, overload
+from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._unary import unary_backward, unary_forward
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class Abs(Operation):
@@ -71,6 +75,10 @@ class Abs(Operation):
             + zero_like_graph(value)
         ]
 @overload
+def abs(value: VariableNode) -> VariableNode: ...
+
+
+@overload
 def abs(value: TensorValue) -> TensorValue: ...
 
 
@@ -78,19 +86,20 @@ def abs(value: TensorValue) -> TensorValue: ...
 def abs(value: TensorData) -> Tensor: ...
 
 
-def abs(value: TensorLike) -> TensorResult:
-    """Return the elementwise absolute value of a Tensor or Variable."""
-    from ..variable import Variable
+def abs(
+    value: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Return the elementwise absolute value of a graph value or Tensor.
 
-    if isinstance(value, Variable):
-        operation = Abs()
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
+
+    if is_graph_operand(value):
+        return apply_operation(Abs(), (value,))
+    value = as_tensor_operand(value)
     return Abs().forward(value)
 
 

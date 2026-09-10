@@ -100,7 +100,10 @@ class NumPyLossTests(NumPyParityTestCase):
         logsumexp_gradient.assert_called_once()
         cross_entropy.assert_called_once()
         cross_entropy_gradient.assert_called_once()
-        one_hot_targets.assert_called_once()
+        # Cross-entropy prepares its own targets, so class indices are
+        # expanded once by the forward pass and once by the reverse one
+        # rather than being expanded ahead of both.
+        self.assertEqual(one_hot_targets.call_count, 2)
         self.assertEqual(distributions_valid.call_count, 2)
         binary_cross_entropy.assert_called_once()
         binary_cross_entropy_gradient.assert_called_once()

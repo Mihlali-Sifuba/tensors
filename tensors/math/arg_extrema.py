@@ -9,6 +9,7 @@ from .._typing import TensorLike
 from ..backend import execute_arg_extremum
 from ..dtype import int64
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ..utils.coordinates import linear_index_to_coordinates
 from ._reduction import normalize_axes, reduction_groups, reduction_shape
 
@@ -109,8 +110,7 @@ def _arg_extremum(
     from ..variable import Variable
 
     tensor = value.data if isinstance(value, Variable) else value
-    if not isinstance(tensor, Tensor):
-        tensor = Tensor(tensor)
+    tensor = as_tensor_operand(tensor)
     return operation.forward(tensor, axis=axis, keepdims=keepdims)
 
 

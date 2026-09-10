@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import math
-from typing import Any, overload
+from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._unary import unary_backward, unary_forward
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class ArcCos(Operation):
@@ -54,6 +58,10 @@ class ArcCos(Operation):
 
 
 @overload
+def arccos(value: VariableNode) -> VariableNode: ...
+
+
+@overload
 def arccos(value: TensorValue) -> TensorValue: ...
 
 
@@ -61,19 +69,20 @@ def arccos(value: TensorValue) -> TensorValue: ...
 def arccos(value: TensorData) -> Tensor: ...
 
 
-def arccos(value: TensorLike) -> TensorResult:
-    """Return the elementwise inverse cosine in radians."""
-    from ..variable import Variable
+def arccos(
+    value: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Return the elementwise inverse cosine in radians.
 
-    if isinstance(value, Variable):
-        operation = ArcCos()
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
+
+    if is_graph_operand(value):
+        return apply_operation(ArcCos(), (value,))
+    value = as_tensor_operand(value)
     return ArcCos().forward(value)
 
 

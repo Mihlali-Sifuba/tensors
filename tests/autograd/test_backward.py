@@ -159,11 +159,7 @@ class AutogradTests(unittest.TestCase):
 
         value = ts.Variable([2.0])
         operation = BrokenOperation()
-        output = value._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
+        output = value._apply_operation(operation, (value,))
 
         with self.assertRaisesRegex(RuntimeError, "returned 0 gradients for 1 inputs"):
             ts.backward(output)
@@ -180,11 +176,7 @@ class AutogradTests(unittest.TestCase):
 
         value = ts.Variable([2.0])
         operation = BrokenOperation()
-        output = value._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
+        output = value._apply_operation(operation, (value,))
         previous_value_gradient = ts.Tensor([7.0])
         previous_output_gradient = ts.Tensor([8.0])
         value.grad = previous_value_gradient
