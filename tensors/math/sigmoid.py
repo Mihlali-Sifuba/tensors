@@ -1,13 +1,19 @@
 """Elementwise sigmoid and its differentiation rule."""
 
+from __future__ import annotations
+
 import math as _math
-from typing import Any, List, overload
+from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._unary import unary_backward, unary_forward
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class Sigmoid(Operation):
@@ -67,6 +73,10 @@ class Sigmoid(Operation):
 
 
 @overload
+def sigmoid(value: VariableNode) -> VariableNode: ...
+
+
+@overload
 def sigmoid(value: TensorValue) -> TensorValue: ...
 
 
@@ -74,19 +84,20 @@ def sigmoid(value: TensorValue) -> TensorValue: ...
 def sigmoid(value: TensorData) -> Tensor: ...
 
 
-def sigmoid(value: TensorLike) -> TensorResult:
-    """Return the elementwise sigmoid as a Tensor or Variable."""
-    from ..variable import Variable
+def sigmoid(
+    value: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Return the elementwise sigmoid of a graph value or Tensor.
 
-    if isinstance(value, Variable):
-        operation = Sigmoid()
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
+
+    if is_graph_operand(value):
+        return apply_operation(Sigmoid(), (value,))
+    value = as_tensor_operand(value)
     return Sigmoid().forward(value)
 
 

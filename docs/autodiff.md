@@ -32,7 +32,7 @@ Responsibilities divide as follows:
 | Object | Responsibility |
 | --- | --- |
 | `Variable` | the differentiable runtime value |
-| `VariableNode` | the graph representation of one `Variable` |
+| `VariableNode` | the graph identity of one value it may predate |
 | `Operation` | one concrete mathematical invocation (owned by `ts.ops`) |
 | `OperationNode` | the graph representation of that invocation |
 | `Edge` | a graph relationship and its data flow |
@@ -58,22 +58,122 @@ Computation
     determines which local derivatives are required
 ```
 
-`Node` itself carries only identity and connectivity. `VariableNode` adds its
-`variable`, and `OperationNode` adds its `operation`; neither stores execution
-state.
+`Node` itself carries only identity and connectivity. `VariableNode` adds the
+value it names, and `OperationNode` adds its `operation`; neither stores
+execution state.
 
 ### Variables and their nodes
 
-Every `Variable` owns exactly one `VariableNode`, and the relationship is
-strong in both directions:
+A `VariableNode` is the graph identity of a value. It can exist before that
+value has been calculated, which is the order execution works in:
+
+```text
+construct graph -> compile -> Computation executes Instructions
+    -> Tensor result -> Variable materialized against its VariableNode
+```
+
+A leaf already holds its value, so constructing a `Variable` records a vertex
+already bound to it. A value the graph only names is recorded unbound and
+materialized once execution produces it:
 
 ```python
-variable.node.variable is variable  # always true
+node = VariableNode()                   # the graph names a value
+node.is_bound                           # False
+node.variable                           # UnboundVariableNodeError
+
+result = node.materialize(tensor, "c")  # execution produced the value
+node.variable is result                 # True
+result.node is node                     # True
+```
+
+Binding is one-time and symmetric, so a vertex names at most one `Variable`
+and that `Variable` names it back:
+
+```python
+variable.node.variable is variable  # true from materialization onwards
 ```
 
 This holds for leaves, for Tensor operands wrapped on the way into an
 operation, for normalized scalar operands, and for operation results.
-`Variable.node` is never an `OperationNode`.
+`Variable.node` is never an `OperationNode`. Rebinding a vertex, or binding a
+`Variable` that already has one, raises rather than silently replacing the
+relationship.
+
+Reading structure never requires a materialized value: `producer`,
+`operand_nodes`, and `result_node` describe edges. `operands` and `result`
+resolve the Variables those vertices name, and raise
+`UnboundVariableNodeError` while one is still pending. Compilation is
+structural for the same reason: an execution slot is numbered by the vertex
+naming a value, so a graph compiles whether or not that value exists.
+Executing the compiled program is what still needs one.
+
+### Eager operations execute through the graph
+
+An eager expression is not a shortcut past the graph; it is the graph, run one
+operation at a time:
+
+```text
+c = a + b
+  -> normalize the operands into Variables
+  -> GraphState records the invocation: VariableNode(c), OperationNode(Add),
+     and the edges ordering the operands and carrying the result
+  -> Compiler numbers that fragment's slots
+  -> Computation executes it and calls Add.forward(a.data, b.data)
+  -> the result Tensor materializes c against VariableNode(c)
+```
+
+`GraphState.record_operation` is where that structure is assembled, so the
+graph can record an operation without anything executing it.
+`Variable._apply_operation` is the single path every operator and every
+`math` and `linalg` function takes, and it only orders the layers. None of
+them calls `Operation.forward` itself, and the result Variable is
+materialized by the Computation rather than constructed around a value that
+was calculated first.
+
+The operands of a new operation already hold their values, so they are the
+boundaries of its compiled fragment. Compiling `d = c * b` emits one
+instruction over `c` and `b`, and the `a + b` behind `c` is not re-executed,
+so a chain of `n` eager operations costs `n` fragments rather than `n`
+growing replays. Boundaries only limit that forward program: the structural
+graph still records every operation, so differentiating a later result
+compiles the complete history behind it.
+
+### Structural expressions
+
+The same operators also apply to a `VariableNode`, and there they describe a
+graph instead of calculating one:
+
+```python
+x = VariableNode()          # a value the graph names but nothing holds
+h = x @ weight              # weight is an ordinary Variable parameter
+y = relu(h + bias)
+
+y.is_bound                  # False, and no kernel has run
+```
+
+The operands decide which application happens. Every operand being a runtime
+Variable makes the expression a calculation; a single `VariableNode` operand
+makes the whole expression structural, because a value that does not exist
+yet cannot take part in one that runs now. A Variable in a structural
+expression takes part as the vertex it was materialized against, so a
+parameter's value is never read while a graph is being described.
+
+A Tensor operand becomes a non-gradient leaf, since it is a value that
+already exists. A Python scalar is rejected: an eager scalar is typed by
+promotion against the value beside it, and a structural expression has not
+calculated that value, so recording one would mean inventing a dtype. Pass a
+typed `Tensor` or `Variable` instead.
+
+That rejection, and a function that has no structural form yet, raise
+`UnsupportedStructuralExpression` — a `TypeError` that states a limit of what
+the graph can describe rather than a faulty expression. It is the signal a
+model build watches for when deciding that a model must be traced instead.
+
+The recorded structure is an ordinary graph, so it compiles like any other:
+
+```python
+Compiler((y,), boundaries=(x,)).compile()   # dot, add, relu
+```
 
 ### Operands are graph values, configuration is not
 
@@ -418,9 +518,21 @@ must be synchronized separately if callers modify them concurrently.
 `Computation` compiles its dependency-first traversal into ordered
 `Instruction` objects once at construction. Each instruction names the
 operation to run, the slots holding its operands, and the slot receiving its
-result, resolved from the operation vertex's edges at that point, so replay
-and differentiation never walk the graph again. `forward` traverses those
-instructions and reverse execution traverses them backwards.
+result. A slot is numbered by the `VariableNode` naming its value, and the
+compiler resolves the operand and result slots from the operation vertex's
+edges, so replay and differentiation never walk the graph again.
+
+A slot holds a Tensor while a pass runs. `forward` seeds the leaf slots from
+the Variables they read, executes each instruction into its output slot, and
+gives that slot's vertex the value it produced: the first pass materializes
+the Variable the vertex named, and a later pass updates the one already bound
+to it. A program compiled from vertices that hold nothing yet therefore runs
+exactly like a replay of a recorded one.
+
+Differentiation works on Variables rather than slot values, so it requires a
+forward pass to have produced them; a reverse pass over a program whose slots
+are still empty says so instead of differentiating an incomplete one. Reverse
+execution then traverses the same instructions backwards.
 
 Every pass allocates its own value and gradient buffers, so concurrent replays
 of one Computation share no mutable execution state.

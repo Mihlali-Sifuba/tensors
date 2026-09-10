@@ -10,9 +10,11 @@ from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ..utils.broadcasting import broadcast_to
 
 if TYPE_CHECKING:
+    from ..graph.node import VariableNode
     from ..variable import Variable
 
 
@@ -28,7 +30,7 @@ def _tensor(value: Any, *, dtype=None) -> Tensor:
         if dtype is not None and isinstance(value, (int, float))
         else None
     )
-    return Tensor(value, dtype=scalar_dtype)
+    return as_tensor_operand(value, dtype=scalar_dtype)
 
 
 class Where(Operation):
@@ -197,6 +199,30 @@ class Where(Operation):
 
 @overload
 def where(
+    condition: VariableNode,
+    left: TensorLike | VariableNode,
+    right: TensorLike | VariableNode,
+) -> VariableNode: ...
+
+
+@overload
+def where(
+    condition: TensorLike,
+    left: VariableNode,
+    right: TensorLike | VariableNode,
+) -> VariableNode: ...
+
+
+@overload
+def where(
+    condition: TensorLike,
+    left: TensorLike,
+    right: VariableNode,
+) -> VariableNode: ...
+
+
+@overload
+def where(
     condition: TensorLike,
     left: Variable,
     right: TensorLike,
@@ -220,15 +246,37 @@ def where(
 
 
 def where(
-    condition: TensorLike,
-    left: TensorLike,
-    right: TensorLike,
-) -> TensorResult:
-    """Select elements from ``left`` or ``right`` using a nonzero mask."""
+    condition: TensorLike | VariableNode,
+    left: TensorLike | VariableNode,
+    right: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Select elements from ``left`` or ``right`` using a nonzero mask.
+
+    A graph value in any of the three positions applies the selection
+    through the graph, recording the condition, the chosen branch and
+    the rejected one as the first, second and third operands. A vertex
+    names a value that does not exist, so the condition is not
+    evaluated and neither branch can be read for the dtype a Python
+    scalar is promoted against below.
+    """
+    from ..graph.expression import apply_operation, as_graph_operand
+    from ..graph.node import VariableNode
     from ..variable import Variable
 
     if isinstance(condition, Variable) and condition.requires_grad:
         raise TypeError("where condition cannot require gradients")
+    if any(
+        isinstance(operand, VariableNode)
+        for operand in (condition, left, right)
+    ):
+        return apply_operation(
+            Where(),
+            (
+                as_graph_operand(condition),
+                as_graph_operand(left),
+                as_graph_operand(right),
+            ),
+        )
     condition_tensor = _tensor(condition)
     left_is_variable = isinstance(left, Variable)
     right_is_variable = isinstance(right, Variable)
@@ -257,8 +305,7 @@ def where(
             else Variable(right_tensor, requires_grad=False)
         )
         operation = Where()
-        return Variable._record_operation(
-            operation.forward(condition_variable.data, left_variable.data, right_variable.data),
+        return Variable._apply_operation(
             operation,
             (condition_variable, left_variable, right_variable),
         )

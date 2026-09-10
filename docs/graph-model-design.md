@@ -33,10 +33,18 @@ Calling the model remains Pythonic:
 prediction = model(x)
 ```
 
-Each call eagerly computes a result and records a fresh graph for that
-execution. A user opts into reusable model capture by defining or wrapping a
-`Graph`. Operations on `Variable` values still record autograd history when
-they occur in ordinary Python functions or classes.
+What that call does depends on the model. A subclass whose `forward` can be
+recorded structurally is built and compiled as it is constructed, and a later
+call passing matching Tensors replays that program instead of running
+`forward` again. A model that cannot be described before its values exist —
+the functional form, or a `forward` whose arguments or expression are only
+known per call — computes eagerly and records a fresh graph for that
+execution. [Execution Lifecycle](#execution-lifecycle) states the full
+contract.
+
+A user opts into reusable model capture by defining or wrapping a `Graph`.
+Operations on `Variable` values still record autograd history when they occur
+in ordinary Python functions or classes.
 
 ## Recorded structure
 
@@ -46,17 +54,20 @@ A traced `Graph` records the same vertex alternation as any eager expression:
 VariableNode -> OperationNode -> VariableNode
 ```
 
-`Graph` owns none of that structure directly. It holds the outputs of its most
-recent call and the `Computation` objects rooted at them; the graph itself is
-reachable through those outputs. See
+`Graph` does not define that structure itself. It holds outputs and the
+`Computation` objects rooted at them, and the graph is reachable through those
+outputs: a structurally built model holds the ones its program produced, from
+construction onwards, and a traced model holds the ones of its most recent
+call. See
 [Automatic differentiation](autodiff.md) for the vertex and edge contract.
 
 ## Responsibilities
 
-A `Graph` retains the latest execution metadata for its function:
+A `Graph` retains the execution metadata for its function, taken from its
+structural build where it has one and from its latest call otherwise:
 
 - persistent parameters and child graphs stored as normal Python attributes;
-- the output or outputs produced by the latest `forward` call;
+- the output or outputs that program or that call produced;
 - computations rooted at those outputs;
 - the reachable operation nodes and edges.
 
@@ -145,17 +156,40 @@ graphs, or more substantial behaviour.
 
 ## Execution Lifecycle
 
-The lifecycle is:
+A subclass model is built as it is constructed:
 
-1. Construct the model and its persistent parameters.
-2. On every call, convert Tensor inputs to non-trainable Variables and execute
-   `forward` eagerly.
-3. Record the operations created by that call and capture the nodes and edges
-   reachable from each returned Variable.
-4. Store the outputs and computations as the calling thread's latest Graph
-   execution metadata.
+1. `Model()` allocates the instance and runs the subclass `__init__`, which
+   creates the parameters.
+2. Once `__init__` has returned, `Graph` records the model's graph: vertices
+   stand in for its inputs, `forward` runs structurally over them and the
+   parameters' own vertices, and nothing is calculated.
+3. The recorded graph is compiled into the `Computation` the model owns from
+   then on, with its input vertices as the program's boundaries.
+4. `model(x)` binds the call's Tensors to those input vertices and replays
+   the program, so the Python `forward` body is not run again.
 
-Calling the model normally records a new computation. `compile(*args,
+Because one program is replayed, a built model returns the same output
+Variable object on every call, holding that call's value, and its graph
+identity is stable. `model.nodes`, `model.edges` and `model.computation`
+therefore describe the model from construction onwards, before its first
+call.
+
+A model keeps the earlier tracing lifecycle when it cannot be described
+before its values exist: the functional `@Graph` form, a `forward` taking
+configuration arguments whose values are only known per call, and a `forward`
+whose expression the graph cannot record yet — a Python scalar operand, or a
+function that has no structural form. A `Variable` input also traces, because
+its autograd identity belongs to the caller rather than to the model's own
+input vertex.
+
+That last case is recognized by one signal and nothing else. Recording an
+expression the graph cannot describe raises
+`UnsupportedStructuralExpression`, and only that abandons the build. Anything
+else — a misspelled attribute, a `forward` that fails, a value read off an
+input, a malformed output, a failure inside the compiler — is a real error
+and construction reports it where it happened.
+
+Traced calls behave as before: each records a new computation. `compile(*args,
 **kwargs)` explicitly enables guarded replay for Tensor inputs on the calling
 thread. Matching backend, shape, dtype, keyword layout, and static-argument
 guards rebind the recorded input Variables and execute the existing plan.
@@ -163,11 +197,29 @@ Guard misses retrace and replace the cached plan. Variable inputs always trace
 freshly so their autograd identity is preserved.
 
 `rebuild(*args, **kwargs)` bypasses a matching compiled trace and refreshes it;
-`uncompile()` restores ordinary fresh tracing. Compiled calls reuse their
-returned Variable objects and update their Tensor values. Previously returned
-Variables from fresh traces retain their own computation history when kept by
-the caller. `release()` drops both the latest execution and any compiled trace
-on the calling thread.
+`uncompile()` restores ordinary fresh tracing. `release()` drops both the
+latest execution and any compiled trace on the calling thread.
+
+Whether a call returns a new output Variable or writes into the previous one
+follows from which of the three lifecycles ran it:
+
+- A fresh traced call records a new computation and returns its own output
+  Variable. Previously returned Variables retain their own computation
+  history when the caller keeps them.
+- An explicitly compiled call reuses the Variable its trace returned and
+  updates that object's Tensor value.
+- An automatically built model replays its structure on every ordinary
+  `model(x)` call, so it reuses its output Variable the same way, without
+  the caller compiling anything. A structurally buildable subclass is built
+  and compiled during construction, so replay is that model's default rather
+  than something opted into.
+
+Reuse follows from replaying one program, not from how the replay was
+requested, which is why the last two cases agree. It also means an output a
+caller retains across a later call is the same object that call writes to:
+its `.data` holds the newer value afterwards. Code that needs a value to
+outlive the next call keeps that value's Tensor, or something derived from
+it, rather than the output Variable.
 
 ## Training Is External
 
@@ -242,8 +294,10 @@ Graph still records one complete plan, avoiding repeated upstream traversal.
 - Model code uses normal Python expressions.
 - Trainable state consists of `Variable` attributes discovered without manual
   parameter registration.
-- Eager execution and fresh graph recording are the default; guarded replay is
-  explicit through `compile()`.
+- A structurally buildable model is built and compiled as it is constructed,
+  so replaying one program is its default. A model that can only be traced
+  executes eagerly, records a fresh graph, and opts into guarded replay
+  through `compile()`.
 - Reusable model capture is opt-in through `Graph`; eager `Variable`
   operations record their own autograd history independently.
 - A graph is a function representation, not a training loop.

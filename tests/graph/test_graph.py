@@ -22,7 +22,7 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(ts.graph.Edge.__module__, "tensors.graph.edge")
         self.assertEqual(ts.graph.Node.__module__, "tensors.graph.node")
 
-    def test_subclass_traces_fresh_with_tensor_inputs(self):
+    def test_subclass_replays_the_graph_built_at_construction(self):
         class Linear(ts.Graph):
             def __init__(self):
                 super().__init__()
@@ -38,7 +38,9 @@ class GraphTests(unittest.TestCase):
         self.assertIs(model.computation.output, first)
         second = model(ts.Tensor([4.0]))
 
-        self.assertIsNot(first, second)
+        # A built model replays one program, so the output Variable stays
+        # the same object and takes the new value.
+        self.assertIs(first, second)
         self.assertEqual(second.data.tolist(), [9.0])
         self.assertIs(model.computation.output, second)
         # input, weight, mul, product, bias, add, result
@@ -139,10 +141,20 @@ class GraphTests(unittest.TestCase):
     def test_graph_rejects_non_variable_output(self):
         class BadGraph(ts.Graph):
             def forward(self, x):
-                return x.data
+                return 5
 
         with self.assertRaisesRegex(TypeError, "must return"):
-            BadGraph()(ts.Tensor([1.0]))
+            BadGraph()
+
+    def test_graph_reports_a_runtime_read_of_a_model_input(self):
+        class ReadsInput(ts.Graph):
+            def forward(self, x):
+                return x.data
+
+        # A model input has no value while the graph is being described, and
+        # construction says so rather than quietly tracing instead.
+        with self.assertRaises(AttributeError):
+            ReadsInput()
 
     def test_graph_collects_parameters_from_child_graphs_and_containers(self):
         class Child(ts.Graph):
@@ -314,7 +326,9 @@ class GraphTests(unittest.TestCase):
         result = model(ts.Tensor([3.0]))
 
         self.assertEqual(result.data.tolist(), [12.0])
-        self.assertEqual(model.calls, 2)
+        # Construction built the model, compile() traced it, and replacing
+        # the parameter made that build stale enough to record again.
+        self.assertEqual(model.calls, 3)
 
     def test_compiled_trace_rebuilds_after_its_computation_is_released(self):
         calls = 0
@@ -333,15 +347,13 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(calls, 2)
 
     def test_new_call_does_not_retain_the_previous_computation(self):
-        class Scale(ts.Graph):
-            def __init__(self):
-                super().__init__()
-                self.weight = ts.Variable([2.0])
+        # A traced graph keeps no reference to the computation it replaced.
+        weight = ts.Variable([2.0])
 
-            def forward(self, value):
-                return value * self.weight
+        @ts.Graph
+        def model(value):
+            return value * weight
 
-        model = Scale()
         first = model(ts.Tensor([3.0]))
         first_reference = weakref.ref(first)
         first_node_reference = weakref.ref(first.node)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, overload
+from typing import TYPE_CHECKING, Any, List, overload
 
 import math
 
@@ -11,6 +11,7 @@ from ..backend import execute_normalization, execute_normalization_gradient
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._normalization import shifted_normalization
 from .softmax import (
     Softmax,
@@ -22,6 +23,9 @@ from .softmax import (
     _softmax_vjp,
     _softmax_vjp_tensor,
 )
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class LogSoftmax(Operation):
@@ -235,11 +239,11 @@ def _log_softmax_vjp(grad, value, axis: int):
     from ..variable import Variable
 
     operation = LogSoftmaxGradient(axis=axis)
-    return Variable._record_operation(
-        operation.forward(grad.data, value.data),
-        operation,
-        (grad, value),
-    )
+    return Variable._apply_operation(operation, (grad, value))
+
+
+@overload
+def log_softmax(value: VariableNode, axis: int = -1) -> VariableNode: ...
 
 
 @overload
@@ -250,20 +254,24 @@ def log_softmax(value: TensorValue, axis: int = -1) -> TensorValue: ...
 def log_softmax(value: TensorData, axis: int = -1) -> Tensor: ...
 
 
-def log_softmax(value: TensorLike, axis: int = -1) -> TensorResult:
-    """Return stable log probabilities along ``axis``."""
-    from ..variable import Variable
+def log_softmax(
+    value: TensorLike | VariableNode,
+    axis: int = -1,
+) -> TensorResult | VariableNode:
+    """Return stable log probabilities along ``axis``.
 
-    if isinstance(value, Variable):
-        operation = LogSoftmax(axis=axis)
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
-    return LogSoftmax(axis=axis).forward(value)
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later. The configuration the operation is built with is the one every
+    application uses, so a recorded call replays what it was written as.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
+
+    operation = LogSoftmax(axis=axis)
+
+    if is_graph_operand(value):
+        return apply_operation(operation, (value,))
+    return operation.forward(as_tensor_operand(value))
 
 
 __all__ = ["LogSoftmax", "log_softmax"]

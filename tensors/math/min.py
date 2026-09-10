@@ -1,13 +1,16 @@
 """Minimum-value public API."""
 
+from __future__ import annotations
+
 import builtins
 import math
-from typing import Any, List, overload
+from typing import TYPE_CHECKING, Any, List, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..backend import execute_reduction, execute_reduction_gradient
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._reduction import (
     Axis,
     immutable_axis,
@@ -16,6 +19,9 @@ from ._reduction import (
     reduction_groups,
     reduction_shape,
 )
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class Min(Operation):
@@ -174,6 +180,14 @@ class Min(Operation):
 
 @overload
 def min(
+    value: VariableNode,
+    axis: Axis = None,
+    keepdims: bool = False,
+) -> VariableNode: ...
+
+
+@overload
+def min(
     value: TensorValue,
     axis: Axis = None,
     keepdims: bool = False,
@@ -189,25 +203,26 @@ def min(
 
 
 def min(
-    value: TensorLike,
+    value: TensorLike | VariableNode,
     axis: Axis = None,
     keepdims: bool = False,
-) -> TensorResult:
-    """Compute minima over one, several, or all axes."""
-    from ..variable import Variable
+) -> TensorResult | VariableNode:
+    """Compute minima over one, several, or all axes.
+
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later. The configuration the operation is built with is the one every
+    application uses, so a recorded call replays what it was written as.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
 
     axis = immutable_axis(axis)
 
-    if isinstance(value, Variable):
-        operation = Min(axis=axis, keepdims=keepdims)
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
-    return Min(axis=axis, keepdims=keepdims).forward(value)
+    operation = Min(axis=axis, keepdims=keepdims)
+
+    if is_graph_operand(value):
+        return apply_operation(operation, (value,))
+    return operation.forward(as_tensor_operand(value))
 
 
 __all__ = ["Min", "min"]

@@ -75,22 +75,78 @@ should not need to import internal operation or graph-node classes.
 tensors/
 ├── __init__.py            # root public facade
 ├── backend/               # backend selection and optional kernels
-│   ├── __init__.py
-│   ├── _array.py          # shared NumPy/CuPy kernel implementation
+│   ├── __init__.py        # backend facade and re-exports
+│   ├── types.py           # backend and operation type aliases
+│   ├── config.py          # selection, availability, and configuration
+│   ├── policy.py          # workload-size policy for acceleration
+│   ├── loading.py         # provider-module and kernel loading
+│   ├── dispatch/          # execute_* dispatch entry points
+│   │   ├── __init__.py    # dispatch facade
+│   │   ├── elementwise.py
+│   │   ├── creation.py
+│   │   ├── manipulation.py
+│   │   ├── reductions.py
+│   │   ├── linalg.py
+│   │   ├── convolution.py
+│   │   ├── fusion.py
+│   │   ├── nn.py
+│   │   └── optim.py
+│   ├── kernels/           # shared NumPy/CuPy kernel implementation
+│   │   ├── __init__.py    # internal kernel facade
+│   │   ├── core.py        # Tensor/Storage to native-array boundary
+│   │   ├── creation.py    # arrays built from parameters
+│   │   ├── manipulation.py# shape, layout, and indexing
+│   │   ├── elementwise/   # elementwise kernels and their VJPs
+│   │   │   ├── binary_ops.py
+│   │   │   ├── unary_ops.py
+│   │   │   ├── comparison_ops.py
+│   │   │   ├── selection.py
+│   │   │   ├── extrema.py
+│   │   │   └── clipping.py
+│   │   ├── fusion/        # fused-chain compilation and execution
+│   │   │   ├── expressions.py  # step, operand, and derivative expressions
+│   │   │   ├── source.py       # CUDA source assembly
+│   │   │   ├── errors.py       # domain guards and error reporting
+│   │   │   ├── common.py       # operand marshalling for both passes
+│   │   │   ├── forward.py
+│   │   │   └── backward.py
+│   │   ├── reductions/    # reductions and stable summation
+│   │   │   ├── stability.py    # summation guards, scaled accumulation
+│   │   │   ├── reduction_ops.py
+│   │   │   ├── extrema.py      # index-of-extremum reductions
+│   │   │   ├── shape.py        # summation down to a broadcast shape
+│   │   │   └── logsumexp_ops.py # log-sum-exp and its shared terms
+│   │   ├── linalg/        # matrix and vector products
+│   │   │   ├── matmul_ops.py
+│   │   │   └── outer_ops.py
+│   │   ├── nn/            # normalization, probability, and losses
+│   │   │   ├── normalization_ops.py
+│   │   │   ├── losses.py
+│   │   │   └── validation.py
+│   │   ├── conv/          # grouped cross-correlation
+│   │   │   ├── common.py       # padding, tiling, columns, storage
+│   │   │   ├── forward.py
+│   │   │   └── backward.py
+│   │   └── optim/         # optimizer updates
+│   │       ├── batching.py     # workspace reuse and parameter batching
+│   │       ├── cuda.py         # batched CUDA optimizer kernels
+│   │       ├── sgd.py
+│   │       ├── adam.py
+│   │       └── rmsprop.py
 │   ├── numpy.py
-│   └── cuda.py
-├── storage/               # internal native storage implementations
-│   ├── __init__.py
-│   ├── _base.py
-│   ├── _conversion.py
-│   ├── python.py
-│   ├── numpy.py
-│   └── cuda.py
+│   ├── cuda.py
+│   └── storage/           # internal native storage implementations
+│       ├── __init__.py
+│       ├── contract.py
+│       ├── conversion.py
+│       ├── python.py
+│       ├── numpy.py
+│       └── cuda.py
 ├── _typing.py             # shared public type aliases
 ├── shape.py               # immutable logical tensor extents
 ├── strides.py             # immutable physical storage movement
 ├── tensor.py              # Tensor storage, construction, and indexing
-├── variable.py            # differentiable value type
+├── variable.py            # differentiable value type; eager operations
 ├── dtype.py               # dtype definitions and promotion
 ├── casting.py             # storage conversion helpers
 ├── creation.py            # tensor-value constructors
@@ -130,7 +186,8 @@ tensors/
     ├── graph.py           # reusable callable model abstraction
     ├── node.py            # Node, VariableNode, and OperationNode
     ├── edge.py
-    ├── state.py
+    ├── expression.py     # applying an operation: structural or runtime
+    ├── state.py          # tracing registry; records operation topology
     └── computation/       # the executable, differentiable form of a graph
         ├── instruction.py   # one executable operation invocation
         ├── compiler.py      # Node/Edge topology to slots, instructions, views
@@ -169,9 +226,39 @@ The folders have deliberately narrow responsibilities:
 
 - `backend` owns process and context-local selection, cached internal kernel
   dispatch, provider-neutral array kernels, and optional NumPy/CUDA entry
-  points.
-- `storage` owns the internal Python, NumPy, and CUDA representations and their
-  lazy conversion cache. Storage classes are not a second public tensor API.
+  points. Its package module is a facade: `types` names the backends and their
+  operations, `config` selects one and reports availability, `policy` decides
+  when a workload is worth accelerating, `loading` resolves a kernel for the
+  selected backend, and `dispatch` holds the `execute_*` entry points, grouped
+  by execution domain so each module sits beside the kernel family it reaches.
+  A dispatch module reads the policy and the loader; it never imports a
+  sibling, and returning `None` from an `execute_*` function still means the
+  caller should run its own Python fallback.
+- `backend.kernels` owns the provider-neutral NumPy/CuPy kernels, split by
+  family. The larger domains are packages whose modules each hold one
+  responsibility; `core`, `creation`, and `manipulation` stay single modules
+  because they are already cohesive. `core` is the only shared layer: it moves
+  values between Tensor/Storage and native arrays and selects the array module
+  for the active backend. Every family depends on `core`; beyond that, `linalg`
+  reuses `reductions.stability` and `nn` reuses `reductions.reduction` and
+  `reductions.logsumexp`. Nothing in `reductions` depends on `nn`.
+  Within a family package the lower modules never import the upper ones:
+  fusion's `expressions`, `source`, `errors`, and `common` are independent of
+  `forward` and `backward`, and optim's `batching` and `cuda` are independent
+  of `sgd`, `adam`, and `rmsprop`. The convolution package is named `conv` so
+  that the exported `convolution` kernel does not shadow a same-named module.
+  `numpy.py` and `cuda.py` import the kernel surface from the `kernels` facade,
+  which is what the backend loader resolves names against; they never import an
+  implementation module directly.
+- No kernels package exposes a submodule and an exported kernel under the same
+  name. Where an implementation module would have collided with the kernel it
+  defines, the module carries an `_ops` suffix, so `linalg.matmul` is the
+  kernel function and `linalg.matmul_ops` is the module holding it. `conv` is
+  named for the same reason. Module names that do not collide keep their plain
+  form.
+- `backend.storage` owns the internal Python, NumPy, and CUDA representations
+  and their lazy conversion cache. Storage classes are not a second public
+  tensor API.
 - `Shape` owns logical dimensions, rank, size, tuple-like slicing of its
   dimension values (for example, `Shape(2, 3, 4)[1:]`), and pure
   broadcast-shape inference. `Strides` owns physical traversal metadata and
@@ -207,7 +294,13 @@ The folders have deliberately narrow responsibilities:
   differentiable form of that structure. A recorded graph
   alternates `VariableNode -> OperationNode -> VariableNode`, and every
   relationship is an `Edge`. `Node` holds only identity and connectivity;
-  `VariableNode` adds its `Variable` and `OperationNode` adds its `Operation`.
+  `VariableNode` is the graph identity of one value and binds the `Variable`
+  materializing it, which may happen after the vertex is recorded, and
+  `OperationNode` adds its `Operation`. `GraphState.record_operation` is
+  where one invocation's vertices and ordered edges are assembled, so a
+  graph can record an operation without anything executing it, and
+  `expression` decides which application an expression asked for: runtime
+  operands calculate now, and a vertex operand records structure only.
   An operation defines how a local derivative is calculated; `Computation`
   decides which local derivatives a reverse pass requires and supplies that
   demand as `needs_input_grad`. See [Automatic differentiation](autodiff.md) for
@@ -231,12 +324,17 @@ The folders have deliberately narrow responsibilities:
                          forward / backward
   ```
 
-  `Compiler` is the last component that understands Nodes and Edges: it emits
-  the slot-based program, resolves each output's execution view, and hands
-  the graph layer the traversal and edges it keeps. An `Instruction` is one
-  executable operation invocation. `Computation` receives an already-resolved
-  execution view and works only in the compiled domain — Variables, slots,
-  instructions, and fusion metadata — to execute it forwards and in reverse.
+  `Compiler` is the last component that understands Nodes and Edges: it
+  takes the output vertices to compile, numbers a slot per `VariableNode`,
+  emits the slot-based program, resolves each output's execution view, and
+  hands the graph layer the traversal and edges it keeps. Compilation reads
+  no values, so a graph compiles before the values it names exist. An
+  `Instruction` is one executable operation invocation. `Computation`
+  receives an already-resolved execution view and works only in the compiled
+  domain — vertices, slots, values, instructions, and fusion metadata — to
+  execute it forwards and in reverse. It holds Tensors in slots while a pass
+  runs and gives each result to the vertex naming its slot, materializing
+  that vertex's Variable on the first pass and updating it on later ones.
   `gradients` supplies the generic mechanics reverse execution uses along the
   way — upstream seed construction, gradient accumulation, and VJP result
   validation; `fusion` recognizes and accelerates compatible instruction runs

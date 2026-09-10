@@ -179,7 +179,6 @@ row-major values:
   containing only logical Tensor values in canonical row-major order.
 - `_data` exposes those logical row-major values through host/Python storage
   for reference kernels.
-- `_value_at_storage_index(index)` reads one actual physical storage index.
 - `_mutable_data()` returns the mutable authoritative physical host Storage
   buffer, so callers must address it with storage indices rather than logical
   linear indices.

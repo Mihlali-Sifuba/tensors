@@ -3,7 +3,7 @@ from __future__ import annotations
 from array import array
 from itertools import product
 from collections.abc import Iterable, Iterator
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, Union, overload
 
 from . import dtype as _dtype
 from ._typing import (
@@ -11,12 +11,10 @@ from ._typing import (
     TensorData,
     TensorIndex,
     TensorLike,
-    TensorOperand,
-    TensorResult,
 )
 from .casting import cast_values
 from .shape import Shape
-from .storage import (
+from .backend.storage import (
     CudaStorage,
     NumPyStorage,
     PythonStorage,
@@ -117,11 +115,6 @@ class Tensor:
             inferred_shape = data.shape
 
         elif isinstance(data, Storage):
-            if data.dtype != self.dtype:
-                raise TypeError(
-                    f"storage dtype {data.dtype.name!r} does not match "
-                    f"tensor dtype {self.dtype.name!r}"
-                )
             # Public construction always establishes independent ownership.
             # Internal producers that can transfer exclusive ownership use
             # ``_from_owned_storage`` instead.
@@ -304,7 +297,18 @@ class Tensor:
             )
 
     def _set_storage(self, storage: Storage) -> None:
-        """Install authoritative storage and invalidate other representations."""
+        """Install authoritative storage and invalidate other representations.
+
+        A Tensor's dtype and its storage's dtype state the same fact, so every
+        installation is the place that holds them to it. Callers that resolve
+        a dtype before the storage exists are relieved of repeating the check.
+        """
+        if storage.dtype != self.dtype:
+            raise TypeError(
+                f"storage dtype {storage.dtype.name!r} does not match "
+                f"tensor dtype {self.dtype.name!r}"
+            )
+
         self._storage = storage
         self._storage_cache: dict[StorageKind, Storage] = {
             storage.kind: storage,
@@ -383,23 +387,6 @@ class Tensor:
             raise TypeError("Python storage conversion returned an invalid buffer")
         return storage.buffer
 
-    def _value_at_storage_index(self, index: int) -> Scalar:
-        """Read one physical position from authoritative host storage."""
-        storage = self._storage_for("python")
-        if not isinstance(storage, PythonStorage):
-            raise TypeError("Python storage conversion returned an invalid buffer")
-        return storage.buffer[index]
-
-    def _create_storage(self, values: Iterable[Scalar]) -> array:
-        """Create this tensor's backing storage."""
-        if isinstance(values, array) and values.typecode == self.dtype.typecode:
-            return array(values.typecode, values)
-        if self.dtype.kind == "integer":
-            converted = (int(value) for value in values)
-        else:
-            converted = (float(value) for value in values)
-        return array(self.dtype.typecode, converted)
-
     def __getitem__(self, key: TensorIndex) -> Scalar | Tensor:
         """
         Support indexing and slicing for N-dimensional tensors.
@@ -443,7 +430,14 @@ class Tensor:
                     dtype=self.dtype,
                     shape=Shape(),
                 ).item()
-            return self._value_at_storage_index(storage_index)
+            storage = self._storage_for("python")
+
+            if not isinstance(storage, PythonStorage):
+                raise TypeError(
+                    "Python storage conversion returned an invalid buffer"
+                )
+
+            return storage.buffer[storage_index]
 
         ranges, output_shape = slice_ranges_and_shape_from_key(keys, self.shape)
         accelerated = execute_slice(self, key, output_shape=output_shape)
@@ -506,7 +500,10 @@ class Tensor:
         """Validate and materialize values for an in-place slice assignment."""
         selection_size = Shape.from_iterable(selection_shape).size
         if isinstance(value, (int, float)):
-            return self._create_storage([value] * selection_size)
+            return PythonStorage.from_values(
+                [value] * selection_size,
+                self.dtype,
+            ).buffer
 
         if not isinstance(value, (Tensor, list, array)):
             raise TypeError(
@@ -525,7 +522,10 @@ class Tensor:
                 f"to slice shape {selection_shape}"
             ) from exc
 
-        return self._create_storage(assignment._data)
+        return PythonStorage.from_values(
+            assignment._data,
+            self.dtype,
+        ).buffer
 
     def _assign_slice_from_key(
         self,
@@ -617,7 +617,10 @@ class Tensor:
             return converted.item()
         if not isinstance(value, (int, float)):
             raise TypeError("Item assignment value must be numeric")
-        return self._create_storage([value])[0]
+        return PythonStorage.from_values(
+            [value],
+            self.dtype,
+        ).buffer[0]
 
     def __repr__(self) -> str:
         """String representation of the tensor."""
@@ -656,10 +659,7 @@ class Tensor:
         lines = []
         for i in range(self.shape[dim]):
             sub_lines = self._format_nested_repr(dim + 1, offset + i * stride)
-            if dim == 0:
-                lines.extend(sub_lines)
-            else:
-                lines.extend(sub_lines)
+            lines.extend(sub_lines)
             if i < self.shape[dim] - 1 and dim < self.ndim - 2:
                 lines.append("")
 
@@ -832,16 +832,29 @@ class Tensor:
         return format(self.item(), format_spec)
 
     # ---------- Operator Overloads (delegate to ops) ----------
+    # Arithmetic below is defined for another Tensor and for a Python scalar,
+    # which is what these operations accept. An operand outside that set is
+    # not an error by itself: Python's binary operator protocol still owes the
+    # right-hand operand its reflected turn, and an operand that knows how to
+    # combine itself with a Tensor answers there. Each method therefore
+    # returns NotImplemented, leaving the failure for Python to report once
+    # neither side has handled the operation.
+
     @overload
     def __add__(self, other: Variable) -> Variable: ...
 
     @overload
     def __add__(self, other: Scalar | Tensor) -> Tensor: ...
 
-    def __add__(self, other: TensorOperand) -> TensorResult:
+    def __add__(
+        self,
+        other: Union[int, float, Tensor, Variable],
+    ) -> Union[Tensor, Variable]:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__radd__(self)
+        if not isinstance(other, (int, float, Tensor)):
+            return NotImplemented
         from .ops import Ops
         return Ops.add(self, other)
 
@@ -851,7 +864,10 @@ class Tensor:
     @overload
     def __radd__(self, other: Scalar | Tensor) -> Tensor: ...
 
-    def __radd__(self, other: TensorOperand) -> TensorResult:
+    def __radd__(
+        self,
+        other: Union[int, float, Tensor, Variable],
+    ) -> Union[Tensor, Variable]:
         return self + other
 
     @overload
@@ -860,10 +876,15 @@ class Tensor:
     @overload
     def __sub__(self, other: Scalar | Tensor) -> Tensor: ...
 
-    def __sub__(self, other: TensorOperand) -> TensorResult:
+    def __sub__(
+        self,
+        other: Union[int, float, Tensor, Variable],
+    ) -> Union[Tensor, Variable]:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rsub__(self)
+        if not isinstance(other, (int, float, Tensor)):
+            return NotImplemented
         from .ops import Ops
         return Ops.subtract(self, other)
 
@@ -876,10 +897,15 @@ class Tensor:
     @overload
     def __mul__(self, other: Scalar | Tensor) -> Tensor: ...
 
-    def __mul__(self, other: TensorOperand) -> TensorResult:
+    def __mul__(
+        self,
+        other: Union[int, float, Tensor, Variable],
+    ) -> Union[Tensor, Variable]:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rmul__(self)
+        if not isinstance(other, (int, float, Tensor)):
+            return NotImplemented
         from .ops import Ops
         return Ops.multiply(self, other)
 
@@ -893,10 +919,15 @@ class Tensor:
     @overload
     def __truediv__(self, other: Scalar | Tensor) -> Tensor: ...
 
-    def __truediv__(self, other: TensorOperand) -> TensorResult:
+    def __truediv__(
+        self,
+        other: Union[int, float, Tensor, Variable],
+    ) -> Union[Tensor, Variable]:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rtruediv__(self)
+        if not isinstance(other, (int, float, Tensor)):
+            return NotImplemented
         from .ops import Ops
         return Ops.divide(self, other)
 
@@ -910,10 +941,15 @@ class Tensor:
     @overload
     def __pow__(self, other: Scalar | Tensor) -> Tensor: ...
 
-    def __pow__(self, other: TensorOperand) -> TensorResult:
+    def __pow__(
+        self,
+        other: Union[int, float, Tensor, Variable],
+    ) -> Union[Tensor, Variable]:
         from .variable import Variable
         if isinstance(other, Variable):
             return other.__rpow__(self)
+        if not isinstance(other, (int, float, Tensor)):
+            return NotImplemented
         from .ops import power
         return power(self, other)
 
@@ -935,7 +971,10 @@ class Tensor:
     @overload
     def __matmul__(self, other: TensorData) -> Tensor: ...
 
-    def __matmul__(self, other: TensorLike) -> TensorResult:
+    def __matmul__(
+        self,
+        other: TensorLike,
+    ) -> Union[Tensor, Variable]:
         from .linalg import matmul
         return matmul(self, other)
 
@@ -945,6 +984,9 @@ class Tensor:
     @overload
     def __rmatmul__(self, other: TensorData) -> Tensor: ...
 
-    def __rmatmul__(self, other: TensorLike) -> TensorResult:
+    def __rmatmul__(
+        self,
+        other: TensorLike,
+    ) -> Union[Tensor, Variable]:
         from .linalg import matmul
         return matmul(other, self)

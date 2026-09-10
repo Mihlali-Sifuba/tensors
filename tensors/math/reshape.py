@@ -1,11 +1,17 @@
 """Reshape operation."""
 
-from typing import Any, List, Tuple, overload
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, List, Tuple, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..shape import Shape
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class Reshape(Operation):
@@ -48,6 +54,13 @@ class Reshape(Operation):
 
 
 @overload
+def reshape(
+    tensor: VariableNode,
+    shape: tuple[int, ...],
+) -> VariableNode: ...
+
+
+@overload
 def reshape(tensor: TensorValue, shape: tuple[int, ...]) -> TensorValue: ...
 
 
@@ -55,21 +68,25 @@ def reshape(tensor: TensorValue, shape: tuple[int, ...]) -> TensorValue: ...
 def reshape(tensor: TensorData, shape: tuple[int, ...]) -> Tensor: ...
 
 
-def reshape(tensor: TensorLike, shape: tuple[int, ...]) -> TensorResult:
-    """Reshape a Tensor or Variable without changing its values."""
-    from ..variable import Variable
+def reshape(
+    tensor: TensorLike | VariableNode,
+    shape: tuple[int, ...],
+) -> TensorResult | VariableNode:
+    """Reshape a graph value or Tensor without changing its values.
+
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later. The target shape is the operation's own state, so a recorded
+    reshape replays the shape it was written with.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
 
     shape = tuple(shape)
-    if isinstance(tensor, Variable):
-        operation = Reshape(shape=shape)
-        return Variable._record_operation(
-            operation.forward(tensor.data),
-            operation,
-            (tensor,),
-        )
-    if not isinstance(tensor, Tensor):
-        tensor = Tensor(tensor)
-    return Reshape(shape=shape).forward(tensor)
+    operation = Reshape(shape=shape)
+
+    if is_graph_operand(tensor):
+        return apply_operation(operation, (tensor,))
+    return operation.forward(as_tensor_operand(tensor))
 
 
 __all__ = ["Reshape", "reshape"]

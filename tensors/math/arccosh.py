@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import math
-from typing import Any, overload
+from typing import TYPE_CHECKING, Any, overload
 
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
+from ..graph.expression import as_tensor_operand
 from ._unary import unary_backward, unary_forward
+
+if TYPE_CHECKING:
+    from ..graph.node import VariableNode
 
 
 class ArcCosh(Operation):
@@ -48,6 +52,10 @@ class ArcCosh(Operation):
 
 
 @overload
+def arccosh(value: VariableNode) -> VariableNode: ...
+
+
+@overload
 def arccosh(value: TensorValue) -> TensorValue: ...
 
 
@@ -55,19 +63,20 @@ def arccosh(value: TensorValue) -> TensorValue: ...
 def arccosh(value: TensorData) -> Tensor: ...
 
 
-def arccosh(value: TensorLike) -> TensorResult:
-    """Return the elementwise inverse hyperbolic cosine."""
-    from ..variable import Variable
+def arccosh(
+    value: TensorLike | VariableNode,
+) -> TensorResult | VariableNode:
+    """Return the elementwise inverse hyperbolic cosine.
 
-    if isinstance(value, Variable):
-        operation = ArcCosh()
-        return Variable._record_operation(
-            operation.forward(value.data),
-            operation,
-            (value,),
-        )
-    if not isinstance(value, Tensor):
-        value = Tensor(value)
+    A graph value is applied through the graph: a Variable calculates the
+    result now, and a vertex records the operation for a program that runs
+    later.
+    """
+    from ..graph.expression import apply_operation, is_graph_operand
+
+    if is_graph_operand(value):
+        return apply_operation(ArcCosh(), (value,))
+    value = as_tensor_operand(value)
     return ArcCosh().forward(value)
 
 
