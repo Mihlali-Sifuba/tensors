@@ -19,6 +19,14 @@ inside ``tensors``, not as a second public surface.
 
 from __future__ import annotations
 
+from .dispatch.arithmetic import (
+    execute_add as execute_add,
+    execute_subtract as execute_subtract,
+    execute_multiply as execute_multiply,
+    execute_divide as execute_divide,
+    execute_power as execute_power,
+)
+
 from .types import (
     ArgExtremumOperation as ArgExtremumOperation,
     BackendName as BackendName,
@@ -51,7 +59,6 @@ from .dispatch import (
     execute_adam_updates as execute_adam_updates,
     execute_arange as execute_arange,
     execute_arg_extremum as execute_arg_extremum,
-    execute_binary as execute_binary,
     execute_binary_cross_entropy as execute_binary_cross_entropy,
     execute_binary_cross_entropy_gradient as execute_binary_cross_entropy_gradient,
     execute_cast as execute_cast,
@@ -104,6 +111,11 @@ from .dispatch import (
 
 
 __all__ = [
+    "execute_add",
+    "execute_subtract",
+    "execute_multiply",
+    "execute_divide",
+    "execute_power",
     "BackendName",
     "BackendSelection",
     "BackendUnavailableError",

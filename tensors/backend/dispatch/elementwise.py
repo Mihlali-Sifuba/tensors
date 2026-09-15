@@ -12,7 +12,6 @@ from ..policy import (
 )
 from ..storage import Storage
 from ..types import (
-    BinaryOperation,
     ComparisonOperation,
     ExtremumOperation,
     UnaryOperation,
@@ -22,30 +21,6 @@ if TYPE_CHECKING:
     from ..._typing import Scalar
     from ...dtype import DataType
     from ...tensor import Tensor
-
-def execute_binary(
-    operation: BinaryOperation,
-    left: Tensor | Scalar,
-    right: Tensor | Scalar,
-    *,
-    dtype: DataType,
-    output_shape: tuple[int, ...],
-) -> Storage | None:
-    """Run an accelerated binary operation or request the Python fallback."""
-    if not _array_work_is_large_enough(
-        _shape_size(output_shape),
-        _NUMPY_ELEMENTWISE_MIN_SIZE,
-    ):
-        return None
-
-    binary = _backend_kernel("binary")
-    return binary(
-        operation,
-        left,
-        right,
-        dtype=dtype,
-        output_shape=output_shape,
-    )
 
 def execute_negate(
     value: Tensor,

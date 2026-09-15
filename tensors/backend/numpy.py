@@ -9,7 +9,6 @@ from .kernels import (
     adam_updates,
     arange,
     arg_extremum,
-    binary,
     binary_cross_entropy,
     binary_cross_entropy_gradient,
     cast_tensor,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from .binary_ops import (
-    binary as binary,
     division_denominator_gradient as division_denominator_gradient,
     power_base_gradient as power_base_gradient,
     power_exponent_gradient as power_exponent_gradient,
@@ -31,7 +30,6 @@ from .unary_ops import (
 
 
 __all__ = [
-    "binary",
     "clip",
     "clip_gradient",
     "comparison",

@@ -12,9 +12,12 @@ class NumPyDispatchBoundaryTests(NumPyParityTestCase):
     """Work-size guards and backend-agnostic graph replay."""
 
     def test_tiny_operations_bypass_numpy_kernel_dispatch(self):
+        from tensors.backend.loading import _load_array_backend
+
+        backend = _load_array_backend("numpy")
         value = ts.Tensor([2.0])
         with (
-            patch.object(numpy_backend, "binary") as binary,
+            patch.object(backend, "add") as binary,
             patch.object(numpy_backend, "negate") as negate,
             patch.object(numpy_backend, "cast_tensor") as cast_tensor,
             patch.object(numpy_backend, "reduction") as reduction,

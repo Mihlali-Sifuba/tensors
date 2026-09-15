@@ -24,7 +24,6 @@ kernel surface.
 from __future__ import annotations
 
 from .elementwise import (
-    binary as binary,
     clip as clip,
     clip_gradient as clip_gradient,
     comparison as comparison,
@@ -101,7 +100,6 @@ __all__ = [
     "adam_updates",
     "arange",
     "arg_extremum",
-    "binary",
     "binary_cross_entropy",
     "binary_cross_entropy_gradient",
     "cast_tensor",

@@ -13,6 +13,7 @@ from typing import Any
 
 from . import config  # imported as a module; see the note in config.py
 from .types import BackendName
+from .providers import ArrayBackend
 
 
 #: Package holding the provider modules loaded by name below. Kernels live
@@ -37,3 +38,15 @@ def _backend_kernel(name: str) -> Any:
 def _clear_backend_kernel_cache() -> None:
     """Forget cached callables after an explicit backend-context change."""
     _load_backend_kernel.cache_clear()
+
+
+@lru_cache(maxsize=2)
+def _load_array_backend(backend: BackendName) -> ArrayBackend:
+    """Resolve a fixed provider without reading configuration."""
+    if backend == "numpy":
+        from .providers.numpy import create_backend
+    elif backend == "cuda":
+        from .providers.cuda import create_backend
+    else:
+        raise RuntimeError("An array provider was requested for the Python backend")
+    return create_backend()

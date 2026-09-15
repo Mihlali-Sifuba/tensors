@@ -12,14 +12,19 @@ class NumPyElementwiseTests(NumPyParityTestCase):
     """Binary, unary, and scalar kernels dispatch and match Python."""
 
     def test_every_binary_operation_dispatches_to_numpy(self):
+        from contextlib import ExitStack
+        from tensors.backend.loading import _load_array_backend
+
         left = ts.full((32, 1), 2.0)
         right = ts.full((1, 32), 3.0)
-
-        with patch.object(
-            numpy_backend,
-            "binary",
-            wraps=numpy_backend.binary,
-        ) as binary:
+        backend = _load_array_backend("numpy")
+        with ExitStack() as stack:
+            mocks = {
+                name: stack.enter_context(
+                    patch.object(backend, name, wraps=getattr(backend, name))
+                )
+                for name in ("add", "subtract", "multiply", "divide", "power")
+            }
             with ts.use_backend("numpy"):
                 _ = left + right
                 _ = left - right
@@ -28,18 +33,9 @@ class NumPyElementwiseTests(NumPyParityTestCase):
                 _ = left ** right
                 _ = 2.0 / left
                 _ = 2.0 ** left
-
         self.assertEqual(
-            [call.args[0] for call in binary.call_args_list],
-            [
-                "add",
-                "subtract",
-                "multiply",
-                "divide",
-                "power",
-                "divide",
-                "power",
-            ],
+            {name: mock.call_count for name, mock in mocks.items()},
+            {"add": 1, "subtract": 1, "multiply": 1, "divide": 2, "power": 2},
         )
     def test_negation_dispatches_to_numpy(self):
         with patch.object(
@@ -175,13 +171,16 @@ class NumPyElementwiseTests(NumPyParityTestCase):
         self.assertOperationParity(lambda: 8.0 / value)
         self.assertOperationParity(lambda: 2.0 ** value)
     def test_numpy_division_validates_tensor_denominators_in_kernel(self):
+        from tensors.backend.loading import _load_array_backend
+
+        backend = _load_array_backend("numpy")
         numerator = ts.Tensor([1.0] * 512)
         denominator = ts.Tensor([2.0] * 511 + [0.0])
 
         with patch.object(
-            numpy_backend,
-            "binary",
-            wraps=numpy_backend.binary,
+            backend,
+            "divide",
+            wraps=backend.divide,
         ) as binary:
             with ts.use_backend("numpy"):
                 with self.assertRaisesRegex(ZeroDivisionError, "Division by zero"):

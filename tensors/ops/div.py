@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Union
 
-from ..backend import execute_binary, execute_division_denominator_gradient
+from ..backend import execute_divide, execute_division_denominator_gradient
 from ..dtype import result_dtype
 from .operation import Operation
 from ..tensor import Tensor
@@ -81,8 +81,7 @@ class Div(Operation):
         if isinstance(b, (int, float)):
             if b == 0:
                 raise ZeroDivisionError("Division by zero")
-            accelerated = execute_binary(
-                "divide",
+            accelerated = execute_divide(
                 a,
                 b,
                 dtype=dtype,
@@ -94,8 +93,7 @@ class Div(Operation):
             return Tensor._from_values(data, dtype, a.shape)
         if isinstance(b, Tensor):
             shape = a.shape.broadcast_with(b.shape)
-            accelerated = execute_binary(
-                "divide",
+            accelerated = execute_divide(
                 a,
                 b,
                 dtype=dtype,
@@ -355,8 +353,7 @@ divide = Div().forward
 def divide_scalar(numerator: Scalar, denominator: Tensor) -> Tensor:
     """Return ``numerator / denominator`` for a scalar left operand."""
     dtype = result_dtype(denominator.dtype, numerator, division=True)
-    accelerated = execute_binary(
-        "divide",
+    accelerated = execute_divide(
         numerator,
         denominator,
         dtype=dtype,

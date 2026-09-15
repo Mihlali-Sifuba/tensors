@@ -17,6 +17,13 @@ _NUMPY_MATMUL_MIN_WORK = 32
 _CUDA_FUSION_MIN_WORK = 8_192
 
 
+def should_accelerate_elementwise(backend: str, size: int) -> bool:
+    """Apply policy to an already-resolved backend selection."""
+    return backend == "cuda" or (
+        backend == "numpy" and size >= _NUMPY_ELEMENTWISE_MIN_SIZE
+    )
+
+
 def _shape_size(shape: tuple[int, ...]) -> int:
     return Shape.from_iterable(shape).size
 

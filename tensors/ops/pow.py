@@ -6,7 +6,7 @@ import math
 from typing import TYPE_CHECKING, Any, List, Optional, Union, overload
 
 from ..backend import (
-    execute_binary,
+    execute_power,
     execute_power_base_gradient,
     execute_power_exponent_gradient,
 )
@@ -201,8 +201,7 @@ class Pow(Operation):
             if isinstance(exponent, Tensor)
             else base.shape
         )
-        accelerated = execute_binary(
-            "power",
+        accelerated = execute_power(
             base,
             exponent,
             dtype=dtype,
@@ -769,8 +768,7 @@ power = _power_values
 def power_scalar_base(base: Scalar, exponent: Tensor) -> Tensor:
     """Return ``base`` raised element-wise to ``exponent`` for a scalar base."""
     dtype = result_dtype(exponent.dtype, base)
-    accelerated = execute_binary(
-        "power",
+    accelerated = execute_power(
         base,
         exponent,
         dtype=dtype,

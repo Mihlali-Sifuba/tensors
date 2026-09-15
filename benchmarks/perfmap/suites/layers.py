@@ -11,7 +11,7 @@ The rungs, innermost first:
 ``kernel``
     the internal guarded kernel, called directly with Tensors.
 ``dispatch``
-    ``execute_binary``, which adds the workload policy and kernel lookup.
+    the dedicated arithmetic dispatch function, which adds the workload policy and kernel lookup.
 ``public``
     ``Tensor.__add__``, which adds dtype resolution, broadcasting
     validation, and result construction.
@@ -29,7 +29,9 @@ from collections.abc import Sequence
 from typing import Any
 
 import tensors as ts
-from tensors.backend import execute_binary, execute_unary
+from tensors.backend import execute_unary
+from tensors.backend.dispatch import arithmetic
+from tensors.backend.loading import _load_array_backend
 from tensors.graph import Computation
 
 from ..harness import Case, Group, Unsupported
@@ -123,7 +125,7 @@ def _binary_ladder(
 
     if backend in ACCELERATED:
         provider = provider_module(backend)
-        kernels = kernel_module(backend)
+        kernels = _load_array_backend(backend)
         raw_left = provider_array(
             provider, shape, dtype_name=dtype_name, kind="ramp"
         )
@@ -151,8 +153,7 @@ def _binary_ladder(
         ))
 
         def run_kernel() -> Any:
-            return kernels.binary(
-                operation,
+            return getattr(kernels, operation)(
                 left,
                 right,
                 dtype=dtype,
@@ -180,8 +181,7 @@ def _binary_ladder(
         ))
 
         def run_dispatch() -> Any:
-            return execute_binary(
-                operation,
+            return getattr(arithmetic, f"execute_{operation}")(
                 left,
                 right,
                 dtype=dtype,
@@ -199,7 +199,7 @@ def _binary_ladder(
             run=run_dispatch,
             layer="dispatch",
             validate=validate_dispatch,
-            description="execute_binary: workload policy and kernel lookup",
+            description="dedicated arithmetic dispatch: workload policy and provider lookup",
             backends=ACCELERATED,
             **common,
         ))

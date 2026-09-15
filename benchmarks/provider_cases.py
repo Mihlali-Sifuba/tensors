@@ -7,6 +7,7 @@ import math
 from typing import Any
 
 import tensors as ts
+from tensors.backend.loading import _load_array_backend
 
 from .runner import BenchmarkBackend, BenchmarkCase
 
@@ -27,6 +28,7 @@ def cases() -> list[BenchmarkCase]:
 
     provider = importlib.import_module("cupy" if backend == "cuda" else "numpy")
     kernels = importlib.import_module(f"tensors.backend.{backend}")
+    arithmetic = _load_array_backend(backend)
     benchmarks: list[BenchmarkCase] = []
 
     for size in (100, 10_000, 100_000, 1_000_000, 10_000_000):
@@ -54,8 +56,7 @@ def cases() -> list[BenchmarkCase]:
         ))
 
         def kernel_add(left=tensor_left, right=tensor_right, output_size=size):
-            return kernels.binary(
-                "add",
+            return arithmetic.add(
                 left,
                 right,
                 dtype=ts.float64,

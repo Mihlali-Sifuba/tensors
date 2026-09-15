@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Union
 
-from ..backend import execute_binary
+from ..backend import execute_subtract
 from ..dtype import result_dtype
 from .operation import Operation
 from ..tensor import Tensor
@@ -29,8 +29,7 @@ class Sub(Operation):
             if isinstance(b, Tensor)
             else a.shape
         )
-        accelerated = execute_binary(
-            "subtract",
+        accelerated = execute_subtract(
             a,
             b,
             dtype=dtype,

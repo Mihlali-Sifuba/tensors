@@ -212,8 +212,8 @@ def _warm_cases(backend: str) -> list[Case]:
 
     if backend in ACCELERATED:
         def cold_kernel_lookup() -> Any:
-            loading._clear_backend_kernel_cache()
-            return loading._backend_kernel("binary")
+            loading._load_array_backend.cache_clear()
+            return loading._load_array_backend(backend).add
 
         cases.append(Case(
             name="startup.kernel_lookup_cold",
@@ -221,8 +221,8 @@ def _warm_cases(backend: str) -> list[Case]:
             layer="startup",
             validate=cold_kernel_lookup,
             description=(
-                "the first kernel lookup after the cache is cleared, which "
-                "happens on every scoped backend change"
+                "construct and bind a provider after explicitly clearing "
+                "the provider cache"
             ),
             backends=ACCELERATED,
             tags={
@@ -237,9 +237,9 @@ def _warm_cases(backend: str) -> list[Case]:
         ))
         cases.append(Case(
             name="startup.kernel_lookup_warm",
-            run=lambda: loading._backend_kernel("binary"),
+            run=lambda: loading._load_array_backend(backend).add,
             layer="startup",
-            validate=lambda: loading._backend_kernel("binary"),
+            validate=lambda: loading._load_array_backend(backend).add,
             description="a kernel lookup the cache already satisfies",
             backends=ACCELERATED,
             tags={

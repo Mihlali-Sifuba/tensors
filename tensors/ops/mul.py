@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Union
 
-from ..backend import execute_binary
+from ..backend import execute_multiply
 from ..dtype import result_dtype
 from .operation import Operation
 from ..tensor import Tensor
@@ -29,8 +29,7 @@ class Mul(Operation):
             if isinstance(b, Tensor)
             else a.shape
         )
-        accelerated = execute_binary(
-            "multiply",
+        accelerated = execute_multiply(
             a,
             b,
             dtype=dtype,

@@ -1,4 +1,4 @@
-"""Binary arithmetic kernels and their vector-Jacobian products."""
+"""Division and power vector-Jacobian products."""
 
 from __future__ import annotations
 
@@ -8,56 +8,7 @@ from ...storage import Storage
 from ..core import _errstate, _finite_operands, _numpy, _operand, _storage
 
 if TYPE_CHECKING:
-    from ...._typing import Scalar
-    from ....dtype import DataType
     from ....tensor import Tensor
-    from ...types import BinaryOperation
-
-def binary(
-    operation: BinaryOperation,
-    left: Tensor | Scalar,
-    right: Tensor | Scalar,
-    *,
-    dtype: DataType,
-    output_shape: tuple[int, ...],
-) -> Storage | None:
-    """Run a broadcasting NumPy binary kernel."""
-    numpy = _numpy()
-    try:
-        left_array = _operand(left, dtype, numpy)
-        right_array = _operand(right, dtype, numpy)
-    except (OverflowError, TypeError, ValueError):
-        return None
-    functions = {
-        "add": numpy.add,
-        "subtract": numpy.subtract,
-        "multiply": numpy.multiply,
-        "divide": numpy.true_divide,
-        "power": numpy.power,
-    }
-    if operation == "divide" and bool(numpy.any(right_array == 0)):
-        raise ZeroDivisionError("Division by zero")
-    with _errstate(
-        numpy,
-        divide="ignore",
-        over="ignore",
-        under="ignore",
-        invalid="ignore",
-    ):
-        result = functions[operation](left_array, right_array)
-
-    if operation == "power" and dtype.kind == "floating" and _finite_operands(
-        left_array,
-        right_array,
-        numpy=numpy,
-    ) and not bool(numpy.all(numpy.isfinite(result))):
-        return None
-    return _storage(
-        result,
-        dtype=dtype,
-        output_shape=output_shape,
-        numpy=numpy,
-    )
 
 def division_denominator_gradient(
     grad: Tensor,

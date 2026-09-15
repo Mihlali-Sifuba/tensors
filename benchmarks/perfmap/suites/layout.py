@@ -25,7 +25,6 @@ from tensors.backend.kernels.core import _numpy, _view
 from ..harness import Case, Group, Unsupported
 from ..workloads import (
     ACCELERATED,
-    kernel_module,
     provider_array,
     provider_module,
     tensor,
@@ -151,7 +150,9 @@ def _strided_cases(backend: str, side: int) -> list[Case]:
             "only for the NumPy and CUDA backends"
         )
     elements = side * side
-    kernels = kernel_module(backend)
+    from tensors.backend.loading import _load_array_backend
+
+    kernels = _load_array_backend(backend)
     array_module = _numpy()
 
     # One buffer, several layouts over it. Every layout addresses the same
@@ -195,13 +196,13 @@ def _strided_cases(backend: str, side: int) -> list[Case]:
         ))
         cases.append(Case(
             name=f"kernel.add/{name}/{side}x{side}",
-            run=lambda value=value: kernels.binary(
-                "add", value, value,
+            run=lambda value=value: kernels.add(
+                value, value,
                 dtype=ts.float64, output_shape=(side, side),
             ),
             layer="kernel",
-            validate=lambda value=value: kernels.binary(
-                "add", value, value,
+            validate=lambda value=value: kernels.add(
+                value, value,
                 dtype=ts.float64, output_shape=(side, side),
             ),
             description="a kernel reading a tensor with this layout",

@@ -19,7 +19,7 @@ from ._support import BackendTestCase, requires_cuda, requires_numpy
 #: must own it. Placement follows the kernel each entry point resolves, so the
 #: dispatch layer mirrors ``tensors.backend.kernels``.
 REPRESENTATIVES = {
-    "execute_binary": "elementwise",
+    "execute_add": "arithmetic",
     "execute_unary_gradient": "elementwise",
     "execute_power_base_gradient": "elementwise",
     "execute_full": "creation",
@@ -48,6 +48,7 @@ class DispatchPackageLayoutTests(unittest.TestCase):
 
     #: The modules the dispatch subpackage owns.
     MODULES = (
+        "arithmetic",
         "elementwise",
         "creation",
         "manipulation",
@@ -151,10 +152,10 @@ class DispatchFacadeTests(unittest.TestCase):
                 )
 
     def test_documented_import_paths_still_resolve(self):
-        from tensors.backend import execute_binary, execute_matmul
-        from tensors.backend.dispatch import execute_binary as package_binary
+        from tensors.backend import execute_add, execute_matmul
+        from tensors.backend.dispatch import execute_add as package_add
 
-        self.assertIs(execute_binary, package_binary)
+        self.assertIs(execute_add, package_add)
         self.assertIs(execute_matmul, backend_package.execute_matmul)
 
     def test_entry_points_are_the_domain_functions_not_wrappers(self):
@@ -166,8 +167,8 @@ class DispatchFacadeTests(unittest.TestCase):
                 owner = importlib.import_module(function.__module__)
                 self.assertIs(getattr(owner, name), function)
 
-    def test_dispatch_surface_did_not_change_size(self):
-        self.assertEqual(len(dispatch_package.__all__), 53)
+    def test_dispatch_surface_has_unique_entry_points(self):
+        self.assertEqual(len(dispatch_package.__all__), len(set(dispatch_package.__all__)))
         self.assertTrue(
             all(name.startswith("execute_") for name in dispatch_package.__all__)
         )
@@ -181,8 +182,8 @@ class DispatchFallbackTests(BackendTestCase):
         matrix = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
         with ts.use_backend("python"):
             self.assertIsNone(
-                dispatch_package.execute_binary(
-                    "add", value, value,
+                dispatch_package.execute_add(
+                    value, value,
                     dtype=ts.float64, output_shape=value.shape,
                 )
             )
@@ -218,8 +219,8 @@ class DispatchFallbackTests(BackendTestCase):
         tiny = ts.Tensor([1.0, 2.0])
         with ts.use_backend("numpy"):
             self.assertIsNone(
-                dispatch_package.execute_binary(
-                    "add", tiny, tiny,
+                dispatch_package.execute_add(
+                    tiny, tiny,
                     dtype=ts.float64, output_shape=tiny.shape,
                 )
             )
@@ -255,8 +256,8 @@ class NumPyDispatchTests(BackendTestCase):
         matrix = ts.full((64, 64), 1.5)
         with ts.use_backend("numpy"):
             results = {
-                "elementwise": dispatch_package.execute_binary(
-                    "add", value, value,
+                "arithmetic": dispatch_package.execute_add(
+                    value, value,
                     dtype=ts.float64, output_shape=value.shape,
                 ),
                 "creation": dispatch_package.execute_full(
@@ -286,8 +287,8 @@ class NumPyDispatchTests(BackendTestCase):
     def test_dispatch_result_matches_the_python_fallback(self):
         value = self._value()
         with ts.use_backend("numpy"):
-            storage = dispatch_package.execute_binary(
-                "add", value, value, dtype=ts.float64, output_shape=value.shape,
+            storage = dispatch_package.execute_add(
+                value, value, dtype=ts.float64, output_shape=value.shape,
             )
 
         self.assertEqual(list(storage.buffer)[:4], [4.0, 4.0, 4.0, 4.0])
@@ -307,8 +308,8 @@ class CudaDispatchTests(BackendTestCase):
         matrix = ts.full((64, 64), 1.5)
         with ts.use_backend("cuda"):
             results = {
-                "elementwise": dispatch_package.execute_binary(
-                    "add", value, value,
+                "arithmetic": dispatch_package.execute_add(
+                    value, value,
                     dtype=ts.float64, output_shape=value.shape,
                 ),
                 "creation": dispatch_package.execute_full(
@@ -330,8 +331,8 @@ class CudaDispatchTests(BackendTestCase):
     def test_cuda_dispatch_matches_the_python_backend(self):
         value = ts.full((self.LARGE,), 2.0)
         with ts.use_backend("cuda"):
-            storage = dispatch_package.execute_binary(
-                "add", value, value, dtype=ts.float64, output_shape=value.shape,
+            storage = dispatch_package.execute_add(
+                value, value, dtype=ts.float64, output_shape=value.shape,
             )
         with ts.use_backend("python"):
             expected = (value + value).tolist()

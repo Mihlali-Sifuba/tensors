@@ -9,6 +9,7 @@ The entry points are grouped by execution domain, mirroring
 surface the rest of ``tensors`` imports:
 
 - :mod:`~tensors.backend.dispatch.elementwise` elementwise work and its VJPs;
+- :mod:`~tensors.backend.dispatch.arithmetic` dedicated arithmetic operations;
 - :mod:`~tensors.backend.dispatch.creation` values built from parameters;
 - :mod:`~tensors.backend.dispatch.manipulation` shape, layout, and indexing;
 - :mod:`~tensors.backend.dispatch.reductions` reductions and shape summation;
@@ -25,8 +26,15 @@ package as a typed dependency treats them as part of its interface.
 
 from __future__ import annotations
 
+from .arithmetic import (
+    execute_add as execute_add,
+    execute_subtract as execute_subtract,
+    execute_multiply as execute_multiply,
+    execute_divide as execute_divide,
+    execute_power as execute_power,
+)
+
 from .elementwise import (
-    execute_binary as execute_binary,
     execute_clip as execute_clip,
     execute_clip_gradient as execute_clip_gradient,
     execute_comparison as execute_comparison,
@@ -99,11 +107,15 @@ from .optim import (
 
 
 __all__ = [
+    "execute_add",
+    "execute_subtract",
+    "execute_multiply",
+    "execute_divide",
+    "execute_power",
     "execute_adam_update",
     "execute_adam_updates",
     "execute_arange",
     "execute_arg_extremum",
-    "execute_binary",
     "execute_binary_cross_entropy",
     "execute_binary_cross_entropy_gradient",
     "execute_cast",

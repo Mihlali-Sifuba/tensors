@@ -44,12 +44,15 @@ class CudaResidencyTests(unittest.TestCase):
     """Supported CUDA work stays on the device."""
 
     def test_floating_results_remain_device_resident(self):
+        from tensors.backend.loading import _load_array_backend
+
+        backend = _load_array_backend("cuda")
         with ts.use_backend("cuda"):
             value = ts.full((64,), 2.0)
             with patch.object(
-                cuda_backend,
-                "binary",
-                wraps=cuda_backend.binary,
+                backend,
+                "add",
+                wraps=backend.add,
             ) as kernel:
                 result = value * 3.0 + 1.0
 

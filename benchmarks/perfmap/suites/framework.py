@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import tensors as ts
-from tensors.backend import config, execute_binary, loading
+from tensors.backend import config, execute_add, loading
 from tensors.backend.policy import _array_work_is_large_enough, _shape_size
 from tensors.backend.storage import NumPyStorage, PythonStorage
 from tensors.dtype import result_dtype
@@ -31,7 +31,7 @@ from tensors.strides import Strides
 from tensors.utils.broadcasting import broadcast_binary_values
 
 from ..harness import Case, Group, Unsupported
-from ..workloads import ACCELERATED, kernel_module, tensor
+from ..workloads import ACCELERATED, tensor
 
 
 def _selection_cases(backend: str) -> list[Case]:
@@ -77,17 +77,17 @@ def _selection_cases(backend: str) -> list[Case]:
     if backend in ACCELERATED:
         cases.append(Case(
             name="framework.kernel_lookup_cached",
-            run=lambda: loading._backend_kernel("binary"),
+            run=lambda: loading._load_array_backend(backend).add,
             layer="dispatch",
-            validate=lambda: loading._backend_kernel("binary"),
+            validate=lambda: loading._load_array_backend(backend).add,
             description="resolve a kernel that the cache already holds",
             backends=ACCELERATED,
             **common,
         ))
 
         def cold_lookup() -> Any:
-            loading._clear_backend_kernel_cache()
-            return loading._backend_kernel("binary")
+            loading._load_array_backend.cache_clear()
+            return loading._load_array_backend(backend).add
 
         cases.append(Case(
             name="framework.kernel_lookup_cold",
@@ -95,8 +95,8 @@ def _selection_cases(backend: str) -> list[Case]:
             layer="dispatch",
             validate=cold_lookup,
             description=(
-                "resolve a kernel with an empty cache, which re-imports the "
-                "provider module from sys.modules and reads the attribute"
+                "construct a provider with an empty provider cache and "
+                "retrieve its bound addition kernel"
             ),
             backends=ACCELERATED,
             **common,
@@ -233,13 +233,13 @@ def _construction_cases(backend: str) -> list[Case]:
     shape = (64,)
 
     if backend in ACCELERATED:
-        kernels = kernel_module(backend)
+        kernels = loading._load_array_backend(backend)
         left = tensor(shape, dtype_name="float64", kind="ramp")
         right = tensor(shape, dtype_name="float64", kind="constant", value=2.0)
         # A real kernel result, so wrapping it is measured on the same kind
         # of object the public path wraps.
-        storage = kernels.binary(
-            "add", left, right, dtype=ts.float64, output_shape=shape
+        storage = kernels.add(
+            left, right, dtype=ts.float64, output_shape=shape
         )
         if storage is None:
             raise Unsupported(
@@ -271,8 +271,8 @@ def _construction_cases(backend: str) -> list[Case]:
         tiny_right = tensor((4,), dtype_name="float64", kind="constant")
 
         def rejected() -> Any:
-            return execute_binary(
-                "add", tiny_left, tiny_right,
+            return execute_add(
+                tiny_left, tiny_right,
                 dtype=ts.float64, output_shape=(4,),
             )
 

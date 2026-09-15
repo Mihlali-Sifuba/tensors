@@ -14,8 +14,9 @@ from collections.abc import Sequence
 from typing import Any
 
 import tensors as ts
+from tensors.backend.loading import _load_array_backend
 from tensors.backend import (
-    execute_binary,
+    execute_multiply,
     execute_sum_products_to_shape,
     execute_sum_to_shape,
 )
@@ -23,7 +24,6 @@ from tensors.backend import (
 from ..harness import Case, Group, Unsupported
 from ..workloads import (
     ACCELERATED,
-    kernel_module,
     provider_array,
     provider_module,
     tensor,
@@ -90,7 +90,7 @@ def _forward_cases(
 
     if backend in ACCELERATED:
         provider = provider_module(backend)
-        kernels = kernel_module(backend)
+        kernels = _load_array_backend(backend)
         raw_left = provider_array(
             provider, left_shape, dtype_name="float64", kind="ramp"
         )
@@ -109,8 +109,8 @@ def _forward_cases(
         ))
 
         def run_kernel() -> Any:
-            return kernels.binary(
-                "multiply", left, right,
+            return kernels.multiply(
+                left, right,
                 dtype=ts.float64, output_shape=output_shape,
             )
 
@@ -132,16 +132,16 @@ def _forward_cases(
         ))
         cases.append(Case(
             name=f"dispatch.broadcast_multiply/{pattern}",
-            run=lambda: execute_binary(
-                "multiply", left, right,
+            run=lambda: execute_multiply(
+                left, right,
                 dtype=ts.float64, output_shape=output_shape,
             ),
             layer="dispatch",
-            validate=lambda: execute_binary(
-                "multiply", left, right,
+            validate=lambda: execute_multiply(
+                left, right,
                 dtype=ts.float64, output_shape=output_shape,
             ),
-            description="execute_binary over a broadcast",
+            description="execute_multiply over a broadcast",
             backends=ACCELERATED,
             **common,
         ))
