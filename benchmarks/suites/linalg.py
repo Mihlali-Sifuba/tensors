@@ -17,7 +17,7 @@ import tensors as ts
 from tensors.backend import execute_matmul, execute_matmul_gradient
 from tensors.graph import Computation
 
-from ..harness import Case, Group, Unsupported
+from ..case import Case, Group, Unsupported
 from ..workloads import (
     ACCELERATED,
     FLOAT_DTYPES,

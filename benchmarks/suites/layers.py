@@ -30,7 +30,7 @@ import tensors as ts
 from tensors.backend.dispatch import arithmetic
 from tensors.backend.loading import load_backend
 from tensors.graph import Computation
-from benchmarks.harness import Case, Group, Unsupported
+from benchmarks.case import Case, Group, Unsupported
 from benchmarks.workloads import (
     ACCELERATED,
     FLOAT_DTYPES,

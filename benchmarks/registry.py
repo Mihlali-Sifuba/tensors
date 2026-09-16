@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable, Sequence
 
-from .harness import Group
+from .case import Group
 
 
 #: Suite name to the module providing its ``groups()`` factory.

@@ -1,4 +1,4 @@
-"""The case model, statistics, and the interleaving measurement scheduler.
+"""The interleaving measurement scheduler.
 
 A measurement here is a ``(case, backend)`` job. Jobs from every backend a
 group supports are built together and then measured in rotated, seeded random
@@ -16,147 +16,14 @@ import time
 import traceback
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypeAlias
+from typing import Any
 
 import tensors as ts
 
+from .case import Case, Classification, Group, Unsupported
+from .measurement import SYNC_POLICY, Timing, timer_for
 from .memory import measure_memory, release_device_memory
-from .timing import SYNC_POLICY, Timing, timer_for
-
-
-Backend: TypeAlias = Literal["python", "numpy", "cuda"]
-
-#: Where in the execution stack a case measures. Comparing adjacent layers
-#: over the same computation is what attributes overhead to a layer.
-Layer: TypeAlias = Literal[
-    "provider",
-    "kernel",
-    "dispatch",
-    "public",
-    "variable",
-    "graph-trace",
-    "graph-compile",
-    "graph-replay",
-    "autograd",
-    "optimizer",
-    "training",
-    "storage",
-    "fusion",
-    "startup",
-    "sync",
-    "memory",
-]
-
-Classification: TypeAlias = Literal[
-    "measured",
-    "unsupported",
-    "skipped",
-    "error",
-]
-
-
-class Unsupported(Exception):
-    """Raised by a case factory when a backend cannot express the case."""
-
-
-@dataclass(frozen=True)
-class Case:
-    """One independently calibrated measurement.
-
-    ``run`` must perform exactly the work being attributed to ``layer``.
-    Anything shared, reusable, or merely preparatory belongs in the factory
-    that builds the case, or in ``setup``.
-    """
-
-    name: str
-    run: Callable[[], Any]
-    layer: Layer = "public"
-    family: str = "misc"
-    #: Backends this case is meaningful on. ``None`` means every backend.
-    backends: frozenset[str] | None = None
-    dtype: str | None = None
-    shape: tuple[int, ...] | str | None = None
-    elements: int | None = None
-    work_items: int | None = None
-    validate: Callable[[], None] | None = None
-    setup: Callable[[], None] | None = None
-    reset: Callable[[], None] | None = None
-    teardown: Callable[[], None] | None = None
-    #: A case that builds cyclic objects each call keeps collection in scope.
-    gc_enabled: bool = False
-    #: A single state transition per sample; calibration must not batch it.
-    single_shot: bool = False
-    #: Include this case in the separate memory pass.
-    memory: bool = False
-    description: str = ""
-    #: Free-form comparison keys, e.g. ``{"op": "add", "against": "..."}``.
-    tags: dict[str, str] = field(default_factory=dict)
-
-    def supports(self, backend: str) -> bool:
-        """Return whether this case is meaningful for ``backend``."""
-        return self.backends is None or backend in self.backends
-
-
-#: A factory receives the active backend and returns the cases it can build
-#: there. Raising :class:`Unsupported` classifies the whole group explicitly.
-CaseFactory: TypeAlias = Callable[[str], Sequence[Case]]
-
-
-@dataclass(frozen=True)
-class Group:
-    """Cases whose inputs are built and released together.
-
-    Grouping bounds live memory: only one group's inputs exist at a time,
-    across every backend it covers. It is also the interleaving unit, so the
-    cases measured close together are the ones meant to be compared.
-    """
-
-    name: str
-    factory: CaseFactory
-    suite: str
-
-
-def _percentile(values: Sequence[float], fraction: float) -> float:
-    ordered = sorted(values)
-    if not ordered:
-        return 0.0
-    position = fraction * (len(ordered) - 1)
-    lower = int(position)
-    upper = min(lower + 1, len(ordered) - 1)
-    weight = position - lower
-    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
-
-
-#: A case whose samples deviate by more than this fraction of the median is
-#: reported as noisy rather than quietly averaged.
-NOISE_THRESHOLD_PERCENT = 15.0
-
-
-def summarize(samples: Sequence[float]) -> dict[str, Any]:
-    """Return robust and classical statistics plus a noise verdict."""
-    if not samples:
-        return {}
-    median = statistics.median(samples)
-    deviations = [abs(sample - median) for sample in samples]
-    median_absolute_deviation = statistics.median(deviations)
-    variability = (
-        0.0 if median == 0.0 else median_absolute_deviation / median * 100.0
-    )
-    return {
-        "median_seconds": median,
-        "mean_seconds": statistics.fmean(samples),
-        "stdev_seconds": (
-            statistics.stdev(samples) if len(samples) > 1 else 0.0
-        ),
-        "min_seconds": min(samples),
-        "max_seconds": max(samples),
-        "p95_seconds": _percentile(samples, 0.95),
-        "median_absolute_deviation_seconds": median_absolute_deviation,
-        "variability_percent": variability,
-        "noisy": variability > NOISE_THRESHOLD_PERCENT,
-        "sample_count": len(samples),
-        "samples_seconds": list(samples),
-    }
+from .statistics import NOISE_THRESHOLD_PERCENT, summarize
 
 
 @dataclass
@@ -262,39 +129,43 @@ class Runner:
                 with ts.use_backend(backend):
                     cases = list(group.factory(backend))
             except Unsupported as error:
-                jobs.append(
-                    self._classified(group, backend, "unsupported", str(error))
-                )
+                jobs.append(self._classified(group, backend, "unsupported", str(error)))
                 continue
             except Exception as error:  # noqa: BLE001 - recorded, not hidden
-                jobs.append(self._classified(
-                    group,
-                    backend,
-                    "error",
-                    f"{type(error).__name__}: {error}\n"
-                    + traceback.format_exc(limit=4),
-                ))
+                jobs.append(
+                    self._classified(
+                        group,
+                        backend,
+                        "error",
+                        f"{type(error).__name__}: {error}\n"
+                        + traceback.format_exc(limit=4),
+                    )
+                )
                 continue
             for case in cases:
                 if not case.supports(backend):
-                    jobs.append(Job(
+                    jobs.append(
+                        Job(
+                            case=case,
+                            backend=backend,
+                            suite=group.suite,
+                            group=group.name,
+                            classification="unsupported",
+                            reason=(
+                                "case declares this backend out of scope; "
+                                f"eligible={sorted(case.backends or ())}"
+                            ),
+                        )
+                    )
+                    continue
+                jobs.append(
+                    Job(
                         case=case,
                         backend=backend,
                         suite=group.suite,
                         group=group.name,
-                        classification="unsupported",
-                        reason=(
-                            "case declares this backend out of scope; "
-                            f"eligible={sorted(case.backends or ())}"
-                        ),
-                    ))
-                    continue
-                jobs.append(Job(
-                    case=case,
-                    backend=backend,
-                    suite=group.suite,
-                    group=group.name,
-                ))
+                    )
+                )
         return jobs
 
     # -- measurement ----------------------------------------------------
@@ -326,9 +197,8 @@ class Runner:
             return False
         except Exception as error:  # noqa: BLE001 - recorded, not hidden
             job.classification = "error"
-            job.reason = (
-                f"{type(error).__name__}: {error}\n"
-                + traceback.format_exc(limit=6)
+            job.reason = f"{type(error).__name__}: {error}\n" + traceback.format_exc(
+                limit=6
             )
             return False
         return True
@@ -424,15 +294,11 @@ class Runner:
                 try:
                     if job.case.reset is not None:
                         job.case.reset()
-                    job.synchronization = timer.probe_synchronization(
-                        job.case.run
-                    )
+                    job.synchronization = timer.probe_synchronization(job.case.run)
                     if job.case.reset is not None:
                         job.case.reset()
                 except Exception as error:  # noqa: BLE001 - recorded
-                    job.synchronization = {
-                        "error": f"{type(error).__name__}: {error}"
-                    }
+                    job.synchronization = {"error": f"{type(error).__name__}: {error}"}
 
         for round_index in range(self.rounds):
             order = list(ready)
@@ -506,9 +372,7 @@ def job_record(job: Job) -> dict[str, Any]:
         "layer": case.layer,
         "family": case.family,
         "dtype": case.dtype,
-        "shape": (
-            list(case.shape) if isinstance(case.shape, tuple) else case.shape
-        ),
+        "shape": (list(case.shape) if isinstance(case.shape, tuple) else case.shape),
         "elements": case.elements,
         "description": case.description,
         "tags": dict(case.tags),
@@ -554,9 +418,7 @@ def job_record(job: Job) -> dict[str, Any]:
             # Only the barrier probe can tell a blocking call from one that
             # is merely expensive to launch.
             "hidden_synchronization": bool(probe.get("synchronizes")),
-            "absorbed_fraction_of_barrier": probe.get(
-                "absorbed_fraction_of_barrier"
-            ),
+            "absorbed_fraction_of_barrier": probe.get("absorbed_fraction_of_barrier"),
         }
     median = record["host_total"]["median_seconds"]
     if case.work_items is not None:
@@ -569,15 +431,4 @@ def job_record(job: Job) -> dict[str, Any]:
     return record
 
 
-__all__ = [
-    "Backend",
-    "Case",
-    "Classification",
-    "Group",
-    "Job",
-    "Layer",
-    "Runner",
-    "Unsupported",
-    "job_record",
-    "summarize",
-]
+__all__ = ["Job", "Runner", "job_record"]

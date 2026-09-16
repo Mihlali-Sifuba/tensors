@@ -31,7 +31,7 @@ from tensors.graph.node import VariableNode
 from tensors.graph.state import get_graph_state, isolated_graph_state
 from tensors.ops import Add, Mul
 
-from ..harness import Case, Group, Unsupported
+from ..case import Case, Group, Unsupported
 from ..workloads import tensor
 
 

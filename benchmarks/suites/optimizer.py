@@ -22,7 +22,7 @@ from tensors.backend import (
     execute_sgd_updates,
 )
 
-from ..harness import Case, Group, Unsupported
+from ..case import Case, Group, Unsupported
 from ..workloads import ACCELERATED, FLOAT_DTYPES, dtype_of, tensor
 
 #: The optimizers and how to construct one over a parameter list.

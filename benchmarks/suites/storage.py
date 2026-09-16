@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from typing import Any
 import tensors as ts
 from tensors.backend.conversion import convert_storage
-from benchmarks.harness import Case, Group, Unsupported
+from benchmarks.case import Case, Group, Unsupported
 from tensors.shape import Shape
 from benchmarks.workloads import (
     ACCELERATED,

@@ -11,16 +11,10 @@ import unittest
 
 import tensors as ts
 
-from benchmarks.harness import (
-    NOISE_THRESHOLD_PERCENT,
-    Case,
-    Group,
-    Runner,
-    Unsupported,
-    job_record,
-    summarize,
-)
-from benchmarks.timing import SYNC_POLICY, CudaTimer, HostTimer, timer_for
+from benchmarks.case import Case, Group, Unsupported
+from benchmarks.runner import Runner, job_record
+from benchmarks.statistics import NOISE_THRESHOLD_PERCENT, summarize
+from benchmarks.measurement import SYNC_POLICY, CudaTimer, HostTimer, timer_for
 
 
 def _runner(**overrides):

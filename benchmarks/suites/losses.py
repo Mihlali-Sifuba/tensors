@@ -22,7 +22,7 @@ from tensors.backend import (
     execute_validate_distributions,
 )
 
-from ..harness import Case, Group, Unsupported
+from ..case import Case, Group, Unsupported
 from ..workloads import ACCELERATED, FLOAT_DTYPES, dtype_of, tensor
 
 

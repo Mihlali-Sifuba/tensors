@@ -19,7 +19,7 @@ from tensors.backend import (
     execute_linspace,
 )
 
-from ..harness import Case, Group, Unsupported
+from ..case import Case, Group, Unsupported
 from ..workloads import (
     ACCELERATED,
     FLOAT_DTYPES,

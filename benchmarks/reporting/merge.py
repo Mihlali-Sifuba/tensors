@@ -17,13 +17,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .report import (
-    build_report,
-    print_summary,
-    write_csv,
-    write_json,
-    write_samples_csv,
-)
+from .console import print_summary
+from .csv import write_csv, write_samples_csv
+from .json import build_report, write_json
 
 
 def _load(

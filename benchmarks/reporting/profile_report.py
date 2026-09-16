@@ -18,10 +18,10 @@ from typing import Any
 
 import tensors as ts
 
-from .meta import environment_metadata
+from ..environment import environment_metadata
 from .profiling import host_transfers, hot_functions, provider_calls
-from .report import write_json
-from .workloads import tensor
+from .json import write_json
+from ..workloads import tensor
 
 
 def _subjects(backend: str) -> dict[str, Callable[[], Any]]:

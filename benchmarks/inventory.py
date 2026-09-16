@@ -26,7 +26,7 @@ from typing import Any
 import tensors as ts
 
 from benchmarks import registry
-from benchmarks.harness import Case, Group, Unsupported
+from benchmarks.case import Case, Group, Unsupported
 
 
 def _shape(value: Any) -> Any:

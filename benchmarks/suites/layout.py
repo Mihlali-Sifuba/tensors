@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from typing import Any
 import tensors as ts
 import importlib
-from benchmarks.harness import Case, Group, Unsupported
+from benchmarks.case import Case, Group, Unsupported
 from benchmarks.workloads import (
     ACCELERATED,
     provider_array,

@@ -19,7 +19,7 @@ from typing import Any
 import tensors as ts
 from tensors.backend import execute_convolution, execute_convolution_gradient
 
-from ..harness import Case, Group, Unsupported
+from ..case import Case, Group, Unsupported
 from ..workloads import ACCELERATED, FLOAT_DTYPES, dtype_of, tensor
 
 

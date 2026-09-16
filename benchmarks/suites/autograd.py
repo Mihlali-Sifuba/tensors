@@ -26,7 +26,7 @@ from tensors.graph.computation.gradients import (
     validate_gradients,
 )
 
-from ..harness import Case, Group, Unsupported
+from ..case import Case, Group, Unsupported
 from ..workloads import FLOAT_DTYPES, GRADIENT_CEILING, tensor
 
 

@@ -11,7 +11,7 @@ import unittest
 import tensors as ts
 
 from benchmarks import registry
-from benchmarks.harness import Unsupported
+from benchmarks.case import Unsupported
 
 
 def _available_backends():

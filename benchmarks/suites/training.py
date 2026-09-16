@@ -19,7 +19,7 @@ from typing import Any
 
 import tensors as ts
 
-from ..harness import Case, Group, Unsupported
+from ..case import Case, Group, Unsupported
 from ..workloads import FLOAT_DTYPES, dtype_of, tensor
 
 

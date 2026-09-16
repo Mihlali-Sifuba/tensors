@@ -20,7 +20,7 @@ from tensors.backend import (
     execute_where,
 )
 
-from ..harness import Case, Group, Unsupported
+from ..case import Case, Group, Unsupported
 from ..workloads import (
     ACCELERATED,
     dtype_of,

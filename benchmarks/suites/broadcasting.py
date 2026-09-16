@@ -18,7 +18,7 @@ from tensors.backend import (
     execute_sum_products_to_shape,
     execute_sum_to_shape,
 )
-from benchmarks.harness import Case, Group, Unsupported
+from benchmarks.case import Case, Group, Unsupported
 from benchmarks.workloads import (
     ACCELERATED,
     provider_array,

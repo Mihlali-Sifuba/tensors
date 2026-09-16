@@ -20,7 +20,7 @@ import tensors as ts
 from tensors.graph import Computation
 from tensors.graph.state import get_graph_state
 
-from ..harness import Case, Group, Unsupported
+from ..case import Case, Group, Unsupported
 from ..workloads import tensor
 
 

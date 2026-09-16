@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-from .report import byte_size, duration, ratio
+from .console import byte_size, duration, ratio
 
 
 def _markdown(
@@ -64,37 +64,47 @@ def _elements(value: Any) -> str:
 def ladder_table(report: dict[str, Any], *, limit: int = 60) -> str:
     """Provider to public to higher-layer ratios, worst absolute first."""
     entries = report["analysis"]["ladders"]
-    rankable = [
-        entry for entry in entries
-        if (entry.get("elements") or 0) >= 1_000
-    ]
-    rankable.sort(
-        key=lambda entry: -(entry["total"]["added_seconds"] or 0.0)
-    )
+    rankable = [entry for entry in entries if (entry.get("elements") or 0) >= 1_000]
+    rankable.sort(key=lambda entry: -(entry["total"]["added_seconds"] or 0.0))
     rows = []
     for entry in rankable[:limit]:
         layers = entry["layers"]
-        rows.append((
-            entry["ladder"],
-            entry["backend"],
-            entry.get("dtype") or "-",
-            _elements(entry.get("elements")),
-            duration(layers.get("provider", {}).get("median_seconds")),
-            duration(layers.get("kernel", {}).get("median_seconds")),
-            duration(layers.get("dispatch", {}).get("median_seconds")),
-            duration(layers.get("public", {}).get("median_seconds")),
-            duration(layers.get("variable", {}).get("median_seconds")),
-            duration(layers.get("graph-replay", {}).get("median_seconds")),
-            ratio(entry["total"]["ratio"]),
-            duration(entry["total"]["added_seconds"]),
-            _flag(entry.get("steps") and any(
-                rung.get("noisy") for rung in layers.values()
-            )),
-        ))
+        rows.append(
+            (
+                entry["ladder"],
+                entry["backend"],
+                entry.get("dtype") or "-",
+                _elements(entry.get("elements")),
+                duration(layers.get("provider", {}).get("median_seconds")),
+                duration(layers.get("kernel", {}).get("median_seconds")),
+                duration(layers.get("dispatch", {}).get("median_seconds")),
+                duration(layers.get("public", {}).get("median_seconds")),
+                duration(layers.get("variable", {}).get("median_seconds")),
+                duration(layers.get("graph-replay", {}).get("median_seconds")),
+                ratio(entry["total"]["ratio"]),
+                duration(entry["total"]["added_seconds"]),
+                _flag(
+                    entry.get("steps")
+                    and any(rung.get("noisy") for rung in layers.values())
+                ),
+            )
+        )
     return _markdown(
-        ("ladder", "backend", "dtype", "elements", "provider", "kernel",
-         "dispatch", "public", "variable", "replay", "total ratio",
-         "added", "noisy"),
+        (
+            "ladder",
+            "backend",
+            "dtype",
+            "elements",
+            "provider",
+            "kernel",
+            "dispatch",
+            "public",
+            "variable",
+            "replay",
+            "total ratio",
+            "added",
+            "noisy",
+        ),
         rows,
         title="Layer ladders, ranked by absolute added time",
         note=(
@@ -110,29 +120,39 @@ def ladder_table(report: dict[str, Any], *, limit: int = 60) -> str:
 def fixed_overhead_table(report: dict[str, Any], *, limit: int = 40) -> str:
     """The per-call floor, from the smallest point of each ladder."""
     entries = [
-        entry for entry in report["analysis"]["ladders"]
+        entry
+        for entry in report["analysis"]["ladders"]
         if (entry.get("elements") or 0) <= 10
     ]
-    entries.sort(
-        key=lambda entry: -(entry["total"]["added_seconds"] or 0.0)
-    )
+    entries.sort(key=lambda entry: -(entry["total"]["added_seconds"] or 0.0))
     rows = []
     for entry in entries[:limit]:
         layers = entry["layers"]
-        rows.append((
-            entry["ladder"],
-            entry["backend"],
-            entry.get("dtype") or "-",
-            duration(layers.get("provider", {}).get("median_seconds")),
-            duration(layers.get("kernel", {}).get("median_seconds")),
-            duration(layers.get("public", {}).get("median_seconds")),
-            duration(layers.get("variable", {}).get("median_seconds")),
-            ratio(entry["total"]["ratio"]),
-            duration(entry["total"]["added_seconds"]),
-        ))
+        rows.append(
+            (
+                entry["ladder"],
+                entry["backend"],
+                entry.get("dtype") or "-",
+                duration(layers.get("provider", {}).get("median_seconds")),
+                duration(layers.get("kernel", {}).get("median_seconds")),
+                duration(layers.get("public", {}).get("median_seconds")),
+                duration(layers.get("variable", {}).get("median_seconds")),
+                ratio(entry["total"]["ratio"]),
+                duration(entry["total"]["added_seconds"]),
+            )
+        )
     return _markdown(
-        ("ladder", "backend", "dtype", "provider", "kernel", "public",
-         "variable", "ratio", "added"),
+        (
+            "ladder",
+            "backend",
+            "dtype",
+            "provider",
+            "kernel",
+            "public",
+            "variable",
+            "ratio",
+            "added",
+        ),
         rows,
         title="Fixed per-call overhead (1 to 10 elements)",
         note=(
@@ -153,21 +173,33 @@ def scaling_table(report: dict[str, Any], *, limit: int = 80) -> str:
     )[:limit]:
         series = curve["series"]
         smallest, largest = series[0], series[-1]
-        rows.append((
-            curve["curve"],
-            curve["backend"],
-            curve["layer"],
-            curve["dtype"],
-            _elements(smallest["elements"]),
-            duration(smallest["median_seconds"]),
-            _elements(largest["elements"]),
-            duration(largest["median_seconds"]),
-            ratio(curve["growth_ratio"]),
-            f"{curve['size_ratio']:,.0f}x" if curve["size_ratio"] else "-",
-        ))
+        rows.append(
+            (
+                curve["curve"],
+                curve["backend"],
+                curve["layer"],
+                curve["dtype"],
+                _elements(smallest["elements"]),
+                duration(smallest["median_seconds"]),
+                _elements(largest["elements"]),
+                duration(largest["median_seconds"]),
+                ratio(curve["growth_ratio"]),
+                f"{curve['size_ratio']:,.0f}x" if curve["size_ratio"] else "-",
+            )
+        )
     return _markdown(
-        ("curve", "backend", "layer", "dtype", "min n", "time at min n",
-         "max n", "time at max n", "time growth", "size growth"),
+        (
+            "curve",
+            "backend",
+            "layer",
+            "dtype",
+            "min n",
+            "time at min n",
+            "max n",
+            "time at max n",
+            "time growth",
+            "size growth",
+        ),
         rows,
         title="Scaling curves",
         note=(
@@ -184,25 +216,37 @@ def crossover_table(report: dict[str, Any], *, limit: int = 60) -> str:
     for entry in report["analysis"]["crossovers"]:
         crossing = entry["crossover"]
         faster = entry["candidate_faster_at"]
-        rows.append((
-            entry["curve"],
-            entry["layer"],
-            entry["dtype"],
-            f"{entry['baseline']} to {entry['candidate']}",
+        rows.append(
             (
-                f"{crossing['between_elements'][0]:,} to "
-                f"{crossing['between_elements'][1]:,}"
-                if crossing
-                else ("always" if faster and not entry["candidate_slower_at"]
-                      else "never")
-            ),
-            _elements(min(faster)) if faster else "-",
-            ratio(entry["speedup_at_largest"]),
-        ))
+                entry["curve"],
+                entry["layer"],
+                entry["dtype"],
+                f"{entry['baseline']} to {entry['candidate']}",
+                (
+                    f"{crossing['between_elements'][0]:,} to "
+                    f"{crossing['between_elements'][1]:,}"
+                    if crossing
+                    else (
+                        "always"
+                        if faster and not entry["candidate_slower_at"]
+                        else "never"
+                    )
+                ),
+                _elements(min(faster)) if faster else "-",
+                ratio(entry["speedup_at_largest"]),
+            )
+        )
     rows.sort(key=lambda row: (row[3], row[0]))
     return _markdown(
-        ("curve", "layer", "dtype", "comparison", "crossover between",
-         "first size where faster", "speedup at largest size"),
+        (
+            "curve",
+            "layer",
+            "dtype",
+            "comparison",
+            "crossover between",
+            "first size where faster",
+            "speedup at largest size",
+        ),
         rows[:limit],
         title="Backend crossover points",
         note=(
@@ -216,10 +260,7 @@ def crossover_table(report: dict[str, Any], *, limit: int = 60) -> str:
 def dtype_table(report: dict[str, Any], *, limit: int = 60) -> str:
     """float32 against float64 on identical work."""
     entries = report["analysis"]["dtype_comparison"]
-    entries = [
-        entry for entry in entries
-        if (entry.get("elements") or 0) >= 1_000
-    ]
+    entries = [entry for entry in entries if (entry.get("elements") or 0) >= 1_000]
     entries.sort(key=lambda entry: -(entry["float32_over_float64"] or 0))
     rows = [
         (
@@ -235,8 +276,16 @@ def dtype_table(report: dict[str, Any], *, limit: int = 60) -> str:
         for entry in entries[:limit]
     ]
     return _markdown(
-        ("subject", "backend", "layer", "elements", "float64", "float32",
-         "float32 / float64", "noisy"),
+        (
+            "subject",
+            "backend",
+            "layer",
+            "elements",
+            "float64",
+            "float32",
+            "float32 / float64",
+            "noisy",
+        ),
         rows,
         title="float32 versus float64",
         note=(
@@ -265,8 +314,7 @@ def layout_table(report: dict[str, Any], *, limit: int = 60) -> str:
         for entry in entries[:limit]
     ]
     return _markdown(
-        ("case", "backend", "layout", "elements", "contiguous", "this layout",
-         "ratio"),
+        ("case", "backend", "layout", "elements", "contiguous", "this layout", "ratio"),
         rows,
         title="Contiguous versus non-contiguous layouts",
         note=(
@@ -304,8 +352,16 @@ def phase_table(
         for entry in entries[:limit]
     ]
     return _markdown(
-        ("subject", "backend", "elements", left, right,
-         f"{right} / {left}", "difference", "noisy"),
+        (
+            "subject",
+            "backend",
+            "elements",
+            left,
+            right,
+            f"{right} / {left}",
+            "difference",
+            "noisy",
+        ),
         rows,
         title=title,
         note=note,
@@ -324,33 +380,46 @@ def training_table(report: dict[str, Any], *, limit: int = 60) -> str:
             if item is None:
                 return "-"
             return (
-                f"{duration(item['seconds'])} "
-                f"({item['share_of_step'] * 100:.0f}%)"
+                f"{duration(item['seconds'])} " f"({item['share_of_step'] * 100:.0f}%)"
                 if item["share_of_step"] is not None
                 else duration(item["seconds"])
             )
 
-        rows.append((
-            entry["subject"],
-            entry["backend"],
-            entry.get("dtype") or "-",
-            f"{int(entry['parameters']):,}" if entry.get("parameters") else "-",
-            duration(entry["step_seconds"]),
-            share("forward"),
-            share("loss"),
-            share("backward"),
-            share("optimizer"),
-            duration(entry["unaccounted_seconds"]),
+        rows.append(
             (
-                ratio(entry.get("sustained_over_single"))
-                if entry.get("sustained_over_single") is not None else "-"
-            ),
-            _flag(entry["noisy"]),
-        ))
+                entry["subject"],
+                entry["backend"],
+                entry.get("dtype") or "-",
+                f"{int(entry['parameters']):,}" if entry.get("parameters") else "-",
+                duration(entry["step_seconds"]),
+                share("forward"),
+                share("loss"),
+                share("backward"),
+                share("optimizer"),
+                duration(entry["unaccounted_seconds"]),
+                (
+                    ratio(entry.get("sustained_over_single"))
+                    if entry.get("sustained_over_single") is not None
+                    else "-"
+                ),
+                _flag(entry["noisy"]),
+            )
+        )
     return _markdown(
-        ("model / batch / hidden / depth", "backend", "dtype", "parameters",
-         "full step", "forward", "loss", "backward", "optimizer",
-         "unaccounted", "10-step / 1-step", "noisy"),
+        (
+            "model / batch / hidden / depth",
+            "backend",
+            "dtype",
+            "parameters",
+            "full step",
+            "forward",
+            "loss",
+            "backward",
+            "optimizer",
+            "unaccounted",
+            "10-step / 1-step",
+            "noisy",
+        ),
         rows,
         title="End-to-end training breakdown",
         note=(
@@ -382,8 +451,18 @@ def cuda_table(report: dict[str, Any], *, limit: int = 60) -> str:
         for entry in entries[:limit]
     ]
     return _markdown(
-        ("case", "layer", "dtype", "elements", "host", "device",
-         "host - device", "device share", "absorbed", "blocks"),
+        (
+            "case",
+            "layer",
+            "dtype",
+            "elements",
+            "host",
+            "device",
+            "host - device",
+            "device share",
+            "absorbed",
+            "blocks",
+        ),
         rows,
         title="CUDA host latency versus device execution",
         note=(
@@ -398,7 +477,8 @@ def cuda_table(report: dict[str, Any], *, limit: int = 60) -> str:
 def blocking_table(report: dict[str, Any]) -> str:
     """Only the CUDA paths that block, grouped by family."""
     entries = [
-        entry for entry in report["analysis"]["cuda_synchronization"]
+        entry
+        for entry in report["analysis"]["cuda_synchronization"]
         if entry["hidden_synchronization"]
     ]
     families: dict[str, list[dict[str, Any]]] = {}
@@ -407,17 +487,18 @@ def blocking_table(report: dict[str, Any]) -> str:
     rows = []
     for family, items in sorted(families.items()):
         worst = max(items, key=lambda item: item["host_overhead_seconds"])
-        rows.append((
-            family,
-            str(len(items)),
-            worst["name"],
-            duration(worst["host_total_seconds"]),
-            duration(worst["device_seconds"]),
-            _percent(worst.get("absorbed_fraction_of_barrier")),
-        ))
+        rows.append(
+            (
+                family,
+                str(len(items)),
+                worst["name"],
+                duration(worst["host_total_seconds"]),
+                duration(worst["device_seconds"]),
+                _percent(worst.get("absorbed_fraction_of_barrier")),
+            )
+        )
     return _markdown(
-        ("family", "blocking cases", "worst case", "host", "device",
-         "absorbed"),
+        ("family", "blocking cases", "worst case", "host", "device", "absorbed"),
         rows,
         title="CUDA paths that synchronize, by family",
         note=(
@@ -444,8 +525,16 @@ def memory_table(report: dict[str, Any], *, limit: int = 50) -> str:
         for entry in entries[:limit]
     ]
     return _markdown(
-        ("case", "backend", "elements", "host peak", "host allocations",
-         "host retained / call", "device delta", "device retained / call"),
+        (
+            "case",
+            "backend",
+            "elements",
+            "host peak",
+            "host allocations",
+            "host retained / call",
+            "device delta",
+            "device retained / call",
+        ),
         rows,
         title="Memory: allocation and retention",
         note=(
@@ -473,8 +562,16 @@ def noise_table(report: dict[str, Any], *, limit: int = 50) -> str:
         for entry in entries[:limit]
     ]
     return _markdown(
-        ("case", "backend", "elements", "median", "MAD / median", "min",
-         "max", "max / min"),
+        (
+            "case",
+            "backend",
+            "elements",
+            "median",
+            "MAD / median",
+            "min",
+            "max",
+            "max / min",
+        ),
         rows,
         title="High-variance measurements",
         note=(
@@ -490,17 +587,13 @@ def classification_table(report: dict[str, Any]) -> str:
     summary = report["analysis"]["classifications"]
     counts = _markdown(
         ("classification", "records"),
-        sorted(
-            (key, f"{value:,}") for key, value in summary["counts"].items()
-        ),
+        sorted((key, f"{value:,}") for key, value in summary["counts"].items()),
         title="Record classifications",
     )
     reasons: dict[str, list[str]] = {}
     for entry in summary["unsupported"]:
         reason = (entry.get("reason") or "").strip().split("\n")[0]
-        reasons.setdefault(reason, []).append(
-            f"{entry['backend']}:{entry['name']}"
-        )
+        reasons.setdefault(reason, []).append(f"{entry['backend']}:{entry['name']}")
     grouped = _markdown(
         ("reason", "backends and cases", "count"),
         [
@@ -509,9 +602,7 @@ def classification_table(report: dict[str, Any]) -> str:
                 ", ".join(sorted({item.split(":", 1)[0] for item in cases})),
                 str(len(cases)),
             )
-            for reason, cases in sorted(
-                reasons.items(), key=lambda item: -len(item[1])
-            )
+            for reason, cases in sorted(reasons.items(), key=lambda item: -len(item[1]))
         ],
         title="Unsupported combinations, with the stated reason",
         note=(
@@ -578,14 +669,25 @@ def bottleneck_table(report: dict[str, Any], *, limit: int = 25) -> str:
             )
             for entry in bottlenecks[key][:limit]
         ]
-        sections.append(_markdown(
-            ("path", "backend", "dtype", "elements",
-             f"innermost", "outermost", "absolute overhead", "ratio",
-             "responsible step", "noisy"),
-            rows,
-            title=title,
-            note=note,
-        ))
+        sections.append(
+            _markdown(
+                (
+                    "path",
+                    "backend",
+                    "dtype",
+                    "elements",
+                    f"innermost",
+                    "outermost",
+                    "absolute overhead",
+                    "ratio",
+                    "responsible step",
+                    "noisy",
+                ),
+                rows,
+                title=title,
+                note=note,
+            )
+        )
     return "\n".join(sections)
 
 
@@ -594,11 +696,20 @@ def inventory_table(report: dict[str, Any]) -> str:
     records = report["records"]
     by_suite: dict[str, dict[str, Any]] = {}
     for record in records:
-        entry = by_suite.setdefault(record["suite"], {
-            "groups": set(), "cases": set(), "records": 0,
-            "measured": 0, "backends": set(), "layers": set(),
-            "families": set(), "dtypes": set(), "elements": set(),
-        })
+        entry = by_suite.setdefault(
+            record["suite"],
+            {
+                "groups": set(),
+                "cases": set(),
+                "records": 0,
+                "measured": 0,
+                "backends": set(),
+                "layers": set(),
+                "families": set(),
+                "dtypes": set(),
+                "elements": set(),
+            },
+        )
         entry["groups"].add(record["group"])
         entry["cases"].add(record["name"])
         entry["records"] += 1
@@ -613,8 +724,17 @@ def inventory_table(report: dict[str, Any]) -> str:
             entry["elements"].add(int(record["elements"]))
 
     suites = _markdown(
-        ("suite", "groups", "distinct cases", "records", "measured",
-         "backends", "layers", "dtypes", "element range"),
+        (
+            "suite",
+            "groups",
+            "distinct cases",
+            "records",
+            "measured",
+            "backends",
+            "layers",
+            "dtypes",
+            "element range",
+        ),
         [
             (
                 suite,
@@ -626,9 +746,9 @@ def inventory_table(report: dict[str, Any]) -> str:
                 ", ".join(sorted(entry["layers"])),
                 ", ".join(sorted(entry["dtypes"])) or "-",
                 (
-                    f"{min(entry['elements']):,} to "
-                    f"{max(entry['elements']):,}"
-                    if entry["elements"] else "-"
+                    f"{min(entry['elements']):,} to " f"{max(entry['elements']):,}"
+                    if entry["elements"]
+                    else "-"
                 ),
             )
             for suite, entry in sorted(by_suite.items())
@@ -645,9 +765,7 @@ def inventory_table(report: dict[str, Any]) -> str:
         ("layer", "measurements"),
         [
             (layer, f"{count:,}")
-            for layer, count in sorted(
-                by_layer.items(), key=lambda item: -item[1]
-            )
+            for layer, count in sorted(by_layer.items(), key=lambda item: -item[1])
         ],
         title="Measurements by layer",
     )
@@ -659,10 +777,7 @@ def inventory_table(report: dict[str, Any]) -> str:
         by_family[record["family"]] = by_family.get(record["family"], 0) + 1
     families = _markdown(
         ("operation family", "measurements"),
-        [
-            (family, f"{count:,}")
-            for family, count in sorted(by_family.items())
-        ],
+        [(family, f"{count:,}") for family, count in sorted(by_family.items())],
         title="Measurements by operation family",
     )
     return "\n".join((suites, layers, families))
@@ -673,15 +788,14 @@ def backend_summary_table(report: dict[str, Any]) -> str:
     import statistics
 
     records = [
-        record for record in report["records"]
+        record
+        for record in report["records"]
         if record["classification"] == "measured" and record.get("host_total")
     ]
     grouped: dict[tuple[str, str], list[float]] = {}
     for record in records:
         key = (record["backend"], record["layer"])
-        grouped.setdefault(key, []).append(
-            record["host_total"]["median_seconds"]
-        )
+        grouped.setdefault(key, []).append(record["host_total"]["median_seconds"])
     rows = [
         (
             backend,
@@ -694,8 +808,7 @@ def backend_summary_table(report: dict[str, Any]) -> str:
         for (backend, layer), values in sorted(grouped.items())
     ]
     return _markdown(
-        ("backend", "layer", "measurements", "median of medians",
-         "fastest", "slowest"),
+        ("backend", "layer", "measurements", "median of medians", "fastest", "slowest"),
         rows,
         title="Orientation: spread of measurements by backend and layer",
         note=(
@@ -715,7 +828,10 @@ SECTIONS: dict[str, Callable[[dict[str, Any]], str]] = {
     "dtype": dtype_table,
     "layout": layout_table,
     "forward-backward": lambda report: phase_table(
-        report, "forward_versus_backward", "forward", "backward",
+        report,
+        "forward_versus_backward",
+        "forward",
+        "backward",
         title="Forward versus backward",
         note=(
             "Both sides replay the same already-traced graph, so the ratio "
@@ -723,7 +839,10 @@ SECTIONS: dict[str, Callable[[dict[str, Any]], str]] = {
         ),
     ),
     "trace-replay": lambda report: phase_table(
-        report, "trace_versus_replay", "trace", "replay",
+        report,
+        "trace_versus_replay",
+        "trace",
+        "replay",
         title="Graph trace versus compiled replay",
         note=(
             "A ratio below 1 means replay is cheaper than tracing the same "
@@ -731,7 +850,10 @@ SECTIONS: dict[str, Callable[[dict[str, Any]], str]] = {
         ),
     ),
     "guard": lambda report: phase_table(
-        report, "reduction_guard", "same-sign", "mixed-sign",
+        report,
+        "reduction_guard",
+        "same-sign",
+        "mixed-sign",
         title="Reduction stability guard: fast path versus full path",
         note=(
             "Same-sign finite data can take the guard's fast path; "

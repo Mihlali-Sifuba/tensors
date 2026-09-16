@@ -29,7 +29,7 @@ import tensors as ts
 from tensors.graph import Computation
 from tensors.graph.computation.fusion import plan_fusions
 
-from ..harness import Case, Group, Unsupported
+from ..case import Case, Group, Unsupported
 from ..workloads import (
     ACCELERATED,
     FLOAT_DTYPES,
