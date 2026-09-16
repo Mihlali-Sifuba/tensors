@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
-from tensors.math._reduction import reduction_groups
-from tensors.math.std import _scaled_deviations
+from tensors.utils.reductions import reduction_groups
+from tensors.utils.deviation import scaled_deviations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -16,7 +16,7 @@ def reduce_variance_gradient(
 ) -> Storage | None:
     """Differentiate the variance of each group."""
     axis = axes
-    _, _, groups = reduction_groups(value, axis, keepdims, scalar_as_vector=True)
+    _, _, groups = reduction_groups(value.shape, axis, keepdims, scalar_as_vector=True)
     gradients = [0.0] * value.size
     for output_index, group in enumerate(groups):
         if not group:
@@ -24,7 +24,7 @@ def reduce_variance_gradient(
         upstream = grad._data[output_index]
         if upstream == 0:
             continue
-        scale, centered, _ = _scaled_deviations(value, group)
+        scale, centered, _ = scaled_deviations(value._data, group)
         if all((centered_value == 0.0 for centered_value in centered)):
             continue
         factor = scale * (2.0 / len(group))

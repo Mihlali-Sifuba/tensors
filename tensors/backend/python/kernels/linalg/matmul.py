@@ -3,7 +3,7 @@
 from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from tensors.math.sum import _stable_product_sum
+from tensors.utils.summation import stable_product_sum
 from tensors.shape import Shape
 from tensors.tensor import Tensor
 from tensors.utils.coordinates import (
@@ -123,7 +123,7 @@ def matmul(
                     for inner in range(a_columns)
                 ]
                 if dtype.kind == "floating":
-                    total = _stable_product_sum(
+                    total = stable_product_sum(
                         [(float(left), float(right)) for left, right in factors]
                     )
                 else:
@@ -146,7 +146,7 @@ def matmul(
                     ]
                     factors.append((left, right))
                 if dtype.kind == "floating":
-                    total = _stable_product_sum(
+                    total = stable_product_sum(
                         [(float(left), float(right)) for left, right in factors]
                     )
                 else:

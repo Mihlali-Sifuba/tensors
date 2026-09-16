@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.python.kernels.nn._normalization import _axis_positions
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from tensors.math._normalization import shifted_normalization
+from tensors.utils.normalization import shifted_normalization
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType

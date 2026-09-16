@@ -16,9 +16,9 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Storage | None:
     target = Shape.from_iterable(shape)
     if target.size == 1:
         if gradient.dtype.kind == "floating":
-            from tensors.math.sum import _stable_float_sum
+            from tensors.utils.summation import stable_float_sum
 
-            total = _stable_float_sum([float(value) for value in gradient._data])
+            total = stable_float_sum([float(value) for value in gradient._data])
         else:
             total = sum(gradient._data)
         return Tensor._from_values([total], gradient.dtype, target)._storage
@@ -37,10 +37,10 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Storage | None:
         )[padding:]
         groups[coordinates_to_linear_index(source_coordinates, shape)].append(value)
     if gradient.dtype.kind == "floating":
-        from tensors.math.sum import _stable_float_sum
+        from tensors.utils.summation import stable_float_sum
 
         values = [
-            _stable_float_sum([float(value) for value in group]) for group in groups
+            stable_float_sum([float(value) for value in group]) for group in groups
         ]
     else:
         values = [sum(group) for group in groups]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import math
-from tensors.math._reduction import reduction_groups
+from tensors.utils.reductions import reduction_groups
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 def validate_distributions(targets: Tensor, axis: int) -> None:
     """Raise unless every row along ``axis`` is a finite probability distribution."""
-    _, _, groups = reduction_groups(targets, axis, keepdims=False)
+    _, _, groups = reduction_groups(targets.shape, axis, keepdims=False)
     for group in groups:
         values = [float(targets._data[index]) for index in group]
         if any(

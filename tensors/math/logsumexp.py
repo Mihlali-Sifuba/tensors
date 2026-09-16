@@ -9,14 +9,14 @@ from tensors.dtype import float64
 from tensors.ops.operation import Operation, UNARY_DEMAND
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
-from tensors.math._reduction import (
+from tensors.utils.reductions import (
     Axis,
     keepdims_shape,
     normalize_axes,
     reduction_groups,
     reduction_shape,
 )
-from tensors.math._normalization import shifted_normalization
+from tensors.utils.normalization import shifted_normalization
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
@@ -109,14 +109,14 @@ class LogSumExpGradient(Operation):
     def backward(
         self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Tensor]:
-        from tensors.math.sum import _stable_product_sum
+        from tensors.utils.summation import stable_product_sum
 
         grad, value = inputs
         need_grad, need_value = needs_input_grad
         axis = self.axis
         keepdims = self.keepdims
         _, output_shape, groups = reduction_groups(
-            value, axis, keepdims, scalar_as_vector=True
+            value.shape, axis, keepdims, scalar_as_vector=True
         )
         grad_values = [0.0] * grad.size
         value_values = [0.0] * value.size
@@ -137,7 +137,7 @@ class LogSumExpGradient(Operation):
                 )
             else:
                 _, _, weights, _ = shifted_normalization(group_values)
-            projection = _stable_product_sum(
+            projection = stable_product_sum(
                 [
                     (float(outer_grad._data[index]), weight)
                     for index, weight in zip(group, weights)
@@ -176,7 +176,7 @@ class LogSumExpGradient(Operation):
         axis = self.axis
         keepdims = self.keepdims
         _, _, groups = reduction_groups(
-            value.data, axis, keepdims, scalar_as_vector=True
+            value.data.shape, axis, keepdims, scalar_as_vector=True
         )
         if any(
             (

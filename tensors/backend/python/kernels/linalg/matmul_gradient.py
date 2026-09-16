@@ -3,7 +3,7 @@
 from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
 from typing import Any, TYPE_CHECKING
-from tensors.math.sum import _stable_product_sum
+from tensors.utils.summation import stable_product_sum
 from tensors.shape import Shape
 from tensors.tensor import Tensor
 from tensors.utils.coordinates import (
@@ -160,14 +160,14 @@ def matmul_gradient(
     return (
         (
             PythonStorage.from_values(
-                [_stable_product_sum(terms) for terms in a_terms], grad.dtype
+                [stable_product_sum(terms) for terms in a_terms], grad.dtype
             )
             if need_left
             else None
         ),
         (
             PythonStorage.from_values(
-                [_stable_product_sum(terms) for terms in b_terms], grad.dtype
+                [stable_product_sum(terms) for terms in b_terms], grad.dtype
             )
             if need_right
             else None

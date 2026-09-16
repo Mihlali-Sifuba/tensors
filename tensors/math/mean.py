@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 from tensors.backend import dispatch as backend_dispatch
-import math
 from typing import TYPE_CHECKING, Any, List, overload
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
 from tensors.dtype import float64
 from tensors.ops.operation import Operation
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
-from tensors.math._reduction import (
+from tensors.utils.reductions import (
     Axis,
     immutable_axis,
     keepdims_shape,
@@ -17,21 +16,9 @@ from tensors.math._reduction import (
     reduction_shape,
     reduction_size,
 )
-from tensors.math.sum import _stable_float_sum, _sum_exact_ratios
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
-
-
-def _stable_float_mean(values: list[float]) -> float:
-    """Return a mean without overflowing its sum or underflowing its terms."""
-    if not values:
-        return math.nan
-    if any((not math.isfinite(value) for value in values)):
-        return _stable_float_sum(values) / len(values)
-    return _sum_exact_ratios(
-        [value.as_integer_ratio() for value in values], divisor=len(values)
-    )
 
 
 class Mean(Operation):

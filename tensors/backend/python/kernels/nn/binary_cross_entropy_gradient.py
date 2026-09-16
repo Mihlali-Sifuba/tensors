@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from tensors.math.sigmoid import _sigmoid
+from tensors.backend.python.kernels.elementwise.sigmoid import _sigmoid
 
 if TYPE_CHECKING:
     from tensors.backend.types import LossReduction

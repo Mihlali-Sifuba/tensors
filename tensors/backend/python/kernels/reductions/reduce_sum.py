@@ -10,10 +10,10 @@ if TYPE_CHECKING:
     from tensors.tensor import Tensor
 import builtins
 import math
-from tensors.math._reduction import reduction_groups
+from tensors.utils.reductions import reduction_groups
 
 
-def _stable_float_sum(values: list[float]) -> float:
+def stable_float_sum(values: list[float]) -> float:
     """Sum floats accurately even when a temporary partial sum overflows."""
     if any((math.isnan(value) for value in values)):
         return math.nan
@@ -28,10 +28,10 @@ def _stable_float_sum(values: list[float]) -> float:
     try:
         return math.fsum(values)
     except OverflowError:
-        return _sum_exact_ratios([value.as_integer_ratio() for value in values])
+        return sum_exact_ratios([value.as_integer_ratio() for value in values])
 
 
-def _sum_exact_ratios(ratios: list[tuple[int, int]], *, divisor: int = 1) -> float:
+def sum_exact_ratios(ratios: list[tuple[int, int]], *, divisor: int = 1) -> float:
     """Convert an exact sum of binary ratios, optionally divided, to a float."""
     denominator = max((item[1] for item in ratios), default=1)
     numerator = builtins.sum(
@@ -58,16 +58,16 @@ def reduce_sum(
     data = value._data
     if axes == tuple(range(value.ndim)):
         if value.dtype.kind == "floating":
-            total = _stable_float_sum([float(value) for value in data])
+            total = stable_float_sum([float(value) for value in data])
         else:
             total = builtins.sum(data)
         return PythonStorage.from_values([total], dtype)
     _, output_shape, groups = reduction_groups(
-        value, axes, keepdims, scalar_as_vector=True
+        value.shape, axes, keepdims, scalar_as_vector=True
     )
     if value.dtype.kind == "floating":
         values = [
-            _stable_float_sum([float(data[index]) for index in group])
+            stable_float_sum([float(data[index]) for index in group])
             for group in groups
         ]
     else:

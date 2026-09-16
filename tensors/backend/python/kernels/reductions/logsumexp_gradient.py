@@ -3,8 +3,8 @@
 from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
 import math
-from tensors.math._reduction import reduction_groups
-from tensors.math._normalization import shifted_normalization
+from tensors.utils.reductions import reduction_groups
+from tensors.utils.normalization import shifted_normalization
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -18,7 +18,7 @@ def logsumexp_gradient(
     """Scale the upstream gradient by the softmax of the group."""
     axis = axes
     a = value
-    _, _, groups = reduction_groups(a, axis, keepdims, scalar_as_vector=True)
+    _, _, groups = reduction_groups(a.shape, axis, keepdims, scalar_as_vector=True)
     values = [0.0] * a.size
     for output_index, group in enumerate(groups):
         if any((math.isnan(float(a._data[index])) for index in group)):

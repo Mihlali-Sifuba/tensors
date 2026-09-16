@@ -445,9 +445,9 @@ def _stable_weighted_sum(
     right: float,
 ) -> float:
     """Return a two-term weighted sum with reliable cancellation."""
-    from ..math.sum import _stable_float_sum
+    from tensors.utils.summation import stable_float_sum
 
-    return _stable_float_sum(
+    return stable_float_sum(
         [
             left_weight * left,
             right_weight * right,

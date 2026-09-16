@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from tensors.math._normalization import shifted_normalization
+from tensors.utils.normalization import shifted_normalization
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType

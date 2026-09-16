@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.dtype import int64
-from tensors.math._reduction import reduction_groups
+from tensors.utils.reductions import reduction_groups
 from tensors.utils.coordinates import linear_index_to_coordinates
 
 if TYPE_CHECKING:
@@ -27,7 +27,7 @@ def argmax(
     A NaN anywhere in a group wins: comparisons against it are all false, so
     it is selected explicitly rather than skipped. Ties keep the first index.
     """
-    _, _, groups = reduction_groups(value, axis, keepdims, scalar_as_vector=True)
+    _, _, groups = reduction_groups(value.shape, axis, keepdims, scalar_as_vector=True)
     if any(not group for group in groups):
         raise ValueError("Cannot compute argmax of empty tensor")
     indices = []

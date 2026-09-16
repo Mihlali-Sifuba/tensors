@@ -14,9 +14,9 @@ def _stable_weighted_sum(
     left_weight: float, left: float, right_weight: float, right: float
 ) -> float:
     """Return a two-term weighted sum with reliable cancellation."""
-    from tensors.math.sum import _stable_float_sum
+    from tensors.utils.summation import stable_float_sum
 
-    return _stable_float_sum([left_weight * left, right_weight * right])
+    return stable_float_sum([left_weight * left, right_weight * right])
 
 
 def _scaled_second_moment(

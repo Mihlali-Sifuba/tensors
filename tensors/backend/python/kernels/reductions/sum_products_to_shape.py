@@ -15,7 +15,7 @@ def sum_products_to_shape(
     gradient: Tensor, factor: Tensor, shape: tuple[int, ...]
 ) -> Storage | None:
     """Sum the products of two broadcast operands down to one shape."""
-    from tensors.math.sum import _stable_product_sum
+    from tensors.utils.summation import stable_product_sum
     from tensors.utils.broadcasting import broadcast_tensors
 
     expanded_gradient, expanded_factor = broadcast_tensors(gradient, factor)
@@ -26,13 +26,13 @@ def sum_products_to_shape(
     target = Shape.from_iterable(shape)
     if expanded_gradient.shape == target:
         values = [
-            _stable_product_sum([(float(left), float(right))])
+            stable_product_sum([(float(left), float(right))])
             for left, right in zip(expanded_gradient._data, expanded_factor._data)
         ]
         return Tensor._from_values(values, gradient.dtype, target)._storage
     if target.size == 1:
         values = [
-            _stable_product_sum(
+            stable_product_sum(
                 [
                     (float(left), float(right))
                     for left, right in zip(
@@ -59,5 +59,5 @@ def sum_products_to_shape(
         )[padding:]
         source_index = coordinates_to_linear_index(source_coordinates, shape)
         groups[source_index].append((float(left), float(right)))
-    values = [_stable_product_sum(group) for group in groups]
+    values = [stable_product_sum(group) for group in groups]
     return PythonStorage.from_values(values, gradient.dtype)

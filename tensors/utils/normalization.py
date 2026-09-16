@@ -1,4 +1,11 @@
-"""Shared stable normalization helpers for softmax-family operations."""
+"""Shift-and-normalize arithmetic for the softmax family.
+
+Softmax, log-softmax, log-sum-exp and the cross-entropy losses all need the
+same shifted normalizer, and so do their derivative rules. The primitive
+works on a plain list of finite floats so that neither the kernels evaluating
+those operations nor the graph code differentiating them has to depend on the
+other.
+"""
 
 from __future__ import annotations
 

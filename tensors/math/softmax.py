@@ -9,7 +9,7 @@ from tensors.dtype import float64
 from tensors.ops.operation import Operation
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
-from tensors.math._normalization import shifted_normalization
+from tensors.utils.normalization import shifted_normalization
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
@@ -106,7 +106,7 @@ def _normalization_components(value: Tensor, axis: int) -> tuple[Tensor, list[fl
 
 def _centered_softmax_tensor(grad: Tensor, value: Tensor, axis: int) -> Tensor:
     """Return ``grad - E_softmax(grad)`` without dominant cancellation."""
-    from tensors.math.sum import _stable_product_sum
+    from tensors.utils.summation import stable_product_sum
 
     probabilities, complements = _normalization_components(value, axis)
     before, axis_size, trailing = _axis_layout(value, axis)
@@ -126,7 +126,7 @@ def _centered_softmax_tensor(grad: Tensor, value: Tensor, axis: int) -> Tensor:
                         if other != position
                     )
                 )
-                values[position] = _stable_product_sum(terms)
+                values[position] = stable_product_sum(terms)
     return Tensor(values, dtype=grad.dtype, shape=value.shape)
 
 
@@ -138,7 +138,7 @@ def _softmax_vjp_tensor(grad: Tensor, value: Tensor, axis: int) -> Tensor:
 
 def _softmax_expectation_tensor(grad: Tensor, value: Tensor, axis: int) -> Tensor:
     """Broadcast the softmax-weighted expectation of ``grad`` per group."""
-    from tensors.math.sum import _stable_product_sum
+    from tensors.utils.summation import stable_product_sum
 
     probabilities = Softmax(axis=axis).forward(value)
     before, axis_size, trailing = _axis_layout(value, axis)
@@ -149,7 +149,7 @@ def _softmax_expectation_tensor(grad: Tensor, value: Tensor, axis: int) -> Tenso
             positions = [
                 group_start + offset + index * trailing for index in range(axis_size)
             ]
-            expectation = _stable_product_sum(
+            expectation = stable_product_sum(
                 [
                     (float(grad._data[position]), float(probabilities._data[position]))
                     for position in positions
@@ -235,7 +235,7 @@ class SoftmaxGradient(Operation):
     def backward(
         self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Tensor]:
-        from tensors.math.sum import _stable_product_sum
+        from tensors.utils.summation import stable_product_sum
 
         grad, value = inputs
         need_grad, need_value = needs_input_grad
@@ -247,7 +247,7 @@ class SoftmaxGradient(Operation):
             projections = _softmax_expectation_tensor(outer_grad, value, axis)
             vector = Tensor(
                 [
-                    _stable_product_sum(
+                    stable_product_sum(
                         [(float(outer), float(difference)), (-float(item), projection)]
                     )
                     for outer, difference, item, projection in zip(

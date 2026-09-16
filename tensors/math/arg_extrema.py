@@ -7,7 +7,7 @@ from .._typing import TensorLike
 from ..dtype import int64
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
-from ._reduction import normalize_axes, reduction_shape
+from tensors.utils.reductions import normalize_axes, reduction_shape
 
 
 def _axis(axis: int | None, ndim: int) -> int | None:

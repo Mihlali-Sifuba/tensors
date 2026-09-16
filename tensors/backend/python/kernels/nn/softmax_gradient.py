@@ -10,7 +10,7 @@ from tensors.backend.python.kernels.nn._normalization import (
 )
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from tensors.math.sum import _stable_product_sum
+from tensors.utils.summation import stable_product_sum
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -35,7 +35,7 @@ def softmax_gradient(grad: Tensor, value: Tensor, axis: int) -> Storage:
                 for other in positions
                 if other != position
             )
-            centered[position] = _stable_product_sum(terms)
+            centered[position] = stable_product_sum(terms)
     rounded = PythonStorage.from_values(centered, grad.dtype).buffer
     return PythonStorage.from_values(
         [

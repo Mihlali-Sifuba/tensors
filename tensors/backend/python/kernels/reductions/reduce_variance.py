@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
 import math
-from tensors.math._reduction import reduction_groups
-from tensors.math.std import _scaled_deviations
+from tensors.utils.reductions import reduction_groups
+from tensors.utils.deviation import scaled_deviations
 
 
 def reduce_variance(
@@ -23,14 +23,14 @@ def reduce_variance(
 ) -> Storage:
     """Return the variance of each group."""
     _, output_shape, groups = reduction_groups(
-        value, axes, keepdims, scalar_as_vector=True
+        value.shape, axes, keepdims, scalar_as_vector=True
     )
     values = []
     for group in groups:
         if not group:
             values.append(math.nan)
             continue
-        scale, _, normalized_deviation = _scaled_deviations(value, group)
+        scale, _, normalized_deviation = scaled_deviations(value._data, group)
         deviation = scale * normalized_deviation
         values.append(deviation * deviation)
     return PythonStorage.from_values(values, dtype)

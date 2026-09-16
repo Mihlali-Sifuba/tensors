@@ -9,14 +9,14 @@ from tensors.dtype import float64
 from tensors.ops.operation import Operation
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
-from tensors.math._reduction import (
+from tensors.utils.reductions import (
     Axis,
     immutable_axis,
     normalize_axes,
     reduction_groups,
     reduction_shape,
 )
-from tensors.math.std import _scaled_deviations
+from tensors.utils.deviation import scaled_deviations
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
@@ -76,11 +76,11 @@ class Variance(Operation):
         value = inputs[0]
         axis = self.axis
         keepdims = self.keepdims
-        _, scale_shape, groups = reduction_groups(value.data, axis, True)
+        _, scale_shape, groups = reduction_groups(value.data.shape, axis, True)
         count = len(groups[0]) if groups else 0
         if count == 0:
             return [zero_like_graph(value)]
-        statistics = [_scaled_deviations(value.data, group) for group in groups]
+        statistics = [scaled_deviations(value.data._data, group) for group in groups]
         scales = Variable(
             Tensor(
                 [

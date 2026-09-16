@@ -17,7 +17,7 @@ from tensors.ops.operation import Operation
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
 from tensors.utils.broadcasting import broadcast_tensors
-from tensors.math._reduction import keepdims_shape
+from tensors.utils.reductions import keepdims_shape
 from tensors.math.log_softmax import log_softmax
 from tensors.math.softmax import _normalize_axis
 

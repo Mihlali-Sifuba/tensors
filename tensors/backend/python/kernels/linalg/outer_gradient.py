@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
-from tensors.math.sum import _stable_product_sum
+from tensors.utils.summation import stable_product_sum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -23,7 +23,7 @@ def outer_gradient(
         []
         if not need_left
         else [
-            _stable_product_sum(
+            stable_product_sum(
                 [
                     (
                         float(grad._data[row * right.size + column]),
@@ -39,7 +39,7 @@ def outer_gradient(
         []
         if not need_right
         else [
-            _stable_product_sum(
+            stable_product_sum(
                 [
                     (
                         float(grad._data[row * right.size + column]),

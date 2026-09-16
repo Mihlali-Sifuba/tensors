@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
-from tensors.math._reduction import reduction_groups
+from tensors.utils.reductions import reduction_groups
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -22,7 +22,7 @@ def reduce_prod_gradient(
 ) -> Storage | None:
     """Scale each upstream gradient by the product of the others."""
     axis = axes
-    _, _, groups = reduction_groups(value, axis, keepdims, scalar_as_vector=True)
+    _, _, groups = reduction_groups(value.shape, axis, keepdims, scalar_as_vector=True)
     gradients = [0.0] * value.size
     for output_index, group in enumerate(groups):
         for input_index in group:

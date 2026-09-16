@@ -9,7 +9,7 @@ from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
 from tensors.ops.operation import Operation
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
-from tensors.math._reduction import (
+from tensors.utils.reductions import (
     Axis,
     immutable_axis,
     keepdims_shape,
@@ -77,7 +77,7 @@ class Max(Operation):
         axis = self.axis
         keepdims = self.keepdims
         _, _, groups = reduction_groups(
-            value.data, axis, keepdims, scalar_as_vector=True
+            value.data.shape, axis, keepdims, scalar_as_vector=True
         )
         weights = [0.0] * value.size
         for group in groups:

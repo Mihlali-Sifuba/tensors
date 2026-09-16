@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from tensors.tensor import Tensor
 import builtins
 import math
-from tensors.math._reduction import reduction_groups
+from tensors.utils.reductions import reduction_groups
 
 
 def reduce_min(
@@ -23,7 +23,7 @@ def reduce_min(
 ) -> Storage:
     """Return the smallest element of each group."""
     _, output_shape, groups = reduction_groups(
-        value, axes, keepdims, scalar_as_vector=True
+        value.shape, axes, keepdims, scalar_as_vector=True
     )
     if any((not group for group in groups)):
         raise ValueError("Cannot compute min of empty tensor")

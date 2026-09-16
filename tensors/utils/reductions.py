@@ -1,14 +1,21 @@
-"""Shared shape and indexing helpers for axis-aware reductions."""
+"""Axis, shape, and index-grouping metadata for axis-aware reductions.
+
+Nothing here reads a value. Given a shape and an axis selection, these
+helpers resolve which axes a reduction covers, the shape it produces, and
+which flat input indices contribute to each flat output index. Both the
+kernels that evaluate a reduction and the graph code that differentiates one
+need exactly that metadata, so it is expressed in plain tuples and lists.
+"""
+
+from __future__ import annotations
 
 from typing import Optional, TypeAlias
 
-from ..shape import Shape
-from ..tensor import Tensor
-from ..utils.coordinates import (
+from tensors.shape import Shape
+from tensors.utils.coordinates import (
     coordinates_to_linear_index,
     linear_index_to_coordinates,
 )
-
 
 Axis: TypeAlias = Optional[int | tuple[int, ...] | list[int]]
 
@@ -65,28 +72,31 @@ def reduction_size(shape: tuple[int, ...], axes: tuple[int, ...]) -> int:
 
 
 def reduction_groups(
-    value: Tensor,
+    shape: tuple[int, ...],
     axis: Axis,
     keepdims: bool,
     *,
     scalar_as_vector: bool = False,
 ) -> tuple[tuple[int, ...], tuple[int, ...], list[list[int]]]:
-    """Group flat input indices by their corresponding reduction output."""
+    """Group flat input indices by their corresponding reduction output.
+
+    ``shape`` is the logical input shape; no values are inspected.
+    """
     if not isinstance(keepdims, bool):
         raise TypeError("keepdims must be a bool")
-    axes = normalize_axes(value.ndim, axis)
-    output_shape = reduction_shape(value.shape, axes, keepdims)
+    input_shape = tuple(shape)
+    axes = normalize_axes(len(input_shape), axis)
+    output_shape = reduction_shape(input_shape, axes, keepdims)
     scalar_output_as_vector = scalar_as_vector and axis is None and not keepdims
     if scalar_output_as_vector:
         output_shape = (1,)
-    groups = [[] for _ in range(Shape.from_iterable(output_shape).size)]
+    groups: list[list[int]] = [
+        [] for _ in range(Shape.from_iterable(output_shape).size)
+    ]
     axes_set = set(axes)
 
-    for input_index in range(value.size):
-        input_coordinates = linear_index_to_coordinates(
-            input_index,
-            value.shape,
-        )
+    for input_index in range(Shape.from_iterable(input_shape).size):
+        input_coordinates = linear_index_to_coordinates(input_index, input_shape)
         if keepdims:
             output_coordinates = tuple(
                 0 if dimension in axes_set else coordinate
@@ -100,9 +110,9 @@ def reduction_groups(
             )
             if scalar_output_as_vector:
                 output_coordinates = (0,)
-        groups[
-            coordinates_to_linear_index(output_coordinates, output_shape)
-        ].append(input_index)
+        groups[coordinates_to_linear_index(output_coordinates, output_shape)].append(
+            input_index
+        )
 
     return axes, output_shape, groups
 

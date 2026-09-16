@@ -9,41 +9,17 @@ from tensors.dtype import float64
 from tensors.ops.operation import Operation
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
-from tensors.math._reduction import (
+from tensors.utils.deviation import scaled_deviations
+from tensors.utils.reductions import (
     Axis,
     immutable_axis,
     normalize_axes,
     reduction_groups,
     reduction_shape,
 )
-from tensors.math.mean import _stable_float_mean
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
-
-
-def _scaled_deviations(
-    value: Tensor, group: list[int]
-) -> tuple[float, list[float], float]:
-    """Return a safe scale, centered scaled values, and their deviation."""
-    values = [float(value._data[index]) for index in group]
-    if any((not _math.isfinite(item) for item in values)):
-        return (_math.nan, [_math.nan] * len(values), _math.nan)
-    count = len(values)
-    average = _stable_float_mean(values)
-    centered = [item - average for item in values]
-    if all((_math.isfinite(item) for item in centered)):
-        scale = max((abs(item) for item in centered), default=0.0)
-        if scale == 0.0:
-            return (0.0, [0.0] * count, 0.0)
-        normalized_centered = [item / scale for item in centered]
-    else:
-        scale = max((abs(item) for item in values), default=0.0)
-        normalized = [item / scale for item in values]
-        normalized_average = _stable_float_mean(normalized)
-        normalized_centered = [item - normalized_average for item in normalized]
-    variance = _math.fsum((item * item / count for item in normalized_centered))
-    return (scale, normalized_centered, _math.sqrt(variance))
 
 
 class Std(Operation):
@@ -101,8 +77,8 @@ class Std(Operation):
         value = inputs[0]
         axis = self.axis
         keepdims = self.keepdims
-        _, scale_shape, groups = reduction_groups(value.data, axis, True)
-        statistics = [_scaled_deviations(value.data, group) for group in groups]
+        _, scale_shape, groups = reduction_groups(value.data.shape, axis, True)
+        statistics = [scaled_deviations(value.data._data, group) for group in groups]
         count = len(groups[0]) if groups else 0
         if count == 0:
             return [zero_like_graph(value)]

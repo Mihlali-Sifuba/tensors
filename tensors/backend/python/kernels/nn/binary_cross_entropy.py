@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from tensors.math.mean import _stable_float_mean
-from tensors.math.sum import _stable_float_sum
+from tensors.utils.summation import stable_float_mean
+from tensors.utils.summation import stable_float_sum
 
 if TYPE_CHECKING:
     from tensors.backend.types import LossReduction
@@ -61,7 +61,7 @@ def binary_cross_entropy(
     if reduction == "none":
         return PythonStorage.from_values(values, dtype)
     if reduction == "mean":
-        total = _stable_float_mean(values)
+        total = stable_float_mean(values)
     else:
-        total = _stable_float_sum(values)
+        total = stable_float_sum(values)
     return PythonStorage.from_values([total], dtype)

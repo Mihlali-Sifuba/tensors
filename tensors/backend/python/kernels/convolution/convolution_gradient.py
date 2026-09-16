@@ -5,8 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from tensors.backend.python.storage import PythonStorage
+from tensors.utils.convolution import (
+    contributions as _contributions,
+    resolve_geometry,
+)
 from tensors.backend.storage import Storage
-from tensors.math.sum import _stable_float_sum, _stable_product_sum
+from tensors.utils.summation import stable_float_sum, stable_product_sum
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -30,12 +34,11 @@ def convolution_gradient(
     so the result does not depend on the order the receptive fields are
     traversed in.
     """
-    from tensors.math.convolution import _contributions, _geometry
 
-    geometry = _geometry(
+    geometry = resolve_geometry(
         len(stride),
-        inputs,
-        kernel,
+        inputs.shape,
+        kernel.shape,
         None,
         stride,
         padding,
@@ -59,7 +62,7 @@ def convolution_gradient(
     bias_terms: list[list[float]] = [
         [] for _ in range(geometry.out_channels if need_bias else 0)
     ]
-    for index, out_channel, pairs in _contributions(geometry, inputs, kernel):
+    for index, out_channel, pairs in _contributions(geometry, kernel.shape):
         upstream = float(grad_data[index])
         if need_values or need_kernel:
             for source, weight in pairs:
@@ -73,7 +76,7 @@ def convolution_gradient(
     results: list[Storage | None] = [
         (
             PythonStorage.from_values(
-                [_stable_product_sum(terms) for terms in input_terms],
+                [stable_product_sum(terms) for terms in input_terms],
                 grad.dtype,
             )
             if need_values
@@ -81,7 +84,7 @@ def convolution_gradient(
         ),
         (
             PythonStorage.from_values(
-                [_stable_product_sum(terms) for terms in kernel_terms],
+                [stable_product_sum(terms) for terms in kernel_terms],
                 grad.dtype,
             )
             if need_kernel
@@ -91,7 +94,7 @@ def convolution_gradient(
     if include_bias:
         results.append(
             PythonStorage.from_values(
-                [_stable_float_sum(terms) for terms in bias_terms],
+                [stable_float_sum(terms) for terms in bias_terms],
                 grad.dtype,
             )
             if need_bias

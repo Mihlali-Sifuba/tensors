@@ -5,7 +5,7 @@ from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 import math
 from tensors.tensor import Tensor
-from tensors.math._reduction import reduction_groups
+from tensors.utils.reductions import reduction_groups
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -37,7 +37,7 @@ def reduce_norm(
 ) -> Storage | None:
     """Return the Euclidean norm of each group without overflow."""
     axis = axes
-    _, output_shape, groups = reduction_groups(value, axis, keepdims)
+    _, output_shape, groups = reduction_groups(value.shape, axis, keepdims)
     results = []
     for group in groups:
         scale, _, normalized_magnitude = _scaled_norm(value, group)

@@ -11,9 +11,9 @@ from tensors.backend.python.kernels.nn._normalization import (
 )
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from tensors.math._normalization import shifted_normalization
-from tensors.math._reduction import reduction_groups
-from tensors.math.sum import _stable_float_sum
+from tensors.utils.normalization import shifted_normalization
+from tensors.utils.reductions import reduction_groups
+from tensors.utils.summation import stable_float_sum
 
 if TYPE_CHECKING:
     from tensors.backend.types import LossReduction
@@ -38,7 +38,7 @@ def cross_entropy_gradient(
     need_logits, need_targets = needs_input_grad
     probabilities = _softmax_values(logits, axis) if need_logits else []
     log_probabilities = _log_softmax_values(logits, axis) if need_targets else []
-    _, _, groups = reduction_groups(logits, axis, keepdims=False)
+    _, _, groups = reduction_groups(logits.shape, axis, keepdims=False)
     logits_gradient = [0.0] * logits.size
     targets_gradient = [0.0] * targets.size
     for output_index, group in enumerate(groups):
@@ -65,7 +65,7 @@ def cross_entropy_gradient(
             probability = probabilities[index]
             target_value = float(targets._data[index])
             if probability > 0.5:
-                derivative = _stable_float_sum(
+                derivative = stable_float_sum(
                     [target_mass - target_value, -target_mass * complement]
                 )
             else:

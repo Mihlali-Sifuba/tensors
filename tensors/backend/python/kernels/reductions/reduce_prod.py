@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
-from tensors.math._reduction import reduction_groups
+from tensors.utils.reductions import reduction_groups
 
 
 def _product(values: list[int | float]) -> int | float:
@@ -28,7 +28,7 @@ def reduce_prod(
 ) -> Storage:
     """Return the product of each group."""
     _, output_shape, groups = reduction_groups(
-        value, axes, keepdims, scalar_as_vector=True
+        value.shape, axes, keepdims, scalar_as_vector=True
     )
     values = [_product([value._data[index] for index in group]) for group in groups]
     return PythonStorage.from_values(values, dtype)

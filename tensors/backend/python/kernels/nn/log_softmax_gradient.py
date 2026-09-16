@@ -10,7 +10,7 @@ from tensors.backend.python.kernels.nn._normalization import (
 )
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from tensors.math.sum import _stable_product_sum
+from tensors.utils.summation import stable_product_sum
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -34,5 +34,5 @@ def log_softmax_gradient(grad: Tensor, value: Tensor, axis: int) -> Storage:
                 for other in positions
                 if other != position
             )
-            values[position] = _stable_product_sum(terms)
+            values[position] = stable_product_sum(terms)
     return PythonStorage.from_values(values, grad.dtype)

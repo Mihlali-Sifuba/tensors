@@ -5,8 +5,8 @@ from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 import math
 from tensors.tensor import Tensor
-from tensors.math._reduction import reduction_groups
-from tensors.math._normalization import shifted_normalization
+from tensors.utils.reductions import reduction_groups
+from tensors.utils.normalization import shifted_normalization
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -40,6 +40,8 @@ def logsumexp(
     """Return the log-sum-exp of each group, shifted for stability."""
     axis = axes
     a = value
-    _, output_shape, groups = reduction_groups(a, axis, keepdims, scalar_as_vector=True)
+    _, output_shape, groups = reduction_groups(
+        a.shape, axis, keepdims, scalar_as_vector=True
+    )
     values = [_group_value(a, group) for group in groups]
     return PythonStorage.from_values(values, dtype)

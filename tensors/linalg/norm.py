@@ -9,7 +9,7 @@ from tensors.dtype import float64
 from tensors.ops.operation import Operation
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
-from tensors.math._reduction import (
+from tensors.utils.reductions import (
     Axis,
     immutable_axis,
     keepdims_shape,
@@ -66,7 +66,7 @@ class Norm(Operation):
         value = inputs[0]
         axis = self.axis
         keepdims = self.keepdims
-        _, output_shape, groups = reduction_groups(value, axis, keepdims)
+        _, output_shape, groups = reduction_groups(value.shape, axis, keepdims)
         if grad.shape != output_shape:
             raise ValueError(
                 f"Gradient shape {grad.shape} does not match output shape {output_shape}"
@@ -91,7 +91,7 @@ class Norm(Operation):
         value = inputs[0]
         axis = self.axis
         keepdims = self.keepdims
-        _, scale_shape, groups = reduction_groups(value.data, axis, True)
+        _, scale_shape, groups = reduction_groups(value.data.shape, axis, True)
         statistics = [_scaled_norm(value.data, group) for group in groups]
         if any((item[2] == 0 for item in statistics)):
             raise ValueError("Higher-order derivatives of norm are undefined at zero")
