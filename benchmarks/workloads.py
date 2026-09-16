@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from typing import Any
 import tensors as ts
 from tensors.shape import Shape
-from benchmarks.perfmap.harness import Unsupported
+from benchmarks.harness import Unsupported
 
 ACCELERATED = frozenset({"numpy", "cuda"})
 ALL_BACKENDS = frozenset({"python", "numpy", "cuda"})

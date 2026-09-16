@@ -1,4 +1,4 @@
-"""Regression coverage for the perfmap benchmark suites.
+"""Regression coverage for the benchmark suites.
 
 A benchmark suite only reports an error when it is actually run, and a full
 run is expensive, so a call that no longer matches its kernel's signature can
@@ -10,8 +10,8 @@ import unittest
 
 import tensors as ts
 
-from benchmarks.perfmap import registry
-from benchmarks.perfmap.harness import Unsupported
+from benchmarks import registry
+from benchmarks.harness import Unsupported
 
 
 def _available_backends():
@@ -87,7 +87,7 @@ class CreationSuiteArgumentTests(unittest.TestCase):
 
     def test_creation_cases_call_their_kernels_successfully(self):
         """Each case runs; a kernel returning ``None`` is a valid decline."""
-        from benchmarks.perfmap.suites import creation
+        from benchmarks.suites import creation
 
         produced = 0
         for backend in _available_backends():
@@ -155,13 +155,13 @@ class InitializerSuiteShapeTests(unittest.TestCase):
         ts.set_backend(self.previous_backend)
 
     def test_one_dimensional_shapes_are_declined(self):
-        from benchmarks.perfmap.suites.initializers import _initializer_cases
+        from benchmarks.suites.initializers import _initializer_cases
 
         with self.assertRaises(Unsupported):
             _initializer_cases("python", (64,), "float64")
 
     def test_two_dimensional_shapes_build_runnable_cases(self):
-        from benchmarks.perfmap.suites.initializers import _initializer_cases
+        from benchmarks.suites.initializers import _initializer_cases
 
         cases = _initializer_cases("python", (8, 4), "float64")
 

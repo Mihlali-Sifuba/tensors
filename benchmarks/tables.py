@@ -5,7 +5,7 @@ it, so every figure in it is traceable to a record.
 
 Usage::
 
-    python -m benchmarks.perfmap.tables benchmarks/results/perfmap.json \
+    python -m benchmarks.tables benchmarks/results/perfmap.json \
         --section all > report-tables.md
 """
 
@@ -751,7 +751,7 @@ SECTIONS: dict[str, Callable[[dict[str, Any]], str]] = {
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m benchmarks.perfmap.tables",
+        prog="python -m benchmarks.tables",
         description="Render a performance map as markdown tables.",
     )
     parser.add_argument("input", type=Path)

@@ -40,19 +40,19 @@ echo "=== steady-state re-measurement $(date -u +%FT%TZ) ===" >> "$LOG"
 for suite in $SUSPECT; do
   echo "########## $suite (steady state) ##########" >> "$LOG"
   start=$SECONDS
-  "$PY" -m benchmarks.perfmap --suite "$suite" \
+  "$PY" -m benchmarks --suite "$suite" \
     --rounds "$ROUNDS" --target-time "$TARGET" --memory \
     --output "$OUT/$suite.json" >> "$LOG" 2>&1
   echo "---------- $suite finished in $((SECONDS-start))s (exit $?) ----------" >> "$LOG"
 done
 
 echo "########## merge ##########" >> "$LOG"
-"$PY" -m benchmarks.perfmap.merge "$OUT/*.json" \
+"$PY" -m benchmarks.merge "$OUT/*.json" \
   --output benchmarks/results/perfmap.json >> "$LOG" 2>&1
 echo "---------- merge exit $? ----------" >> "$LOG"
 
 echo "########## profiling ##########" >> "$LOG"
-"$PY" -m benchmarks.perfmap.profile_report \
+"$PY" -m benchmarks.profile_report \
   --output benchmarks/results/profiling.json >> "$LOG" 2>&1
 echo "---------- profiling exit $? ----------" >> "$LOG"
 echo "=== finalize complete $(date -u +%FT%TZ) ===" >> "$LOG"

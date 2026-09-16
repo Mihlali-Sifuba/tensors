@@ -33,7 +33,7 @@ Each record carries `name`, `backend`, `suite`, `group`, `layer`, `family`,
 
 ```bash
 # on the optimization branch
-python -m benchmarks.perfmap --output after.json --memory
+python -m benchmarks --output after.json --memory
 # join after.csv against perfmap.csv on (name, backend)
 ```
 

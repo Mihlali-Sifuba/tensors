@@ -27,7 +27,7 @@ echo "=== run started $(date -u +%FT%TZ) rounds=$ROUNDS target=$TARGET ===" >> "
 for suite in "$@"; do
   echo "########## $suite ##########" >> "$LOG"
   start=$SECONDS
-  "$PY" -m benchmarks.perfmap --suite "$suite" \
+  "$PY" -m benchmarks --suite "$suite" \
     --rounds "$ROUNDS" --target-time "$TARGET" --memory \
     --output "$OUT/$suite.json" >> "$LOG" 2>&1
   status=$?

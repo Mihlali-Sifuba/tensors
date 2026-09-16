@@ -24,9 +24,9 @@ single failure would not discard the rest:
 
 ```bash
 ROUNDS=5 TARGET=0.02 bash benchmarks/results/run_stages.sh <suite> ...
-python -m benchmarks.perfmap.merge "benchmarks/results/baseline/*.json" \
+python -m benchmarks.merge "benchmarks/results/baseline/*.json" \
     --output benchmarks/results/perfmap.json
-python -m benchmarks.perfmap.profile_report \
+python -m benchmarks.profile_report \
     --output benchmarks/results/profiling.json
 ```
 

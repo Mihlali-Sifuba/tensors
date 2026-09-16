@@ -13,8 +13,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 import tensors as ts
-from benchmarks.perfmap.harness import Case, Group, Unsupported
-from benchmarks.perfmap.workloads import CUDA_ONLY, tensor
+from benchmarks.harness import Case, Group, Unsupported
+from benchmarks.workloads import CUDA_ONLY, tensor
 
 
 def _primitive_cases(backend: str) -> list[Case]:

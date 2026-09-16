@@ -26,8 +26,8 @@ from tensors.ops import Add, Mul
 from tensors.shape import Shape
 from tensors.strides import Strides
 from tensors.utils.broadcasting import broadcast_binary_values
-from benchmarks.perfmap.harness import Case, Group, Unsupported
-from benchmarks.perfmap.workloads import ACCELERATED, tensor
+from benchmarks.harness import Case, Group, Unsupported
+from benchmarks.workloads import ACCELERATED, tensor
 
 
 def _selection_cases(backend: str) -> list[Case]:

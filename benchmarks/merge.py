@@ -7,7 +7,7 @@ a ladder whose rungs came from different suites, for instance — resolve.
 
 Usage::
 
-    python -m benchmarks.perfmap.merge out/*.json --output out/perfmap.json
+    python -m benchmarks.merge out/*.json --output out/perfmap.json
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ def _load(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m benchmarks.perfmap.merge",
+        prog="python -m benchmarks.merge",
         description="Merge per-suite performance-map reports into one.",
     )
     parser.add_argument("inputs", nargs="+", type=Path)

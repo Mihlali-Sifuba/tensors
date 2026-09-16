@@ -17,7 +17,7 @@ import unittest
 import tensors as ts
 
 from benchmarks import inventory
-from benchmarks.perfmap import registry
+from benchmarks import registry
 
 #: Cheap suites that still exercise both a successful build and a decline.
 SAMPLE_SUITES = ("framework", "shape")

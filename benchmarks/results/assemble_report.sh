@@ -2,7 +2,7 @@
 # Assemble REPORT.md from the narrative files and the generated tables.
 #
 # Every table comes from benchmarks/results/perfmap.json via
-# `python -m benchmarks.perfmap.tables`, so no figure in the report is
+# `python -m benchmarks.tables`, so no figure in the report is
 # transcribed by hand.
 set -eu
 cd "$(dirname "$0")/../.."
@@ -11,7 +11,7 @@ MAP="benchmarks/results/perfmap.json"
 OUT="benchmarks/results/REPORT.md"
 HERE="benchmarks/results"
 
-table() { "$PY" -m benchmarks.perfmap.tables "$MAP" --section "$1"; }
+table() { "$PY" -m benchmarks.tables "$MAP" --section "$1"; }
 
 {
   cat "$HERE/REPORT-header.md"
