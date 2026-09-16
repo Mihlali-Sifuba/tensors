@@ -193,3 +193,10 @@ Exact integer results and structural behaviour must match the Python reference.
 Floating-point results are expected to agree within dtype-appropriate
 tolerances. Changing a backend is an execution choice, not a change to the
 mathematical API.
+
+This describes the arrangement in force today, in which the Python backend
+defines the semantics the other two reproduce. That arrangement is being
+replaced: see [Arithmetic semantics](arithmetic-semantics.md), the approved
+target contract in which the declared dtype and a written specification define
+an operation's behaviour and no backend is the authority. That document is
+awaiting implementation and does not describe current behaviour.
