@@ -198,6 +198,145 @@ class ObsoleteModuleTests(unittest.TestCase):
                 self.assertEqual(modules, ["__init__.py"])
 
 
+#: The public namespaces. Nothing inside the package may reach an operation
+#: through one of these; they re-export from ``tensors.operations``, so an
+#: internal module that imports one depends on a module that depends on it.
+FACADES = ("tensors.math", "tensors.ops", "tensors.linalg")
+
+
+def _package_of(path: pathlib.Path) -> str:
+    """Return the dotted package a module file lives in."""
+    return ".".join(path.parts[:-1])
+
+
+def _names_a_facade(module: str) -> bool:
+    prefixes = tuple(f"{name}." for name in FACADES)
+    return module in FACADES or module.startswith(prefixes)
+
+
+def _parent_of(node: ast.ImportFrom, package: str) -> str:
+    """Return the absolute module an ``ImportFrom`` reads from."""
+    if not node.level:
+        return node.module or ""
+    parts = package.split(".") if package else []
+    parts = parts[: len(parts) - node.level + 1]
+    if node.module:
+        parts = parts + [node.module]
+    return ".".join(parts)
+
+
+def facade_imports(source: str, package: str):
+    """Return ``(lineno, module)`` for every facade the source imports.
+
+    An import names a module in two places, and reading only one of them
+    leaves a hole. The node itself carries ``tensors.math`` for
+    ``from tensors.math import log`` and ``import tensors.linalg``. But for
+    ``from tensors import math``, ``from tensors import math, ops, linalg``
+    and ``from . import linalg`` the node says only ``tensors``, and the
+    facade is named by the alias; those are found by joining each alias to
+    the resolved parent.
+
+    When the parent is itself a facade its aliases are the same import, so
+    only the parent is reported. When it is not, each alias is judged on its
+    own, which is what makes all three of ``math, ops, linalg`` appear rather
+    than an arbitrary one of them.
+
+    ``package`` is the dotted package the source lives in, which is what a
+    relative import resolves against.
+    """
+    found = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if _names_a_facade(alias.name):
+                    found.add((node.lineno, alias.name))
+        elif isinstance(node, ast.ImportFrom):
+            parent = _parent_of(node, package)
+            if _names_a_facade(parent):
+                found.add((node.lineno, parent))
+                continue
+            for alias in node.names:
+                effective = f"{parent}.{alias.name}" if parent else alias.name
+                if _names_a_facade(effective):
+                    found.add((node.lineno, effective))
+    return sorted(found)
+
+
+class FacadeDetectionTests(unittest.TestCase):
+    """The detector itself, against every import form it has to recognize.
+
+    A guard that has never been seen to fire is not a guard. These run the
+    detector over source that spells a facade import each way it can be
+    spelled, so a change that narrows the detector fails here rather than
+    quietly passing the two tests below.
+    """
+
+    PACKAGE = "tensors.operations.elementary"
+
+    def detected(self, source, package=None):
+        package = self.PACKAGE if package is None else package
+        return [module for _, module in facade_imports(source, package)]
+
+    def test_the_direct_and_submodule_forms(self):
+        self.assertEqual(
+            self.detected("from tensors.math import log\n"), ["tensors.math"]
+        )
+        self.assertEqual(
+            self.detected("from tensors.math.log import log\n"), ["tensors.math.log"]
+        )
+
+    def test_the_plain_and_aliased_import_forms(self):
+        self.assertEqual(self.detected("import tensors.linalg\n"), ["tensors.linalg"])
+        self.assertEqual(
+            self.detected("import tensors.linalg as la\n"), ["tensors.linalg"]
+        )
+
+    def test_the_package_alias_form(self):
+        """``from tensors import math`` names ``tensors.math``."""
+        self.assertEqual(self.detected("from tensors import math\n"), ["tensors.math"])
+
+    def test_every_alias_in_one_statement(self):
+        """One statement can name three facades, and all three are reported."""
+        self.assertEqual(
+            self.detected("from tensors import math, ops, linalg\n"),
+            ["tensors.linalg", "tensors.math", "tensors.ops"],
+        )
+
+    def test_the_relative_alias_form(self):
+        """``from . import linalg`` inside ``tensors`` names the facade."""
+        self.assertEqual(
+            self.detected("from . import linalg\n", "tensors"), ["tensors.linalg"]
+        )
+        self.assertEqual(
+            self.detected("from .. import math\n", "tensors.operations"),
+            ["tensors.math"],
+        )
+        self.assertEqual(
+            self.detected(
+                "from ...ops import power\n", "tensors.operations.arithmetic"
+            ),
+            ["tensors.ops"],
+        )
+
+    def test_a_deferred_import_is_caught_like_any_other(self):
+        source = (
+            "def entry(value):\n"
+            "    from tensors import math\n"
+            "    return math.log(value)\n"
+        )
+        self.assertEqual(facade_imports(source, self.PACKAGE), [(2, "tensors.math")])
+
+    def test_canonical_imports_are_not_flagged(self):
+        source = (
+            "from tensors.operations.elementary.log import log\n"
+            "from tensors.operations import manipulation\n"
+            "from tensors import operations\n"
+            "from . import log\n"
+            "import tensors.operations.reductions\n"
+        )
+        self.assertEqual(self.detected(source), [])
+
+
 class FacadeDirectionTests(unittest.TestCase):
     """The facades are for users of the library, not for the library.
 
@@ -210,26 +349,23 @@ class FacadeDirectionTests(unittest.TestCase):
     Internal code names the canonical module; the facades face outward.
     """
 
-    FACADES = ("tensors.math", "tensors.ops", "tensors.linalg")
-
     #: ``tensors/__init__.py`` assembles the root namespace from the three
     #: documented namespaces. That is one public surface composing another,
     #: not an implementation reaching sideways through one.
     COMPOSES_THE_PUBLIC_API = ("tensors/__init__.py",)
 
     def _violations(self, *roots):
+        facade_inits = {name.replace(".", "/") + "/__init__.py" for name in FACADES}
         found = []
         for path in modules_under(*roots):
             posix = _posix(path)
             if posix in self.COMPOSES_THE_PUBLIC_API:
                 continue
-            if posix in {f"{f.replace('.', '/')}/__init__.py" for f in self.FACADES}:
+            if posix in facade_inits:
                 continue  # a facade re-exporting is the point of a facade
-            for module, line in imported_modules(path):
-                if module in self.FACADES or module.startswith(
-                    tuple(f"{name}." for name in self.FACADES)
-                ):
-                    found.append(f"{posix}:{line} imports {module}")
+            source = path.read_text(encoding="utf-8")
+            for line, module in facade_imports(source, _package_of(path)):
+                found.append(f"{posix}:{line} imports {module}")
         return found
 
     def test_no_operation_imports_a_facade(self):
