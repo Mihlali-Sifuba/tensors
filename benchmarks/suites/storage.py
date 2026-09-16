@@ -19,6 +19,7 @@ import tensors as ts
 from tensors.backend.conversion import convert_storage
 from benchmarks.case import Case, Group, Unsupported
 from tensors.shape import Shape
+from benchmarks.profiles import selected_sizes
 from benchmarks.workloads import (
     ACCELERATED,
     FLOAT_DTYPES,
@@ -359,7 +360,7 @@ def groups() -> list[Group]:
     """Return storage construction and conversion groups."""
     result: list[Group] = []
     for dtype_name in FLOAT_DTYPES:
-        for size in (1, 100, 10_000, 1_000_000):
+        for size in selected_sizes((1, 100, 10_000, 1_000_000)):
 
             def construction(
                 backend: str, size: int = size, dtype_name: str = dtype_name

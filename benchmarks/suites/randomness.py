@@ -13,7 +13,8 @@ from typing import Any
 import tensors as ts
 
 from ..case import Case, Group, Unsupported
-from ..workloads import (
+from benchmarks.profiles import selected_sizes
+from benchmarks.workloads import (
     ACCELERATED,
     FLOAT_DTYPES,
     dtype_of,
@@ -129,7 +130,7 @@ def groups() -> list[Group]:
     result: list[Group] = []
     for seeded in (False, True):
         for dtype_name in FLOAT_DTYPES:
-            for size in (1, 1_000, 100_000, 1_000_000):
+            for size in selected_sizes((1, 1_000, 100_000, 1_000_000)):
                 def factory(
                     backend: str,
                     size: int = size,

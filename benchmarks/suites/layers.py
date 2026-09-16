@@ -31,11 +31,13 @@ from tensors.backend.dispatch import arithmetic
 from tensors.backend.loading import load_backend
 from tensors.graph import Computation
 from benchmarks.case import Case, Group, Unsupported
+from benchmarks.profiles import selected_sizes
 from benchmarks.workloads import (
     ACCELERATED,
     FLOAT_DTYPES,
     INTEGER_DTYPES,
     SIZE_CEILING,
+    ceiling_for,
     close,
     dtype_of,
     first,
@@ -43,7 +45,6 @@ from benchmarks.workloads import (
     kernel_module,
     provider_array,
     provider_module,
-    sizes_for,
     tensor,
 )
 
@@ -413,7 +414,7 @@ def groups() -> list[Group]:
         for dtype_name in (*FLOAT_DTYPES, *INTEGER_DTYPES):
             if operation == "divide" and is_integer(dtype_name):
                 continue
-            for size in (1, 10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000):
+            for size in selected_sizes((1, 10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000)):
 
                 def factory(
                     backend: str,
@@ -421,9 +422,9 @@ def groups() -> list[Group]:
                     dtype_name: str = dtype_name,
                     size: int = size,
                 ) -> Sequence[Case]:
-                    if size > SIZE_CEILING[backend]:
+                    if size > ceiling_for(backend, SIZE_CEILING):
                         raise Unsupported(
-                            f"{size} elements exceeds the {backend} ceiling of {SIZE_CEILING[backend]}; the Python backend interprets element by element and the device has limited memory"
+                            f"{size} elements exceeds the {backend} ceiling of {ceiling_for(backend, SIZE_CEILING)}; the Python backend interprets element by element and the device has limited memory"
                         )
                     if is_integer(dtype_name) and size > INTEGER_ELEMENTWISE_CEILING:
                         raise Unsupported(
@@ -440,7 +441,7 @@ def groups() -> list[Group]:
                 )
     for operation in _UNARY:
         for dtype_name in FLOAT_DTYPES:
-            for size in (1, 100, 10_000, 1_000_000, 10_000_000):
+            for size in selected_sizes((1, 100, 10_000, 1_000_000, 10_000_000)):
 
                 def unary_factory(
                     backend: str,
@@ -448,7 +449,7 @@ def groups() -> list[Group]:
                     dtype_name: str = dtype_name,
                     size: int = size,
                 ) -> Sequence[Case]:
-                    if size > SIZE_CEILING[backend]:
+                    if size > ceiling_for(backend, SIZE_CEILING):
                         raise Unsupported(
                             f"{size} elements exceeds the {backend} ceiling"
                         )
@@ -462,12 +463,12 @@ def groups() -> list[Group]:
                     )
                 )
     for operation in ("relu", "sigmoid", "softplus"):
-        for size in (1, 10_000, 1_000_000):
+        for size in selected_sizes((1, 10_000, 1_000_000)):
 
             def activation_factory(
                 backend: str, operation: str = operation, size: int = size
             ) -> Sequence[Case]:
-                if size > SIZE_CEILING[backend]:
+                if size > ceiling_for(backend, SIZE_CEILING):
                     raise Unsupported(f"{size} elements exceeds the {backend} ceiling")
                 return _unary_ladder(backend, operation, "float64", size)
 
@@ -480,7 +481,7 @@ def groups() -> list[Group]:
             )
     for operation in _COMPARISONS:
         for dtype_name in ("float64", "float32", "int64"):
-            for size in (1, 10_000, 1_000_000):
+            for size in selected_sizes((1, 10_000, 1_000_000)):
 
                 def comparison_factory(
                     backend: str,
@@ -488,7 +489,7 @@ def groups() -> list[Group]:
                     dtype_name: str = dtype_name,
                     size: int = size,
                 ) -> Sequence[Case]:
-                    if size > SIZE_CEILING[backend]:
+                    if size > ceiling_for(backend, SIZE_CEILING):
                         raise Unsupported(
                             f"{size} elements exceeds the {backend} ceiling"
                         )

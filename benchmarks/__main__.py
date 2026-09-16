@@ -9,7 +9,7 @@ from pathlib import Path
 
 import tensors as ts
 
-from . import registry
+from . import profiles, registry
 from .runner import Runner, job_record
 from .memory import device_memory_status
 from .environment import environment_metadata
@@ -48,16 +48,23 @@ def _parser() -> argparse.ArgumentParser:
         help="run only groups whose name contains this text",
     )
     parser.add_argument(
+        "--profile",
+        choices=profiles.PROFILE_NAMES,
+        default="standard",
+        help=(
+            "how much of the matrix to run and how hard to measure it "
+            "(default: standard, which runs every case a suite declares)"
+        ),
+    )
+    parser.add_argument(
         "--rounds",
         type=int,
-        default=5,
-        help="measured samples per case, one per interleaved round",
+        help="override the profile's measured samples per case",
     )
     parser.add_argument(
         "--target-time",
         type=float,
-        default=0.05,
-        help="calibration target in seconds per sample",
+        help="override the profile's calibration target, in seconds",
     )
     parser.add_argument(
         "--seed",
@@ -68,12 +75,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--memory",
         action="store_true",
-        help="run the separate allocation pass for cases that ask for it",
-    )
-    parser.add_argument(
-        "--quick",
-        action="store_true",
-        help="three short rounds for verifying the harness",
+        help="run the allocation pass even if the profile does not ask for it",
     )
     parser.add_argument(
         "--output",
@@ -102,22 +104,24 @@ def main(argv: list[str] | None = None) -> int:
             print(name)
         return 0
 
-    suites = arguments.suite or list(registry.DEFAULT_SUITES)
+    profile = profiles.load(arguments.profile)
+    suites = arguments.suite or list(profile.suites) or list(registry.DEFAULT_SUITES)
     unknown = [name for name in suites if name not in registry.SUITE_MODULES]
     if unknown:
         parser.error(f"unknown suite(s): {', '.join(unknown)}")
 
-    backends = arguments.backend or list(ts.available_backends())
-    missing = [
-        name for name in backends if name not in ts.available_backends()
-    ]
+    backends = (
+        arguments.backend or list(profile.backends) or list(ts.available_backends())
+    )
+    missing = [name for name in backends if name not in ts.available_backends()]
     if missing:
         parser.error(
             f"backend(s) not installed: {', '.join(missing)}; available: "
             f"{', '.join(ts.available_backends())}"
         )
 
-    groups = registry.collect(suites, match=arguments.match)
+    with profiles.use(profile):
+        groups = registry.collect(suites, match=arguments.match)
     if not groups:
         parser.error("no groups matched the selection")
 
@@ -127,8 +131,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n{len(groups)} groups")
         return 0
 
-    rounds = 3 if arguments.quick else arguments.rounds
-    target = 0.01 if arguments.quick else arguments.target_time
+    rounds = arguments.rounds if arguments.rounds is not None else profile.rounds
+    target = (
+        arguments.target_time
+        if arguments.target_time is not None
+        else profile.target_seconds
+    )
+    collect_memory = arguments.memory or profile.collect_memory
     if rounds <= 0:
         parser.error("--rounds must be positive")
     if target <= 0.0:
@@ -137,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"Measuring {len(groups)} groups on "
         f"{', '.join(backends)} with {rounds} rounds "
-        f"(target {target * 1000:.0f} ms/sample)",
+        f"(profile {profile.name}, target {target * 1000:.0f} ms/sample)",
         flush=True,
     )
     started = time.perf_counter()
@@ -146,9 +155,10 @@ def main(argv: list[str] | None = None) -> int:
         rounds=rounds,
         target_seconds=target,
         seed=arguments.seed,
-        collect_memory=arguments.memory,
+        collect_memory=collect_memory,
     )
-    jobs = runner.run(groups)
+    with profiles.use(profile):
+        jobs = runner.run(groups)
     elapsed = time.perf_counter() - started
 
     records = [job_record(job) for job in jobs]
@@ -162,9 +172,12 @@ def main(argv: list[str] | None = None) -> int:
         "device_memory_after": device_memory_status(),
         "command": " ".join(sys.argv),
     }
+    settings = runner.settings()
+    with profiles.use(profile):
+        settings["profile"] = profiles.settings()
     report = build_report(
         metadata=metadata,
-        settings=runner.settings(),
+        settings=settings,
         records=records,
     )
     print_summary(report)

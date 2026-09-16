@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from typing import Any
 import tensors as ts
 from tensors.shape import Shape
+from benchmarks import profiles
 from benchmarks.case import Unsupported
 
 ACCELERATED = frozenset({"numpy", "cuda"})
@@ -93,15 +94,31 @@ def kernel_module(backend: str) -> Any:
     return importlib.import_module(f"tensors.backend.{backend}.kernels")
 
 
+def ceiling_for(backend: str, table: dict[str, int] | None = None) -> int:
+    """Return the element ceiling in force for ``backend``.
+
+    A workload states the ceiling its own cost imposes; a profile may state a
+    tighter one for the run. The smaller of the two wins, so neither can be
+    talked out of a limit by the other.
+    """
+    declared = (table or SIZE_CEILING)[backend]
+    return profiles.active().ceiling_for(backend, declared)
+
+
 def sizes_for(
     backend: str,
     *,
     ceiling: dict[str, int] | None = None,
     curve: Sequence[int] = ELEMENTWISE_SIZES,
 ) -> tuple[int, ...]:
-    """Return the part of a size curve ``backend`` can carry."""
-    limit = (ceiling or SIZE_CEILING)[backend]
-    return tuple((size for size in curve if size <= limit))
+    """Return the part of a size curve this backend and profile admit."""
+    limit = ceiling_for(backend, ceiling)
+    return tuple(size for size in profiles.selected_sizes(curve) if size <= limit)
+
+
+def dtypes_for(names: Sequence[str]) -> tuple[str, ...]:
+    """Return the part of a dtype selection the active profile admits."""
+    return profiles.selected_dtypes(names)
 
 
 def matrix_sides(backend: str) -> tuple[int, ...]:
@@ -289,6 +306,8 @@ __all__ = [
     "provider_module",
     "ramp_values",
     "scalar",
+    "ceiling_for",
+    "dtypes_for",
     "sizes_for",
     "tensor",
     "variable",

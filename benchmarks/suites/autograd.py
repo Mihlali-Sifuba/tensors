@@ -27,7 +27,7 @@ from tensors.graph.computation.gradients import (
 )
 
 from ..case import Case, Group, Unsupported
-from ..workloads import FLOAT_DTYPES, GRADIENT_CEILING, tensor
+from ..workloads import ceiling_for, FLOAT_DTYPES, GRADIENT_CEILING, tensor
 
 
 def _paired_cases(
@@ -538,7 +538,7 @@ def groups() -> list[Group]:
                     width: int = width,
                     dtype_name: str = dtype_name,
                 ) -> Sequence[Case]:
-                    if width > GRADIENT_CEILING[backend]:
+                    if width > ceiling_for(backend, GRADIENT_CEILING):
                         raise Unsupported(
                             f"{width} elements exceeds the {backend} "
                             "gradient ceiling"

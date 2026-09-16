@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from typing import Any
 import tensors as ts
 from benchmarks.case import Case, Group, Unsupported
+from benchmarks.profiles import selected_sizes
 from benchmarks.workloads import CUDA_ONLY, tensor
 
 
@@ -274,7 +275,7 @@ def groups() -> list[Group]:
     result: list[Group] = [
         Group(name="cuda/primitives", factory=_primitive_cases, suite="cuda")
     ]
-    for size in (1, 1_024, 1_000_000, 10_000_000):
+    for size in selected_sizes((1, 1_024, 1_000_000, 10_000_000)):
 
         def transfer(backend: str, size: int = size) -> Sequence[Case]:
             return _transfer_cases(backend, size)
@@ -282,7 +283,7 @@ def groups() -> list[Group]:
         result.append(
             Group(name=f"cuda/transfer/{size}", factory=transfer, suite="cuda")
         )
-    for size in (1_024, 100_000, 1_000_000):
+    for size in selected_sizes((1_024, 100_000, 1_000_000)):
 
         def guard(backend: str, size: int = size) -> Sequence[Case]:
             return _guard_cases(backend, size)

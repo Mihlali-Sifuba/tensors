@@ -21,7 +21,8 @@ from tensors.graph import Computation
 from tensors.graph.state import get_graph_state
 
 from ..case import Case, Group, Unsupported
-from ..workloads import tensor
+from benchmarks.profiles import selected_sizes
+from benchmarks.workloads import tensor
 
 
 def _operation_cases(backend: str, size: int) -> list[Case]:
@@ -298,7 +299,7 @@ def groups() -> list[Group]:
     """Return the memory groups."""
     result: list[Group] = []
 
-    for size in (1_000, 100_000, 1_000_000):
+    for size in selected_sizes((1_000, 100_000, 1_000_000)):
         def operations(backend: str, size: int = size) -> Sequence[Case]:
             if backend == "python" and size > 100_000:
                 raise Unsupported(
@@ -326,7 +327,7 @@ def groups() -> list[Group]:
         ))
 
     for depth in (10, 100):
-        for size in (100, 10_000):
+        for size in selected_sizes((100, 10_000)):
             def graph_growth(
                 backend: str, depth: int = depth, size: int = size,
             ) -> Sequence[Case]:

@@ -20,7 +20,8 @@ import tensors as ts
 import importlib
 
 from ..case import Case, Group, Unsupported
-from ..workloads import (
+from benchmarks.profiles import selected_sizes
+from benchmarks.workloads import (
     ACCELERATED,
     FLOAT_DTYPES,
     REDUCTION_CEILING,
@@ -455,7 +456,7 @@ def groups() -> list[Group]:
     result: list[Group] = []
     for operation in _PUBLIC:
         for dtype_name in FLOAT_DTYPES:
-            for size in (1, 100, 10_000, 1_000_000, 4_000_000):
+            for size in selected_sizes((1, 100, 10_000, 1_000_000, 4_000_000)):
                 for data_kind in ("ramp", "mixed"):
                     _register(
                         result,
@@ -507,7 +508,7 @@ def groups() -> list[Group]:
                     elements=shape[0] * shape[1],
                 )
     for operation in ("argmax", "argmin"):
-        for size in (100, 10_000, 1_000_000):
+        for size in selected_sizes((100, 10_000, 1_000_000)):
             _register(
                 result,
                 f"reductions/{operation}/{size}",

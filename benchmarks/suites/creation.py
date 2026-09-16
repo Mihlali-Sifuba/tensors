@@ -20,7 +20,8 @@ from tensors.backend import (
 )
 
 from ..case import Case, Group, Unsupported
-from ..workloads import (
+from benchmarks.profiles import selected_sizes
+from benchmarks.workloads import (
     ACCELERATED,
     FLOAT_DTYPES,
     INTEGER_DTYPES,
@@ -234,7 +235,7 @@ def groups() -> list[Group]:
     """Return creation groups over a size curve and both dtype families."""
     result: list[Group] = []
     for dtype_name in (*FLOAT_DTYPES, *INTEGER_DTYPES):
-        for size in (1, 100, 10_000, 1_000_000, 10_000_000):
+        for size in selected_sizes((1, 100, 10_000, 1_000_000, 10_000_000)):
 
             def factory(
                 backend: str,
