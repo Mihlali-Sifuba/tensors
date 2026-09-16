@@ -317,7 +317,7 @@ class DemandScopedDomainTests(unittest.TestCase):
     def test_power_domain_check_only_guards_a_requested_derivative(self):
         base = ts.Variable([-2.0])
         exponent = ts.Variable([2.0])
-        output = base ** exponent
+        output = base**exponent
 
         # The base derivative is defined at a negative base.
         self.assertEqual(ts.grad(output, base).tolist(), [-4.0])
@@ -356,11 +356,11 @@ class FusionDemandTests(unittest.TestCase):
     def test_forward_fusion_is_independent_of_backward_demand(self):
         from unittest.mock import patch
 
-        from tensors.backend import cuda as cuda_backend
+        from tensors.backend.cuda import kernels as cuda_backend
         from tensors.backend import _clear_backend_kernel_cache
 
         def expression(base, exponent):
-            return ts.sin(base ** exponent) * 2.0 + 1.0
+            return ts.sin(base**exponent) * 2.0 + 1.0
 
         with ts.use_backend("cuda"):
             base = ts.Variable(ts.full((4_096,), 1.5))
@@ -384,7 +384,7 @@ class FusionDemandTests(unittest.TestCase):
     )
     def test_fused_backward_falls_back_for_an_unsupported_derivative(self):
         def expression(base, exponent):
-            return ts.sin(base ** exponent) * 2.0 + 1.0
+            return ts.sin(base**exponent) * 2.0 + 1.0
 
         with ts.use_backend("python"):
             reference_base = ts.Variable(ts.full((4_096,), 1.5))
@@ -423,14 +423,14 @@ class FusionDemandTests(unittest.TestCase):
         with ts.use_backend("python"):
             reference_value = ts.Variable(ts.full((4_096,), 1.5))
             expected = ts.grad(
-                ts.sin(reference_value ** 2.0) * 2.0 + 1.0,
+                ts.sin(reference_value**2.0) * 2.0 + 1.0,
                 reference_value,
                 ts.ones((4_096,)),
             )
 
         with ts.use_backend("cuda"):
             value = ts.Variable(ts.full((4_096,), 1.5))
-            output = ts.sin(value ** 2.0) * 2.0 + 1.0
+            output = ts.sin(value**2.0) * 2.0 + 1.0
             actual = ts.grad(output, value, ts.ones((4_096,)))
 
         self.assertAlmostEqual(actual[0], expected[0], places=10)

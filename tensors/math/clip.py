@@ -1,19 +1,17 @@
 """Elementwise clipping to constant bounds."""
 
 from __future__ import annotations
-
 import math
 from typing import TYPE_CHECKING, Any, overload
-
-from .._typing import TensorData, TensorLike, TensorResult, TensorValue
-from ..backend import execute_clip, execute_clip_gradient
-from ..dtype import result_dtype
-from ..ops.operation import Operation
-from ..tensor import Tensor
-from ..graph.expression import as_tensor_operand
+from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
+from tensors.backend import execute_clip, execute_clip_gradient
+from tensors.dtype import result_dtype
+from tensors.ops.operation import Operation
+from tensors.tensor import Tensor
+from tensors.graph.expression import as_tensor_operand
 
 if TYPE_CHECKING:
-    from ..graph.node import VariableNode
+    from tensors.graph.node import VariableNode
 
 
 def _validate_bound(name: str, value: int | float | None) -> None:
@@ -26,18 +24,13 @@ def _validate_bound(name: str, value: int | float | None) -> None:
 
 
 def _validate_bounds(
-    min_value: int | float | None,
-    max_value: int | float | None,
+    min_value: int | float | None, max_value: int | float | None
 ) -> None:
     _validate_bound("min_value", min_value)
     _validate_bound("max_value", max_value)
     if min_value is None and max_value is None:
         raise ValueError("clip requires min_value, max_value, or both")
-    if (
-        min_value is not None
-        and max_value is not None
-        and min_value > max_value
-    ):
+    if min_value is not None and max_value is not None and (min_value > max_value):
         raise ValueError("min_value cannot be greater than max_value")
 
 
@@ -48,10 +41,7 @@ class Clip(Operation):
     name = "clip"
 
     def __init__(
-        self,
-        *,
-        min_value: int | float | None,
-        max_value: int | float | None,
+        self, *, min_value: int | float | None, max_value: int | float | None
     ) -> None:
         object.__setattr__(self, "min_value", min_value)
         object.__setattr__(self, "max_value", max_value)
@@ -65,28 +55,12 @@ class Clip(Operation):
             dtype = result_dtype(dtype, min_value)
         if max_value is not None:
             dtype = result_dtype(dtype, max_value)
-        accelerated = execute_clip(
-            value,
-            min_value,
-            max_value,
-            dtype=dtype,
-        )
-        if accelerated is not None:
-            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=value.shape)
-        values = []
-        for item in value._data:
-            if min_value is not None and item < min_value:
-                item = min_value
-            if max_value is not None and item > max_value:
-                item = max_value
-            values.append(item)
-        return Tensor(values, dtype=dtype, shape=value.shape)
+        accelerated = execute_clip(value, min_value, max_value, dtype=dtype)
+        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=value.shape)
 
     @staticmethod
     def _mask(
-        value: Tensor,
-        min_value: int | float | None,
-        max_value: int | float | None,
+        value: Tensor, min_value: int | float | None, max_value: int | float | None
     ) -> list[float]:
         mask = []
         for item in value._data:
@@ -99,53 +73,28 @@ class Clip(Operation):
         return mask
 
     def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Tensor]:
         value = inputs[0]
         min_value = self.min_value
         max_value = self.max_value
         _validate_bounds(min_value, max_value)
-        accelerated = execute_clip_gradient(
-            grad,
-            value,
-            min_value,
-            max_value,
-        )
-        if accelerated is not None:
-            return [Tensor._from_owned_storage(
-                accelerated,
-                dtype=grad.dtype,
-                shape=value.shape,
-            )]
-        mask = Clip._mask(value, min_value, max_value)
-        return [Tensor(
-            [upstream * weight for upstream, weight in zip(grad._data, mask)],
-            dtype=grad.dtype,
-            shape=value.shape,
-        )]
+        accelerated = execute_clip_gradient(grad, value, min_value, max_value)
+        return [
+            Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=value.shape)
+        ]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
-        from ..ops._utils import masked_value_graph, zero_like_graph
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        from tensors.ops._utils import masked_value_graph, zero_like_graph
 
         value = inputs[0]
         min_value = self.min_value
         max_value = self.max_value
         _validate_bounds(min_value, max_value)
         if any(
-            isinstance(item, float) and math.isnan(item)
-            for item in value.data._data
+            (isinstance(item, float) and math.isnan(item) for item in value.data._data)
         ):
-            raise ValueError(
-                "Higher-order derivatives of clip are undefined at NaN"
-            )
+            raise ValueError("Higher-order derivatives of clip are undefined at NaN")
         mask = Tensor(
             Clip._mask(value.data, min_value, max_value),
             dtype=grad.dtype,
@@ -191,11 +140,10 @@ def clip(
     on the operation and a recorded clip replays the interval it was
     written with.
     """
-    from ..graph.expression import apply_operation, is_graph_operand
+    from tensors.graph.expression import apply_operation, is_graph_operand
 
     _validate_bounds(min_value, max_value)
     operation = Clip(min_value=min_value, max_value=max_value)
-
     if is_graph_operand(value):
         return apply_operation(operation, (value,))
     return operation.forward(as_tensor_operand(value))

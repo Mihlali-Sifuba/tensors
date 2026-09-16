@@ -1,35 +1,36 @@
 """Mean and its differentiation rule."""
 
 from __future__ import annotations
-
+from tensors.backend import dispatch as backend_dispatch
 import math
 from typing import TYPE_CHECKING, Any, List, overload
-
-from .._typing import TensorData, TensorLike, TensorResult, TensorValue
-from ..backend import execute_reduction, execute_reduction_gradient
-from ..dtype import float64
-from ..ops.operation import Operation, UNARY_DEMAND
-from ..tensor import Tensor
-from ..graph.expression import as_tensor_operand
-from ._reduction import (
-    Axis, immutable_axis, keepdims_shape, normalize_axes, reduction_groups,
-    reduction_shape, reduction_size,
+from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
+from tensors.dtype import float64
+from tensors.ops.operation import Operation
+from tensors.tensor import Tensor
+from tensors.graph.expression import as_tensor_operand
+from tensors.math._reduction import (
+    Axis,
+    immutable_axis,
+    keepdims_shape,
+    normalize_axes,
+    reduction_shape,
+    reduction_size,
 )
-from .sum import Sum, _stable_float_sum, _sum_exact_ratios
+from tensors.math.sum import _stable_float_sum, _sum_exact_ratios
 
 if TYPE_CHECKING:
-    from ..graph.node import VariableNode
+    from tensors.graph.node import VariableNode
 
 
 def _stable_float_mean(values: list[float]) -> float:
     """Return a mean without overflowing its sum or underflowing its terms."""
     if not values:
         return math.nan
-    if any(not math.isfinite(value) for value in values):
+    if any((not math.isfinite(value) for value in values)):
         return _stable_float_sum(values) / len(values)
     return _sum_exact_ratios(
-        [value.as_integer_ratio() for value in values],
-        divisor=len(values),
+        [value.as_integer_ratio() for value in values], divisor=len(values)
     )
 
 
@@ -39,12 +40,7 @@ class Mean(Operation):
     __slots__ = ("axis", "keepdims")
     name = "mean"
 
-    def __init__(
-        self,
-        *,
-        axis: Axis = None,
-        keepdims: bool = False,
-    ) -> None:
+    def __init__(self, *, axis: Axis = None, keepdims: bool = False) -> None:
         object.__setattr__(self, "axis", axis)
         object.__setattr__(self, "keepdims", keepdims)
 
@@ -53,90 +49,44 @@ class Mean(Operation):
         keepdims = self.keepdims
         axes = normalize_axes(a.ndim, axis)
         output_shape = reduction_shape(a.shape, axes, keepdims)
-        if axis is None and not keepdims:
+        if axis is None and (not keepdims):
             output_shape = (1,)
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
-        accelerated = execute_reduction(
-            "mean",
-            a,
-            axes,
-            keepdims=keepdims,
-            dtype=dtype,
-            output_shape=output_shape,
+        accelerated = backend_dispatch.execute_reduce_mean(
+            a, axes, keepdims=keepdims, dtype=dtype, output_shape=output_shape
         )
-        if accelerated is not None:
-            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
-        data = a._data
-        if axes == tuple(range(a.ndim)):
-            return Tensor(
-                [_stable_float_mean([float(value) for value in data])],
-                dtype=dtype,
-                shape=output_shape,
-            )
-        _, output_shape, groups = reduction_groups(
-            a, axis, keepdims, scalar_as_vector=True
-        )
-        values = [
-            _stable_float_mean([
-                float(data[index]) for index in group
-            ])
-            for group in groups
-        ]
-        return Tensor(values, dtype=dtype, shape=output_shape)
+        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
 
     def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Tensor]:
         a = inputs[0]
         axis = self.axis
         keepdims = self.keepdims
         axes = normalize_axes(a.ndim, axis)
         output_shape = reduction_shape(a.shape, axes, keepdims)
-        if axis is None and not keepdims:
+        if axis is None and (not keepdims):
             output_shape = (1,)
         if grad.shape != output_shape:
             raise ValueError(
-                f"Gradient shape {grad.shape} does not match output shape "
-                f"{output_shape}"
+                f"Gradient shape {grad.shape} does not match output shape {output_shape}"
             )
         count = reduction_size(a.shape, axes)
         if count == 0:
             return [Tensor([], dtype=grad.dtype, shape=a.shape)]
-        accelerated = execute_reduction_gradient(
-            "mean",
-            grad,
-            a,
-            axes,
-            keepdims=keepdims,
+        accelerated = backend_dispatch.execute_reduce_mean_gradient(
+            grad, a, axes, keepdims=keepdims
         )
-        if accelerated is not None:
-            return [Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=a.shape)]
-        summed = Sum(axis=axis, keepdims=keepdims).backward(
-            grad,
-            a,
-            needs_input_grad=UNARY_DEMAND,
-        )[0]
-        assert summed is not None
-        return [Tensor(
-            [float(item) / count for item in summed._data],
-            dtype=grad.dtype,
-            shape=a.shape,
-        )]
+        return [
+            Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=a.shape)
+        ]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable VJP for an axis-aware mean."""
-        from ..creation import ones
-        from ..ops._utils import zero_like_graph
-        from ..variable import Variable
-        from .reshape import reshape
+        from tensors.creation import ones
+        from tensors.ops._utils import zero_like_graph
+        from tensors.variable import Variable
+        from tensors.math.reshape import reshape
 
         axis = self.axis
         keepdims = self.keepdims
@@ -144,42 +94,31 @@ class Mean(Operation):
         count = reduction_size(value.shape, normalize_axes(value.ndim, axis))
         if count == 0:
             return [zero_like_graph(value)]
-        expanded = grad if keepdims else reshape(grad, keepdims_shape(value.shape, axis))
-        unit = Variable(
-            ones(value.shape, dtype=grad.dtype),
-            requires_grad=False,
+        expanded = (
+            grad if keepdims else reshape(grad, keepdims_shape(value.shape, axis))
         )
-        return [(expanded * unit) / count]
+        unit = Variable(ones(value.shape, dtype=grad.dtype), requires_grad=False)
+        return [expanded * unit / count]
 
 
 @overload
 def mean(
-    value: VariableNode,
-    axis: Axis = None,
-    keepdims: bool = False,
+    value: VariableNode, axis: Axis = None, keepdims: bool = False
 ) -> VariableNode: ...
 
 
 @overload
 def mean(
-    value: TensorValue,
-    axis: Axis = None,
-    keepdims: bool = False,
+    value: TensorValue, axis: Axis = None, keepdims: bool = False
 ) -> TensorValue: ...
 
 
 @overload
-def mean(
-    value: TensorData,
-    axis: Axis = None,
-    keepdims: bool = False,
-) -> Tensor: ...
+def mean(value: TensorData, axis: Axis = None, keepdims: bool = False) -> Tensor: ...
 
 
 def mean(
-    value: TensorLike | VariableNode,
-    axis: Axis = None,
-    keepdims: bool = False,
+    value: TensorLike | VariableNode, axis: Axis = None, keepdims: bool = False
 ) -> TensorResult | VariableNode:
     """Compute the mean over one, several, or all axes.
 
@@ -188,12 +127,10 @@ def mean(
     later. The configuration the operation is built with is the one every
     application uses, so a recorded call replays what it was written as.
     """
-    from ..graph.expression import apply_operation, is_graph_operand
+    from tensors.graph.expression import apply_operation, is_graph_operand
 
     axis = immutable_axis(axis)
-
     operation = Mean(axis=axis, keepdims=keepdims)
-
     if is_graph_operand(value):
         return apply_operation(operation, (value,))
     return operation.forward(as_tensor_operand(value))

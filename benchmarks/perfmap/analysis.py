@@ -9,10 +9,8 @@ ratios between layers can be resolved without naming cases pairwise.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Iterable, Sequence
 from typing import Any
-
 
 #: The execution stack, outermost cost last. A ladder's ratios are taken
 #: between neighbouring layers present in that ladder.
@@ -36,9 +34,9 @@ _LAYER_RANK = {layer: index for index, layer in enumerate(LAYER_ORDER)}
 def measured(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return only the records that produced timings."""
     return [
-        record for record in records
-        if record.get("classification") == "measured"
-        and record.get("host_total")
+        record
+        for record in records
+        if record.get("classification") == "measured" and record.get("host_total")
     ]
 
 
@@ -92,9 +90,7 @@ def ladders(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                     "name": item["name"],
                     "median_seconds": median_of(item),
                     "noisy": item["host_total"]["noisy"],
-                    "device_seconds": (
-                        item.get("device", {}).get("median_seconds")
-                    ),
+                    "device_seconds": (item.get("device", {}).get("median_seconds")),
                 }
                 for item in present
             },
@@ -103,12 +99,14 @@ def ladders(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         for lower, upper in zip(present, present[1:]):
             lower_time = median_of(lower)
             upper_time = median_of(upper)
-            entry["steps"].append({
-                "from": lower["layer"],
-                "to": upper["layer"],
-                "ratio": _ratio(upper_time, lower_time),
-                "added_seconds": upper_time - lower_time,
-            })
+            entry["steps"].append(
+                {
+                    "from": lower["layer"],
+                    "to": upper["layer"],
+                    "ratio": _ratio(upper_time, lower_time),
+                    "added_seconds": upper_time - lower_time,
+                }
+            )
         base = present[0]
         top = present[-1]
         entry["total"] = {
@@ -153,9 +151,7 @@ def scaling_curves(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "elements": point["elements"],
                 "median_seconds": median_of(point),
                 "seconds_per_element": (
-                    median_of(point) / point["elements"]
-                    if point["elements"]
-                    else None
+                    median_of(point) / point["elements"] if point["elements"] else None
                 ),
                 "noisy": point["host_total"]["noisy"],
             }
@@ -166,21 +162,23 @@ def scaling_curves(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         # Fixed overhead is what a size curve is for: the smallest point is
         # almost entirely overhead, and comparing per-element cost at both
         # ends says how much of it survives at scale.
-        results.append({
-            "backend": backend,
-            "layer": layer,
-            "curve": curve,
-            "dtype": dtype,
-            "series": series,
-            "fixed_overhead_seconds": median_of(smallest),
-            "elements_range": [smallest["elements"], largest["elements"]],
-            "growth_ratio": _ratio(median_of(largest), median_of(smallest)),
-            "size_ratio": (
-                largest["elements"] / smallest["elements"]
-                if smallest["elements"]
-                else None
-            ),
-        })
+        results.append(
+            {
+                "backend": backend,
+                "layer": layer,
+                "curve": curve,
+                "dtype": dtype,
+                "series": series,
+                "fixed_overhead_seconds": median_of(smallest),
+                "elements_range": [smallest["elements"], largest["elements"]],
+                "growth_ratio": _ratio(median_of(largest), median_of(smallest)),
+                "size_ratio": (
+                    largest["elements"] / smallest["elements"]
+                    if smallest["elements"]
+                    else None
+                ),
+            }
+        )
     return results
 
 
@@ -200,9 +198,9 @@ def crossovers(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         if not curve or record.get("elements") is None:
             continue
         key = (record["layer"], curve, record.get("dtype") or "-")
-        grouped.setdefault(key, {}).setdefault(
-            record["backend"], {}
-        )[record["elements"]] = median_of(record)
+        grouped.setdefault(key, {}).setdefault(record["backend"], {})[
+            record["elements"]
+        ] = median_of(record)
 
     pairs = (("python", "numpy"), ("python", "cuda"), ("numpy", "cuda"))
     results = []
@@ -226,23 +224,23 @@ def crossovers(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                         "ratio_after": _ratio(right[upper], left[upper]),
                     }
                     break
-            results.append({
-                "layer": layer,
-                "curve": curve,
-                "dtype": dtype,
-                "baseline": slower,
-                "candidate": faster,
-                "crossover": crossing,
-                "candidate_faster_at": [
-                    size for size in shared if right[size] < left[size]
-                ],
-                "candidate_slower_at": [
-                    size for size in shared if right[size] >= left[size]
-                ],
-                "speedup_at_largest": _ratio(
-                    left[shared[-1]], right[shared[-1]]
-                ),
-            })
+            results.append(
+                {
+                    "layer": layer,
+                    "curve": curve,
+                    "dtype": dtype,
+                    "baseline": slower,
+                    "candidate": faster,
+                    "crossover": crossing,
+                    "candidate_faster_at": [
+                        size for size in shared if right[size] < left[size]
+                    ],
+                    "candidate_slower_at": [
+                        size for size in shared if right[size] >= left[size]
+                    ],
+                    "speedup_at_largest": _ratio(left[shared[-1]], right[shared[-1]]),
+                }
+            )
     return results
 
 
@@ -273,24 +271,26 @@ def _paired(
         right = sides.get(right_value)
         if left is None or right is None:
             continue
-        results.append({
-            "backend": backend,
-            "layer": layer,
-            "pair": pair_key,
-            left_value: {
-                "name": left["name"],
-                "median_seconds": median_of(left),
-                "noisy": left["host_total"]["noisy"],
-            },
-            right_value: {
-                "name": right["name"],
-                "median_seconds": median_of(right),
-                "noisy": right["host_total"]["noisy"],
-            },
-            "ratio": _ratio(median_of(right), median_of(left)),
-            "difference_seconds": median_of(right) - median_of(left),
-            "elements": left.get("elements"),
-        })
+        results.append(
+            {
+                "backend": backend,
+                "layer": layer,
+                "pair": pair_key,
+                left_value: {
+                    "name": left["name"],
+                    "median_seconds": median_of(left),
+                    "noisy": left["host_total"]["noisy"],
+                },
+                right_value: {
+                    "name": right["name"],
+                    "median_seconds": median_of(right),
+                    "noisy": right["host_total"]["noisy"],
+                },
+                "ratio": _ratio(median_of(right), median_of(left)),
+                "difference_seconds": median_of(right) - median_of(left),
+                "elements": left.get("elements"),
+            }
+        )
     return results
 
 
@@ -314,28 +314,34 @@ def dtype_comparison(
         grouped.setdefault(key, {})[dtype] = record
     results = []
     for (backend, layer, subject, elements), sides in sorted(
-        grouped.items(), key=lambda item: (str(item[0][0]), str(item[0][1]), str(item[0][2]), item[0][3] or 0)
+        grouped.items(),
+        key=lambda item: (
+            str(item[0][0]),
+            str(item[0][1]),
+            str(item[0][2]),
+            item[0][3] or 0,
+        ),
     ):
         single = sides.get("float32")
         double = sides.get("float64")
         if single is None or double is None:
             continue
-        results.append({
-            "backend": backend,
-            "layer": layer,
-            "subject": subject,
-            "elements": elements,
-            "float32_seconds": median_of(single),
-            "float64_seconds": median_of(double),
-            "float32_over_float64": _ratio(
-                median_of(single), median_of(double)
-            ),
-            "float32_case": single["name"],
-            "float64_case": double["name"],
-            "noisy": (
-                single["host_total"]["noisy"] or double["host_total"]["noisy"]
-            ),
-        })
+        results.append(
+            {
+                "backend": backend,
+                "layer": layer,
+                "subject": subject,
+                "elements": elements,
+                "float32_seconds": median_of(single),
+                "float64_seconds": median_of(double),
+                "float32_over_float64": _ratio(median_of(single), median_of(double)),
+                "float32_case": single["name"],
+                "float64_case": double["name"],
+                "noisy": (
+                    single["host_total"]["noisy"] or double["host_total"]["noisy"]
+                ),
+            }
+        )
     return results
 
 
@@ -356,7 +362,8 @@ def layout_comparison(
         grouped.setdefault(key, {})[layout] = record
     results = []
     for (backend, subject, elements), layouts in sorted(
-        grouped.items(), key=lambda item: (str(item[0][0]), str(item[0][1]), item[0][2] or 0)
+        grouped.items(),
+        key=lambda item: (str(item[0][0]), str(item[0][1]), item[0][2] or 0),
     ):
         baseline = layouts.get("contiguous")
         if baseline is None:
@@ -364,18 +371,20 @@ def layout_comparison(
         for layout, record in sorted(layouts.items()):
             if layout == "contiguous":
                 continue
-            results.append({
-                "backend": backend,
-                "subject": subject,
-                "elements": elements,
-                "layout": layout,
-                "contiguous_seconds": median_of(baseline),
-                "layout_seconds": median_of(record),
-                "ratio": _ratio(median_of(record), median_of(baseline)),
-                "difference_seconds": median_of(record) - median_of(baseline),
-                "case": record["name"],
-                "noisy": record["host_total"]["noisy"],
-            })
+            results.append(
+                {
+                    "backend": backend,
+                    "subject": subject,
+                    "elements": elements,
+                    "layout": layout,
+                    "contiguous_seconds": median_of(baseline),
+                    "layout_seconds": median_of(record),
+                    "ratio": _ratio(median_of(record), median_of(baseline)),
+                    "difference_seconds": median_of(record) - median_of(baseline),
+                    "case": record["name"],
+                    "noisy": record["host_total"]["noisy"],
+                }
+            )
     return results
 
 
@@ -429,9 +438,7 @@ def training_breakdown(
         if step is None:
             continue
         present = {
-            name: median_of(phases[name])
-            for name in TRAINING_PHASES
-            if name in phases
+            name: median_of(phases[name]) for name in TRAINING_PHASES if name in phases
         }
         if not present:
             continue
@@ -447,15 +454,11 @@ def training_breakdown(
             "step_seconds": step_time,
             "phase_sum_seconds": total,
             "unaccounted_seconds": step_time - total,
-            "accounted_fraction": (
-                None if step_time <= 0 else total / step_time
-            ),
+            "accounted_fraction": (None if step_time <= 0 else total / step_time),
             "phases": {
                 name: {
                     "seconds": value,
-                    "share_of_step": (
-                        None if step_time <= 0 else value / step_time
-                    ),
+                    "share_of_step": (None if step_time <= 0 else value / step_time),
                 }
                 for name, value in present.items()
             },
@@ -466,8 +469,7 @@ def training_breakdown(
             # includes whatever accumulates across iterations.
             entry["ten_step_mean_seconds"] = median_of(sustained) / 10.0
             entry["sustained_over_single"] = (
-                None if step_time <= 0
-                else (median_of(sustained) / 10.0) / step_time
+                None if step_time <= 0 else (median_of(sustained) / 10.0) / step_time
             )
         results.append(entry)
     results.sort(key=lambda item: -item["step_seconds"])
@@ -488,29 +490,27 @@ def cuda_synchronization(
             continue
         total = median_of(record)
         device = record["device"]["median_seconds"]
-        results.append({
-            "name": record["name"],
-            "layer": record["layer"],
-            "family": record["family"],
-            "dtype": record.get("dtype"),
-            "elements": record.get("elements"),
-            "host_total_seconds": total,
-            "host_submit_seconds": record["host_submit"]["median_seconds"],
-            "device_seconds": device,
-            "host_overhead_seconds": total - device,
-            "device_utilization": _ratio(device, total),
-            "single_call_submit_seconds": cuda.get(
-                "single_call_submit_seconds"
-            ),
-            "single_call_total_seconds": cuda.get(
-                "single_call_total_seconds"
-            ),
-            "absorbed_fraction_of_barrier": cuda.get(
-                "absorbed_fraction_of_barrier"
-            ),
-            "hidden_synchronization": cuda["hidden_synchronization"],
-            "noisy": record["host_total"]["noisy"],
-        })
+        results.append(
+            {
+                "name": record["name"],
+                "layer": record["layer"],
+                "family": record["family"],
+                "dtype": record.get("dtype"),
+                "elements": record.get("elements"),
+                "host_total_seconds": total,
+                "host_submit_seconds": record["host_submit"]["median_seconds"],
+                "device_seconds": device,
+                "host_overhead_seconds": total - device,
+                "device_utilization": _ratio(device, total),
+                "single_call_submit_seconds": cuda.get("single_call_submit_seconds"),
+                "single_call_total_seconds": cuda.get("single_call_total_seconds"),
+                "absorbed_fraction_of_barrier": cuda.get(
+                    "absorbed_fraction_of_barrier"
+                ),
+                "hidden_synchronization": cuda["hidden_synchronization"],
+                "noisy": record["host_total"]["noisy"],
+            }
+        )
     results.sort(key=lambda item: -item["host_overhead_seconds"])
     return results
 
@@ -525,25 +525,23 @@ def memory_findings(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         memory = record.get("memory")
         if not memory or "error" in memory:
             continue
-        results.append({
-            "name": record["name"],
-            "backend": record["backend"],
-            "layer": record["layer"],
-            "family": record["family"],
-            "elements": record.get("elements"),
-            "host_peak_bytes": memory["host_peak_bytes"],
-            "host_allocation_count": memory["host_allocation_count"],
-            "host_retained_bytes_per_call": memory[
-                "host_retained_bytes_per_call"
-            ],
-            "device_used_delta_bytes": memory["device_used_delta_bytes"],
-            "device_retained_bytes_per_call": memory[
-                "device_retained_bytes_per_call"
-            ],
-        })
-    results.sort(
-        key=lambda item: -abs(item["host_retained_bytes_per_call"] or 0.0)
-    )
+        results.append(
+            {
+                "name": record["name"],
+                "backend": record["backend"],
+                "layer": record["layer"],
+                "family": record["family"],
+                "elements": record.get("elements"),
+                "host_peak_bytes": memory["host_peak_bytes"],
+                "host_allocation_count": memory["host_allocation_count"],
+                "host_retained_bytes_per_call": memory["host_retained_bytes_per_call"],
+                "device_used_delta_bytes": memory["device_used_delta_bytes"],
+                "device_retained_bytes_per_call": memory[
+                    "device_retained_bytes_per_call"
+                ],
+            }
+        )
+    results.sort(key=lambda item: -abs(item["host_retained_bytes_per_call"] or 0.0))
     return results
 
 
@@ -557,21 +555,23 @@ def noisy_cases(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         statistics_block = record["host_total"]
         if not statistics_block["noisy"]:
             continue
-        results.append({
-            "name": record["name"],
-            "backend": record["backend"],
-            "layer": record["layer"],
-            "elements": record.get("elements"),
-            "median_seconds": statistics_block["median_seconds"],
-            "variability_percent": statistics_block["variability_percent"],
-            "min_seconds": statistics_block["min_seconds"],
-            "max_seconds": statistics_block["max_seconds"],
-            "spread_ratio": _ratio(
-                statistics_block["max_seconds"],
-                statistics_block["min_seconds"],
-            ),
-            "samples_seconds": statistics_block["samples_seconds"],
-        })
+        results.append(
+            {
+                "name": record["name"],
+                "backend": record["backend"],
+                "layer": record["layer"],
+                "elements": record.get("elements"),
+                "median_seconds": statistics_block["median_seconds"],
+                "variability_percent": statistics_block["variability_percent"],
+                "min_seconds": statistics_block["min_seconds"],
+                "max_seconds": statistics_block["max_seconds"],
+                "spread_ratio": _ratio(
+                    statistics_block["max_seconds"],
+                    statistics_block["min_seconds"],
+                ),
+                "samples_seconds": statistics_block["samples_seconds"],
+            }
+        )
     results.sort(key=lambda item: -item["variability_percent"])
     return results
 
@@ -587,20 +587,24 @@ def classification_summary(
         classification = record.get("classification", "unknown")
         counts[classification] = counts.get(classification, 0) + 1
         if classification == "unsupported":
-            unsupported.append({
-                "name": record["name"],
-                "backend": record["backend"],
-                "suite": record["suite"],
-                "reason": record.get("reason"),
-            })
+            unsupported.append(
+                {
+                    "name": record["name"],
+                    "backend": record["backend"],
+                    "suite": record["suite"],
+                    "reason": record.get("reason"),
+                }
+            )
         elif classification in ("error", "skipped"):
-            errors.append({
-                "name": record["name"],
-                "backend": record["backend"],
-                "suite": record["suite"],
-                "classification": classification,
-                "reason": record.get("reason"),
-            })
+            errors.append(
+                {
+                    "name": record["name"],
+                    "backend": record["backend"],
+                    "suite": record["suite"],
+                    "classification": classification,
+                    "reason": record.get("reason"),
+                }
+            )
     return {
         "counts": counts,
         "unsupported": unsupported,
@@ -644,31 +648,33 @@ def bottlenecks(
             default=None,
         )
         elements = entry.get("elements") or 0
-        candidates.append({
-            "ladder": entry["ladder"],
-            "backend": entry["backend"],
-            "dtype": entry.get("dtype"),
-            "elements": elements,
-            "base_layer": base_layer,
-            "base_seconds": base["median_seconds"],
-            "top_layer": top_layer,
-            "top_seconds": top["median_seconds"],
-            "absolute_overhead_seconds": (
-                top["median_seconds"] - base["median_seconds"]
-            ),
-            "multiplicative_overhead": entry["total"]["ratio"],
-            "responsible_layer": (
-                f"{dominant['from']} to {dominant['to']}" if dominant else None
-            ),
-            "responsible_added_seconds": (
-                dominant["added_seconds"] if dominant else None
-            ),
-            "layer_times": {
-                name: rung["median_seconds"] for name, rung in layers.items()
-            },
-            "noisy": any(rung["noisy"] for rung in layers.values()),
-            "rankable": elements >= RANKABLE_MINIMUM_ELEMENTS,
-        })
+        candidates.append(
+            {
+                "ladder": entry["ladder"],
+                "backend": entry["backend"],
+                "dtype": entry.get("dtype"),
+                "elements": elements,
+                "base_layer": base_layer,
+                "base_seconds": base["median_seconds"],
+                "top_layer": top_layer,
+                "top_seconds": top["median_seconds"],
+                "absolute_overhead_seconds": (
+                    top["median_seconds"] - base["median_seconds"]
+                ),
+                "multiplicative_overhead": entry["total"]["ratio"],
+                "responsible_layer": (
+                    f"{dominant['from']} to {dominant['to']}" if dominant else None
+                ),
+                "responsible_added_seconds": (
+                    dominant["added_seconds"] if dominant else None
+                ),
+                "layer_times": {
+                    name: rung["median_seconds"] for name, rung in layers.items()
+                },
+                "noisy": any(rung["noisy"] for rung in layers.values()),
+                "rankable": elements >= RANKABLE_MINIMUM_ELEMENTS,
+            }
+        )
 
     def ranked(
         key: Any,
@@ -676,15 +682,10 @@ def bottlenecks(
         require_rankable: bool = False,
         limit: int = 25,
     ) -> list[dict[str, Any]]:
-        pool = [
-            item for item in candidates
-            if not require_rankable or item["rankable"]
-        ]
+        pool = [item for item in candidates if not require_rankable or item["rankable"]]
         return sorted(pool, key=key)[:limit]
 
-    fixed_overhead = [
-        item for item in candidates if (item["elements"] or 0) <= 10
-    ]
+    fixed_overhead = [item for item in candidates if (item["elements"] or 0) <= 10]
     return {
         "candidates": candidates,
         "by_absolute_runtime": ranked(

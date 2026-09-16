@@ -1,11 +1,10 @@
 """Negation operation."""
 
 from typing import List
-
-from ..backend import execute_negate
-from .operation import Operation
-from ..tensor import Tensor
-from ..dtype import negation_dtype
+from tensors.backend import execute_negate
+from tensors.ops.operation import Operation
+from tensors.tensor import Tensor
+from tensors.dtype import negation_dtype
 
 
 class Neg(Operation):
@@ -18,25 +17,14 @@ class Neg(Operation):
         """Negate all elements of a tensor."""
         dtype = negation_dtype(a.dtype)
         accelerated = execute_negate(a, dtype=dtype)
-        if accelerated is not None:
-            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
-        data = [-x for x in a._data]
-        return Tensor(data, dtype=dtype, shape=a.shape)
+        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
 
     def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Tensor]:
         return [self.forward(grad)]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable VJP for negation."""
         return [-grad]
 

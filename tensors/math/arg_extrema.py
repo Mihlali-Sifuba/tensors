@@ -1,17 +1,13 @@
 """Indices of minimum and maximum values along an axis."""
 
 from __future__ import annotations
-
-import math
+from tensors.backend import dispatch as backend_dispatch
 from typing import Any
-
 from .._typing import TensorLike
-from ..backend import execute_arg_extremum
 from ..dtype import int64
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
-from ..utils.coordinates import linear_index_to_coordinates
-from ._reduction import normalize_axes, reduction_groups, reduction_shape
+from ._reduction import normalize_axes, reduction_shape
 
 
 def _axis(axis: int | None, ndim: int) -> int | None:
@@ -32,63 +28,19 @@ class _ArgExtremum:
 
     @classmethod
     def forward(
-        cls,
-        value: Tensor,
-        axis: int | None = None,
-        keepdims: bool = False,
+        cls, value: Tensor, axis: int | None = None, keepdims: bool = False
     ) -> Tensor:
         axis = _axis(axis, value.ndim)
         axes = normalize_axes(value.ndim, axis)
         output_shape = reduction_shape(value.shape, axes, keepdims)
-        if axis is None and not keepdims:
+        if axis is None and (not keepdims):
             output_shape = (1,)
         operation = "argmax" if cls.select_maximum else "argmin"
-        accelerated = execute_arg_extremum(
-            operation,
-            value,
-            axis,
-            keepdims=keepdims,
-            output_shape=output_shape,
-        )
-        if accelerated is not None:
-            return Tensor._from_owned_storage(accelerated, dtype=int64, shape=output_shape)
-        _, output_shape, groups = reduction_groups(
-            value,
-            axis,
-            keepdims,
-            scalar_as_vector=True,
-        )
-        if any(not group for group in groups):
-            name = "argmax" if cls.select_maximum else "argmin"
-            raise ValueError(f"Cannot compute {name} of empty tensor")
-
-        indices = []
-        for group in groups:
-            nan_indices = [
-                index
-                for index in group
-                if isinstance(value._data[index], float)
-                and math.isnan(value._data[index])
-            ]
-            if nan_indices:
-                selected = nan_indices[0]
-            else:
-                selected = group[0]
-                for candidate in group[1:]:
-                    candidate_value = value._data[candidate]
-                    selected_value = value._data[selected]
-                    if (
-                        candidate_value > selected_value
-                        if cls.select_maximum
-                        else candidate_value < selected_value
-                    ):
-                        selected = candidate
-            indices.append(
-                selected
-                if axis is None
-                else linear_index_to_coordinates(selected, value.shape)[axis]
-            )
-        return Tensor(indices, dtype=int64, shape=output_shape)
+        accelerated = {
+            "argmin": backend_dispatch.execute_argmin,
+            "argmax": backend_dispatch.execute_argmax,
+        }[operation](value, axis, keepdims=keepdims, output_shape=output_shape)
+        return Tensor._from_owned_storage(accelerated, dtype=int64, shape=output_shape)
 
 
 class ArgMax(_ArgExtremum):
@@ -101,12 +53,7 @@ class ArgMin(_ArgExtremum):
     """Indices of minimum values, selecting the first tie."""
 
 
-def _arg_extremum(
-    operation,
-    value: Any,
-    axis: int | None,
-    keepdims: bool,
-) -> Tensor:
+def _arg_extremum(operation, value: Any, axis: int | None, keepdims: bool) -> Tensor:
     from ..variable import Variable
 
     tensor = value.data if isinstance(value, Variable) else value
@@ -115,18 +62,14 @@ def _arg_extremum(
 
 
 def argmax(
-    value: TensorLike,
-    axis: int | None = None,
-    keepdims: bool = False,
+    value: TensorLike, axis: int | None = None, keepdims: bool = False
 ) -> Tensor:
     """Return first-occurrence indices of maximum values."""
     return _arg_extremum(ArgMax, value, axis, keepdims)
 
 
 def argmin(
-    value: TensorLike,
-    axis: int | None = None,
-    keepdims: bool = False,
+    value: TensorLike, axis: int | None = None, keepdims: bool = False
 ) -> Tensor:
     """Return first-occurrence indices of minimum values."""
     return _arg_extremum(ArgMin, value, axis, keepdims)

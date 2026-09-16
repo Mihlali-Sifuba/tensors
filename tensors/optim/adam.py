@@ -136,9 +136,7 @@ class Adam(Optimizer):
                 scaled_values,
                 Tensor,
             ):
-                scale_data = [
-                    math.sqrt(float(value)) for value in visible._data
-                ]
+                scale_data = [math.sqrt(float(value)) for value in visible._data]
                 scales = Tensor(
                     scale_data,
                     dtype=gradient.dtype,
@@ -149,23 +147,25 @@ class Adam(Optimizer):
                     dtype=gradient.dtype,
                     shape=gradient.shape,
                 )
-            beta1_product = float(
-                state.get("beta1_product", beta1 ** (step_count - 1))
-            ) * beta1
-            beta2_product = float(
-                state.get("beta2_product", beta2 ** (step_count - 1))
-            ) * beta2
-            records.append((
-                parameter,
-                gradient,
-                identity,
-                step_count,
-                moment,
-                scales,
-                scaled_values,
-                beta1_product,
-                beta2_product,
-            ))
+            beta1_product = (
+                float(state.get("beta1_product", beta1 ** (step_count - 1))) * beta1
+            )
+            beta2_product = (
+                float(state.get("beta2_product", beta2 ** (step_count - 1))) * beta2
+            )
+            records.append(
+                (
+                    parameter,
+                    gradient,
+                    identity,
+                    step_count,
+                    moment,
+                    scales,
+                    scaled_values,
+                    beta1_product,
+                    beta2_product,
+                )
+            )
 
         accelerated = execute_adam_updates(
             tuple(record[0].data for record in records),
@@ -190,7 +190,14 @@ class Adam(Optimizer):
             scaled_storages,
         ) = accelerated
         pending = []
-        for record, parameter_storage, moment_storage, visible_storage, scale_storage, scaled_storage in zip(
+        for (
+            record,
+            parameter_storage,
+            moment_storage,
+            visible_storage,
+            scale_storage,
+            scaled_storage,
+        ) in zip(
             records,
             parameter_storages,
             moment_storages,
@@ -310,8 +317,12 @@ class Adam(Optimizer):
                     shape=grad.shape,
                 )
 
-            beta1_product = float(current_state.get("beta1_product", b1 ** (step_count - 1))) * b1
-            beta2_product = float(current_state.get("beta2_product", b2 ** (step_count - 1))) * b2
+            beta1_product = (
+                float(current_state.get("beta1_product", b1 ** (step_count - 1))) * b1
+            )
+            beta2_product = (
+                float(current_state.get("beta2_product", b2 ** (step_count - 1))) * b2
+            )
             first_correction = 1.0 - beta1_product
             second_correction = 1.0 - beta2_product
 
@@ -328,21 +339,27 @@ class Adam(Optimizer):
                 first_correction=first_correction,
                 second_correction=second_correction,
             )
-            if accelerated is not None:
-                (
-                    parameter_storage,
-                    moment_storage,
-                    visible_storage,
-                    scale_storage,
-                    scaled_storage,
-                ) = accelerated
-                if state is not None and len({
-                    id(m),
-                    id(v),
-                    id(scales),
-                    id(scaled_values),
-                }) == 4:
-                    reusable_pending.append((
+            (
+                parameter_storage,
+                moment_storage,
+                visible_storage,
+                scale_storage,
+                scaled_storage,
+            ) = accelerated
+            if (
+                state is not None
+                and len(
+                    {
+                        id(m),
+                        id(v),
+                        id(scales),
+                        id(scaled_values),
+                    }
+                )
+                == 4
+            ):
+                reusable_pending.append(
+                    (
                         param,
                         current_state,
                         m,
@@ -357,96 +374,40 @@ class Adam(Optimizer):
                         step_count,
                         beta1_product,
                         beta2_product,
-                    ))
-                    continue
-                accelerated_state: dict[str, Tensor | int | float] = {
-                    "step": step_count,
-                    "m": Tensor._from_owned_storage(
-                        moment_storage,
-                        dtype=grad.dtype,
-                        shape=grad.shape,
-                    ),
-                    "v": Tensor._from_owned_storage(
-                        visible_storage,
-                        dtype=grad.dtype,
-                        shape=grad.shape,
-                    ),
-                    "v_scale": Tensor._from_owned_storage(
-                        scale_storage,
-                        dtype=grad.dtype,
-                        shape=grad.shape,
-                    ),
-                    "v_scaled": Tensor._from_owned_storage(
-                        scaled_storage,
-                        dtype=grad.dtype,
-                        shape=grad.shape,
-                    ),
-                    "beta1_product": beta1_product,
-                    "beta2_product": beta2_product,
-                }
-                new_parameter = Tensor._from_owned_storage(
-                    parameter_storage,
-                    dtype=param.dtype,
-                    shape=param.shape,
-                )
-                pending.append(
-                    (param, sid, new_parameter, accelerated_state)
+                    )
                 )
                 continue
-
-            moment_values = []
-            visible_second_values = []
-            new_scales = []
-            new_scaled_values = []
-            parameter_values = []
-            for parameter_value, gradient_value, moment, scale, scaled in zip(
-                param.data._data,
-                grad._data,
-                m._data,
-                scales._data,
-                scaled_values._data,
-            ):
-                gradient_value = float(gradient_value)
-                moment_value = _stable_weighted_sum(
-                    b1, float(moment), 1.0 - b1, gradient_value
-                )
-                new_scale, new_scaled = _scaled_second_moment(
-                    float(scale), float(scaled), gradient_value, b2
-                )
-                root_second_moment = new_scale * math.sqrt(new_scaled)
-                ratio = _product_quotient(
-                    [moment_value, math.sqrt(second_correction)],
-                    [first_correction, root_second_moment + eps * math.sqrt(second_correction)],
-                )
-                update = lr * ratio
-
-                moment_values.append(moment_value)
-                new_scales.append(new_scale)
-                new_scaled_values.append(new_scaled)
-                visible_second_values.append(
-                    _visible_second_moment(new_scale, new_scaled)
-                )
-                parameter_values.append(float(parameter_value) - update)
-
-            new_state: dict[str, Tensor | int | float] = {
+            accelerated_state: dict[str, Tensor | int | float] = {
                 "step": step_count,
-                "m": Tensor(moment_values, dtype=grad.dtype, shape=grad.shape),
-                "v": Tensor(
-                    visible_second_values, dtype=grad.dtype, shape=grad.shape
+                "m": Tensor._from_owned_storage(
+                    moment_storage,
+                    dtype=grad.dtype,
+                    shape=grad.shape,
                 ),
-                "v_scale": Tensor(new_scales, dtype=grad.dtype, shape=grad.shape),
-                "v_scaled": Tensor(
-                    new_scaled_values, dtype=grad.dtype, shape=grad.shape
+                "v": Tensor._from_owned_storage(
+                    visible_storage,
+                    dtype=grad.dtype,
+                    shape=grad.shape,
+                ),
+                "v_scale": Tensor._from_owned_storage(
+                    scale_storage,
+                    dtype=grad.dtype,
+                    shape=grad.shape,
+                ),
+                "v_scaled": Tensor._from_owned_storage(
+                    scaled_storage,
+                    dtype=grad.dtype,
+                    shape=grad.shape,
                 ),
                 "beta1_product": beta1_product,
                 "beta2_product": beta2_product,
             }
-            new_parameter = Tensor(
-                parameter_values,
+            new_parameter = Tensor._from_owned_storage(
+                parameter_storage,
                 dtype=param.dtype,
                 shape=param.shape,
             )
-            pending.append((param, sid, new_parameter, new_state))
+            pending.append((param, sid, new_parameter, accelerated_state))
 
         for param, sid, new_parameter, new_state in pending:
             self._state[sid] = new_state
@@ -486,10 +447,12 @@ def _stable_weighted_sum(
     """Return a two-term weighted sum with reliable cancellation."""
     from ..math.sum import _stable_float_sum
 
-    return _stable_float_sum([
-        left_weight * left,
-        right_weight * right,
-    ])
+    return _stable_float_sum(
+        [
+            left_weight * left,
+            right_weight * right,
+        ]
+    )
 
 
 def _scaled_second_moment(

@@ -10,7 +10,7 @@ from ..backend import execute_rmsprop_update, execute_rmsprop_updates
 from ..creation import zeros
 from ..tensor import Tensor
 from .optimizer import Optimizer
-from .adam import _scaled_second_moment, _visible_second_moment
+from .adam import _visible_second_moment
 
 if TYPE_CHECKING:
     from ..variable import Variable
@@ -97,26 +97,24 @@ class RMSprop(Optimizer):
         for parameter, gradient in prepared:
             identity = id(parameter)
             scaled_state = self._scaled_state.get(identity)
-            if (
-                scaled_state is None
-                or any(
-                    value.shape != gradient.shape
-                    or value.dtype != gradient.dtype
-                    for value in scaled_state
-                )
+            if scaled_state is None or any(
+                value.shape != gradient.shape or value.dtype != gradient.dtype
+                for value in scaled_state
             ):
                 zero_state = zeros(gradient.shape, dtype=gradient.dtype)
                 scales = zero_state
                 scaled_values = zero_state
             else:
                 scales, scaled_values = scaled_state
-            records.append((
-                parameter,
-                gradient,
-                identity,
-                scales,
-                scaled_values,
-            ))
+            records.append(
+                (
+                    parameter,
+                    gradient,
+                    identity,
+                    scales,
+                    scaled_values,
+                )
+            )
 
         accelerated = execute_rmsprop_updates(
             tuple(record[0].data for record in records),
@@ -159,12 +157,14 @@ class RMSprop(Optimizer):
                 dtype=parameter.dtype,
                 shape=parameter.shape,
             )
-            pending.append((
-                parameter,
-                identity,
-                value,
-                scaled_state,
-            ))
+            pending.append(
+                (
+                    parameter,
+                    identity,
+                    value,
+                    scaled_state,
+                )
+            )
         for parameter, identity, value, scaled in pending:
             self._scaled_state[identity] = scaled
             parameter.data = value
@@ -180,12 +180,9 @@ class RMSprop(Optimizer):
         for param, grad in prepared:
             sid = id(param)
             scaled_state = self._scaled_state.get(sid)
-            if (
-                scaled_state is None
-                or any(
-                    value.shape != grad.shape or value.dtype != grad.dtype
-                    for value in scaled_state
-                )
+            if scaled_state is None or any(
+                value.shape != grad.shape or value.dtype != grad.dtype
+                for value in scaled_state
             ):
                 zero_state = zeros(grad.shape, dtype=grad.dtype)
                 scales = zero_state
@@ -202,61 +199,27 @@ class RMSprop(Optimizer):
                 learning_rate=self.learning_rate,
                 epsilon=self.eps,
             )
-            if accelerated is not None:
-                (
-                    parameter_storage,
-                    scale_storage,
-                    scaled_storage,
-                ) = accelerated
-                scaled_state = (
-                    Tensor._from_owned_storage(
-                        scale_storage,
-                        dtype=grad.dtype,
-                        shape=grad.shape,
-                    ),
-                    Tensor._from_owned_storage(
-                        scaled_storage,
-                        dtype=grad.dtype,
-                        shape=grad.shape,
-                    ),
-                )
-                new_parameter = Tensor._from_owned_storage(
-                    parameter_storage,
-                    dtype=param.dtype,
-                    shape=param.shape,
-                )
-                pending.append(
-                    (param, sid, new_parameter, scaled_state)
-                )
-                continue
-
-            new_scales = []
-            new_scaled_values = []
-            parameter_values = []
-            for parameter_value, gradient_value, scale, scaled in zip(
-                param.data._data,
-                grad._data,
-                scales._data,
-                scaled_values._data,
-            ):
-                gradient_value = float(gradient_value)
-                new_scale, new_scaled = _scaled_second_moment(
-                    float(scale), float(scaled), gradient_value, self.rho
-                )
-                root_moment = new_scale * math.sqrt(new_scaled)
-                update = self.learning_rate * (
-                    gradient_value / (root_moment + self.eps)
-                )
-                new_scales.append(new_scale)
-                new_scaled_values.append(new_scaled)
-                parameter_values.append(float(parameter_value) - update)
-
+            (
+                parameter_storage,
+                scale_storage,
+                scaled_storage,
+            ) = accelerated
             scaled_state = (
-                Tensor(new_scales, dtype=grad.dtype, shape=grad.shape),
-                Tensor(new_scaled_values, dtype=grad.dtype, shape=grad.shape),
+                Tensor._from_owned_storage(
+                    scale_storage,
+                    dtype=grad.dtype,
+                    shape=grad.shape,
+                ),
+                Tensor._from_owned_storage(
+                    scaled_storage,
+                    dtype=grad.dtype,
+                    shape=grad.shape,
+                ),
             )
-            new_parameter = Tensor(
-                parameter_values, dtype=param.dtype, shape=param.shape
+            new_parameter = Tensor._from_owned_storage(
+                parameter_storage,
+                dtype=param.dtype,
+                shape=param.shape,
             )
             pending.append((param, sid, new_parameter, scaled_state))
 

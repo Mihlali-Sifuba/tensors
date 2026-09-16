@@ -52,14 +52,11 @@ class SGD(Optimizer):
                 gradient,
                 self.learning_rate,
             )
-            if storage is None:
-                value = parameter.data - self.learning_rate * gradient
-            else:
-                value = Tensor._from_owned_storage(
-                    storage,
-                    dtype=parameter.dtype,
-                    shape=parameter.shape,
-                )
+            value = Tensor._from_owned_storage(
+                storage,
+                dtype=parameter.dtype,
+                shape=parameter.shape,
+            )
             pending.append((parameter, value))
         for parameter, value in pending:
             parameter.data = value

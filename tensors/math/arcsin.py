@@ -1,16 +1,14 @@
 """Elementwise inverse sine and its differentiation rule."""
 
 from __future__ import annotations
-
+from tensors.backend import dispatch as backend_dispatch
 import math
 from typing import TYPE_CHECKING, Any, overload
-
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
-from ._unary import unary_backward, unary_forward
 
 if TYPE_CHECKING:
     from ..graph.node import VariableNode
@@ -24,37 +22,32 @@ class ArcSin(Operation):
 
     def forward(self, value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
-        return unary_forward("arcsin", value, dtype=dtype, fallback=_arcsin)
+        return Tensor._from_owned_storage(
+            backend_dispatch.execute_arcsin(value, dtype=dtype),
+            dtype=dtype,
+            shape=value.shape,
+        )
 
     def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Tensor]:
         value = inputs[0]
         return [
-            unary_backward(
-                "arcsin",
-                grad,
-                value,
-                fallback=_arcsin_gradient,
+            Tensor._from_owned_storage(
+                backend_dispatch.execute_arcsin_gradient(grad, value),
+                dtype=grad.dtype,
+                shape=value.shape,
             )
         ]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable VJP for inverse sine."""
         from .sqrt import sqrt
 
         value = inputs[0]
-        if any(item == -1.0 or item == 1.0 for item in value.data._data):
+        if any((item == -1.0 or item == 1.0 for item in value.data._data)):
             raise ValueError("arcsin derivative is undefined at -1 and 1")
-        return [grad / sqrt(1.0 - value ** 2.0)]
+        return [grad / sqrt(1.0 - value**2.0)]
 
 
 @overload
@@ -69,9 +62,7 @@ def arcsin(value: TensorValue) -> TensorValue: ...
 def arcsin(value: TensorData) -> Tensor: ...
 
 
-def arcsin(
-    value: TensorLike | VariableNode,
-) -> TensorResult | VariableNode:
+def arcsin(value: TensorLike | VariableNode) -> TensorResult | VariableNode:
     """Return the elementwise inverse sine in radians.
 
     A graph value is applied through the graph: a Variable calculates the

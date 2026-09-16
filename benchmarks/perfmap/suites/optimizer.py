@@ -25,20 +25,15 @@ from tensors.backend import (
 from ..harness import Case, Group, Unsupported
 from ..workloads import ACCELERATED, FLOAT_DTYPES, dtype_of, tensor
 
-
 #: The optimizers and how to construct one over a parameter list.
 OPTIMIZERS: dict[str, Any] = {
     "sgd": lambda parameters: ts.optim.SGD(parameters, learning_rate=0.01),
     "adam": lambda parameters: ts.optim.Adam(parameters, learning_rate=0.001),
-    "rmsprop": lambda parameters: ts.optim.RMSprop(
-        parameters, learning_rate=0.01
-    ),
+    "rmsprop": lambda parameters: ts.optim.RMSprop(parameters, learning_rate=0.01),
 }
 
 
-def _parameters(
-    count: int, size: int, dtype_name: str
-) -> list[ts.Variable]:
+def _parameters(count: int, size: int, dtype_name: str) -> list[ts.Variable]:
     """Build ``count`` parameters of ``size`` elements each, with gradients."""
     parameters = []
     for _ in range(count):
@@ -91,23 +86,26 @@ def _optimizer_cases(
 
     first_common = dict(common)
     first_common["tags"] = {
-        **common["tags"], "curve": f"optimizer-{name}-first|{dtype_name}|{count}",
+        **common["tags"],
+        "curve": f"optimizer-{name}-first|{dtype_name}|{count}",
         "phase": "first-step",
     }
-    cases.append(Case(
-        name=f"optimizer.first_step/{suffix}",
-        run=run_first,
-        layer="optimizer",
-        validate=run_first,
-        reset=reset_first,
-        single_shot=True,
-        description=(
-            "the first step on fresh state, which allocates whatever "
-            "moments this optimizer keeps"
-        ),
-        memory=True,
-        **first_common,
-    ))
+    cases.append(
+        Case(
+            name=f"optimizer.first_step/{suffix}",
+            run=run_first,
+            layer="optimizer",
+            validate=run_first,
+            reset=reset_first,
+            single_shot=True,
+            description=(
+                "the first step on fresh state, which allocates whatever "
+                "moments this optimizer keeps"
+            ),
+            memory=True,
+            **first_common,
+        )
+    )
 
     # -- steady step: state already allocated --------------------------
     steady_parameters = _parameters(count, size, dtype_name)
@@ -125,16 +123,18 @@ def _optimizer_cases(
 
     steady_common = dict(common)
     steady_common["tags"] = {**common["tags"], "phase": "steady-step"}
-    cases.append(Case(
-        name=f"optimizer.steady_step/{suffix}",
-        run=steady_optimizer.step,
-        layer="optimizer",
-        validate=steady_optimizer.step,
-        reset=reset_steady,
-        description="a step with state already allocated",
-        memory=True,
-        **steady_common,
-    ))
+    cases.append(
+        Case(
+            name=f"optimizer.steady_step/{suffix}",
+            run=steady_optimizer.step,
+            layer="optimizer",
+            validate=steady_optimizer.step,
+            reset=reset_steady,
+            description="a step with state already allocated",
+            memory=True,
+            **steady_common,
+        )
+    )
 
     # -- the phases inside a step --------------------------------------
     phase_common = dict(common)
@@ -142,17 +142,19 @@ def _optimizer_cases(
         **common["tags"],
         "curve": f"optimizer-phase|{dtype_name}|{count}",
     }
-    cases.append(Case(
-        name=f"optimizer.prepared_gradients/{suffix}",
-        run=steady_optimizer._prepared_gradients,
-        layer="optimizer",
-        validate=steady_optimizer._prepared_gradients,
-        description=(
-            "validate every gradient's shape and dtype before any "
-            "parameter is written"
-        ),
-        **phase_common,
-    ))
+    cases.append(
+        Case(
+            name=f"optimizer.prepared_gradients/{suffix}",
+            run=steady_optimizer._prepared_gradients,
+            layer="optimizer",
+            validate=steady_optimizer._prepared_gradients,
+            description=(
+                "validate every gradient's shape and dtype before any "
+                "parameter is written"
+            ),
+            **phase_common,
+        )
+    )
 
     zero_parameters = _parameters(count, size, dtype_name)
     zero_optimizer = build(zero_parameters)
@@ -163,21 +165,21 @@ def _optimizer_cases(
                 (size,), dtype_name=dtype_name, kind="constant", value=0.01
             )
 
-    cases.append(Case(
-        name=f"optimizer.zero_grad/{suffix}",
-        run=zero_optimizer.zero_grad,
-        layer="optimizer",
-        validate=zero_optimizer.zero_grad,
-        reset=reset_zero,
-        description="clear every managed parameter's gradient",
-        **phase_common,
-    ))
+    cases.append(
+        Case(
+            name=f"optimizer.zero_grad/{suffix}",
+            run=zero_optimizer.zero_grad,
+            layer="optimizer",
+            validate=zero_optimizer.zero_grad,
+            reset=reset_zero,
+            description="clear every managed parameter's gradient",
+            **phase_common,
+        )
+    )
 
     # -- the update kernels, single and batched ------------------------
     if backend in ACCELERATED:
-        parameter_tensors = tuple(
-            parameter.data for parameter in steady_parameters
-        )
+        parameter_tensors = tuple(parameter.data for parameter in steady_parameters)
         gradient_tensors = tuple(
             tensor((size,), dtype_name=dtype_name, kind="constant", value=0.01)
             for _ in range(count)
@@ -191,9 +193,7 @@ def _optimizer_cases(
         # Adam and RMSprop keep their second moment as a scale and a
         # scaled value, so their kernels take both.
         def state() -> ts.Tensor:
-            return tensor(
-                (size,), dtype_name=dtype_name, kind="constant", value=1.0
-            )
+            return tensor((size,), dtype_name=dtype_name, kind="constant", value=1.0)
 
         if name == "sgd":
             single_call = lambda: execute_sgd_update(
@@ -205,10 +205,17 @@ def _optimizer_cases(
         elif name == "adam":
             moment, scale, scaled = state(), state(), state()
             single_call = lambda: execute_adam_update(
-                parameter_tensors[0], gradient_tensors[0],
-                moment, scale, scaled,
-                beta1=0.9, beta2=0.999, learning_rate=0.001,
-                epsilon=1e-8, first_correction=0.1, second_correction=0.001,
+                parameter_tensors[0],
+                gradient_tensors[0],
+                moment,
+                scale,
+                scaled,
+                beta1=0.9,
+                beta2=0.999,
+                learning_rate=0.001,
+                epsilon=1e-8,
+                first_correction=0.1,
+                second_correction=0.001,
             )
             moments = tuple(state() for _ in range(count))
             scales = tuple(state() for _ in range(count))
@@ -218,9 +225,14 @@ def _optimizer_cases(
             corrections = (0.1,) * count
             second = (0.001,) * count
             batched_call = lambda: execute_adam_updates(
-                parameter_tensors, gradient_tensors,
-                moments, scales, scaled_values,
-                beta1=0.9, beta2=0.999, learning_rate=0.001,
+                parameter_tensors,
+                gradient_tensors,
+                moments,
+                scales,
+                scaled_values,
+                beta1=0.9,
+                beta2=0.999,
+                learning_rate=0.001,
                 epsilon=1e-8,
                 first_corrections=corrections,
                 second_corrections=second,
@@ -228,8 +240,13 @@ def _optimizer_cases(
         else:
             scale, scaled = state(), state()
             single_call = lambda: execute_rmsprop_update(
-                parameter_tensors[0], gradient_tensors[0], scale, scaled,
-                rho=0.99, learning_rate=0.01, epsilon=1e-8,
+                parameter_tensors[0],
+                gradient_tensors[0],
+                scale,
+                scaled,
+                rho=0.99,
+                learning_rate=0.01,
+                epsilon=1e-8,
             )
             batched_call = None
 
@@ -244,35 +261,37 @@ def _optimizer_cases(
         single_common["elements"] = size
         single_common["work_items"] = size
         single_common["shape"] = (size,)
-        cases.append(Case(
-            name=f"optimizer.kernel_single/{suffix}",
-            run=single_call,
-            layer="optimizer",
-            validate=validate_single,
-            description="one parameter's fused update kernel",
-            backends=ACCELERATED,
-            **single_common,
-        ))
+        cases.append(
+            Case(
+                name=f"optimizer.kernel_single/{suffix}",
+                run=single_call,
+                layer="optimizer",
+                validate=validate_single,
+                description="one parameter's fused update kernel",
+                backends=ACCELERATED,
+                **single_common,
+            )
+        )
 
         if batched_call is not None and count > 1:
+
             def validate_batched(call: Any = batched_call) -> None:
                 if call() is None:
                     raise Unsupported(
-                        "the batched optimizer kernel declined this "
-                        "configuration"
+                        "the batched optimizer kernel declined this " "configuration"
                     )
 
-            cases.append(Case(
-                name=f"optimizer.kernel_batched/{suffix}",
-                run=batched_call,
-                layer="optimizer",
-                validate=validate_batched,
-                description=(
-                    f"one batched kernel updating all {count} parameters"
-                ),
-                backends=ACCELERATED,
-                **kernel_common,
-            ))
+            cases.append(
+                Case(
+                    name=f"optimizer.kernel_batched/{suffix}",
+                    run=batched_call,
+                    layer="optimizer",
+                    validate=validate_batched,
+                    description=(f"one batched kernel updating all {count} parameters"),
+                    backends=ACCELERATED,
+                    **kernel_common,
+                )
+            )
     return cases
 
 
@@ -318,17 +337,15 @@ def groups() -> list[Group]:
                             "and temporaries exceeds device memory in this "
                             "run"
                         )
-                    return _optimizer_cases(
-                        backend, name, count, size, dtype_name
-                    )
+                    return _optimizer_cases(backend, name, count, size, dtype_name)
 
-                result.append(Group(
-                    name=(
-                        f"optimizer/{name}/{dtype_name}/{count}x{size}"
-                    ),
-                    factory=factory,
-                    suite="optimizer",
-                ))
+                result.append(
+                    Group(
+                        name=(f"optimizer/{name}/{dtype_name}/{count}x{size}"),
+                        factory=factory,
+                        suite="optimizer",
+                    )
+                )
     return result
 
 

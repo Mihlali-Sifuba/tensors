@@ -10,23 +10,18 @@ silently absent on the other backends.
 """
 
 from __future__ import annotations
-
 from collections.abc import Sequence
 from typing import Any
-
 import tensors as ts
-
-from ..harness import Case, Group, Unsupported
-from ..workloads import CUDA_ONLY, tensor
+from benchmarks.perfmap.harness import Case, Group, Unsupported
+from benchmarks.perfmap.workloads import CUDA_ONLY, tensor
 
 
 def _primitive_cases(backend: str) -> list[Case]:
     """Measure the launch floor, barriers, and scalar reads."""
     if backend != "cuda":
         raise Unsupported(
-            "these cases measure CUDA launch, synchronization, and transfer "
-            "primitives, which have no counterpart on the Python or NumPy "
-            "backends"
+            "these cases measure CUDA launch, synchronization, and transfer primitives, which have no counterpart on the Python or NumPy backends"
         )
     import cupy
 
@@ -40,17 +35,13 @@ def _primitive_cases(backend: str) -> list[Case]:
         "elements": 1,
         "tags": {"curve": "cuda-primitive"},
     }
-
     cases: list[Case] = [
         Case(
             name="cuda.launch_floor",
             run=lambda: cupy.add(tiny, tiny),
             layer="sync",
             validate=lambda: cupy.add(tiny, tiny),
-            description=(
-                "one elementwise kernel on a single element: the launch "
-                "cost with the arithmetic removed"
-            ),
+            description="one elementwise kernel on a single element: the launch cost with the arithmetic removed",
             **common,
         ),
         Case(
@@ -74,10 +65,7 @@ def _primitive_cases(backend: str) -> list[Case]:
             run=lambda: (cupy.add(tiny, tiny), stream.synchronize()),
             layer="sync",
             validate=lambda: (cupy.add(tiny, tiny), stream.synchronize()),
-            description=(
-                "one launch followed by a barrier: the round trip a "
-                "host-visible result costs"
-            ),
+            description="one launch followed by a barrier: the round trip a host-visible result costs",
             **common,
         ),
         Case(
@@ -85,9 +73,7 @@ def _primitive_cases(backend: str) -> list[Case]:
             run=lambda: float(small[0]),
             layer="sync",
             validate=lambda: float(small[0]),
-            description=(
-                "read one device value to the host through the provider"
-            ),
+            description="read one device value to the host through the provider",
             **common,
         ),
         Case(
@@ -95,10 +81,7 @@ def _primitive_cases(backend: str) -> list[Case]:
             run=lambda: bool(cupy.all(small > 0.0)),
             layer="sync",
             validate=lambda: bool(cupy.all(small > 0.0)),
-            description=(
-                "the pattern every numerical guard uses: reduce on the "
-                "device, then convert the result to a Python bool"
-            ),
+            description="the pattern every numerical guard uses: reduce on the device, then convert the result to a Python bool",
             **common,
         ),
         Case(
@@ -106,48 +89,40 @@ def _primitive_cases(backend: str) -> list[Case]:
             run=lambda: bool(cupy.all(cupy.isfinite(small))),
             layer="sync",
             validate=lambda: bool(cupy.all(cupy.isfinite(small))),
-            description=(
-                "the exact finite-result check the kernels perform, "
-                "including its host barrier"
-            ),
+            description="the exact finite-result check the kernels perform, including its host barrier",
             **common,
         ),
     ]
-
-    # Allocation, and what the pool does about it.
     pool = cupy.get_default_memory_pool()
     for size, label in ((1_024, "4KB"), (1_000_000, "8MB")):
         allocate_common = dict(common)
         allocate_common["elements"] = size
         allocate_common["tags"] = {"curve": "cuda-allocation"}
-        cases.append(Case(
-            name=f"cuda.allocate_pooled/{label}",
-            run=lambda size=size: cupy.empty(size, dtype=cupy.float64),
-            layer="sync",
-            validate=lambda size=size: cupy.empty(size, dtype=cupy.float64),
-            description=(
-                "allocate device memory with a warm pool, which reuses a "
-                "cached block"
-            ),
-            **allocate_common,
-        ))
+        cases.append(
+            Case(
+                name=f"cuda.allocate_pooled/{label}",
+                run=lambda size=size: cupy.empty(size, dtype=cupy.float64),
+                layer="sync",
+                validate=lambda size=size: cupy.empty(size, dtype=cupy.float64),
+                description="allocate device memory with a warm pool, which reuses a cached block",
+                **allocate_common,
+            )
+        )
 
         def allocate_cold(size: int = size) -> Any:
             pool.free_all_blocks()
             return cupy.empty(size, dtype=cupy.float64)
 
-        cases.append(Case(
-            name=f"cuda.allocate_unpooled/{label}",
-            run=allocate_cold,
-            layer="sync",
-            validate=allocate_cold,
-            description=(
-                "allocate device memory after releasing the pool, so the "
-                "driver has to serve the request"
-            ),
-            **allocate_common,
-        ))
-
+        cases.append(
+            Case(
+                name=f"cuda.allocate_unpooled/{label}",
+                run=allocate_cold,
+                layer="sync",
+                validate=allocate_cold,
+                description="allocate device memory after releasing the pool, so the driver has to serve the request",
+                **allocate_common,
+            )
+        )
     return cases
 
 
@@ -155,21 +130,17 @@ def _transfer_cases(backend: str, size: int) -> list[Case]:
     """Measure host-to-device and device-to-host transfers."""
     if backend != "cuda":
         raise Unsupported(
-            "host/device transfer has no counterpart on the Python or "
-            "NumPy backends"
+            "host/device transfer has no counterpart on the Python or NumPy backends"
         )
     import cupy
     import numpy
-    from tensors.backend.storage import CudaStorage
+    from tensors.backend.cuda.storage import CudaStorage
 
     host = numpy.full(size, 1.5, dtype=numpy.float64)
     device_array = cupy.full(size, 1.5, dtype=cupy.float64)
     pinned = cupy.cuda.alloc_pinned_memory(host.nbytes)
-    pinned_host = numpy.frombuffer(
-        pinned, dtype=numpy.float64, count=size
-    )
+    pinned_host = numpy.frombuffer(pinned, dtype=numpy.float64, count=size)
     pinned_host[:] = host
-
     common: dict[str, Any] = {
         "family": "cuda/transfer",
         "backends": CUDA_ONLY,
@@ -201,10 +172,7 @@ def _transfer_cases(backend: str, size: int) -> list[Case]:
             run=lambda: cupy.asnumpy(device_array),
             layer="sync",
             validate=lambda: cupy.asnumpy(device_array),
-            description=(
-                "copy device values back to the host, which necessarily "
-                "waits for the device"
-            ),
+            description="copy device values back to the host, which necessarily waits for the device",
             **common,
         ),
         Case(
@@ -216,43 +184,33 @@ def _transfer_cases(backend: str, size: int) -> list[Case]:
             **common,
         ),
     ]
-
-    # The same transfers through the package, so the library's share of a
-    # transfer is visible next to the provider's.
-    device_tensor = tensor(
-        (size,), dtype_name="float64", kind="constant", value=1.5
-    )
+    device_tensor = tensor((size,), dtype_name="float64", kind="constant", value=1.5)
     package_common = dict(common)
     package_common["tags"] = {"curve": "cuda-transfer-package"}
-    # Tensor() accepts no provider array, so a host NumPy buffer reaches
-    # the device by way of the storage class. That is the transfer the
-    # package actually performs.
-    cases.append(Case(
-        name=f"cuda.tensor_from_host/{size}",
-        run=lambda: ts.Tensor(
-            CudaStorage(host, ts.float64), dtype=ts.float64, shape=(size,)
-        ),
-        layer="storage",
-        validate=lambda: ts.Tensor(
-            CudaStorage(host, ts.float64), dtype=ts.float64, shape=(size,)
-        ),
-        description=(
-            "construct a device Tensor from host NumPy values through "
-            "device storage, which public construction then copies"
-        ),
-        **package_common,
-    ))
-    cases.append(Case(
-        name=f"cuda.tensor_to_host/{size}",
-        run=device_tensor.tolist,
-        layer="storage",
-        validate=device_tensor.tolist,
-        description=(
-            "materialize a device Tensor as a Python list, which transfers "
-            "to the host and then converts element by element"
-        ),
-        **package_common,
-    ))
+    cases.append(
+        Case(
+            name=f"cuda.tensor_from_host/{size}",
+            run=lambda: ts.Tensor(
+                CudaStorage(host, ts.float64), dtype=ts.float64, shape=(size,)
+            ),
+            layer="storage",
+            validate=lambda: ts.Tensor(
+                CudaStorage(host, ts.float64), dtype=ts.float64, shape=(size,)
+            ),
+            description="construct a device Tensor from host NumPy values through device storage, which public construction then copies",
+            **package_common,
+        )
+    )
+    cases.append(
+        Case(
+            name=f"cuda.tensor_to_host/{size}",
+            run=device_tensor.tolist,
+            layer="storage",
+            validate=device_tensor.tolist,
+            description="materialize a device Tensor as a Python list, which transfers to the host and then converts element by element",
+            **package_common,
+        )
+    )
     return cases
 
 
@@ -266,8 +224,7 @@ def _guard_cases(backend: str, size: int) -> list[Case]:
     """
     if backend != "cuda":
         raise Unsupported(
-            "these cases exist to attribute CUDA host barriers and have no "
-            "counterpart on the other backends"
+            "these cases exist to attribute CUDA host barriers and have no counterpart on the other backends"
         )
     common: dict[str, Any] = {
         "family": "cuda/guard",
@@ -283,73 +240,54 @@ def _guard_cases(backend: str, size: int) -> list[Case]:
             (
                 "add",
                 lambda value=value: value + value,
-                "elementwise addition, whose float32 path range-checks the "
-                "narrowed result",
+                "elementwise addition, whose float32 path range-checks the narrowed result",
             ),
-            (
-                "sum",
-                lambda value=value: ts.sum(value),
-                "a guarded reduction",
-            ),
-            (
-                "mean",
-                lambda value=value: ts.mean(value),
-                "a guarded mean",
-            ),
-            (
-                "exp",
-                lambda value=value: ts.exp(value),
-                "a unary transform",
-            ),
+            ("sum", lambda value=value: ts.sum(value), "a guarded reduction"),
+            ("mean", lambda value=value: ts.mean(value), "a guarded mean"),
+            ("exp", lambda value=value: ts.exp(value), "a unary transform"),
         ):
-            cases.append(Case(
-                name=f"cuda.guard_{name}/{dtype_name}/{size}",
-                run=call,
-                layer="public",
-                validate=call,
-                description=description,
-                dtype=dtype_name,
-                family=f"cuda/guard/{name}",
-                tags={
-                    "curve": f"cuda-guard-{name}|{dtype_name}",
-                    "dtype_pair": f"cuda-guard-{name}",
-                },
-                **{
-                    key: item for key, item in common.items()
-                    if key not in ("family",)
-                },
-            ))
+            cases.append(
+                Case(
+                    name=f"cuda.guard_{name}/{dtype_name}/{size}",
+                    run=call,
+                    layer="public",
+                    validate=call,
+                    description=description,
+                    dtype=dtype_name,
+                    family=f"cuda/guard/{name}",
+                    tags={
+                        "curve": f"cuda-guard-{name}|{dtype_name}",
+                        "dtype_pair": f"cuda-guard-{name}",
+                    },
+                    **{
+                        key: item
+                        for key, item in common.items()
+                        if key not in ("family",)
+                    },
+                )
+            )
     return cases
 
 
 def groups() -> list[Group]:
     """Return the CUDA primitive, transfer, and guard groups."""
     result: list[Group] = [
-        Group(
-            name="cuda/primitives",
-            factory=_primitive_cases,
-            suite="cuda",
-        ),
+        Group(name="cuda/primitives", factory=_primitive_cases, suite="cuda")
     ]
     for size in (1, 1_024, 1_000_000, 10_000_000):
+
         def transfer(backend: str, size: int = size) -> Sequence[Case]:
             return _transfer_cases(backend, size)
 
-        result.append(Group(
-            name=f"cuda/transfer/{size}",
-            factory=transfer,
-            suite="cuda",
-        ))
-
+        result.append(
+            Group(name=f"cuda/transfer/{size}", factory=transfer, suite="cuda")
+        )
     for size in (1_024, 100_000, 1_000_000):
+
         def guard(backend: str, size: int = size) -> Sequence[Case]:
             return _guard_cases(backend, size)
 
-        result.append(Group(
-            name=f"cuda/guard/{size}",
-            factory=guard,
-            suite="cuda",
-        ))
+        result.append(Group(name=f"cuda/guard/{size}", factory=guard, suite="cuda"))
     return result
 
 

@@ -29,7 +29,6 @@ from ..workloads import (
     provider_module,
 )
 
-
 #: Integer creation is per-element Python work on every backend, so its
 #: curve stops where a single call would take seconds.
 INTEGER_CREATION_CEILING = 1_000_000
@@ -69,36 +68,33 @@ def _creation_cases(
             "ones": lambda: provider.ones(size, dtype=native),
             "full": lambda: provider.full(size, 3, dtype=native),
             "arange": lambda: provider.arange(size, dtype=native),
-            "linspace": lambda: provider.linspace(
-                0.0, 1.0, size, dtype=native
-            ),
+            "linspace": lambda: provider.linspace(0.0, 1.0, size, dtype=native),
         }
         for name, call in provider_calls.items():
             if name == "linspace" and dtype.kind == "integer":
                 continue
-            cases.append(Case(
-                name=f"provider.{name}/{dtype_name}/{size}",
-                run=call,
-                layer="provider",
-                validate=call,
-                description=f"raw provider {name}",
-                backends=ACCELERATED,
-                **common(name),
-            ))
+            cases.append(
+                Case(
+                    name=f"provider.{name}/{dtype_name}/{size}",
+                    run=call,
+                    layer="provider",
+                    validate=call,
+                    description=f"raw provider {name}",
+                    backends=ACCELERATED,
+                    **common(name),
+                )
+            )
 
         kernel_calls = {
-            "full": lambda: kernels.full(
-                3, dtype=dtype, output_shape=shape
-            ),
-            "arange": lambda: kernels.arange(
-                0, size, 1, dtype=dtype, output_shape=shape
-            ),
+            "full": lambda: kernels.full(shape, 3, dtype=dtype),
+            "arange": lambda: kernels.arange(0, 1, size, dtype=dtype),
         }
         if dtype.kind != "integer":
             kernel_calls["linspace"] = lambda: kernels.linspace(
-                0.0, 1.0, size, dtype=dtype, output_shape=shape
+                0.0, 1.0, size, dtype=dtype
             )
         for name, call in kernel_calls.items():
+
             def validate(call: Any = call, name: str = name) -> None:
                 if call() is None:
                     raise Unsupported(
@@ -106,38 +102,38 @@ def _creation_cases(
                         "to the Python reference implementation"
                     )
 
-            cases.append(Case(
-                name=f"kernel.{name}/{dtype_name}/{size}",
-                run=call,
-                layer="kernel",
-                validate=validate,
-                description=f"internal {name} kernel",
-                backends=ACCELERATED,
-                **common(name),
-            ))
+            cases.append(
+                Case(
+                    name=f"kernel.{name}/{dtype_name}/{size}",
+                    run=call,
+                    layer="kernel",
+                    validate=validate,
+                    description=f"internal {name} kernel",
+                    backends=ACCELERATED,
+                    **common(name),
+                )
+            )
 
         dispatch_calls = {
-            "full": lambda: execute_full(
-                3, dtype=dtype, output_shape=shape
-            ),
-            "arange": lambda: execute_arange(
-                0, size, 1, dtype=dtype, output_shape=shape
-            ),
+            "full": lambda: execute_full(shape, 3, dtype=dtype),
+            "arange": lambda: execute_arange(0, 1, size, dtype=dtype),
         }
         if dtype.kind != "integer":
             dispatch_calls["linspace"] = lambda: execute_linspace(
-                0.0, 1.0, size, dtype=dtype, output_shape=shape
+                0.0, 1.0, size, dtype=dtype
             )
         for name, call in dispatch_calls.items():
-            cases.append(Case(
-                name=f"dispatch.{name}/{dtype_name}/{size}",
-                run=call,
-                layer="dispatch",
-                validate=call,
-                description=f"execute_{name}: policy and kernel lookup",
-                backends=ACCELERATED,
-                **common(name),
-            ))
+            cases.append(
+                Case(
+                    name=f"dispatch.{name}/{dtype_name}/{size}",
+                    run=call,
+                    layer="dispatch",
+                    validate=call,
+                    description=f"execute_{name}: policy and kernel lookup",
+                    backends=ACCELERATED,
+                    **common(name),
+                )
+            )
 
     public_calls = {
         "zeros": lambda: ts.zeros(shape, dtype=dtype),
@@ -146,19 +142,19 @@ def _creation_cases(
         "arange": lambda: ts.arange(0, size, 1, dtype=dtype),
     }
     if dtype.kind != "integer":
-        public_calls["linspace"] = lambda: ts.linspace(
-            0.0, 1.0, size, dtype=dtype
-        )
+        public_calls["linspace"] = lambda: ts.linspace(0.0, 1.0, size, dtype=dtype)
     for name, call in public_calls.items():
-        cases.append(Case(
-            name=f"public.{name}/{dtype_name}/{size}",
-            run=call,
-            layer="public",
-            validate=call,
-            description=f"public {name}",
-            memory=name == "zeros",
-            **common(name),
-        ))
+        cases.append(
+            Case(
+                name=f"public.{name}/{dtype_name}/{size}",
+                run=call,
+                layer="public",
+                validate=call,
+                description=f"public {name}",
+                memory=name == "zeros",
+                **common(name),
+            )
+        )
     return cases
 
 
@@ -180,58 +176,57 @@ def _eye_cases(backend: str, side: int) -> list[Case]:
     if backend in ACCELERATED:
         provider = provider_module(backend)
         kernels = kernel_module(backend)
-        cases.append(Case(
-            name=f"provider.eye/{side}",
-            run=lambda: provider.eye(side, dtype=provider.float64),
-            layer="provider",
-            validate=lambda: provider.eye(side, dtype=provider.float64),
-            description="raw provider identity matrix",
-            backends=ACCELERATED,
-            **common,
-        ))
+        cases.append(
+            Case(
+                name=f"provider.eye/{side}",
+                run=lambda: provider.eye(side, dtype=provider.float64),
+                layer="provider",
+                validate=lambda: provider.eye(side, dtype=provider.float64),
+                description="raw provider identity matrix",
+                backends=ACCELERATED,
+                **common,
+            )
+        )
 
         def run_kernel() -> Any:
-            return kernels.eye(
-                side, side, 0,
-                dtype=ts.float64, output_shape=(side, side),
-            )
+            return kernels.eye(side, side, 0, dtype=ts.float64)
 
         def validate_kernel() -> None:
             if run_kernel() is None:
                 raise Unsupported("the eye kernel declines this dtype")
 
-        cases.append(Case(
-            name=f"kernel.eye/{side}",
-            run=run_kernel,
-            layer="kernel",
-            validate=validate_kernel,
-            description="internal identity kernel",
-            backends=ACCELERATED,
+        cases.append(
+            Case(
+                name=f"kernel.eye/{side}",
+                run=run_kernel,
+                layer="kernel",
+                validate=validate_kernel,
+                description="internal identity kernel",
+                backends=ACCELERATED,
+                **common,
+            )
+        )
+        cases.append(
+            Case(
+                name=f"dispatch.eye/{side}",
+                run=lambda: execute_eye(side, side, 0, dtype=ts.float64),
+                layer="dispatch",
+                validate=lambda: execute_eye(side, side, 0, dtype=ts.float64),
+                description="execute_eye",
+                backends=ACCELERATED,
+                **common,
+            )
+        )
+    cases.append(
+        Case(
+            name=f"public.eye/{side}",
+            run=lambda: ts.eye(side),
+            layer="public",
+            validate=lambda: ts.eye(side),
+            description="public identity matrix",
             **common,
-        ))
-        cases.append(Case(
-            name=f"dispatch.eye/{side}",
-            run=lambda: execute_eye(
-                side, side, 0,
-                dtype=ts.float64, output_shape=(side, side),
-            ),
-            layer="dispatch",
-            validate=lambda: execute_eye(
-                side, side, 0,
-                dtype=ts.float64, output_shape=(side, side),
-            ),
-            description="execute_eye",
-            backends=ACCELERATED,
-            **common,
-        ))
-    cases.append(Case(
-        name=f"public.eye/{side}",
-        run=lambda: ts.eye(side),
-        layer="public",
-        validate=lambda: ts.eye(side),
-        description="public identity matrix",
-        **common,
-    ))
+        )
+    )
     return cases
 
 
@@ -240,15 +235,14 @@ def groups() -> list[Group]:
     result: list[Group] = []
     for dtype_name in (*FLOAT_DTYPES, *INTEGER_DTYPES):
         for size in (1, 100, 10_000, 1_000_000, 10_000_000):
+
             def factory(
                 backend: str,
                 size: int = size,
                 dtype_name: str = dtype_name,
             ) -> Sequence[Case]:
                 if backend == "python" and size > 100_000:
-                    raise Unsupported(
-                        "exceeds the Python backend creation ceiling"
-                    )
+                    raise Unsupported("exceeds the Python backend creation ceiling")
                 if backend == "cuda" and size > 10_000_000:
                     raise Unsupported("exceeds available device memory")
                 # Integer creation is per-element Python work on every
@@ -273,26 +267,30 @@ def groups() -> list[Group]:
                     )
                 return _creation_cases(backend, size, dtype_name)
 
-            result.append(Group(
-                name=f"creation/values/{dtype_name}/{size}",
-                factory=factory,
-                suite="creation",
-            ))
+            result.append(
+                Group(
+                    name=f"creation/values/{dtype_name}/{size}",
+                    factory=factory,
+                    suite="creation",
+                )
+            )
 
     for side in (4, 64, 512, 2_048):
+
         def eye_factory(backend: str, side: int = side) -> Sequence[Case]:
             if backend == "python" and side > 256:
                 raise Unsupported(
-                    "exceeds the Python backend ceiling for identity "
-                    "construction"
+                    "exceeds the Python backend ceiling for identity " "construction"
                 )
             return _eye_cases(backend, side)
 
-        result.append(Group(
-            name=f"creation/eye/{side}",
-            factory=eye_factory,
-            suite="creation",
-        ))
+        result.append(
+            Group(
+                name=f"creation/eye/{side}",
+                factory=eye_factory,
+                suite="creation",
+            )
+        )
     return result
 
 

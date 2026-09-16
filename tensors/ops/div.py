@@ -1,39 +1,27 @@
 """Division operation."""
 
 from typing import List, Optional, Union
-
-from ..backend import execute_divide, execute_division_denominator_gradient
-from ..dtype import result_dtype
-from .operation import Operation
-from ..tensor import Tensor
-from ..utils.broadcasting import (
-    broadcast_binary_values,
-    broadcast_to,
-    broadcast_tensors,
-)
-from ._utils import sum_to_shape
-
+from tensors.backend import execute_divide, execute_division_denominator_gradient
+from tensors.dtype import result_dtype
+from tensors.ops.operation import Operation
+from tensors.tensor import Tensor
+from tensors.utils.broadcasting import broadcast_to, broadcast_tensors
+from tensors.ops._utils import sum_to_shape
 
 Scalar = Union[int, float]
 
 
 def _negative_product_over_square(
-    left: float,
-    right: float,
-    denominator: float,
+    left: float, right: float, denominator: float
 ) -> float:
     """Evaluate ``-left * right / denominator**2`` without range loss."""
     return _product_over_denominator_power(
-        [-float(left), float(right)],
-        float(denominator),
-        2,
+        [-float(left), float(right)], float(denominator), 2
     )
 
 
 def _product_over_denominator_power(
-    factors: list[float],
-    denominator: float,
-    power: int,
+    factors: list[float], denominator: float, power: int
 ) -> float:
     """Evaluate a product divided by a denominator power exactly when finite."""
     import math
@@ -41,20 +29,18 @@ def _product_over_denominator_power(
     denominator = float(denominator)
     if denominator == 0.0:
         raise ZeroDivisionError("Division by zero")
-    if any(value == 0.0 for value in factors):
+    if any((value == 0.0 for value in factors)):
         return 0.0
-    if all(math.isfinite(value) for value in factors + [denominator]):
+    if all((math.isfinite(value) for value in factors + [denominator])):
         numerator = 1
         divisor = 1
         for factor in factors:
             factor_numerator, factor_denominator = factor.as_integer_ratio()
             numerator *= factor_numerator
             divisor *= factor_denominator
-        denominator_numerator, denominator_denominator = (
-            denominator.as_integer_ratio()
-        )
-        numerator *= denominator_denominator ** power
-        divisor *= denominator_numerator ** power
+        denominator_numerator, denominator_denominator = denominator.as_integer_ratio()
+        numerator *= denominator_denominator**power
+        divisor *= denominator_numerator**power
         try:
             return numerator / divisor
         except OverflowError:
@@ -81,107 +67,53 @@ class Div(Operation):
         if isinstance(b, (int, float)):
             if b == 0:
                 raise ZeroDivisionError("Division by zero")
-            accelerated = execute_divide(
-                a,
-                b,
-                dtype=dtype,
-                output_shape=a.shape,
-            )
-            if accelerated is not None:
-                return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
-            data = [x / b for x in a._data]
-            return Tensor._from_values(data, dtype, a.shape)
+            accelerated = execute_divide(a, b, dtype=dtype, output_shape=a.shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
         if isinstance(b, Tensor):
             shape = a.shape.broadcast_with(b.shape)
-            accelerated = execute_divide(
-                a,
-                b,
-                dtype=dtype,
-                output_shape=shape,
-            )
-            if accelerated is not None:
-                return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
-            def divide(x, y):
-                if y == 0:
-                    raise ZeroDivisionError("Division by zero")
-                return x / y
-
-            data = broadcast_binary_values(a, b, shape, divide)
-            return Tensor._from_values(data, dtype, shape)
+            accelerated = execute_divide(a, b, dtype=dtype, output_shape=shape)
+            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
         raise TypeError(f"Unsupported: {type(b)}")
 
     def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Optional[Tensor]]:
         a, b = inputs
         need_numerator, need_denominator = needs_input_grad
-        # The denominator VJP needs both operands broadcast together; the
-        # numerator VJP does not, so only pay for it when it is requested.
         numerator_gradient = (
-            sum_to_shape(self.forward(grad, b), a.shape)
-            if need_numerator
-            else None
+            sum_to_shape(self.forward(grad, b), a.shape) if need_numerator else None
         )
         if not need_denominator:
             return [numerator_gradient, None]
-
         expanded_a, expanded_b = broadcast_tensors(a, b)
-        accelerated = execute_division_denominator_gradient(
-            grad,
-            expanded_a,
-            expanded_b,
+        storage = execute_division_denominator_gradient(grad, expanded_a, expanded_b)
+        denominator_gradient = Tensor._from_owned_storage(
+            storage, dtype=grad.dtype, shape=grad.shape
         )
-        if accelerated is not None:
-            db = Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=grad.shape)
-        else:
-            db = Tensor(
-                [
-                    _negative_product_over_square(g, x, y)
-                    for g, x, y in zip(
-                        grad._data,
-                        expanded_a._data,
-                        expanded_b._data,
-                    )
-                ],
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
-        return [numerator_gradient, sum_to_shape(db, b.shape)]
+        return [numerator_gradient, sum_to_shape(denominator_gradient, b.shape)]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable VJP for division."""
         left, right = inputs
         need_numerator, need_denominator = needs_input_grad
-        from ._utils import sum_to_shape_graph
+        from tensors.ops._utils import sum_to_shape_graph
+
         return [
-            sum_to_shape_graph(grad / right, left.shape)
-            if need_numerator
-            else None,
-            sum_to_shape_graph(
-                _division_denominator_vjp(grad, left, right),
-                right.shape,
-            )
-            if need_denominator
-            else None,
+            sum_to_shape_graph(grad / right, left.shape) if need_numerator else None,
+            (
+                sum_to_shape_graph(
+                    _division_denominator_vjp(grad, left, right), right.shape
+                )
+                if need_denominator
+                else None
+            ),
         ]
 
 
 def _expanded_division_inputs(
-    grad: Tensor,
-    numerator: Tensor,
-    denominator: Tensor,
+    grad: Tensor, numerator: Tensor, denominator: Tensor
 ) -> tuple[Tensor, Tensor, Tensor]:
-    shape = grad.shape.broadcast_with(numerator.shape).broadcast_with(
-        denominator.shape
-    )
+    shape = grad.shape.broadcast_with(numerator.shape).broadcast_with(denominator.shape)
     return (
         broadcast_to(grad, shape),
         broadcast_to(numerator, shape),
@@ -195,45 +127,21 @@ class DivisionDenominatorGradient(Operation):
     __slots__ = ()
     name = "division_denominator_gradient"
 
-    def forward(
-        self,
-        grad: Tensor,
-        numerator: Tensor,
-        denominator: Tensor,
-    ) -> Tensor:
+    def forward(self, grad: Tensor, numerator: Tensor, denominator: Tensor) -> Tensor:
         grad, numerator, denominator = _expanded_division_inputs(
-            grad,
-            numerator,
-            denominator,
+            grad, numerator, denominator
         )
-        if any(value == 0 for value in denominator._data):
+        if any((value == 0 for value in denominator._data)):
             raise ZeroDivisionError("Division by zero")
         accelerated = execute_division_denominator_gradient(
-            grad,
-            numerator,
-            denominator,
+            grad, numerator, denominator
         )
-        if accelerated is not None:
-            return Tensor._from_owned_storage(
-                accelerated,
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
-        values = [
-            _negative_product_over_square(upstream, value, divisor)
-            for upstream, value, divisor in zip(
-                grad._data,
-                numerator._data,
-                denominator._data,
-            )
-        ]
-        return Tensor(values, dtype=grad.dtype, shape=grad.shape)
+        return Tensor._from_owned_storage(
+            accelerated, dtype=grad.dtype, shape=grad.shape
+        )
 
     def backward(
-        self,
-        outer_grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Optional[Tensor]]:
         grad, numerator, denominator = inputs
         need_grad, need_numerator, need_denominator = needs_input_grad
@@ -251,9 +159,7 @@ class DivisionDenominatorGradient(Operation):
             expanded_denominator._data,
         ):
             if need_grad:
-                grad_values.append(
-                    _negative_product_over_square(outer, value, divisor)
-                )
+                grad_values.append(_negative_product_over_square(outer, value, divisor))
             if need_numerator:
                 numerator_values.append(
                     _negative_product_over_square(outer, upstream, divisor)
@@ -271,77 +177,50 @@ class DivisionDenominatorGradient(Operation):
 
         def reduced(values: list[float], target: Tensor) -> Tensor:
             return sum_to_shape(
-                Tensor(values, dtype=outer_grad.dtype, shape=shape),
-                target.shape,
+                Tensor(values, dtype=outer_grad.dtype, shape=shape), target.shape
             )
 
         return [
             reduced(grad_values, grad) if need_grad else None,
             reduced(numerator_values, numerator) if need_numerator else None,
-            reduced(denominator_values, denominator)
-            if need_denominator
-            else None,
+            reduced(denominator_values, denominator) if need_denominator else None,
         ]
 
-    def backward_graph(
-        self,
-        outer_grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
-        from ._utils import sum_to_shape_graph
+    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        from tensors.ops._utils import sum_to_shape_graph
 
         grad, numerator, denominator = inputs
         need_grad, need_numerator, need_denominator = needs_input_grad
         return [
-            sum_to_shape_graph(
-                _division_denominator_vjp(
-                    outer_grad,
-                    numerator,
-                    denominator,
-                ),
-                grad.shape,
-            )
-            if need_grad
-            else None,
-            sum_to_shape_graph(
-                _division_denominator_vjp(
-                    outer_grad,
-                    grad,
-                    denominator,
-                ),
-                numerator.shape,
-            )
-            if need_numerator
-            else None,
-            sum_to_shape_graph(
-                2.0
-                * outer_grad
-                * grad
-                * numerator
-                / (denominator ** 3.0),
-                denominator.shape,
-            )
-            if need_denominator
-            else None,
+            (
+                sum_to_shape_graph(
+                    _division_denominator_vjp(outer_grad, numerator, denominator),
+                    grad.shape,
+                )
+                if need_grad
+                else None
+            ),
+            (
+                sum_to_shape_graph(
+                    _division_denominator_vjp(outer_grad, grad, denominator),
+                    numerator.shape,
+                )
+                if need_numerator
+                else None
+            ),
+            (
+                sum_to_shape_graph(
+                    2.0 * outer_grad * grad * numerator / denominator**3.0,
+                    denominator.shape,
+                )
+                if need_denominator
+                else None
+            ),
         ]
 
 
-def _constant_like(reference, value: float):
-    from ..variable import Variable
-
-    return Variable(
-        Tensor(
-            [value] * reference.size,
-            dtype=reference.dtype,
-            shape=reference.shape,
-        ),
-        requires_grad=False,
-    )
-
-
 def _division_denominator_vjp(grad, numerator, denominator):
-    from ..variable import Variable
+    from tensors.variable import Variable
 
     operation = DivisionDenominatorGradient()
     return Variable._apply_operation(operation, (grad, numerator, denominator))
@@ -354,20 +233,6 @@ def divide_scalar(numerator: Scalar, denominator: Tensor) -> Tensor:
     """Return ``numerator / denominator`` for a scalar left operand."""
     dtype = result_dtype(denominator.dtype, numerator, division=True)
     accelerated = execute_divide(
-        numerator,
-        denominator,
-        dtype=dtype,
-        output_shape=denominator.shape,
+        numerator, denominator, dtype=dtype, output_shape=denominator.shape
     )
-    if accelerated is not None:
-        return Tensor._from_owned_storage(
-            accelerated,
-            dtype=dtype,
-            shape=denominator.shape,
-        )
-    values = []
-    for value in denominator._data:
-        if value == 0:
-            raise ZeroDivisionError("Division by zero")
-        values.append(numerator / value)
-    return Tensor(values, dtype=dtype, shape=denominator.shape)
+    return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=denominator.shape)

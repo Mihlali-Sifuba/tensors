@@ -1,16 +1,14 @@
 """Elementwise inverse hyperbolic cosine and its differentiation rule."""
 
 from __future__ import annotations
-
+from tensors.backend import dispatch as backend_dispatch
 import math
 from typing import TYPE_CHECKING, Any, overload
-
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
-from ._unary import unary_backward, unary_forward
 
 if TYPE_CHECKING:
     from ..graph.node import VariableNode
@@ -24,28 +22,30 @@ class ArcCosh(Operation):
 
     def forward(self, value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
-        return unary_forward("arccosh", value, dtype=dtype, fallback=_arccosh)
+        return Tensor._from_owned_storage(
+            backend_dispatch.execute_arccosh(value, dtype=dtype),
+            dtype=dtype,
+            shape=value.shape,
+        )
 
     def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Tensor]:
         value = inputs[0]
-        return [unary_backward("arccosh", grad, value, fallback=_gradient)]
+        return [
+            Tensor._from_owned_storage(
+                backend_dispatch.execute_arccosh_gradient(grad, value),
+                dtype=grad.dtype,
+                shape=value.shape,
+            )
+        ]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable VJP for inverse hyperbolic cosine."""
         from .sqrt import sqrt
 
         value = inputs[0]
-        if any(item == 1.0 for item in value.data._data):
+        if any((item == 1.0 for item in value.data._data)):
             raise ValueError("arccosh derivative is undefined at 1")
         denominator = sqrt(value - 1.0) * sqrt(value + 1.0)
         return [grad / denominator]
@@ -63,9 +63,7 @@ def arccosh(value: TensorValue) -> TensorValue: ...
 def arccosh(value: TensorData) -> Tensor: ...
 
 
-def arccosh(
-    value: TensorLike | VariableNode,
-) -> TensorResult | VariableNode:
+def arccosh(value: TensorLike | VariableNode) -> TensorResult | VariableNode:
     """Return the elementwise inverse hyperbolic cosine.
 
     A graph value is applied through the graph: a Variable calculates the
@@ -98,7 +96,5 @@ def _gradient(upstream, value):
     if math.isinf(value):
         derivative = 0.0
     else:
-        derivative = 1.0 / (
-            math.sqrt(value - 1.0) * math.sqrt(value + 1.0)
-        )
+        derivative = 1.0 / (math.sqrt(value - 1.0) * math.sqrt(value + 1.0))
     return upstream * derivative

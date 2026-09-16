@@ -1,16 +1,14 @@
 """Elementwise inverse hyperbolic sine and its differentiation rule."""
 
 from __future__ import annotations
-
+from tensors.backend import dispatch as backend_dispatch
 import math
 from typing import TYPE_CHECKING, Any, overload
-
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
-from ._unary import unary_backward, unary_forward
 
 if TYPE_CHECKING:
     from ..graph.node import VariableNode
@@ -24,28 +22,25 @@ class ArcSinh(Operation):
 
     def forward(self, value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
-        return unary_forward(
-            "arcsinh",
-            value,
+        return Tensor._from_owned_storage(
+            backend_dispatch.execute_arcsinh(value, dtype=dtype),
             dtype=dtype,
-            fallback=lambda item: math.asinh(float(item)),
+            shape=value.shape,
         )
 
     def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Tensor]:
         value = inputs[0]
-        return [unary_backward("arcsinh", grad, value, fallback=_gradient)]
+        return [
+            Tensor._from_owned_storage(
+                backend_dispatch.execute_arcsinh_gradient(grad, value),
+                dtype=grad.dtype,
+                shape=value.shape,
+            )
+        ]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a stable differentiable VJP for inverse hyperbolic sine."""
         from .abs import abs
         from .sqrt import sqrt
@@ -56,24 +51,15 @@ class ArcSinh(Operation):
         reciprocal_scale = 1.0 / scale
         normalized_value = value / scale
         stable_derivative = reciprocal_scale / sqrt(
-            reciprocal_scale ** 2.0 + normalized_value ** 2.0
+            reciprocal_scale**2.0 + normalized_value**2.0
         )
-        direct_derivative = 1.0 / sqrt(1.0 + value ** 2.0)
+        direct_derivative = 1.0 / sqrt(1.0 + value**2.0)
         large_mask = Tensor(
-            [
-                1.0 if math.fabs(float(item)) > 1.0 else 0.0
-                for item in value.data._data
-            ],
+            [1.0 if math.fabs(float(item)) > 1.0 else 0.0 for item in value.data._data],
             dtype=grad.dtype,
             shape=value.shape,
         )
-        return [
-            grad * where(
-                large_mask,
-                stable_derivative,
-                direct_derivative,
-            )
-        ]
+        return [grad * where(large_mask, stable_derivative, direct_derivative)]
 
 
 @overload
@@ -88,9 +74,7 @@ def arcsinh(value: TensorValue) -> TensorValue: ...
 def arcsinh(value: TensorData) -> Tensor: ...
 
 
-def arcsinh(
-    value: TensorLike | VariableNode,
-) -> TensorResult | VariableNode:
+def arcsinh(value: TensorLike | VariableNode) -> TensorResult | VariableNode:
     """Return the elementwise inverse hyperbolic sine.
 
     A graph value is applied through the graph: a Variable calculates the

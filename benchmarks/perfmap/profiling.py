@@ -31,52 +31,42 @@ import importlib
 import io
 import pstats
 import types
+import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
-
-#: Every kernel module that binds ``_numpy`` as its own global. Each has to
-#: be patched separately, because the import is by symbol.
-_KERNEL_MODULES: tuple[str, ...] = (
-    "tensors.backend.kernels.core",
-    "tensors.backend.kernels.creation",
-    "tensors.backend.kernels.manipulation",
-    "tensors.backend.kernels.conv.backward",
-    "tensors.backend.kernels.conv.forward",
-    "tensors.backend.kernels.elementwise.binary_ops",
-    "tensors.backend.kernels.elementwise.clipping",
-    "tensors.backend.kernels.elementwise.comparison_ops",
-    "tensors.backend.kernels.elementwise.extrema",
-    "tensors.backend.kernels.elementwise.selection",
-    "tensors.backend.kernels.elementwise.unary_ops",
-    "tensors.backend.kernels.fusion.backward",
-    "tensors.backend.kernels.fusion.forward",
-    "tensors.backend.kernels.linalg.matmul_ops",
-    "tensors.backend.kernels.linalg.outer_ops",
-    "tensors.backend.kernels.nn.losses",
-    "tensors.backend.kernels.nn.normalization_ops",
-    "tensors.backend.kernels.nn.validation",
-    "tensors.backend.kernels.optim.adam",
-    "tensors.backend.kernels.optim.rmsprop",
-    "tensors.backend.kernels.optim.sgd",
-    "tensors.backend.kernels.reductions.extrema",
-    "tensors.backend.kernels.reductions.logsumexp_ops",
-    "tensors.backend.kernels.reductions.reduction_ops",
-    "tensors.backend.kernels.reductions.shape",
+#: Provider primitives that move or duplicate values rather than compute.
+COPY_PRIMITIVES = frozenset(
+    {
+        "asarray",
+        "ascontiguousarray",
+        "array",
+        "copy",
+        "asnumpy",
+        "astype",
+        "reshape",
+        "broadcast_arrays",
+        "broadcast_to",
+        "squeeze",
+        "expand_dims",
+        "concatenate",
+        "stack",
+        "put_along_axis",
+    }
 )
 
-#: Provider primitives that move or duplicate values rather than compute.
-COPY_PRIMITIVES = frozenset({
-    "asarray", "ascontiguousarray", "array", "copy", "asnumpy",
-    "astype", "reshape", "broadcast_arrays", "broadcast_to", "squeeze",
-    "expand_dims", "concatenate", "stack", "put_along_axis",
-})
-
 #: Provider primitives whose result a guard converts to a Python bool.
-GUARD_PRIMITIVES = frozenset({
-    "isfinite", "isnan", "all", "any", "signbit", "floor",
-})
+GUARD_PRIMITIVES = frozenset(
+    {
+        "isfinite",
+        "isnan",
+        "all",
+        "any",
+        "signbit",
+        "floor",
+    }
+)
 
 
 class _RecordingProvider(types.ModuleType):
@@ -124,23 +114,19 @@ def _recording_provider(backend: str) -> Iterator[dict[str, int]]:
     counts: dict[str, int] = {}
     proxy = _RecordingProvider(real, counts)
 
-    def provider() -> Any:
-        return proxy
-
-    patched: list[tuple[Any, Any]] = []
-    for name in _KERNEL_MODULES:
-        try:
-            module = importlib.import_module(name)
-        except ImportError:
-            continue
-        if hasattr(module, "_numpy"):
-            patched.append((module, module._numpy))
-            module._numpy = provider
+    importlib.import_module(f"tensors.backend.{backend}.kernels")
+    symbol = "cupy" if backend == "cuda" else "numpy"
+    prefix = f"tensors.backend.{backend}."
+    patched = []
+    for name, module in tuple(sys.modules.items()):
+        if name.startswith(prefix) and getattr(module, symbol, None) is real:
+            patched.append(module)
+            setattr(module, symbol, proxy)
     try:
         yield counts
     finally:
-        for module, original in patched:
-            module._numpy = original
+        for module in patched:
+            setattr(module, symbol, real)
 
 
 def provider_calls(
@@ -162,15 +148,15 @@ def provider_calls(
     total = sum(recorded.values())
     return {
         "total_calls": total,
-        "calls": dict(
-            sorted(recorded.items(), key=lambda item: (-item[1], item[0]))
-        ),
+        "calls": dict(sorted(recorded.items(), key=lambda item: (-item[1], item[0]))),
         "copy_calls": {
-            name: count for name, count in recorded.items()
+            name: count
+            for name, count in recorded.items()
             if name.rsplit(".", 1)[-1] in COPY_PRIMITIVES
         },
         "guard_calls": {
-            name: count for name, count in recorded.items()
+            name: count
+            for name, count in recorded.items()
             if name.rsplit(".", 1)[-1] in GUARD_PRIMITIVES
         },
     }
@@ -200,8 +186,15 @@ def _counting_host_transfers() -> Iterator[dict[str, int]]:
         except (AttributeError, TypeError):
             original.pop(name, None)
 
-    for name in ("__bool__", "__float__", "__int__", "item", "get",
-                 "tolist", "__index__"):
+    for name in (
+        "__bool__",
+        "__float__",
+        "__int__",
+        "item",
+        "get",
+        "tolist",
+        "__index__",
+    ):
         install(name)
 
     module_original = cupy.asnumpy
@@ -266,26 +259,23 @@ def hot_functions(
     rows: list[dict[str, Any]] = []
     for (path, line, function), values in statistics.stats.items():
         call_count, _, total_time, cumulative_time, _ = values
-        rows.append({
-            "function": function,
-            "location": f"{path}:{line}",
-            "calls": call_count,
-            "calls_per_invocation": call_count / repeats,
-            "total_seconds": total_time,
-            "cumulative_seconds": cumulative_time,
-            "self_seconds_per_invocation": total_time / repeats,
-        })
-    library = [
-        row for row in rows
-        if inside is None or inside in row["location"]
-    ]
+        rows.append(
+            {
+                "function": function,
+                "location": f"{path}:{line}",
+                "calls": call_count,
+                "calls_per_invocation": call_count / repeats,
+                "total_seconds": total_time,
+                "cumulative_seconds": cumulative_time,
+                "self_seconds_per_invocation": total_time / repeats,
+            }
+        )
+    library = [row for row in rows if inside is None or inside in row["location"]]
     library.sort(key=lambda row: -row["total_seconds"])
     overall = sorted(rows, key=lambda row: -row["total_seconds"])
 
     buffer = io.StringIO()
-    pstats.Stats(profiler, stream=buffer).sort_stats("tottime").print_stats(
-        limit
-    )
+    pstats.Stats(profiler, stream=buffer).sort_stats("tottime").print_stats(limit)
     return {
         "repeats": repeats,
         "library_functions": library[:limit],
@@ -298,9 +288,7 @@ def hot_functions(
 def summarize_provider_calls(report: dict[str, Any]) -> str:
     """Return a one-line description of a provider-call report."""
     calls = report["calls"]
-    top = ", ".join(
-        f"{name}x{count}" for name, count in list(calls.items())[:6]
-    )
+    top = ", ".join(f"{name}x{count}" for name, count in list(calls.items())[:6])
     return f"{report['total_calls']} provider calls: {top}"
 
 

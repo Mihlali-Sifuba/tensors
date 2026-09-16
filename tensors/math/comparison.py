@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
-from .._typing import TensorLike
-from ..backend import ComparisonOperation, execute_comparison
-from ..dtype import result_dtype, uint8
-from ..tensor import Tensor
-from ..utils.broadcasting import broadcast_tensors
+from tensors._typing import TensorLike
+from tensors.backend import (
+    execute_equal,
+    execute_greater,
+    execute_greater_equal,
+    execute_less,
+    execute_less_equal,
+    execute_not_equal,
+)
+from tensors.backend.storage import Storage
+from tensors.dtype import result_dtype, uint8
+from tensors.shape import Shape
+from tensors.tensor import Tensor
 
 
-def _tensor(value: Any, *, reference_dtype=None) -> Tensor:
-    from ..variable import Variable
+def _tensor(value: Any, *, reference_dtype: Any = None) -> Tensor:
+    from tensors.variable import Variable
 
     if isinstance(value, Variable):
         return value.data
@@ -27,74 +34,69 @@ def _tensor(value: Any, *, reference_dtype=None) -> Tensor:
     return Tensor(value, dtype=dtype)
 
 
-def _compare(
-    left: Any,
-    right: Any,
-    operation: ComparisonOperation,
-    predicate: Callable[[int | float, int | float], bool],
-) -> Tensor:
+def _operands(left: Any, right: Any) -> tuple[Tensor, Tensor, Shape]:
+    """Return both comparison operands as tensors with their result shape.
+
+    A scalar takes its dtype from the tensor it is compared against, in
+    whichever position it appears.
+    """
     left_tensor = _tensor(left)
     right_tensor = _tensor(right, reference_dtype=left_tensor.dtype)
     if isinstance(left, (int, float)):
         left_tensor = _tensor(left, reference_dtype=right_tensor.dtype)
-    output_shape = left_tensor.shape.broadcast_with(right_tensor.shape)
-    accelerated = execute_comparison(
-        operation,
+    return (
         left_tensor,
         right_tensor,
-        output_shape=output_shape,
+        left_tensor.shape.broadcast_with(right_tensor.shape),
     )
-    if accelerated is not None:
-        return Tensor._from_owned_storage(accelerated, dtype=uint8, shape=output_shape)
-    expanded_left, expanded_right = broadcast_tensors(left_tensor, right_tensor)
-    return Tensor(
-        [
-            1 if predicate(left_value, right_value) else 0
-            for left_value, right_value in zip(
-                expanded_left._data,
-                expanded_right._data,
-            )
-        ],
-        dtype=uint8,
-        shape=expanded_left.shape,
-    )
+
+
+def _mask(storage: Storage, output_shape: Shape) -> Tensor:
+    return Tensor._from_owned_storage(storage, dtype=uint8, shape=output_shape)
 
 
 def equal(left: TensorLike, right: TensorLike) -> Tensor:
     """Return an elementwise equality mask with dtype ``uint8``."""
-    return _compare(left, right, "equal", lambda a, b: a == b)
+    left_tensor, right_tensor, shape = _operands(left, right)
+    return _mask(execute_equal(left_tensor, right_tensor, output_shape=shape), shape)
 
 
 def not_equal(left: TensorLike, right: TensorLike) -> Tensor:
     """Return an elementwise inequality mask with dtype ``uint8``."""
-    return _compare(left, right, "not_equal", lambda a, b: a != b)
+    left_tensor, right_tensor, shape = _operands(left, right)
+    return _mask(
+        execute_not_equal(left_tensor, right_tensor, output_shape=shape), shape
+    )
 
 
 def less(left: TensorLike, right: TensorLike) -> Tensor:
     """Return the elementwise ``left < right`` mask."""
-    return _compare(left, right, "less", lambda a, b: a < b)
+    left_tensor, right_tensor, shape = _operands(left, right)
+    return _mask(execute_less(left_tensor, right_tensor, output_shape=shape), shape)
 
 
 def less_equal(left: TensorLike, right: TensorLike) -> Tensor:
     """Return the elementwise ``left <= right`` mask."""
-    return _compare(left, right, "less_equal", lambda a, b: a <= b)
+    left_tensor, right_tensor, shape = _operands(left, right)
+    return _mask(
+        execute_less_equal(left_tensor, right_tensor, output_shape=shape),
+        shape,
+    )
 
 
 def greater(left: TensorLike, right: TensorLike) -> Tensor:
     """Return the elementwise ``left > right`` mask."""
-    return _compare(left, right, "greater", lambda a, b: a > b)
+    left_tensor, right_tensor, shape = _operands(left, right)
+    return _mask(execute_greater(left_tensor, right_tensor, output_shape=shape), shape)
 
 
 def greater_equal(left: TensorLike, right: TensorLike) -> Tensor:
     """Return the elementwise ``left >= right`` mask."""
-    return _compare(left, right, "greater_equal", lambda a, b: a >= b)
+    left_tensor, right_tensor, shape = _operands(left, right)
+    return _mask(
+        execute_greater_equal(left_tensor, right_tensor, output_shape=shape),
+        shape,
+    )
 
 
-__all__ = [
-    "equal",
-    "greater",
-    "greater_equal",
-    "less",
-    "less_equal",
-    "not_equal",
-]
+__all__ = ["equal", "greater", "greater_equal", "less", "less_equal", "not_equal"]

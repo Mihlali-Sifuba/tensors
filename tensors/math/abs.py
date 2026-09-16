@@ -1,16 +1,13 @@
 """Elementwise absolute value and its differentiation rule."""
 
 from __future__ import annotations
-
-import builtins
+from tensors.backend import dispatch as backend_dispatch
 import math
 from typing import TYPE_CHECKING, Any, overload
-
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
-from ._unary import unary_backward, unary_forward
 
 if TYPE_CHECKING:
     from ..graph.node import VariableNode
@@ -23,44 +20,35 @@ class Abs(Operation):
     name = "abs"
 
     def forward(self, value: Tensor) -> Tensor:
-        return unary_forward(
-            "abs",
-            value,
+        return Tensor._from_owned_storage(
+            backend_dispatch.execute_abs(value, dtype=value.dtype),
             dtype=value.dtype,
-            fallback=builtins.abs,
+            shape=value.shape,
         )
 
     def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Tensor]:
         value = inputs[0]
-        return [unary_backward("abs", grad, value, fallback=_abs_gradient)]
+        return [
+            Tensor._from_owned_storage(
+                backend_dispatch.execute_abs_gradient(grad, value),
+                dtype=grad.dtype,
+                shape=value.shape,
+            )
+        ]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable VJP using the chosen zero subgradient."""
         from ..ops._utils import masked_value_graph, zero_like_graph
 
         value = inputs[0]
         if any(
-            isinstance(item, float) and math.isnan(item)
-            for item in value.data._data
+            (isinstance(item, float) and math.isnan(item) for item in value.data._data)
         ):
-            raise ValueError(
-                "Higher-order derivatives of abs are undefined at NaN"
-            )
+            raise ValueError("Higher-order derivatives of abs are undefined at NaN")
         positive_mask = Tensor(
-            [
-                1.0 if item > 0 else 0.0
-                for item in value.data._data
-            ],
+            [1.0 if item > 0 else 0.0 for item in value.data._data],
             dtype=grad.dtype,
             shape=value.shape,
         )
@@ -74,6 +62,8 @@ class Abs(Operation):
             - masked_value_graph(grad, negative_mask)
             + zero_like_graph(value)
         ]
+
+
 @overload
 def abs(value: VariableNode) -> VariableNode: ...
 
@@ -86,9 +76,7 @@ def abs(value: TensorValue) -> TensorValue: ...
 def abs(value: TensorData) -> Tensor: ...
 
 
-def abs(
-    value: TensorLike | VariableNode,
-) -> TensorResult | VariableNode:
+def abs(value: TensorLike | VariableNode) -> TensorResult | VariableNode:
     """Return the elementwise absolute value of a graph value or Tensor.
 
     A graph value is applied through the graph: a Variable calculates the

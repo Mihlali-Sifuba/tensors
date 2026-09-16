@@ -1,10 +1,8 @@
 import unittest
 from unittest.mock import patch
-
 import tensors as ts
-import tensors.backend.numpy as numpy_backend
-
-from ._support import NumPyParityTestCase, requires_numpy
+import tensors.backend.numpy.kernels as numpy_backend
+from tests.backend._support import NumPyParityTestCase, requires_numpy
 
 
 @requires_numpy
@@ -13,11 +11,11 @@ class NumPyElementwiseTests(NumPyParityTestCase):
 
     def test_every_binary_operation_dispatches_to_numpy(self):
         from contextlib import ExitStack
-        from tensors.backend.loading import _load_array_backend
+        from tensors.backend.loading import load_backend
 
         left = ts.full((32, 1), 2.0)
         right = ts.full((1, 32), 3.0)
-        backend = _load_array_backend("numpy")
+        backend = load_backend("numpy")
         with ExitStack() as stack:
             mocks = {
                 name: stack.enter_context(
@@ -30,22 +28,21 @@ class NumPyElementwiseTests(NumPyParityTestCase):
                 _ = left - right
                 _ = left * right
                 _ = left / right
-                _ = left ** right
+                _ = left**right
                 _ = 2.0 / left
-                _ = 2.0 ** left
+                _ = 2.0**left
         self.assertEqual(
             {name: mock.call_count for name, mock in mocks.items()},
             {"add": 1, "subtract": 1, "multiply": 1, "divide": 2, "power": 2},
         )
+
     def test_negation_dispatches_to_numpy(self):
         with patch.object(
-            numpy_backend,
-            "negate",
-            wraps=numpy_backend.negate,
+            numpy_backend, "negate", wraps=numpy_backend.negate
         ) as negate:
             self._evaluate("numpy", lambda: -ts.full((64,), 2.0))
-
         negate.assert_called_once()
+
     def test_every_unary_operation_dispatches_to_numpy(self):
         operations = (
             ("abs", ts.abs, 0.5),
@@ -69,33 +66,31 @@ class NumPyElementwiseTests(NumPyParityTestCase):
             ("tanh", ts.tanh, 0.5),
             ("softplus", ts.softplus, 0.5),
         )
-        with (
-            patch.object(
-                numpy_backend,
-                "unary",
-                wraps=numpy_backend.unary,
-            ) as unary,
-            patch.object(
-                numpy_backend,
-                "unary_gradient",
-                wraps=numpy_backend.unary_gradient,
-            ) as unary_gradient,
-        ):
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            names = [
+                name + suffix
+                for name, _, _ in operations
+                for suffix in ("", "_gradient")
+            ]
+            mocks = {
+                name: stack.enter_context(
+                    patch.object(
+                        numpy_backend, name, wraps=getattr(numpy_backend, name)
+                    )
+                )
+                for name in names
+            }
             with ts.use_backend("numpy"):
                 for _, function, item in operations:
                     value = ts.Variable(ts.full((64,), item))
                     output = function(value)
                     ts.grad(ts.sum(output), value)
+        for name, kernel in mocks.items():
+            with self.subTest(kernel=name):
+                self.assertGreaterEqual(kernel.call_count, 1)
 
-        expected = [name for name, _, _ in operations]
-        self.assertEqual(
-            [call.args[0] for call in unary.call_args_list],
-            expected,
-        )
-        self.assertEqual(
-            [call.args[0] for call in unary_gradient.call_args_list],
-            expected,
-        )
     def test_unary_operations_and_gradients_match_python_backend(self):
         operations = (
             (ts.abs, 0.5),
@@ -125,7 +120,7 @@ class NumPyElementwiseTests(NumPyParityTestCase):
                 value = ts.Variable(ts.full((64,), item))
                 output = function(value)
                 gradient = ts.grad(ts.sum(output), value)
-                return output.data, gradient
+                return (output.data, gradient)
 
         for function, item in operations:
             with self.subTest(operation=function.__name__):
@@ -135,66 +130,59 @@ class NumPyElementwiseTests(NumPyParityTestCase):
                     self.assertEqual(actual_tensor.shape, expected_tensor.shape)
                     self.assertIs(actual_tensor.dtype, expected_tensor.dtype)
                     for actual_item, expected_item in zip(
-                        actual_tensor._data,
-                        expected_tensor._data,
+                        actual_tensor._data, expected_tensor._data
                     ):
                         self.assertAlmostEqual(actual_item, expected_item)
+
     def test_unary_kernels_preserve_domain_errors(self):
         with ts.use_backend("numpy"):
             with self.assertRaisesRegex(
-                ValueError,
-                "sqrt is only defined for non-negative values",
+                ValueError, "sqrt is only defined for non-negative values"
             ):
                 ts.sqrt(ts.full((64,), -1.0))
             value = ts.Variable(ts.full((64,), 1.0))
             with self.assertRaisesRegex(
-                ValueError,
-                "arcsin derivative is undefined at -1 and 1",
+                ValueError, "arcsin derivative is undefined at -1 and 1"
             ):
                 ts.grad(ts.sum(ts.arcsin(value)), value)
+
     def test_broadcast_arithmetic_matches_python_backend(self):
         left = ts.Tensor([[1.5], [2.5]])
         right = ts.Tensor([[3.0, 4.0]])
-
         for operation in (
             lambda: left + right,
             lambda: left - right,
             lambda: left * right,
             lambda: left / right,
-            lambda: left ** right,
+            lambda: left**right,
         ):
             with self.subTest(operation=operation):
                 self.assertOperationParity(operation)
+
     def test_reverse_scalar_operations_match_python_backend(self):
         value = ts.Tensor([1.0, 2.0, 4.0])
-
         self.assertOperationParity(lambda: 8.0 / value)
-        self.assertOperationParity(lambda: 2.0 ** value)
-    def test_numpy_division_validates_tensor_denominators_in_kernel(self):
-        from tensors.backend.loading import _load_array_backend
+        self.assertOperationParity(lambda: 2.0**value)
 
-        backend = _load_array_backend("numpy")
+    def test_numpy_division_validates_tensor_denominators_in_kernel(self):
+        from tensors.backend.loading import load_backend
+
+        backend = load_backend("numpy")
         numerator = ts.Tensor([1.0] * 512)
         denominator = ts.Tensor([2.0] * 511 + [0.0])
-
-        with patch.object(
-            backend,
-            "divide",
-            wraps=backend.divide,
-        ) as binary:
+        with patch.object(backend, "divide", wraps=backend.divide) as binary:
             with ts.use_backend("numpy"):
                 with self.assertRaisesRegex(ZeroDivisionError, "Division by zero"):
                     ts.divide(numerator, denominator)
-
         binary.assert_called_once()
+
     def test_integer_arithmetic_and_unsigned_negation_match(self):
         left = ts.Tensor([1, 2, 3], dtype=ts.int32)
         right = ts.Tensor([4, 5, 6], dtype=ts.int32)
         unsigned = ts.Tensor([1, 255], dtype=ts.uint8)
-
         self.assertOperationParity(lambda: left + right)
         self.assertOperationParity(lambda: left * right)
-        self.assertOperationParity(lambda: left ** 3)
+        self.assertOperationParity(lambda: left**3)
         self.assertOperationParity(lambda: -unsigned)
 
 

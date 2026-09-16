@@ -1,11 +1,13 @@
 import random as python_random
 import unittest
-
 import tensors as ts
-from tensors.backend.storage import CudaStorage, NumPyStorage, PythonStorage
+from tensors.backend.cuda.storage import CudaStorage
+from tensors.backend.numpy.storage import NumPyStorage
+from tensors.backend.python.storage import PythonStorage
 
 
 class RandomTests(unittest.TestCase):
+
     def setUp(self):
         self.previous_backend = ts.get_backend()
         ts.set_backend("python")
@@ -18,26 +20,23 @@ class RandomTests(unittest.TestCase):
         uniform = ts.random.uniform((2, 3), -2.0, 4.0, dtype=ts.float32)
         normal = ts.random.normal((3, 2), 1.5, 0.25)
         integers = ts.random.randint((100,), -3, 5, dtype=ts.int16)
-
         self.assertEqual(uniform.shape, (2, 3))
         self.assertIs(uniform.dtype, ts.float32)
-        self.assertTrue(all(-2.0 <= value < 4.0 for value in uniform.tolist()))
+        self.assertTrue(all((-2.0 <= value < 4.0 for value in uniform.tolist())))
         self.assertEqual(normal.shape, (3, 2))
         self.assertIs(normal.dtype, ts.float64)
         self.assertIs(integers.dtype, ts.int16)
-        self.assertTrue(all(-3 <= value < 5 for value in integers.tolist()))
+        self.assertTrue(all((-3 <= value < 5 for value in integers.tolist())))
 
     def test_randint_supports_single_bound(self):
         ts.random.seed(11)
         values = ts.random.randint((100,), 4)
-
-        self.assertTrue(all(0 <= value < 4 for value in values.tolist()))
+        self.assertTrue(all((0 <= value < 4 for value in values.tolist())))
 
     def test_random_constructors_support_scalar_and_empty_shapes(self):
         scalar = ts.random.uniform(())
         empty = ts.random.normal((2, 0, 3))
         integers = ts.random.randint((0,), 5)
-
         self.assertEqual(scalar.shape, ())
         self.assertEqual(scalar.size, 1)
         self.assertEqual(empty.shape, (2, 0, 3))
@@ -46,7 +45,6 @@ class RandomTests(unittest.TestCase):
 
     def test_zero_normal_deviation_returns_the_mean(self):
         value = ts.random.normal((8,), mean=3.5, stddev=0.0)
-
         self.assertEqual(value.tolist(), [3.5] * 8)
 
     def test_seed_reproduces_a_sequence_and_state_advances(self):
@@ -54,7 +52,6 @@ class RandomTests(unittest.TestCase):
         first = ts.random.uniform((16,)).tolist()
         second = ts.random.uniform((16,)).tolist()
         self.assertNotEqual(first, second)
-
         ts.random.seed(42)
         self.assertEqual(ts.random.uniform((16,)).tolist(), first)
         self.assertEqual(ts.random.uniform((16,)).tolist(), second)
@@ -64,22 +61,19 @@ class RandomTests(unittest.TestCase):
         first = ts.random.normal((16,)).tolist()
         ts.random.seed(2)
         second = ts.random.normal((16,)).tolist()
-
         self.assertNotEqual(first, second)
 
     def test_seed_does_not_modify_python_global_random_state(self):
-        python_random.seed(8675309)
+        python_random.seed(8_675_309)
         before = python_random.getstate()
         ts.random.seed(23)
         ts.random.uniform((32,))
         ts.random.normal((32,))
         ts.random.randint((32,), 10)
-
         self.assertEqual(python_random.getstate(), before)
 
     def test_python_backend_uses_python_native_storage(self):
         value = ts.random.normal((64,))
-
         self.assertIsInstance(value._storage, PythonStorage)
 
     def test_argument_validation_is_explicit(self):
@@ -100,11 +94,9 @@ class RandomTests(unittest.TestCase):
                     call()
 
 
-@unittest.skipUnless(
-    "numpy" in ts.available_backends(),
-    "NumPy is not installed",
-)
+@unittest.skipUnless("numpy" in ts.available_backends(), "NumPy is not installed")
 class NumPyRandomTests(unittest.TestCase):
+
     def tearDown(self):
         ts.random.seed(None)
 
@@ -115,17 +107,14 @@ class NumPyRandomTests(unittest.TestCase):
             ts.random.seed(101)
             second = ts.random.uniform((128,), dtype=ts.float32)
             integers = ts.random.randint((128,), -4, 7)
-
         self.assertIsInstance(first._storage, NumPyStorage)
         self.assertIsInstance(integers._storage, NumPyStorage)
         self.assertEqual(first.tolist(), second.tolist())
 
 
-@unittest.skipUnless(
-    "cuda" in ts.available_backends(),
-    "CUDA is not available",
-)
+@unittest.skipUnless("cuda" in ts.available_backends(), "CUDA is not available")
 class CudaRandomTests(unittest.TestCase):
+
     def tearDown(self):
         ts.random.seed(None)
 
@@ -136,7 +125,6 @@ class CudaRandomTests(unittest.TestCase):
             ts.random.seed(101)
             second = ts.random.normal((128,), dtype=ts.float32)
             integers = ts.random.randint((128,), -4, 7)
-
         self.assertIsInstance(first._storage, CudaStorage)
         self.assertIsInstance(integers._storage, CudaStorage)
         self.assertEqual(first.tolist(), second.tolist())

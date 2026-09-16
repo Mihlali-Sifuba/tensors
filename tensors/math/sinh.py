@@ -1,16 +1,14 @@
 """Elementwise hyperbolic sine and its differentiation rule."""
 
 from __future__ import annotations
-
+from tensors.backend import dispatch as backend_dispatch
 import math
 from typing import TYPE_CHECKING, Any, overload
-
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
-from ._unary import unary_backward, unary_forward
 
 if TYPE_CHECKING:
     from ..graph.node import VariableNode
@@ -24,30 +22,25 @@ class Sinh(Operation):
 
     def forward(self, value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
-        return unary_forward("sinh", value, dtype=dtype, fallback=_sinh)
+        return Tensor._from_owned_storage(
+            backend_dispatch.execute_sinh(value, dtype=dtype),
+            dtype=dtype,
+            shape=value.shape,
+        )
 
     def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Tensor]:
         value = inputs[0]
         return [
-            unary_backward(
-                "sinh",
-                grad,
-                value,
-                fallback=lambda upstream, item: upstream * _cosh(item),
+            Tensor._from_owned_storage(
+                backend_dispatch.execute_sinh_gradient(grad, value),
+                dtype=grad.dtype,
+                shape=value.shape,
             )
         ]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable VJP for hyperbolic sine."""
         from .cosh import cosh
 
@@ -66,9 +59,7 @@ def sinh(value: TensorValue) -> TensorValue: ...
 def sinh(value: TensorData) -> Tensor: ...
 
 
-def sinh(
-    value: TensorLike | VariableNode,
-) -> TensorResult | VariableNode:
+def sinh(value: TensorLike | VariableNode) -> TensorResult | VariableNode:
     """Return the elementwise hyperbolic sine.
 
     A graph value is applied through the graph: a Variable calculates the

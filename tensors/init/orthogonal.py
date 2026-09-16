@@ -1,26 +1,24 @@
 """Orthogonal parameter initialization."""
 
 from __future__ import annotations
-
 import importlib
 import math
 from dataclasses import dataclass
-
-from ..backend import get_backend
-from ..dtype import DataType
-from ..random import normal
-from ..shape import Shape as TensorShape
-from ..backend.storage import CudaStorage, NumPyStorage, PythonStorage, Storage
-from ..tensor import Tensor
-from ._utils import DType, Shape, finite_number, floating_dtype
-from .initializer import Initializer
+from tensors.backend import get_backend
+from tensors.dtype import DataType
+from tensors.random import normal
+from tensors.shape import Shape as TensorShape
+from tensors.backend.cuda.storage import CudaStorage
+from tensors.backend.numpy.storage import NumPyStorage
+from tensors.backend.python.storage import PythonStorage
+from tensors.backend.storage import Storage
+from tensors.tensor import Tensor
+from tensors.init._utils import DType, Shape, finite_number, floating_dtype
+from tensors.init.initializer import Initializer
 
 
 def _python_orthogonal(
-    rows: int,
-    columns: int,
-    dtype: DataType,
-    gain: float,
+    rows: int, columns: int, dtype: DataType, gain: float
 ) -> Storage:
     source_rows = max(rows, columns)
     source_columns = min(rows, columns)
@@ -29,19 +27,17 @@ def _python_orthogonal(
     vectors: list[list[float]] = []
     for column in range(source_columns):
         vector = [
-            float(raw[row * source_columns + column])
-            for row in range(source_rows)
+            float(raw[row * source_columns + column]) for row in range(source_rows)
         ]
         for basis in vectors:
             projection = math.fsum(
-                value * basis_value
-                for value, basis_value in zip(vector, basis)
+                (value * basis_value for value, basis_value in zip(vector, basis))
             )
             vector = [
                 value - projection * basis_value
                 for value, basis_value in zip(vector, basis)
             ]
-        magnitude = math.sqrt(math.fsum(value * value for value in vector))
+        magnitude = math.sqrt(math.fsum((value * value for value in vector)))
         if magnitude <= 1e-15:
             raise RuntimeError(
                 "orthogonal initialization encountered a degenerate sample"
@@ -58,24 +54,14 @@ def _python_orthogonal(
             for row in range(rows)
             for column in range(columns)
         ]
-    return PythonStorage.from_values(
-        (gain * value for value in matrix),
-        dtype,
-    )
+    return PythonStorage.from_values((gain * value for value in matrix), dtype)
 
 
-def _array_orthogonal(
-    rows: int,
-    columns: int,
-    dtype: DataType,
-    gain: float,
-) -> Storage:
+def _array_orthogonal(rows: int, columns: int, dtype: DataType, gain: float) -> Storage:
     backend = get_backend()
     module = importlib.import_module("cupy" if backend == "cuda" else "numpy")
     source = normal((rows, columns), dtype=dtype)
-    storage = source._logical_storage_for(
-        "cuda" if backend == "cuda" else "numpy"
-    )
+    storage = source._logical_storage_for("cuda" if backend == "cuda" else "numpy")
     matrix = storage.buffer.reshape(rows, columns)
     transposed = rows < columns
     if transposed:
@@ -86,10 +72,7 @@ def _array_orthogonal(
     q = q * signs
     if transposed:
         q = q.T
-    values = module.asarray(
-        q * gain,
-        dtype=module.dtype(dtype.name),
-    ).reshape(-1)
+    values = module.asarray(q * gain, dtype=module.dtype(dtype.name)).reshape(-1)
     if backend == "cuda":
         return CudaStorage(values, dtype)
     return NumPyStorage(values, dtype)
@@ -113,36 +96,24 @@ class Orthogonal(Initializer):
             raise ValueError(
                 "orthogonal initialization requires at least two dimensions"
             )
-        if any(dimension == 0 for dimension in normalized_shape):
-            raise ValueError(
-                "orthogonal initialization requires positive dimensions"
-            )
+        if any((dimension == 0 for dimension in normalized_shape)):
+            raise ValueError("orthogonal initialization requires positive dimensions")
         rows = normalized_shape[0]
         columns = normalized_shape[1:].size
         if get_backend() == "python":
-            storage = _python_orthogonal(
-                rows, columns, self.dtype, float(self.gain)
-            )
+            storage = _python_orthogonal(rows, columns, self.dtype, float(self.gain))
         else:
-            storage = _array_orthogonal(
-                rows, columns, self.dtype, float(self.gain)
-            )
+            storage = _array_orthogonal(rows, columns, self.dtype, float(self.gain))
         if storage.size != normalized_shape.size:
             raise RuntimeError(
                 "orthogonal initializer returned an unexpected result size"
             )
         return Tensor._from_owned_storage(
-            storage,
-            dtype=self.dtype,
-            shape=normalized_shape,
+            storage, dtype=self.dtype, shape=normalized_shape
         )
 
 
-def orthogonal(
-    shape: Shape,
-    gain: int | float = 1.0,
-    dtype: DType = None,
-) -> Tensor:
+def orthogonal(shape: Shape, gain: int | float = 1.0, dtype: DType = None) -> Tensor:
     """Initialize using a one-shot Orthogonal configuration."""
     return Orthogonal(gain, dtype)(shape)
 

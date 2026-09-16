@@ -1,25 +1,23 @@
 """Differentiable selection with a constant condition mask."""
 
 from __future__ import annotations
-
 from typing import TYPE_CHECKING, Any, Optional, overload
-
-from .._typing import TensorData, TensorLike, TensorResult
-from ..backend import execute_where, execute_where_gradient
-from ..dtype import result_dtype
-from ..ops._utils import sum_to_shape
-from ..ops.operation import Operation
-from ..tensor import Tensor
-from ..graph.expression import as_tensor_operand
-from ..utils.broadcasting import broadcast_to
+from tensors._typing import TensorData, TensorLike, TensorResult
+from tensors.backend import execute_where, execute_where_gradient
+from tensors.dtype import result_dtype
+from tensors.ops._utils import sum_to_shape
+from tensors.ops.operation import Operation
+from tensors.tensor import Tensor
+from tensors.graph.expression import as_tensor_operand
+from tensors.utils.broadcasting import broadcast_to
 
 if TYPE_CHECKING:
-    from ..graph.node import VariableNode
-    from ..variable import Variable
+    from tensors.graph.node import VariableNode
+    from tensors.variable import Variable
 
 
 def _tensor(value: Any, *, dtype=None) -> Tensor:
-    from ..variable import Variable
+    from tensors.variable import Variable
 
     if isinstance(value, Variable):
         return value.data
@@ -40,126 +38,55 @@ class Where(Operation):
     name = "where"
 
     def forward(self, condition: Tensor, left: Tensor, right: Tensor) -> Tensor:
-        shape = condition.shape.broadcast_with(left.shape).broadcast_with(
-            right.shape
-        )
+        shape = condition.shape.broadcast_with(left.shape).broadcast_with(right.shape)
         dtype = result_dtype(left.dtype, right)
         accelerated = execute_where(
-            condition,
-            left,
-            right,
-            dtype=dtype,
-            output_shape=shape,
+            condition, left, right, dtype=dtype, output_shape=shape
         )
-        if accelerated is not None:
-            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
-        expanded_condition = broadcast_to(condition, shape)
-        expanded_left = broadcast_to(left, shape)
-        expanded_right = broadcast_to(right, shape)
-        return Tensor(
-            [
-                left_value if selected != 0 else right_value
-                for selected, left_value, right_value in zip(
-                    expanded_condition._data,
-                    expanded_left._data,
-                    expanded_right._data,
-                )
-            ],
-            dtype=dtype,
-            shape=shape,
-        )
+        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
 
     def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Optional[Tensor]]:
         condition, left, right = inputs
         need_condition, need_left, need_right = needs_input_grad
-        # ``where`` rejects a differentiable condition, so its derivative is
-        # never requested; the branch remains for contract completeness.
         condition_gradient = (
             Tensor._from_values(
-                [0.0] * condition.shape.size,
-                grad.dtype,
-                condition.shape,
+                [0.0] * condition.shape.size, grad.dtype, condition.shape
             )
             if need_condition
             else None
         )
         accelerated = execute_where_gradient(
-            grad,
-            condition,
-            needs_input_grad=(need_left, need_right),
+            grad, condition, needs_input_grad=(need_left, need_right)
         )
-        if accelerated is not None:
-            left_storage, right_storage = accelerated
-            return [
-                condition_gradient,
+        left_storage, right_storage = accelerated
+        return [
+            condition_gradient,
+            (
                 sum_to_shape(
                     Tensor._from_owned_storage(
-                        left_storage,
-                        dtype=grad.dtype,
-                        shape=grad.shape,
+                        left_storage, dtype=grad.dtype, shape=grad.shape
                     ),
                     left.shape,
                 )
                 if left_storage is not None
-                else None,
+                else None
+            ),
+            (
                 sum_to_shape(
                     Tensor._from_owned_storage(
-                        right_storage,
-                        dtype=grad.dtype,
-                        shape=grad.shape,
+                        right_storage, dtype=grad.dtype, shape=grad.shape
                     ),
                     right.shape,
                 )
                 if right_storage is not None
-                else None,
-            ]
-        expanded_condition = broadcast_to(condition, grad.shape)
-        left_gradient = None
-        if need_left:
-            left_gradient = sum_to_shape(
-                Tensor(
-                    [
-                        upstream if selected != 0 else 0.0
-                        for upstream, selected in zip(
-                            grad._data,
-                            expanded_condition._data,
-                        )
-                    ],
-                    dtype=grad.dtype,
-                    shape=grad.shape,
-                ),
-                left.shape,
-            )
-        right_gradient = None
-        if need_right:
-            right_gradient = sum_to_shape(
-                Tensor(
-                    [
-                        upstream if selected == 0 else 0.0
-                        for upstream, selected in zip(
-                            grad._data,
-                            expanded_condition._data,
-                        )
-                    ],
-                    dtype=grad.dtype,
-                    shape=grad.shape,
-                ),
-                right.shape,
-            )
-        return [condition_gradient, left_gradient, right_gradient]
+                else None
+            ),
+        ]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
-        from ..ops._utils import (
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        from tensors.ops._utils import (
             masked_value_graph,
             sum_to_shape_graph,
             zero_like_graph,
@@ -176,8 +103,7 @@ class Where(Operation):
                 shape=grad.shape,
             )
             left_gradient = sum_to_shape_graph(
-                masked_value_graph(grad, left_mask),
-                left.shape,
+                masked_value_graph(grad, left_mask), left.shape
             ) + zero_like_graph(left)
         right_gradient = None
         if need_right:
@@ -187,8 +113,7 @@ class Where(Operation):
                 shape=grad.shape,
             )
             right_gradient = sum_to_shape_graph(
-                masked_value_graph(grad, right_mask),
-                right.shape,
+                masked_value_graph(grad, right_mask), right.shape
             ) + zero_like_graph(right)
         return [
             zero_like_graph(condition) if need_condition else None,
@@ -207,42 +132,26 @@ def where(
 
 @overload
 def where(
-    condition: TensorLike,
-    left: VariableNode,
-    right: TensorLike | VariableNode,
+    condition: TensorLike, left: VariableNode, right: TensorLike | VariableNode
 ) -> VariableNode: ...
 
 
 @overload
 def where(
-    condition: TensorLike,
-    left: TensorLike,
-    right: VariableNode,
+    condition: TensorLike, left: TensorLike, right: VariableNode
 ) -> VariableNode: ...
 
 
 @overload
-def where(
-    condition: TensorLike,
-    left: Variable,
-    right: TensorLike,
-) -> Variable: ...
+def where(condition: TensorLike, left: Variable, right: TensorLike) -> Variable: ...
 
 
 @overload
-def where(
-    condition: TensorLike,
-    left: TensorLike,
-    right: Variable,
-) -> Variable: ...
+def where(condition: TensorLike, left: TensorLike, right: Variable) -> Variable: ...
 
 
 @overload
-def where(
-    condition: TensorLike,
-    left: TensorData,
-    right: TensorData,
-) -> Tensor: ...
+def where(condition: TensorLike, left: TensorData, right: TensorData) -> Tensor: ...
 
 
 def where(
@@ -259,16 +168,13 @@ def where(
     evaluated and neither branch can be read for the dtype a Python
     scalar is promoted against below.
     """
-    from ..graph.expression import apply_operation, as_graph_operand
-    from ..graph.node import VariableNode
-    from ..variable import Variable
+    from tensors.graph.expression import apply_operation, as_graph_operand
+    from tensors.graph.node import VariableNode
+    from tensors.variable import Variable
 
     if isinstance(condition, Variable) and condition.requires_grad:
         raise TypeError("where condition cannot require gradients")
-    if any(
-        isinstance(operand, VariableNode)
-        for operand in (condition, left, right)
-    ):
+    if any((isinstance(operand, VariableNode) for operand in (condition, left, right))):
         return apply_operation(
             Where(),
             (
@@ -281,13 +187,12 @@ def where(
     left_is_variable = isinstance(left, Variable)
     right_is_variable = isinstance(right, Variable)
     reference_dtype = (
-        left.dtype if left_is_variable or isinstance(left, Tensor)
-        else right.dtype if right_is_variable or isinstance(right, Tensor)
-        else None
+        left.dtype
+        if left_is_variable or isinstance(left, Tensor)
+        else right.dtype if right_is_variable or isinstance(right, Tensor) else None
     )
     left_tensor = _tensor(left, dtype=reference_dtype)
     right_tensor = _tensor(right, dtype=reference_dtype)
-
     if left_is_variable or right_is_variable:
         condition_variable = (
             condition
@@ -306,8 +211,7 @@ def where(
         )
         operation = Where()
         return Variable._apply_operation(
-            operation,
-            (condition_variable, left_variable, right_variable),
+            operation, (condition_variable, left_variable, right_variable)
         )
     return Where().forward(condition_tensor, left_tensor, right_tensor)
 

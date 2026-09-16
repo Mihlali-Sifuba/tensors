@@ -81,7 +81,7 @@ array API. Users continue to write ordinary tensor expressions.
 
 Tensor layout metadata remains MS-Tensors' semantic source of truth:
 `Shape` defines logical extents, `Strides` and `offset` map logical coordinates
-to physical storage, and `Storage` owns the flat provider buffer. Optional
+to physical storage, and `Storage` owns the flat backend-native buffer. Optional
 backend kernels currently operate on compact arrays. A non-compact internal
 layout is gathered in logical order within the same backend before crossing
 that boundary, avoiding an unnecessary CUDA-to-host value transfer. Public
@@ -98,19 +98,31 @@ the mathematical definitions and reproducibility contract.
 
 ## Kernel coverage and fallback
 
-NumPy and CUDA share kernels for broadcasting arithmetic, unary mathematics,
-reductions, normalization, losses, selection, layout operations, tensor
-construction, linear algebra, convolution, gradients, and fused optimizer
-updates. Convolution and its VJPs use bounded matrix-product tiles, so grouped
-and dilated kernels stay device-resident without materializing an unbounded
-receptive-field matrix. Float32 convolution remains float32 on accelerated
-providers; mixed inputs use the public result dtype.
+Each backend owns its own kernels. `tensors/backend/python`, `.../numpy`, and
+`.../cuda` each hold one module per operation, so a single operation's Python,
+NumPy, and CUDA implementations are three separate files with no shared
+numerical body between them. NumPy and CUDA both cover broadcasting arithmetic,
+unary mathematics, reductions, normalization, losses, selection, layout
+operations, tensor construction, linear algebra, convolution, gradients, and
+fused optimizer updates. Convolution and its VJPs use bounded matrix-product
+tiles, so grouped and dilated kernels stay device-resident without materializing
+an unbounded receptive-field matrix. Float32 convolution remains float32 on
+accelerated backends; mixed inputs use the public result dtype.
 
 The Python implementation defines shape, dtype, error, and differentiation
-semantics. Optional kernels return to that implementation for edge cases that
-need stable reference algorithms or exact Python integer intermediates. CuPy has
-no Python object dtype, so exact integer operations currently use the Python
-path; floating-point kernels remain device-resident.
+semantics. `tensors/backend/dispatch` holds one `execute_*` entry point per
+operation; that entry point applies the workload policy, calls the selected
+backend's kernel, and runs the Python reference itself when the policy declines
+or the kernel does. Operations therefore receive a result, not a decision: the
+choice of fallback belongs to dispatch. An array kernel declines for edge cases
+needing stable reference algorithms or exact Python integer intermediates. CuPy
+has no Python object dtype, so exact integer operations use the Python path;
+floating-point kernels remain device-resident.
+
+Two optional optimizations may still decline to the caller, because their
+alternative is ordinary execution rather than a reference kernel: elementwise
+fusion falls back to running the steps separately, and a batched optimizer
+update falls back to updating each parameter individually.
 
 Small NumPy workloads may use Python when array setup would cost more than the
 numerical work. Explicit CUDA selection keeps supported floating-point work on

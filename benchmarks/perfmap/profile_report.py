@@ -12,7 +12,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -108,9 +107,7 @@ def _subjects(backend: str) -> dict[str, Callable[[], Any]]:
     parameter = ts.Variable(
         tensor((size,), dtype_name="float64", kind="constant", value=0.5)
     )
-    parameter.grad = tensor(
-        (size,), dtype_name="float64", kind="constant", value=0.01
-    )
+    parameter.grad = tensor((size,), dtype_name="float64", kind="constant", value=0.01)
     optimizer = ts.optim.Adam([parameter], learning_rate=0.001)
     optimizer.step()
     subjects["optimizer_step/adam"] = optimizer.step
@@ -187,9 +184,7 @@ def main(argv: list[str] | None = None) -> int:
             for name, call in subjects.items():
                 entry: dict[str, Any] = {}
                 try:
-                    entry["provider_calls"] = provider_calls(
-                        call, backend=backend
-                    )
+                    entry["provider_calls"] = provider_calls(call, backend=backend)
                 except Exception as error:  # noqa: BLE001 - reported
                     entry["provider_calls"] = {
                         "error": f"{type(error).__name__}: {error}"
@@ -215,10 +210,15 @@ def main(argv: list[str] | None = None) -> int:
             # cProfile is expensive, so it is applied to the paths whose
             # fixed overhead the benchmarks flagged rather than to all.
             focus = (
-                "add/float64", "add/float32", "sum/float64/same-sign",
-                "matmul/float64", "variable_add/float64",
-                "graph_replay/chain-10", "graph_backward/chain-10",
-                "item/float64", "transpose/float64",
+                "add/float64",
+                "add/float32",
+                "sum/float64/same-sign",
+                "matmul/float64",
+                "variable_add/float64",
+                "graph_replay/chain-10",
+                "graph_backward/chain-10",
+                "item/float64",
+                "transpose/float64",
             )
             profiles: dict[str, Any] = {}
             for name in focus:
@@ -230,9 +230,7 @@ def main(argv: list[str] | None = None) -> int:
                         call, repeats=arguments.profile_repeats
                     )
                 except Exception as error:  # noqa: BLE001
-                    profiles[name] = {
-                        "error": f"{type(error).__name__}: {error}"
-                    }
+                    profiles[name] = {"error": f"{type(error).__name__}: {error}"}
             results[backend]["hot_functions"] = profiles
 
             tracing: dict[str, Any] = {}
@@ -240,9 +238,7 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     tracing[name] = hot_functions(call, repeats=200)
                 except Exception as error:  # noqa: BLE001
-                    tracing[name] = {
-                        "error": f"{type(error).__name__}: {error}"
-                    }
+                    tracing[name] = {"error": f"{type(error).__name__}: {error}"}
             results[backend]["tracing"] = tracing
 
     report = {

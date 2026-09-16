@@ -7,35 +7,26 @@ the exact definition and its relationship to true convolution.
 """
 
 from __future__ import annotations
-
 import itertools
 from dataclasses import dataclass
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, List, Optional, TypeAlias, overload
-
 from .._typing import TensorData, TensorLike, TensorResult
 from ..backend import execute_convolution, execute_convolution_gradient
-from ..dtype import DataType, result_dtype
+from ..dtype import result_dtype
 from ..strides import Strides
 from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
-from .sum import _stable_float_sum, _stable_product_sum
 
 if TYPE_CHECKING:
     from ..graph.node import VariableNode
     from ..variable import Variable
-
-
 SpatialArgument: TypeAlias = int | tuple[int, ...] | list[int]
 
 
 def _spatial_argument(
-    value: SpatialArgument,
-    rank: int,
-    name: str,
-    *,
-    minimum: int,
+    value: SpatialArgument, rank: int, name: str, *, minimum: int
 ) -> tuple[int, ...]:
     """Normalize an int or per-axis sequence into immutable graph metadata."""
     if isinstance(value, bool):
@@ -46,8 +37,7 @@ def _spatial_argument(
         values = tuple(value)
         if len(values) != rank:
             raise ValueError(
-                f"{name} must contain {rank} values for a {rank}D "
-                f"convolution, got {len(values)}"
+                f"{name} must contain {rank} values for a {rank}D convolution, got {len(values)}"
             )
     else:
         raise TypeError(f"{name} must be an integer or a sequence of integers")
@@ -92,8 +82,8 @@ class _Geometry:
     @property
     def output_shape(self) -> tuple[int, ...]:
         """Return the logical shape produced by this convolution."""
-        leading = (self.batch, self.out_channels) if self.batched else (
-            self.out_channels,
+        leading = (
+            (self.batch, self.out_channels) if self.batched else (self.out_channels,)
         )
         return leading + self.output_spatial
 
@@ -105,16 +95,12 @@ class _Geometry:
     @property
     def offsets(self) -> tuple[tuple[int, ...], ...]:
         """Return every kernel offset in row-major kernel order."""
-        return tuple(
-            itertools.product(*(range(size) for size in self.kernel_spatial))
-        )
+        return tuple(itertools.product(*(range(size) for size in self.kernel_spatial)))
 
     @property
     def positions(self) -> tuple[tuple[int, ...], ...]:
         """Return every output coordinate in row-major output order."""
-        return tuple(
-            itertools.product(*(range(size) for size in self.output_spatial))
-        )
+        return tuple(itertools.product(*(range(size) for size in self.output_spatial)))
 
 
 def _geometry(
@@ -130,47 +116,39 @@ def _geometry(
     """Validate operands and resolve every convolution extent."""
     if inputs.ndim not in {rank + 1, rank + 2}:
         raise ValueError(
-            f"conv{rank}d input must have {rank + 1} unbatched dimensions "
-            f"or {rank + 2} batched dimensions, got {inputs.ndim}"
+            f"conv{rank}d input must have {rank + 1} unbatched dimensions or {rank + 2} batched dimensions, got {inputs.ndim}"
         )
     if kernel.ndim != rank + 2:
         raise ValueError(
-            f"conv{rank}d kernel must have {rank + 2} dimensions "
-            f"(output channels, input channels, {rank} spatial), got "
-            f"{kernel.ndim}"
+            f"conv{rank}d kernel must have {rank + 2} dimensions (output channels, input channels, {rank} spatial), got {kernel.ndim}"
         )
     if isinstance(groups, bool) or not isinstance(groups, int):
         raise TypeError("groups must be an integer")
     if groups < 1:
         raise ValueError("groups must be at least 1")
-
     batched = inputs.ndim == rank + 2
     batch = inputs.shape[0] if batched else 1
     in_channels = inputs.shape[1] if batched else inputs.shape[0]
-    out_channels, kernel_channels = kernel.shape[0], kernel.shape[1]
+    out_channels, kernel_channels = (kernel.shape[0], kernel.shape[1])
     if in_channels % groups:
         raise ValueError(
             f"Input channels {in_channels} is not divisible by groups {groups}"
         )
     if out_channels % groups:
         raise ValueError(
-            f"Output channels {out_channels} is not divisible by groups "
-            f"{groups}"
+            f"Output channels {out_channels} is not divisible by groups {groups}"
         )
     if kernel_channels != in_channels // groups:
         raise ValueError(
-            f"Kernel expects {kernel_channels} input channels per group but "
-            f"the input provides {in_channels // groups}"
+            f"Kernel expects {kernel_channels} input channels per group but the input provides {in_channels // groups}"
         )
-
     strides = _spatial_argument(stride, rank, "stride", minimum=1)
     paddings = _spatial_argument(padding, rank, "padding", minimum=0)
     dilations = _spatial_argument(dilation, rank, "dilation", minimum=1)
     spatial = tuple(inputs.shape[2:] if batched else inputs.shape[1:])
     kernel_spatial = tuple(kernel.shape[2:])
-    if any(size < 1 for size in kernel_spatial):
+    if any((size < 1 for size in kernel_spatial)):
         raise ValueError("Kernel spatial dimensions must be at least 1")
-
     output_spatial = []
     for axis in range(rank):
         extent = (
@@ -182,18 +160,14 @@ def _geometry(
         if extent < 0:
             span = dilations[axis] * (kernel_spatial[axis] - 1) + 1
             raise ValueError(
-                f"Kernel span {span} on spatial axis {axis} exceeds the "
-                f"padded input extent {spatial[axis] + 2 * paddings[axis]}"
+                f"Kernel span {span} on spatial axis {axis} exceeds the padded input extent {spatial[axis] + 2 * paddings[axis]}"
             )
         output_spatial.append(extent // strides[axis] + 1)
-
     if bias is not None:
         if bias.ndim != 1 or bias.shape[0] != out_channels:
             raise ValueError(
-                f"Bias shape {tuple(bias.shape)} does not match the expected "
-                f"({out_channels},)"
+                f"Bias shape {tuple(bias.shape)} does not match the expected ({out_channels},)"
             )
-
     return _Geometry(
         rank=rank,
         batched=batched,
@@ -213,9 +187,7 @@ def _geometry(
 
 
 def _contributions(
-    geometry: _Geometry,
-    inputs: Tensor,
-    kernel: Tensor,
+    geometry: _Geometry, inputs: Tensor, kernel: Tensor
 ) -> Iterator[tuple[int, int, list[tuple[int, int]]]]:
     """Yield every ``(output, input, weight)`` index a convolution touches.
 
@@ -232,9 +204,7 @@ def _contributions(
         for out_channel in range(geometry.out_channels):
             group = out_channel // geometry.group_outputs
             weight_base = out_channel * kernel_strides[0]
-            group_base = batch_base + (
-                group * geometry.group_channels * input_strides[1]
-            )
+            group_base = batch_base + group * geometry.group_channels * input_strides[1]
             for position in positions:
                 pairs: list[tuple[int, int]] = []
                 for channel in range(geometry.group_channels):
@@ -257,7 +227,7 @@ def _contributions(
                             weight += offset[axis] * kernel_strides[axis + 2]
                         if inside:
                             pairs.append((source, weight))
-                yield output_index, out_channel, pairs
+                yield (output_index, out_channel, pairs)
                 output_index += 1
 
 
@@ -287,17 +257,13 @@ class ConvND(Operation):
         return f"conv{self.rank}d"
 
     def forward(
-        self,
-        inputs: Tensor,
-        kernel: Tensor,
-        bias: Tensor | None = None,
+        self, inputs: Tensor, kernel: Tensor, bias: Tensor | None = None
     ) -> Tensor:
         """Correlate ``inputs`` with ``kernel`` and add an optional bias."""
         geometry = self._geometry_for(inputs, kernel, bias)
         dtype = result_dtype(inputs.dtype, kernel)
         if bias is not None:
             dtype = result_dtype(dtype, bias)
-
         accelerated = execute_convolution(
             inputs,
             kernel,
@@ -309,54 +275,12 @@ class ConvND(Operation):
             dilation=geometry.dilation,
             groups=geometry.groups,
         )
-        if accelerated is not None:
-            return Tensor._from_owned_storage(
-                accelerated,
-                dtype=dtype,
-                shape=geometry.output_shape,
-            )
-        return self._reference_forward(inputs, kernel, bias, geometry, dtype)
-
-    @staticmethod
-    def _reference_forward(
-        inputs: Tensor,
-        kernel: Tensor,
-        bias: Tensor | None,
-        geometry: _Geometry,
-        dtype: DataType,
-    ) -> Tensor:
-        """Accumulate each receptive field with reference-exact arithmetic."""
-        input_data = inputs._data
-        kernel_data = kernel._data
-        bias_data = bias._data if bias is not None else None
-        exact = dtype.kind == "integer"
-        values: list[Any] = []
-        for _, out_channel, pairs in _contributions(geometry, inputs, kernel):
-            total: Any
-            if exact:
-                total = sum(
-                    int(input_data[source]) * int(kernel_data[weight])
-                    for source, weight in pairs
-                )
-                if bias_data is not None:
-                    total += int(bias_data[out_channel])
-            else:
-                total = _stable_product_sum([
-                    (float(input_data[source]), float(kernel_data[weight]))
-                    for source, weight in pairs
-                ])
-                if bias_data is not None:
-                    total = _stable_float_sum(
-                        [total, float(bias_data[out_channel])]
-                    )
-            values.append(total)
-        return Tensor(values, dtype=dtype, shape=geometry.output_shape)
+        return Tensor._from_owned_storage(
+            accelerated, dtype=dtype, shape=geometry.output_shape
+        )
 
     def _geometry_for(
-        self,
-        inputs: Tensor,
-        kernel: Tensor,
-        bias: Tensor | None,
+        self, inputs: Tensor, kernel: Tensor, bias: Tensor | None
     ) -> "_Geometry":
         """Resolve this invocation's spatial geometry for given operands."""
         return _geometry(
@@ -371,13 +295,10 @@ class ConvND(Operation):
         )
 
     def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Optional[Tensor]]:
         """Differentiate a convolution with respect to its requested inputs."""
-        values, kernel = inputs[0], inputs[1]
+        values, kernel = (inputs[0], inputs[1])
         bias = inputs[2] if len(inputs) > 2 else None
         geometry = _geometry(
             self.rank,
@@ -391,14 +312,9 @@ class ConvND(Operation):
         )
         if tuple(grad.shape) != geometry.output_shape:
             raise ValueError(
-                f"Gradient shape {tuple(grad.shape)} does not match output "
-                f"shape {geometry.output_shape}"
+                f"Gradient shape {tuple(grad.shape)} does not match output shape {geometry.output_shape}"
             )
-
-        shapes: list[tuple[int, ...]] = [
-            tuple(values.shape),
-            tuple(kernel.shape),
-        ]
+        shapes: list[tuple[int, ...]] = [tuple(values.shape), tuple(kernel.shape)]
         if bias is not None:
             shapes.append((geometry.out_channels,))
         accelerated = execute_convolution_gradient(
@@ -412,38 +328,22 @@ class ConvND(Operation):
             include_bias=bias is not None,
             needs_input_grad=needs_input_grad,
         )
-        if accelerated is not None:
-            return [
-                Tensor._from_owned_storage(
-                    storage,
-                    dtype=grad.dtype,
-                    shape=shape,
-                )
+        return [
+            (
+                Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=shape)
                 if storage is not None
                 else None
-                for storage, shape in zip(accelerated, shapes)
-            ]
-        return self._reference_backward(
-            grad,
-            values,
-            kernel,
-            bias,
-            geometry,
-            needs_input_grad,
-        )
+            )
+            for storage, shape in zip(accelerated, shapes)
+        ]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable convolution VJP from primitive graph ops."""
         from ..math.reshape import reshape
         from ..math.stack import stack
         from ..ops._utils import zero_like_graph
 
-        values, kernel = inputs[0], inputs[1]
+        values, kernel = (inputs[0], inputs[1])
         bias = inputs[2] if len(inputs) > 2 else None
         geometry = _geometry(
             self.rank,
@@ -460,14 +360,9 @@ class ConvND(Operation):
         kernel_flat = reshape(kernel, (kernel.size,))
         input_terms: list[list[Any]] = [[] for _ in range(values.size)]
         kernel_terms: list[list[Any]] = [[] for _ in range(kernel.size)]
-        bias_terms: list[list[Any]] = [
-            [] for _ in range(geometry.out_channels)
-        ]
-
+        bias_terms: list[list[Any]] = [[] for _ in range(geometry.out_channels)]
         for output_index, out_channel, pairs in _contributions(
-            geometry,
-            values.data,
-            kernel.data,
+            geometry, values.data, kernel.data
         ):
             upstream = grad_flat[output_index]
             for source, weight in pairs:
@@ -485,17 +380,21 @@ class ConvND(Operation):
             return result
 
         input_gradient = reshape(
-            stack([
-                reshape(accumulate(terms, values_flat[index]), (1,))
-                for index, terms in enumerate(input_terms)
-            ]),
+            stack(
+                [
+                    reshape(accumulate(terms, values_flat[index]), (1,))
+                    for index, terms in enumerate(input_terms)
+                ]
+            ),
             values.shape,
         )
         kernel_gradient = reshape(
-            stack([
-                reshape(accumulate(terms, kernel_flat[index]), (1,))
-                for index, terms in enumerate(kernel_terms)
-            ]),
+            stack(
+                [
+                    reshape(accumulate(terms, kernel_flat[index]), (1,))
+                    for index, terms in enumerate(kernel_terms)
+                ]
+            ),
             kernel.shape,
         )
         results = [input_gradient, kernel_gradient]
@@ -503,84 +402,14 @@ class ConvND(Operation):
             bias_flat = reshape(bias, (bias.size,))
             results.append(
                 reshape(
-                    stack([
-                        reshape(accumulate(terms, bias_flat[index]), (1,))
-                        for index, terms in enumerate(bias_terms)
-                    ]),
+                    stack(
+                        [
+                            reshape(accumulate(terms, bias_flat[index]), (1,))
+                            for index, terms in enumerate(bias_terms)
+                        ]
+                    ),
                     bias.shape,
                 )
-            )
-        return results
-
-    @staticmethod
-    def _reference_backward(
-        grad: Tensor,
-        values: Tensor,
-        kernel: Tensor,
-        bias: Tensor | None,
-        geometry: _Geometry,
-        needs_input_grad: tuple[bool, ...],
-    ) -> List[Optional[Tensor]]:
-        """Collect the requested VJP terms before summing them stably."""
-        need_values, need_kernel = needs_input_grad[0], needs_input_grad[1]
-        need_bias = bias is not None and needs_input_grad[2]
-        grad_data = grad._data
-        input_data = values._data
-        kernel_data = kernel._data
-        input_terms: list[list[tuple[float, float]]] = [
-            [] for _ in range(values.size if need_values else 0)
-        ]
-        kernel_terms: list[list[tuple[float, float]]] = [
-            [] for _ in range(kernel.size if need_kernel else 0)
-        ]
-        bias_terms: list[list[float]] = [
-            [] for _ in range(geometry.out_channels if need_bias else 0)
-        ]
-        if not (need_values or need_kernel or need_bias):
-            return [None] * len(needs_input_grad)
-
-        for index, out_channel, pairs in _contributions(
-            geometry, values, kernel
-        ):
-            upstream = float(grad_data[index])
-            if need_values or need_kernel:
-                for source, weight in pairs:
-                    if need_values:
-                        input_terms[source].append(
-                            (upstream, float(kernel_data[weight]))
-                        )
-                    if need_kernel:
-                        kernel_terms[weight].append(
-                            (upstream, float(input_data[source]))
-                        )
-            if need_bias:
-                bias_terms[out_channel].append(upstream)
-
-        results: List[Optional[Tensor]] = [
-            Tensor(
-                [_stable_product_sum(terms) for terms in input_terms],
-                dtype=grad.dtype,
-                shape=values.shape,
-            )
-            if need_values
-            else None,
-            Tensor(
-                [_stable_product_sum(terms) for terms in kernel_terms],
-                dtype=grad.dtype,
-                shape=kernel.shape,
-            )
-            if need_kernel
-            else None,
-        ]
-        if bias is not None:
-            results.append(
-                Tensor(
-                    [_stable_float_sum(terms) for terms in bias_terms],
-                    dtype=grad.dtype,
-                    shape=(geometry.out_channels,),
-                )
-                if need_bias
-                else None
             )
         return results
 
@@ -604,39 +433,24 @@ def _convolve(
     An absent bias stays absent rather than becoming a placeholder
     operand, which is the shape ConvND.forward reads.
     """
-    from ..graph.expression import (
-        apply_operation, as_graph_operand, is_graph_operand,
-    )
+    from ..graph.expression import apply_operation, as_graph_operand, is_graph_operand
 
-    # Normalize before tracing so replayed graph metadata is immutable and
-    # does not need to be revalidated against the original argument forms.
     strides = _spatial_argument(stride, rank, "stride", minimum=1)
     paddings = _spatial_argument(padding, rank, "padding", minimum=0)
-    dilations = _spatial_argument(
-        dilation, rank, "dilation", minimum=1
-    )
+    dilations = _spatial_argument(dilation, rank, "dilation", minimum=1)
     operands: list[TensorLike | VariableNode] = [inputs, kernel]
     if bias is not None:
         operands.append(bias)
     operation = ConvND(
-        rank=rank,
-        stride=strides,
-        padding=paddings,
-        dilation=dilations,
-        groups=groups,
+        rank=rank, stride=strides, padding=paddings, dilation=dilations, groups=groups
     )
-
-    if any(is_graph_operand(operand) for operand in operands):
+    if any((is_graph_operand(operand) for operand in operands)):
         return apply_operation(
-            operation,
-            tuple(as_graph_operand(operand) for operand in operands),
+            operation, tuple((as_graph_operand(operand) for operand in operands))
         )
-
     tensors = [_as_tensor(operand) for operand in operands]
     return operation.forward(
-        tensors[0],
-        tensors[1],
-        tensors[2] if len(tensors) > 2 else None,
+        tensors[0], tensors[1], tensors[2] if len(tensors) > 2 else None
     )
 
 
@@ -760,9 +574,7 @@ def conv1d(
         ``(length + 2 * padding - dilation * (kernel_length - 1) - 1)
         // stride + 1``.
     """
-    return _convolve(
-        1, inputs, kernel, bias, stride, padding, dilation, groups
-    )
+    return _convolve(1, inputs, kernel, bias, stride, padding, dilation, groups)
 
 
 @overload
@@ -897,9 +709,7 @@ def conv2d(
     Returns:
         Values shaped ``(batch, out_channels, out_height, out_width)``.
     """
-    return _convolve(
-        2, inputs, kernel, bias, stride, padding, dilation, groups
-    )
+    return _convolve(2, inputs, kernel, bias, stride, padding, dilation, groups)
 
 
 @overload
@@ -1004,9 +814,7 @@ def conv3d(
     groups: int = 1,
 ) -> TensorResult | VariableNode:
     """Correlate a batched or unbatched 3D volume with a kernel."""
-    return _convolve(
-        3, inputs, kernel, bias, stride, padding, dilation, groups
-    )
+    return _convolve(3, inputs, kernel, bias, stride, padding, dilation, groups)
 
 
 __all__ = ["conv1d", "conv2d", "conv3d"]

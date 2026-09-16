@@ -23,19 +23,15 @@ The rungs, innermost first:
 """
 
 from __future__ import annotations
-
-import math
+from tensors.backend import dispatch as backend_dispatch
 from collections.abc import Sequence
 from typing import Any
-
 import tensors as ts
-from tensors.backend import execute_unary
 from tensors.backend.dispatch import arithmetic
-from tensors.backend.loading import _load_array_backend
+from tensors.backend.loading import load_backend
 from tensors.graph import Computation
-
-from ..harness import Case, Group, Unsupported
-from ..workloads import (
+from benchmarks.perfmap.harness import Case, Group, Unsupported
+from benchmarks.perfmap.workloads import (
     ACCELERATED,
     FLOAT_DTYPES,
     INTEGER_DTYPES,
@@ -51,20 +47,13 @@ from ..workloads import (
     tensor,
 )
 
-
-#: The provider function implementing each public binary operator.
 _BINARY = {
     "add": ("add", lambda left, right: left + right),
     "subtract": ("subtract", lambda left, right: left - right),
     "multiply": ("multiply", lambda left, right: left * right),
     "divide": ("true_divide", lambda left, right: left / right),
 }
-
-#: Unary transforms whose provider equivalent has the same name, chosen to
-#: span cheap, transcendental, and piecewise kernels.
 _UNARY = ("exp", "log", "sqrt", "tanh", "sin", "abs", "sign")
-
-#: Public unary entry points, by internal operation name.
 _PUBLIC_UNARY = {
     "exp": lambda value: ts.exp(value),
     "log": lambda value: ts.log(value),
@@ -77,11 +66,7 @@ _PUBLIC_UNARY = {
     "sigmoid": lambda value: ts.sigmoid(value),
     "softplus": lambda value: ts.softplus(value),
 }
-
-#: Integer elementwise work is unaccelerated on every backend, so its
-#: curve stops where per-element Python cost would dominate the run.
 INTEGER_ELEMENTWISE_CEILING = 1_000_000
-
 _COMPARISONS = {
     "equal": ("equal", ts.equal),
     "less": ("less", ts.less),
@@ -90,10 +75,7 @@ _COMPARISONS = {
 
 
 def _binary_ladder(
-    backend: str,
-    operation: str,
-    dtype_name: str,
-    size: int,
+    backend: str, operation: str, dtype_name: str, size: int
 ) -> list[Case]:
     """Build every measurable rung of one binary operation."""
     provider_name, public_operation = _BINARY[operation]
@@ -115,20 +97,18 @@ def _binary_ladder(
         },
     }
     cases: list[Case] = []
-
     left = tensor(shape, dtype_name=dtype_name, kind="ramp")
     right = tensor(shape, dtype_name=dtype_name, kind="constant", value=2.0)
-    expected = float(public_operation(
-        first(left) if not is_integer(dtype_name) else int(first(left)),
-        2.0 if not is_integer(dtype_name) else 2,
-    ))
-
+    expected = float(
+        public_operation(
+            first(left) if not is_integer(dtype_name) else int(first(left)),
+            2.0 if not is_integer(dtype_name) else 2,
+        )
+    )
     if backend in ACCELERATED:
         provider = provider_module(backend)
-        kernels = _load_array_backend(backend)
-        raw_left = provider_array(
-            provider, shape, dtype_name=dtype_name, kind="ramp"
-        )
+        kernels = load_backend(backend)
+        raw_left = provider_array(provider, shape, dtype_name=dtype_name, kind="ramp")
         raw_right = provider_array(
             provider, shape, dtype_name=dtype_name, kind="constant", value=2.0
         )
@@ -140,69 +120,64 @@ def _binary_ladder(
         def validate_provider() -> None:
             result = provider_function(raw_left, raw_right)
             assert result.size == size
-            assert close(first(result), expected, tolerance=1e-5)
+            assert close(first(result), expected, tolerance=1e-05)
 
-        cases.append(Case(
-            name=f"provider.{operation}/{dtype_name}/{size}",
-            run=run_provider,
-            layer="provider",
-            validate=validate_provider,
-            description=f"raw {provider.__name__}.{provider_name}",
-            backends=ACCELERATED,
-            **common,
-        ))
+        cases.append(
+            Case(
+                name=f"provider.{operation}/{dtype_name}/{size}",
+                run=run_provider,
+                layer="provider",
+                validate=validate_provider,
+                description=f"raw {provider.__name__}.{provider_name}",
+                backends=ACCELERATED,
+                **common,
+            )
+        )
 
         def run_kernel() -> Any:
             return getattr(kernels, operation)(
-                left,
-                right,
-                dtype=dtype,
-                output_shape=shape,
+                left, right, dtype=dtype, output_shape=shape
             )
 
         def validate_kernel() -> None:
             storage = run_kernel()
             if storage is None:
                 raise Unsupported(
-                    "the guarded array kernel declines this dtype and "
-                    "backend and defers to the Python reference "
-                    "implementation"
+                    "the guarded array kernel declines this dtype and backend and defers to the Python reference implementation"
                 )
             assert storage.size == size
 
-        cases.append(Case(
-            name=f"kernel.{operation}/{dtype_name}/{size}",
-            run=run_kernel,
-            layer="kernel",
-            validate=validate_kernel,
-            description="internal guarded array kernel over Tensors",
-            backends=ACCELERATED,
-            **common,
-        ))
+        cases.append(
+            Case(
+                name=f"kernel.{operation}/{dtype_name}/{size}",
+                run=run_kernel,
+                layer="kernel",
+                validate=validate_kernel,
+                description="internal guarded array kernel over Tensors",
+                backends=ACCELERATED,
+                **common,
+            )
+        )
 
         def run_dispatch() -> Any:
             return getattr(arithmetic, f"execute_{operation}")(
-                left,
-                right,
-                dtype=dtype,
-                output_shape=shape,
+                left, right, dtype=dtype, output_shape=shape
             )
 
         def validate_dispatch() -> None:
-            # Below the workload policy's threshold the dispatcher declines
-            # and the caller runs the reference implementation. That is the
-            # measurement, not a failure.
             run_dispatch()
 
-        cases.append(Case(
-            name=f"dispatch.{operation}/{dtype_name}/{size}",
-            run=run_dispatch,
-            layer="dispatch",
-            validate=validate_dispatch,
-            description="dedicated arithmetic dispatch: workload policy and provider lookup",
-            backends=ACCELERATED,
-            **common,
-        ))
+        cases.append(
+            Case(
+                name=f"dispatch.{operation}/{dtype_name}/{size}",
+                run=run_dispatch,
+                layer="dispatch",
+                validate=validate_dispatch,
+                description="dedicated arithmetic dispatch: workload policy and provider lookup",
+                backends=ACCELERATED,
+                **common,
+            )
+        )
 
     def run_public() -> Any:
         return public_operation(left, right)
@@ -210,17 +185,18 @@ def _binary_ladder(
     def validate_public() -> None:
         result = public_operation(left, right)
         assert result.shape == shape
-        assert close(first(result), expected, tolerance=1e-5)
+        assert close(first(result), expected, tolerance=1e-05)
 
-    cases.append(Case(
-        name=f"public.{operation}/{dtype_name}/{size}",
-        run=run_public,
-        layer="public",
-        validate=validate_public,
-        description="public Tensor operator",
-        **common,
-    ))
-
+    cases.append(
+        Case(
+            name=f"public.{operation}/{dtype_name}/{size}",
+            run=run_public,
+            layer="public",
+            validate=validate_public,
+            description="public Tensor operator",
+            **common,
+        )
+    )
     if not is_integer(dtype_name):
         left_variable = ts.Variable(left, requires_grad=False)
         right_variable = ts.Variable(right, requires_grad=False)
@@ -232,21 +208,17 @@ def _binary_ladder(
             result = public_operation(left_variable, right_variable)
             assert result.shape == shape
 
-        cases.append(Case(
-            name=f"variable.{operation}/{dtype_name}/{size}",
-            run=run_variable,
-            layer="variable",
-            validate=validate_variable,
-            description=(
-                "eager Variable operator: records structure, compiles a "
-                "one-instruction program, and runs it"
-            ),
-            # Each call builds a node and Variable that reference each
-            # other, so collection is part of this path's sustained cost.
-            gc_enabled=True,
-            **common,
-        ))
-
+        cases.append(
+            Case(
+                name=f"variable.{operation}/{dtype_name}/{size}",
+                run=run_variable,
+                layer="variable",
+                validate=validate_variable,
+                description="eager Variable operator: records structure, compiles a one-instruction program, and runs it",
+                gc_enabled=True,
+                **common,
+            )
+        )
         traced = public_operation(left_variable, right_variable)
         computation = Computation(traced)
         computation.forward()
@@ -258,23 +230,21 @@ def _binary_ladder(
             result = computation.forward()
             assert result.shape == shape
 
-        cases.append(Case(
-            name=f"replay.{operation}/{dtype_name}/{size}",
-            run=run_replay,
-            layer="graph-replay",
-            validate=validate_replay,
-            description="forward replay of the compiled one-instruction program",
-            **common,
-        ))
-
+        cases.append(
+            Case(
+                name=f"replay.{operation}/{dtype_name}/{size}",
+                run=run_replay,
+                layer="graph-replay",
+                validate=validate_replay,
+                description="forward replay of the compiled one-instruction program",
+                **common,
+            )
+        )
     return cases
 
 
 def _unary_ladder(
-    backend: str,
-    operation: str,
-    dtype_name: str,
-    size: int,
+    backend: str, operation: str, dtype_name: str, size: int
 ) -> list[Case]:
     """Build provider, kernel, dispatch, and public rungs for a unary map."""
     dtype = dtype_of(dtype_name)
@@ -294,70 +264,75 @@ def _unary_ladder(
     }
     cases: list[Case] = []
     value = tensor(shape, dtype_name=dtype_name, kind="ramp")
-
     if backend in ACCELERATED:
         provider = provider_module(backend)
         kernels = kernel_module(backend)
         raw = provider_array(provider, shape, dtype_name=dtype_name, kind="ramp")
         provider_function = getattr(provider, operation, None)
         if provider_function is not None:
-            cases.append(Case(
-                name=f"provider.{operation}/{dtype_name}/{size}",
-                run=lambda: provider_function(raw),
-                layer="provider",
-                validate=lambda: provider_function(raw),
-                description=f"raw {provider.__name__}.{operation}",
-                backends=ACCELERATED,
-                **common,
-            ))
+            cases.append(
+                Case(
+                    name=f"provider.{operation}/{dtype_name}/{size}",
+                    run=lambda: provider_function(raw),
+                    layer="provider",
+                    validate=lambda: provider_function(raw),
+                    description=f"raw {provider.__name__}.{operation}",
+                    backends=ACCELERATED,
+                    **common,
+                )
+            )
 
         def run_kernel() -> Any:
-            return kernels.unary(operation, value, dtype=dtype)
+            return getattr(kernels, operation)(value, dtype=dtype)
 
         def validate_kernel() -> None:
             if run_kernel() is None:
                 raise Unsupported(
-                    "the guarded array kernel declines this dtype and "
-                    "defers to the Python reference implementation"
+                    "the guarded array kernel declines this dtype and defers to the Python reference implementation"
                 )
 
-        cases.append(Case(
-            name=f"kernel.{operation}/{dtype_name}/{size}",
-            run=run_kernel,
-            layer="kernel",
-            validate=validate_kernel,
-            description="internal guarded unary kernel",
-            backends=ACCELERATED,
-            **common,
-        ))
-
-        cases.append(Case(
-            name=f"dispatch.{operation}/{dtype_name}/{size}",
-            run=lambda: execute_unary(operation, value, dtype=dtype),
-            layer="dispatch",
-            validate=lambda: execute_unary(operation, value, dtype=dtype),
-            description="execute_unary: policy and kernel lookup",
-            backends=ACCELERATED,
-            **common,
-        ))
-
+        cases.append(
+            Case(
+                name=f"kernel.{operation}/{dtype_name}/{size}",
+                run=run_kernel,
+                layer="kernel",
+                validate=validate_kernel,
+                description="internal guarded unary kernel",
+                backends=ACCELERATED,
+                **common,
+            )
+        )
+        cases.append(
+            Case(
+                name=f"dispatch.{operation}/{dtype_name}/{size}",
+                run=lambda: getattr(backend_dispatch, f"execute_{operation}")(
+                    value, dtype=dtype
+                ),
+                layer="dispatch",
+                validate=lambda: getattr(backend_dispatch, f"execute_{operation}")(
+                    value, dtype=dtype
+                ),
+                description="execute_unary: policy and kernel lookup",
+                backends=ACCELERATED,
+                **common,
+            )
+        )
     public = _PUBLIC_UNARY[operation]
-    cases.append(Case(
-        name=f"public.{operation}/{dtype_name}/{size}",
-        run=lambda: public(value),
-        layer="public",
-        validate=lambda: public(value),
-        description="public unary function",
-        **common,
-    ))
+    cases.append(
+        Case(
+            name=f"public.{operation}/{dtype_name}/{size}",
+            run=lambda: public(value),
+            layer="public",
+            validate=lambda: public(value),
+            description="public unary function",
+            **common,
+        )
+    )
     return cases
 
 
 def _comparison_cases(
-    backend: str,
-    operation: str,
-    dtype_name: str,
-    size: int,
+    backend: str, operation: str, dtype_name: str, size: int
 ) -> list[Case]:
     """Build provider, kernel, and public rungs for a comparison."""
     provider_name, public = _COMPARISONS[operation]
@@ -378,7 +353,6 @@ def _comparison_cases(
     cases: list[Case] = []
     left = tensor(shape, dtype_name=dtype_name, kind="ramp")
     right = tensor(shape, dtype_name=dtype_name, kind="constant", value=1.5)
-
     if backend in ACCELERATED:
         provider = provider_module(backend)
         kernels = kernel_module(backend)
@@ -387,61 +361,60 @@ def _comparison_cases(
             provider, shape, dtype_name=dtype_name, kind="constant", value=1.5
         )
         provider_function = getattr(provider, provider_name)
-        cases.append(Case(
-            name=f"provider.{operation}/{dtype_name}/{size}",
-            run=lambda: provider_function(raw_left, raw_right),
-            layer="provider",
-            validate=lambda: provider_function(raw_left, raw_right),
-            description=f"raw {provider.__name__}.{provider_name}",
-            backends=ACCELERATED,
-            **common,
-        ))
+        cases.append(
+            Case(
+                name=f"provider.{operation}/{dtype_name}/{size}",
+                run=lambda: provider_function(raw_left, raw_right),
+                layer="provider",
+                validate=lambda: provider_function(raw_left, raw_right),
+                description=f"raw {provider.__name__}.{provider_name}",
+                backends=ACCELERATED,
+                **common,
+            )
+        )
 
         def run_kernel() -> Any:
-            return kernels.comparison(
-                operation, left, right, output_shape=shape
-            )
+            return getattr(kernels, operation)(left, right, output_shape=shape)
 
         def validate_kernel() -> None:
             if run_kernel() is None:
                 raise Unsupported(
-                    "the comparison kernel declines this dtype and defers "
-                    "to the Python reference implementation"
+                    "the comparison kernel declines this dtype and defers to the Python reference implementation"
                 )
 
-        cases.append(Case(
-            name=f"kernel.{operation}/{dtype_name}/{size}",
-            run=run_kernel,
-            layer="kernel",
-            validate=validate_kernel,
-            description="internal comparison kernel",
-            backends=ACCELERATED,
+        cases.append(
+            Case(
+                name=f"kernel.{operation}/{dtype_name}/{size}",
+                run=run_kernel,
+                layer="kernel",
+                validate=validate_kernel,
+                description="internal comparison kernel",
+                backends=ACCELERATED,
+                **common,
+            )
+        )
+    cases.append(
+        Case(
+            name=f"public.{operation}/{dtype_name}/{size}",
+            run=lambda: public(left, right),
+            layer="public",
+            validate=lambda: public(left, right),
+            description="public comparison returning a boolean-valued Tensor",
             **common,
-        ))
-
-    cases.append(Case(
-        name=f"public.{operation}/{dtype_name}/{size}",
-        run=lambda: public(left, right),
-        layer="public",
-        validate=lambda: public(left, right),
-        description="public comparison returning a boolean-valued Tensor",
-        **common,
-    ))
+        )
+    )
     return cases
 
 
 def groups() -> list[Group]:
     """Return one group per (operation, dtype, size) ladder."""
     result: list[Group] = []
-
     for operation in _BINARY:
         for dtype_name in (*FLOAT_DTYPES, *INTEGER_DTYPES):
             if operation == "divide" and is_integer(dtype_name):
-                # Integer division promotes to floating point, so it is not
-                # the same arithmetic as the float case and is covered there.
                 continue
-            for size in (1, 10, 100, 1_000, 10_000, 100_000, 1_000_000,
-                         10_000_000):
+            for size in (1, 10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000):
+
                 def factory(
                     backend: str,
                     operation: str = operation,
@@ -450,43 +423,25 @@ def groups() -> list[Group]:
                 ) -> Sequence[Case]:
                     if size > SIZE_CEILING[backend]:
                         raise Unsupported(
-                            f"{size} elements exceeds the {backend} ceiling "
-                            f"of {SIZE_CEILING[backend]}; the Python backend "
-                            "interprets element by element and the device "
-                            "has limited memory"
+                            f"{size} elements exceeds the {backend} ceiling of {SIZE_CEILING[backend]}; the Python backend interprets element by element and the device has limited memory"
                         )
-                    # Integer arithmetic is not accelerated on any backend:
-                    # the NumPy path widens integers to object dtype, so the
-                    # additions run as Python ints inside a NumPy loop, and
-                    # the CUDA kernels decline integers entirely and fall
-                    # back to the host reference implementation. Both are
-                    # therefore per-element Python work, and the curve up to
-                    # a million values already establishes that; sweeping to
-                    # ten million would add tens of minutes and no finding.
-                    if (
-                        is_integer(dtype_name)
-                        and size > INTEGER_ELEMENTWISE_CEILING
-                    ):
+                    if is_integer(dtype_name) and size > INTEGER_ELEMENTWISE_CEILING:
                         raise Unsupported(
-                            f"{size} integer elements exceeds the "
-                            f"{INTEGER_ELEMENTWISE_CEILING} ceiling for "
-                            "integer elementwise work: no backend "
-                            "accelerates it (NumPy computes in object "
-                            "dtype, CUDA declines and uses the host "
-                            "reference implementation), so cost is "
-                            "per-element Python work in every case"
+                            f"{size} integer elements exceeds the {INTEGER_ELEMENTWISE_CEILING} ceiling for integer elementwise work: no backend accelerates it (NumPy computes in object dtype, CUDA declines and uses the host reference implementation), so cost is per-element Python work in every case"
                         )
                     return _binary_ladder(backend, operation, dtype_name, size)
 
-                result.append(Group(
-                    name=f"layers/binary/{operation}/{dtype_name}/{size}",
-                    factory=factory,
-                    suite="layers",
-                ))
-
+                result.append(
+                    Group(
+                        name=f"layers/binary/{operation}/{dtype_name}/{size}",
+                        factory=factory,
+                        suite="layers",
+                    )
+                )
     for operation in _UNARY:
         for dtype_name in FLOAT_DTYPES:
             for size in (1, 100, 10_000, 1_000_000, 10_000_000):
+
                 def unary_factory(
                     backend: str,
                     operation: str = operation,
@@ -499,34 +454,34 @@ def groups() -> list[Group]:
                         )
                     return _unary_ladder(backend, operation, dtype_name, size)
 
-                result.append(Group(
-                    name=f"layers/unary/{operation}/{dtype_name}/{size}",
-                    factory=unary_factory,
-                    suite="layers",
-                ))
-
+                result.append(
+                    Group(
+                        name=f"layers/unary/{operation}/{dtype_name}/{size}",
+                        factory=unary_factory,
+                        suite="layers",
+                    )
+                )
     for operation in ("relu", "sigmoid", "softplus"):
         for size in (1, 10_000, 1_000_000):
+
             def activation_factory(
-                backend: str,
-                operation: str = operation,
-                size: int = size,
+                backend: str, operation: str = operation, size: int = size
             ) -> Sequence[Case]:
                 if size > SIZE_CEILING[backend]:
-                    raise Unsupported(
-                        f"{size} elements exceeds the {backend} ceiling"
-                    )
+                    raise Unsupported(f"{size} elements exceeds the {backend} ceiling")
                 return _unary_ladder(backend, operation, "float64", size)
 
-            result.append(Group(
-                name=f"layers/activation/{operation}/{size}",
-                factory=activation_factory,
-                suite="layers",
-            ))
-
+            result.append(
+                Group(
+                    name=f"layers/activation/{operation}/{size}",
+                    factory=activation_factory,
+                    suite="layers",
+                )
+            )
     for operation in _COMPARISONS:
         for dtype_name in ("float64", "float32", "int64"):
             for size in (1, 10_000, 1_000_000):
+
                 def comparison_factory(
                     backend: str,
                     operation: str = operation,
@@ -537,18 +492,15 @@ def groups() -> list[Group]:
                         raise Unsupported(
                             f"{size} elements exceeds the {backend} ceiling"
                         )
-                    return _comparison_cases(
-                        backend, operation, dtype_name, size
+                    return _comparison_cases(backend, operation, dtype_name, size)
+
+                result.append(
+                    Group(
+                        name=f"layers/comparison/{operation}/{dtype_name}/{size}",
+                        factory=comparison_factory,
+                        suite="layers",
                     )
-
-                result.append(Group(
-                    name=(
-                        f"layers/comparison/{operation}/{dtype_name}/{size}"
-                    ),
-                    factory=comparison_factory,
-                    suite="layers",
-                ))
-
+                )
     return result
 
 

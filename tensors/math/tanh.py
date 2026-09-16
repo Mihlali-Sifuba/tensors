@@ -1,16 +1,14 @@
 """Elementwise hyperbolic tangent and its differentiation rule."""
 
 from __future__ import annotations
-
+from tensors.backend import dispatch as backend_dispatch
 import math as _math
 from typing import TYPE_CHECKING, Any, List, overload
-
 from .._typing import TensorData, TensorLike, TensorResult, TensorValue
 from ..dtype import float64
 from ..ops.operation import Operation
 from ..tensor import Tensor
 from ..graph.expression import as_tensor_operand
-from ._unary import unary_backward, unary_forward
 
 if TYPE_CHECKING:
     from ..graph.node import VariableNode
@@ -24,37 +22,23 @@ class Tanh(Operation):
 
     def forward(self, a: Tensor) -> Tensor:
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
-        return unary_forward(
-            "tanh",
-            a,
-            dtype=dtype,
-            fallback=lambda value: _math.tanh(float(value)),
+        return Tensor._from_owned_storage(
+            backend_dispatch.execute_tanh(a, dtype=dtype), dtype=dtype, shape=a.shape
         )
 
     def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Tensor]:
         a = inputs[0]
         return [
-            unary_backward(
-                "tanh",
-                grad,
-                a,
-                fallback=lambda upstream, value: (
-                    upstream * _tanh_derivative(float(value))
-                ),
+            Tensor._from_owned_storage(
+                backend_dispatch.execute_tanh_gradient(grad, a),
+                dtype=grad.dtype,
+                shape=a.shape,
             )
         ]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable VJP for hyperbolic tangent."""
         from ..ops._utils import masked_value_graph
         from .exp import exp
@@ -72,8 +56,8 @@ class Tanh(Operation):
         )
         positive_z = exp(-2.0 * masked_value_graph(value, positive_mask))
         negative_z = exp(2.0 * masked_value_graph(value, negative_mask))
-        positive = 4.0 * positive_z / ((1.0 + positive_z) ** 2) * positive_mask
-        negative = 4.0 * negative_z / ((1.0 + negative_z) ** 2) * negative_mask
+        positive = 4.0 * positive_z / (1.0 + positive_z) ** 2 * positive_mask
+        negative = 4.0 * negative_z / (1.0 + negative_z) ** 2 * negative_mask
         return [grad * (positive + negative)]
 
 
@@ -89,9 +73,7 @@ def tanh(value: TensorValue) -> TensorValue: ...
 def tanh(value: TensorData) -> Tensor: ...
 
 
-def tanh(
-    value: TensorLike | VariableNode,
-) -> TensorResult | VariableNode:
+def tanh(value: TensorLike | VariableNode) -> TensorResult | VariableNode:
     """Return the elementwise hyperbolic tangent of a graph value or Tensor.
 
     A graph value is applied through the graph: a Variable calculates the

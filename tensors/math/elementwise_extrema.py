@@ -1,12 +1,15 @@
 """Broadcasting elementwise minimum and maximum operations."""
 
 from __future__ import annotations
-
+from tensors.backend import (
+    execute_maximum,
+    execute_maximum_gradient,
+    execute_minimum,
+    execute_minimum_gradient,
+)
 import math
 from typing import ClassVar, TYPE_CHECKING, Any, Optional, overload
-
 from .._typing import TensorData, TensorLike, TensorResult
-from ..backend import execute_extremum, execute_extremum_gradient
 from ..dtype import result_dtype
 from ..ops._utils import sum_to_shape
 from ..ops.operation import Operation
@@ -44,60 +47,17 @@ class _ElementwiseExtremum(Operation):
     __slots__ = ()
     select_maximum: ClassVar[bool] = False
 
-    def forward(self, left: Tensor, right: Tensor) -> Tensor:
-        shape = left.shape.broadcast_with(right.shape)
-        dtype = result_dtype(left.dtype, right)
-        operation = "maximum" if self.select_maximum else "minimum"
-        accelerated = execute_extremum(
-            operation,
-            left,
-            right,
-            dtype=dtype,
-            output_shape=shape,
-        )
-        if accelerated is not None:
-            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
-        expanded_left, expanded_right = broadcast_tensors(left, right)
-        values = []
-        for left_value, right_value in zip(
-            expanded_left._data,
-            expanded_right._data,
-        ):
-            if _is_nan(left_value) or _is_nan(right_value):
-                values.append(math.nan)
-            elif self.select_maximum:
-                values.append(
-                    left_value if left_value >= right_value else right_value
-                )
-            else:
-                values.append(
-                    left_value if left_value <= right_value else right_value
-                )
-        return Tensor(
-            values,
-            dtype=dtype,
-            shape=expanded_left.shape,
-        )
-
     def _weights(
-        self,
-        left: Tensor,
-        right: Tensor,
-        *,
-        higher_order: bool,
+        self, left: Tensor, right: Tensor, *, higher_order: bool
     ) -> tuple[list[float], list[float]]:
         expanded_left, expanded_right = broadcast_tensors(left, right)
         left_weights = []
         right_weights = []
-        for left_value, right_value in zip(
-            expanded_left._data,
-            expanded_right._data,
-        ):
+        for left_value, right_value in zip(expanded_left._data, expanded_right._data):
             if _is_nan(left_value) or _is_nan(right_value):
                 if higher_order:
                     raise ValueError(
-                        "Higher-order derivatives of elementwise extrema "
-                        "are undefined at NaN"
+                        "Higher-order derivatives of elementwise extrema are undefined at NaN"
                     )
                 left_weights.append(math.nan)
                 right_weights.append(math.nan)
@@ -105,8 +65,7 @@ class _ElementwiseExtremum(Operation):
             if left_value == right_value:
                 if higher_order:
                     raise ValueError(
-                        "Higher-order derivatives of elementwise extrema "
-                        "are undefined at ties"
+                        "Higher-order derivatives of elementwise extrema are undefined at ties"
                     )
                 left_weights.append(0.5)
                 right_weights.append(0.5)
@@ -118,97 +77,50 @@ class _ElementwiseExtremum(Operation):
             )
             left_weights.append(1.0 if left_selected else 0.0)
             right_weights.append(0.0 if left_selected else 1.0)
-        return left_weights, right_weights
+        return (left_weights, right_weights)
 
-    def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
+    @staticmethod
+    def _gradients(
+        grad: Tensor, left: Tensor, right: Tensor, storages: tuple[Any, Any]
     ) -> list[Optional[Tensor]]:
-        left, right = inputs
-        need_left, need_right = needs_input_grad
-        operation = "maximum" if self.select_maximum else "minimum"
-        accelerated = execute_extremum_gradient(
-            operation,
-            grad,
-            left,
-            right,
-            needs_input_grad=needs_input_grad,
-        )
-        if accelerated is not None:
-            left_storage, right_storage = accelerated
-            return [
+        """Shape each requested extremum VJP back onto its own operand."""
+        left_storage, right_storage = storages
+        return [
+            (
                 sum_to_shape(
                     Tensor._from_owned_storage(
-                        left_storage,
-                        dtype=grad.dtype,
-                        shape=grad.shape,
+                        left_storage, dtype=grad.dtype, shape=grad.shape
                     ),
                     left.shape,
                 )
                 if left_storage is not None
-                else None,
+                else None
+            ),
+            (
                 sum_to_shape(
                     Tensor._from_owned_storage(
-                        right_storage,
-                        dtype=grad.dtype,
-                        shape=grad.shape,
+                        right_storage, dtype=grad.dtype, shape=grad.shape
                     ),
                     right.shape,
                 )
                 if right_storage is not None
-                else None,
-            ]
-        left_weights, right_weights = self._weights(
-            left,
-            right,
-            higher_order=False,
-        )
-
-        def weighted(weights: list[float], target: Tensor) -> Tensor:
-            return sum_to_shape(
-                Tensor(
-                    [
-                        upstream * weight
-                        for upstream, weight in zip(grad._data, weights)
-                    ],
-                    dtype=grad.dtype,
-                    shape=grad.shape,
-                ),
-                target.shape,
-            )
-
-        return [
-            weighted(left_weights, left) if need_left else None,
-            weighted(right_weights, right) if need_right else None,
+                else None
+            ),
         ]
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
-        from ..ops._utils import (
-            masked_value_graph,
-            sum_to_shape_graph,
-            zero_like_graph,
-        )
+    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        from ..ops._utils import masked_value_graph, sum_to_shape_graph, zero_like_graph
 
         left, right = inputs
         need_left, need_right = needs_input_grad
         left_weights, right_weights = self._weights(
-            left.data,
-            right.data,
-            higher_order=True,
+            left.data, right.data, higher_order=True
         )
 
         def masked(weights: list[float], target: Any) -> Any:
             mask = Tensor(weights, dtype=grad.dtype, shape=grad.shape)
             return sum_to_shape_graph(
-                masked_value_graph(grad, mask),
-                target.shape,
+                masked_value_graph(grad, mask), target.shape
             ) + zero_like_graph(target)
 
         return [
@@ -224,12 +136,46 @@ class Maximum(_ElementwiseExtremum):
     name = "maximum"
     select_maximum = True
 
+    def forward(self, left: Tensor, right: Tensor) -> Tensor:
+        """Select the larger of each broadcast pair, propagating NaN."""
+        shape = left.shape.broadcast_with(right.shape)
+        dtype = result_dtype(left.dtype, right)
+        storage = execute_maximum(left, right, dtype=dtype, output_shape=shape)
+        return Tensor._from_owned_storage(storage, dtype=dtype, shape=shape)
+
+    def backward(
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
+    ) -> list[Optional[Tensor]]:
+        """Route the upstream gradient to the selected operand."""
+        left, right = inputs
+        storages = execute_maximum_gradient(
+            grad, left, right, needs_input_grad=needs_input_grad
+        )
+        return self._gradients(grad, left, right, storages)
+
 
 class Minimum(_ElementwiseExtremum):
     """Elementwise minimum with broadcasting."""
 
     __slots__ = ()
     name = "minimum"
+
+    def forward(self, left: Tensor, right: Tensor) -> Tensor:
+        """Select the smaller of each broadcast pair, propagating NaN."""
+        shape = left.shape.broadcast_with(right.shape)
+        dtype = result_dtype(left.dtype, right)
+        storage = execute_minimum(left, right, dtype=dtype, output_shape=shape)
+        return Tensor._from_owned_storage(storage, dtype=dtype, shape=shape)
+
+    def backward(
+        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
+    ) -> list[Optional[Tensor]]:
+        """Route the upstream gradient to the selected operand."""
+        left, right = inputs
+        storages = execute_minimum_gradient(
+            grad, left, right, needs_input_grad=needs_input_grad
+        )
+        return self._gradients(grad, left, right, storages)
 
 
 def _extremum(operation: Operation, left: Any, right: Any) -> Any:
@@ -246,40 +192,30 @@ def _extremum(operation: Operation, left: Any, right: Any) -> Any:
 
     if isinstance(left, VariableNode) or isinstance(right, VariableNode):
         return apply_operation(
-            operation,
-            (as_graph_operand(left), as_graph_operand(right)),
+            operation, (as_graph_operand(left), as_graph_operand(right))
         )
-
     left_is_variable = isinstance(left, Variable)
     right_is_variable = isinstance(right, Variable)
     reference_dtype = (
-        left.dtype if left_is_variable or isinstance(left, Tensor)
-        else right.dtype if right_is_variable or isinstance(right, Tensor)
-        else None
+        left.dtype
+        if left_is_variable or isinstance(left, Tensor)
+        else right.dtype if right_is_variable or isinstance(right, Tensor) else None
     )
     left_tensor = _tensor(left, dtype=reference_dtype)
     right_tensor = _tensor(right, dtype=reference_dtype)
     if left_is_variable or right_is_variable:
-        left_variable = left if left_is_variable else Variable(
-            left_tensor,
-            requires_grad=False,
+        left_variable = (
+            left if left_is_variable else Variable(left_tensor, requires_grad=False)
         )
-        right_variable = right if right_is_variable else Variable(
-            right_tensor,
-            requires_grad=False,
+        right_variable = (
+            right if right_is_variable else Variable(right_tensor, requires_grad=False)
         )
-        return Variable._apply_operation(
-            operation,
-            (left_variable, right_variable),
-        )
+        return Variable._apply_operation(operation, (left_variable, right_variable))
     return operation.forward(left_tensor, right_tensor)
 
 
 @overload
-def maximum(
-    left: VariableNode,
-    right: TensorLike | VariableNode,
-) -> VariableNode: ...
+def maximum(left: VariableNode, right: TensorLike | VariableNode) -> VariableNode: ...
 
 
 @overload
@@ -299,18 +235,14 @@ def maximum(left: TensorData, right: TensorData) -> Tensor: ...
 
 
 def maximum(
-    left: TensorLike | VariableNode,
-    right: TensorLike | VariableNode,
+    left: TensorLike | VariableNode, right: TensorLike | VariableNode
 ) -> TensorResult | VariableNode:
     """Return the broadcasting elementwise maximum of two values."""
     return _extremum(Maximum(), left, right)
 
 
 @overload
-def minimum(
-    left: VariableNode,
-    right: TensorLike | VariableNode,
-) -> VariableNode: ...
+def minimum(left: VariableNode, right: TensorLike | VariableNode) -> VariableNode: ...
 
 
 @overload
@@ -330,8 +262,7 @@ def minimum(left: TensorData, right: TensorData) -> Tensor: ...
 
 
 def minimum(
-    left: TensorLike | VariableNode,
-    right: TensorLike | VariableNode,
+    left: TensorLike | VariableNode, right: TensorLike | VariableNode
 ) -> TensorResult | VariableNode:
     """Return the broadcasting elementwise minimum of two values."""
     return _extremum(Minimum(), left, right)
