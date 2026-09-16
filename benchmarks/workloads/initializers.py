@@ -13,7 +13,7 @@ from collections.abc import Sequence
 import tensors as ts
 
 from ..case import Case, Group, Unsupported
-from ..workloads import FLOAT_DTYPES, dtype_of
+from ..inputs import FLOAT_DTYPES, dtype_of
 
 #: The sampling initializers, which differ only in their variance scale.
 SAMPLING = (

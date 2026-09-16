@@ -20,7 +20,7 @@ from benchmarks import inventory
 from benchmarks import registry
 
 #: Cheap suites that still exercise both a successful build and a decline.
-SAMPLE_SUITES = ("framework", "shape")
+SAMPLE_SUITES = ("dispatch", "manipulation")
 
 REQUIRED_FIELDS = frozenset(
     {

@@ -14,7 +14,7 @@ import tensors as ts
 
 from ..case import Case, Group, Unsupported
 from benchmarks.profiles import selected_sizes
-from benchmarks.workloads import (
+from benchmarks.inputs import (
     ACCELERATED,
     FLOAT_DTYPES,
     dtype_of,
@@ -58,70 +58,76 @@ def _random_cases(
         native = getattr(provider, dtype_name)
         provider_calls = {
             "uniform": lambda: provider.random.random(size).astype(native),
-            "normal": lambda: provider.random.standard_normal(
-                size
-            ).astype(native),
+            "normal": lambda: provider.random.standard_normal(size).astype(native),
         }
         for name, call in provider_calls.items():
-            cases.append(Case(
-                name=f"provider.{name}/{dtype_name}/{size}/{state}",
-                run=call,
+            cases.append(
+                Case(
+                    name=f"provider.{name}/{dtype_name}/{size}/{state}",
+                    run=call,
+                    layer="provider",
+                    validate=call,
+                    description=f"raw provider {name} generation",
+                    backends=ACCELERATED,
+                    **common(name),
+                )
+            )
+        cases.append(
+            Case(
+                name=f"provider.randint/int64/{size}/{state}",
+                run=lambda: provider.random.randint(0, 100, size),
                 layer="provider",
-                validate=call,
-                description=f"raw provider {name} generation",
+                validate=lambda: provider.random.randint(0, 100, size),
+                description="raw provider integer generation",
+                family="random/randint",
+                dtype="int64",
+                shape=shape,
+                elements=size,
+                work_items=size,
                 backends=ACCELERATED,
-                **common(name),
-            ))
-        cases.append(Case(
-            name=f"provider.randint/int64/{size}/{state}",
-            run=lambda: provider.random.randint(0, 100, size),
-            layer="provider",
-            validate=lambda: provider.random.randint(0, 100, size),
-            description="raw provider integer generation",
-            family="random/randint",
-            dtype="int64",
-            shape=shape,
-            elements=size,
-            work_items=size,
-            backends=ACCELERATED,
-            tags={
-                "ladder": f"random-randint|int64|{size}|{state}",
-                "curve": f"random-randint|int64|{state}",
-            },
-        ))
+                tags={
+                    "ladder": f"random-randint|int64|{size}|{state}",
+                    "curve": f"random-randint|int64|{state}",
+                },
+            )
+        )
 
     public_calls = {
         "uniform": lambda: ts.random.uniform(shape, dtype=dtype),
         "normal": lambda: ts.random.normal(shape, dtype=dtype),
     }
     for name, call in public_calls.items():
-        cases.append(Case(
-            name=f"public.{name}/{dtype_name}/{size}/{state}",
-            run=call,
+        cases.append(
+            Case(
+                name=f"public.{name}/{dtype_name}/{size}/{state}",
+                run=call,
+                layer="public",
+                validate=call,
+                setup=seed,
+                description=f"public {name} generation ({state})",
+                memory=name == "normal",
+                **common(name),
+            )
+        )
+    cases.append(
+        Case(
+            name=f"public.randint/int64/{size}/{state}",
+            run=lambda: ts.random.randint(shape, 0, 100),
             layer="public",
-            validate=call,
+            validate=lambda: ts.random.randint(shape, 0, 100),
             setup=seed,
-            description=f"public {name} generation ({state})",
-            memory=name == "normal",
-            **common(name),
-        ))
-    cases.append(Case(
-        name=f"public.randint/int64/{size}/{state}",
-        run=lambda: ts.random.randint(shape, 0, 100),
-        layer="public",
-        validate=lambda: ts.random.randint(shape, 0, 100),
-        setup=seed,
-        description=f"public integer generation ({state})",
-        family="random/randint",
-        dtype="int64",
-        shape=shape,
-        elements=size,
-        work_items=size,
-        tags={
-            "ladder": f"random-randint|int64|{size}|{state}",
-            "curve": f"random-randint|int64|{state}",
-        },
-    ))
+            description=f"public integer generation ({state})",
+            family="random/randint",
+            dtype="int64",
+            shape=shape,
+            elements=size,
+            work_items=size,
+            tags={
+                "ladder": f"random-randint|int64|{size}|{state}",
+                "curve": f"random-randint|int64|{state}",
+            },
+        )
+    )
     return cases
 
 
@@ -131,6 +137,7 @@ def groups() -> list[Group]:
     for seeded in (False, True):
         for dtype_name in FLOAT_DTYPES:
             for size in selected_sizes((1, 1_000, 100_000, 1_000_000)):
+
                 def factory(
                     backend: str,
                     size: int = size,
@@ -144,11 +151,13 @@ def groups() -> list[Group]:
                     return _random_cases(backend, size, dtype_name, seeded)
 
                 state = "seeded" if seeded else "unseeded"
-                result.append(Group(
-                    name=f"random/{state}/{dtype_name}/{size}",
-                    factory=factory,
-                    suite="random",
-                ))
+                result.append(
+                    Group(
+                        name=f"random/{state}/{dtype_name}/{size}",
+                        factory=factory,
+                        suite="random",
+                    )
+                )
     return result
 
 

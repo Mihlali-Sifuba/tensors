@@ -9,7 +9,7 @@ subset of what the suites declare, and ``standard`` is the whole of it.
 import unittest
 
 from benchmarks import profiles
-from benchmarks.workloads import ELEMENTWISE_SIZES, NUMERIC_DTYPES, ceiling_for
+from benchmarks.inputs import ELEMENTWISE_SIZES, NUMERIC_DTYPES, ceiling_for
 
 
 class ScaleTests(unittest.TestCase):

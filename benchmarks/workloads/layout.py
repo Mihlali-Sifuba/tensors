@@ -20,7 +20,7 @@ from typing import Any
 import tensors as ts
 import importlib
 from benchmarks.case import Case, Group, Unsupported
-from benchmarks.workloads import (
+from benchmarks.inputs import (
     ACCELERATED,
     provider_array,
     provider_module,

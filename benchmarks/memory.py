@@ -39,9 +39,7 @@ class MemorySample:
             "device_used_delta_bytes": self.device_used_delta_bytes,
             "device_pool_delta_bytes": self.device_pool_delta_bytes,
             "device_peak_used_bytes": self.device_peak_used_bytes,
-            "device_retained_bytes_per_call": (
-                self.device_retained_bytes_per_call
-            ),
+            "device_retained_bytes_per_call": (self.device_retained_bytes_per_call),
             "notes": list(self.notes),
         }
 

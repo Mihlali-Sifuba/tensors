@@ -23,17 +23,13 @@ from tensors.backend import (
 )
 
 from ..case import Case, Group, Unsupported
-from ..workloads import ACCELERATED, FLOAT_DTYPES, dtype_of, tensor
+from ..inputs import ACCELERATED, FLOAT_DTYPES, dtype_of, tensor
 
 
-def _dense_targets(
-    batch: int, classes: int, dtype_name: str
-) -> ts.Tensor:
+def _dense_targets(batch: int, classes: int, dtype_name: str) -> ts.Tensor:
     """Return a valid dense probability distribution per row."""
     row = [1.0 / classes] * classes
-    return ts.Tensor(
-        row * batch, dtype=dtype_of(dtype_name), shape=(batch, classes)
-    )
+    return ts.Tensor(row * batch, dtype=dtype_of(dtype_name), shape=(batch, classes))
 
 
 def _index_targets(batch: int, classes: int) -> ts.Tensor:
@@ -90,39 +86,44 @@ def _cross_entropy_cases(
 
         def validate_one_hot() -> None:
             if run_one_hot() is None:
-                raise Unsupported(
-                    "dense target expansion declined this configuration"
-                )
+                raise Unsupported("dense target expansion declined this configuration")
 
-        cases.append(Case(
-            name=f"prepare.one_hot/{suffix}",
-            run=run_one_hot,
-            layer="dispatch",
-            validate=validate_one_hot,
-            description=(
-                "expand class indices into a dense distribution, including "
-                "the host-visible validity check"
-            ),
-            backends=ACCELERATED,
-            **preparation_common,
-        ))
-        cases.append(Case(
-            name=f"prepare.validate_distributions/{suffix}",
-            run=lambda: execute_validate_distributions(dense, axis),
-            layer="dispatch",
-            validate=lambda: execute_validate_distributions(dense, axis),
-            description=(
-                "validate already-dense target rows, which reads a "
-                "provider result back to the host"
-            ),
-            backends=ACCELERATED,
-            **preparation_common,
-        ))
+        cases.append(
+            Case(
+                name=f"prepare.one_hot/{suffix}",
+                run=run_one_hot,
+                layer="dispatch",
+                validate=validate_one_hot,
+                description=(
+                    "expand class indices into a dense distribution, including "
+                    "the host-visible validity check"
+                ),
+                backends=ACCELERATED,
+                **preparation_common,
+            )
+        )
+        cases.append(
+            Case(
+                name=f"prepare.validate_distributions/{suffix}",
+                run=lambda: execute_validate_distributions(dense, axis),
+                layer="dispatch",
+                validate=lambda: execute_validate_distributions(dense, axis),
+                description=(
+                    "validate already-dense target rows, which reads a "
+                    "provider result back to the host"
+                ),
+                backends=ACCELERATED,
+                **preparation_common,
+            )
+        )
 
         def run_dispatch() -> Any:
             return execute_cross_entropy(
-                logits, dense, axis,
-                reduction=reduction, dtype=dtype,
+                logits,
+                dense,
+                axis,
+                reduction=reduction,
+                dtype=dtype,
                 output_shape=output_shape,
             )
 
@@ -133,15 +134,17 @@ def _cross_entropy_cases(
                     "configuration and deferred to the reference path"
                 )
 
-        cases.append(Case(
-            name=f"dispatch.cross_entropy/{suffix}",
-            run=run_dispatch,
-            layer="dispatch",
-            validate=validate_dispatch,
-            description="the fused dense cross-entropy kernel",
-            backends=ACCELERATED,
-            **common,
-        ))
+        cases.append(
+            Case(
+                name=f"dispatch.cross_entropy/{suffix}",
+                run=run_dispatch,
+                layer="dispatch",
+                validate=validate_dispatch,
+                description="the fused dense cross-entropy kernel",
+                backends=ACCELERATED,
+                **common,
+            )
+        )
 
         gradient = tensor(output_shape, dtype_name=dtype_name, kind="constant")
         backward_common = dict(common)
@@ -156,46 +159,46 @@ def _cross_entropy_cases(
 
         def validate_gradient() -> None:
             if run_gradient() is None:
-                raise Unsupported(
-                    "the cross-entropy VJP declined this configuration"
-                )
+                raise Unsupported("the cross-entropy VJP declined this configuration")
 
-        cases.append(Case(
-            name=f"vjp.cross_entropy/{suffix}",
-            run=run_gradient,
-            layer="dispatch",
-            validate=validate_gradient,
-            description="the fused cross-entropy VJP",
-            backends=ACCELERATED,
-            **backward_common,
-        ))
+        cases.append(
+            Case(
+                name=f"vjp.cross_entropy/{suffix}",
+                run=run_gradient,
+                layer="dispatch",
+                validate=validate_gradient,
+                description="the fused cross-entropy VJP",
+                backends=ACCELERATED,
+                **backward_common,
+            )
+        )
 
-    cases.append(Case(
-        name=f"public.cross_entropy_dense/{suffix}",
-        run=lambda: ts.cross_entropy(logits, dense, reduction=reduction),
-        layer="public",
-        validate=lambda: ts.cross_entropy(
-            logits, dense, reduction=reduction
-        ),
-        description="public cross-entropy over dense target rows",
-        **common,
-    ))
+    cases.append(
+        Case(
+            name=f"public.cross_entropy_dense/{suffix}",
+            run=lambda: ts.cross_entropy(logits, dense, reduction=reduction),
+            layer="public",
+            validate=lambda: ts.cross_entropy(logits, dense, reduction=reduction),
+            description="public cross-entropy over dense target rows",
+            **common,
+        )
+    )
     index_common = dict(common)
     index_common["tags"] = dict(common["tags"])
     index_common["tags"].pop("ladder", None)
-    cases.append(Case(
-        name=f"public.cross_entropy_indices/{suffix}",
-        run=lambda: ts.cross_entropy(logits, indices, reduction=reduction),
-        layer="public",
-        validate=lambda: ts.cross_entropy(
-            logits, indices, reduction=reduction
-        ),
-        description=(
-            "public cross-entropy over class indices, which includes dense "
-            "target expansion"
-        ),
-        **index_common,
-    ))
+    cases.append(
+        Case(
+            name=f"public.cross_entropy_indices/{suffix}",
+            run=lambda: ts.cross_entropy(logits, indices, reduction=reduction),
+            layer="public",
+            validate=lambda: ts.cross_entropy(logits, indices, reduction=reduction),
+            description=(
+                "public cross-entropy over class indices, which includes dense "
+                "target expansion"
+            ),
+            **index_common,
+        )
+    )
 
     # The differentiated public path, so backward can be compared against
     # the forward loss it differentiates.
@@ -208,20 +211,20 @@ def _cross_entropy_cases(
     autograd_common["tags"] = autograd_tags
 
     def run_backward() -> None:
-        loss = ts.cross_entropy(
-            logits_variable, dense_variable, reduction=reduction
-        )
+        loss = ts.cross_entropy(logits_variable, dense_variable, reduction=reduction)
         ts.backward(loss)
 
-    cases.append(Case(
-        name=f"autograd.cross_entropy/{suffix}",
-        run=run_backward,
-        layer="autograd",
-        validate=run_backward,
-        description="trace, forward, and differentiate a public loss",
-        gc_enabled=True,
-        **autograd_common,
-    ))
+    cases.append(
+        Case(
+            name=f"autograd.cross_entropy/{suffix}",
+            run=run_backward,
+            layer="autograd",
+            validate=run_backward,
+            description="trace, forward, and differentiate a public loss",
+            gc_enabled=True,
+            **autograd_common,
+        )
+    )
     return cases
 
 
@@ -257,7 +260,8 @@ def _binary_cases(
         if from_logits
         else ts.Tensor(
             [0.25 + (index % 5) / 10.0 for index in range(size)],
-            dtype=dtype, shape=shape,
+            dtype=dtype,
+            shape=shape,
         )
     )
     target = ts.Tensor(
@@ -265,11 +269,15 @@ def _binary_cases(
     )
 
     if backend in ACCELERATED:
+
         def run_dispatch() -> Any:
             return execute_binary_cross_entropy(
-                prediction, target,
-                from_logits=from_logits, reduction="mean",
-                dtype=dtype, output_shape=(1,),
+                prediction,
+                target,
+                from_logits=from_logits,
+                reduction="mean",
+                dtype=dtype,
+                output_shape=(1,),
             )
 
         def validate_dispatch() -> None:
@@ -279,59 +287,65 @@ def _binary_cases(
                     "configuration"
                 )
 
-        cases.append(Case(
-            name=f"dispatch.binary_cross_entropy/{suffix}",
-            run=run_dispatch,
-            layer="dispatch",
-            validate=validate_dispatch,
-            description="the fused binary cross-entropy kernel",
-            backends=ACCELERATED,
-            **common,
-        ))
+        cases.append(
+            Case(
+                name=f"dispatch.binary_cross_entropy/{suffix}",
+                run=run_dispatch,
+                layer="dispatch",
+                validate=validate_dispatch,
+                description="the fused binary cross-entropy kernel",
+                backends=ACCELERATED,
+                **common,
+            )
+        )
 
         gradient = tensor((1,), dtype_name=dtype_name, kind="constant")
         backward_common = dict(common)
         backward_common["tags"] = dict(common["tags"])
         backward_common["tags"]["phase"] = "backward"
-        backward_common["tags"]["ladder"] = (
-            f"binary_cross_entropy-vjp|{suffix}"
-        )
+        backward_common["tags"]["ladder"] = f"binary_cross_entropy-vjp|{suffix}"
 
         def run_gradient() -> Any:
             return execute_binary_cross_entropy_gradient(
-                gradient, prediction, target,
-                from_logits=from_logits, reduction="mean",
+                gradient,
+                prediction,
+                target,
+                from_logits=from_logits,
+                reduction="mean",
             )
 
         def validate_gradient() -> None:
             if run_gradient() is None:
                 raise Unsupported(
-                    "the binary cross-entropy VJP declined this "
-                    "configuration"
+                    "the binary cross-entropy VJP declined this " "configuration"
                 )
 
-        cases.append(Case(
-            name=f"vjp.binary_cross_entropy/{suffix}",
-            run=run_gradient,
-            layer="dispatch",
-            validate=validate_gradient,
-            description="the fused binary cross-entropy VJP",
-            backends=ACCELERATED,
-            **backward_common,
-        ))
+        cases.append(
+            Case(
+                name=f"vjp.binary_cross_entropy/{suffix}",
+                run=run_gradient,
+                layer="dispatch",
+                validate=validate_gradient,
+                description="the fused binary cross-entropy VJP",
+                backends=ACCELERATED,
+                **backward_common,
+            )
+        )
 
-    cases.append(Case(
-        name=f"public.binary_cross_entropy/{suffix}",
-        run=lambda: ts.binary_cross_entropy(
-            prediction, target, from_logits=from_logits
-        ),
-        layer="public",
-        validate=lambda: ts.binary_cross_entropy(
-            prediction, target, from_logits=from_logits
-        ),
-        description="public binary cross-entropy",
-        **common,
-    ))
+    cases.append(
+        Case(
+            name=f"public.binary_cross_entropy/{suffix}",
+            run=lambda: ts.binary_cross_entropy(
+                prediction, target, from_logits=from_logits
+            ),
+            layer="public",
+            validate=lambda: ts.binary_cross_entropy(
+                prediction, target, from_logits=from_logits
+            ),
+            description="public binary cross-entropy",
+            **common,
+        )
+    )
     return cases
 
 
@@ -341,7 +355,11 @@ def groups() -> list[Group]:
 
     for dtype_name in FLOAT_DTYPES:
         for batch, classes in (
-            (1, 10), (32, 10), (128, 1_000), (512, 1_000), (64, 10_000),
+            (1, 10),
+            (32, 10),
+            (128, 1_000),
+            (512, 1_000),
+            (64, 10_000),
         ):
             for reduction in ("mean", "none"):
                 elements = batch * classes
@@ -355,25 +373,26 @@ def groups() -> list[Group]:
                     elements: int = elements,
                 ) -> Sequence[Case]:
                     if backend == "python" and elements > 20_000:
-                        raise Unsupported(
-                            "exceeds the Python backend loss ceiling"
-                        )
+                        raise Unsupported("exceeds the Python backend loss ceiling")
                     return _cross_entropy_cases(
                         backend, batch, classes, dtype_name, reduction
                     )
 
-                result.append(Group(
-                    name=(
-                        f"losses/cross_entropy/{dtype_name}/"
-                        f"{batch}x{classes}/{reduction}"
-                    ),
-                    factory=factory,
-                    suite="losses",
-                ))
+                result.append(
+                    Group(
+                        name=(
+                            f"losses/cross_entropy/{dtype_name}/"
+                            f"{batch}x{classes}/{reduction}"
+                        ),
+                        factory=factory,
+                        suite="losses",
+                    )
+                )
 
     for dtype_name in FLOAT_DTYPES:
         for size in (100, 10_000, 1_000_000):
             for from_logits in (False, True):
+
                 def binary_factory(
                     backend: str,
                     size: int = size,
@@ -381,21 +400,17 @@ def groups() -> list[Group]:
                     from_logits: bool = from_logits,
                 ) -> Sequence[Case]:
                     if backend == "python" and size > 20_000:
-                        raise Unsupported(
-                            "exceeds the Python backend loss ceiling"
-                        )
-                    return _binary_cases(
-                        backend, size, dtype_name, from_logits
-                    )
+                        raise Unsupported("exceeds the Python backend loss ceiling")
+                    return _binary_cases(backend, size, dtype_name, from_logits)
 
                 convention = "logits" if from_logits else "probabilities"
-                result.append(Group(
-                    name=(
-                        f"losses/binary/{dtype_name}/{size}/{convention}"
-                    ),
-                    factory=binary_factory,
-                    suite="losses",
-                ))
+                result.append(
+                    Group(
+                        name=(f"losses/binary/{dtype_name}/{size}/{convention}"),
+                        factory=binary_factory,
+                        suite="losses",
+                    )
+                )
     return result
 
 

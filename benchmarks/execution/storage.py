@@ -20,7 +20,7 @@ from tensors.backend.conversion import convert_storage
 from benchmarks.case import Case, Group, Unsupported
 from tensors.shape import Shape
 from benchmarks.profiles import selected_sizes
-from benchmarks.workloads import (
+from benchmarks.inputs import (
     ACCELERATED,
     FLOAT_DTYPES,
     _native_storage,

@@ -27,7 +27,7 @@ from tensors.graph.computation.gradients import (
 )
 
 from ..case import Case, Group, Unsupported
-from ..workloads import ceiling_for, FLOAT_DTYPES, GRADIENT_CEILING, tensor
+from ..inputs import ceiling_for, FLOAT_DTYPES, GRADIENT_CEILING, tensor
 
 
 def _paired_cases(
@@ -91,9 +91,7 @@ def _single_operation_cases(
     backend: str, operation: str, width: int, dtype_name: str
 ) -> list[Case]:
     """Differentiate one operation, so the rule is what is measured."""
-    left = ts.Variable(
-        tensor((width,), dtype_name=dtype_name, kind="ramp")
-    )
+    left = ts.Variable(tensor((width,), dtype_name=dtype_name, kind="ramp"))
     right = ts.Variable(
         tensor((width,), dtype_name=dtype_name, kind="constant", value=2.0)
     )
@@ -102,7 +100,7 @@ def _single_operation_cases(
         "add": lambda: left + right,
         "multiply": lambda: left * right,
         "divide": lambda: left / right,
-        "power": lambda: left ** right,
+        "power": lambda: left**right,
         "exp": lambda: ts.exp(left),
         "log": lambda: ts.log(left),
         "tanh": lambda: ts.tanh(left),
@@ -127,9 +125,7 @@ def _single_operation_cases(
     )
 
 
-def _topology_cases(
-    backend: str, topology: str, depth: int, width: int
-) -> list[Case]:
+def _topology_cases(backend: str, topology: str, depth: int, width: int) -> list[Case]:
     """Differentiate graphs whose shape, not size, is what varies."""
     leaf = ts.Variable(
         tensor((width,), dtype_name="float64", kind="constant", value=1.0)
@@ -201,47 +197,55 @@ def _component_cases(backend: str, depth: int, width: int) -> list[Case]:
     }
     cases: list[Case] = []
 
-    cases.append(Case(
-        name=f"autograd.validate_states/{depth}/{width}",
-        run=computation._validate_recorded_states,
-        layer="autograd",
-        validate=computation._validate_recorded_states,
-        description=(
-            "the pre-reverse check that no recorded forward value was "
-            "mutated, which walks every instruction and its operands"
-        ),
-        **common,
-    ))
-    cases.append(Case(
-        name=f"autograd.live_slots_all/{depth}/{width}",
-        run=lambda: computation._live_slots(None),
-        layer="autograd",
-        validate=lambda: computation._live_slots(None),
-        description=(
-            "demand analysis for a full backward, which asks every slot "
-            "whether it requires a gradient"
-        ),
-        **common,
-    ))
-    cases.append(Case(
-        name=f"autograd.live_slots_selective/{depth}/{width}",
-        run=lambda: computation._live_slots((leaf,)),
-        layer="autograd",
-        validate=lambda: computation._live_slots((leaf,)),
-        description=(
-            "demand analysis for one requested input, which closes the set "
-            "over the paths reaching it"
-        ),
-        **common,
-    ))
-    cases.append(Case(
-        name=f"autograd.gradient_seed/{depth}/{width}",
-        run=lambda: gradient_seed(output, None),
-        layer="autograd",
-        validate=lambda: gradient_seed(output, None),
-        description="construct the upstream gradient a reverse pass starts from",
-        **common,
-    ))
+    cases.append(
+        Case(
+            name=f"autograd.validate_states/{depth}/{width}",
+            run=computation._validate_recorded_states,
+            layer="autograd",
+            validate=computation._validate_recorded_states,
+            description=(
+                "the pre-reverse check that no recorded forward value was "
+                "mutated, which walks every instruction and its operands"
+            ),
+            **common,
+        )
+    )
+    cases.append(
+        Case(
+            name=f"autograd.live_slots_all/{depth}/{width}",
+            run=lambda: computation._live_slots(None),
+            layer="autograd",
+            validate=lambda: computation._live_slots(None),
+            description=(
+                "demand analysis for a full backward, which asks every slot "
+                "whether it requires a gradient"
+            ),
+            **common,
+        )
+    )
+    cases.append(
+        Case(
+            name=f"autograd.live_slots_selective/{depth}/{width}",
+            run=lambda: computation._live_slots((leaf,)),
+            layer="autograd",
+            validate=lambda: computation._live_slots((leaf,)),
+            description=(
+                "demand analysis for one requested input, which closes the set "
+                "over the paths reaching it"
+            ),
+            **common,
+        )
+    )
+    cases.append(
+        Case(
+            name=f"autograd.gradient_seed/{depth}/{width}",
+            run=lambda: gradient_seed(output, None),
+            layer="autograd",
+            validate=lambda: gradient_seed(output, None),
+            description="construct the upstream gradient a reverse pass starts from",
+            **common,
+        )
+    )
 
     # Accumulation, at the fan-in counts a shared value actually sees.
     for terms in (1, 2, 8, 64):
@@ -254,21 +258,22 @@ def _component_cases(backend: str, depth: int, width: int) -> list[Case]:
         accumulate_common["tags"] = {
             "curve": f"autograd-accumulate|{width}",
         }
-        cases.append(Case(
-            name=f"autograd.sum_gradient_values/{terms}/{width}",
-            run=lambda contributions=contributions: sum_gradient_values(
-                list(contributions)
-            ),
-            layer="autograd",
-            validate=lambda contributions=contributions: sum_gradient_values(
-                list(contributions)
-            ),
-            description=(
-                f"combine {terms} gradient contributions arriving at one "
-                "value"
-            ),
-            **accumulate_common,
-        ))
+        cases.append(
+            Case(
+                name=f"autograd.sum_gradient_values/{terms}/{width}",
+                run=lambda contributions=contributions: sum_gradient_values(
+                    list(contributions)
+                ),
+                layer="autograd",
+                validate=lambda contributions=contributions: sum_gradient_values(
+                    list(contributions)
+                ),
+                description=(
+                    f"combine {terms} gradient contributions arriving at one " "value"
+                ),
+                **accumulate_common,
+            )
+        )
 
     # Per-operation result validation, which every rule's output passes
     # through.
@@ -280,30 +285,30 @@ def _component_cases(backend: str, depth: int, width: int) -> list[Case]:
         tensor((width,), dtype_name="float64", kind="constant", value=1.0),
         tensor((width,), dtype_name="float64", kind="constant", value=1.0),
     )
-    cases.append(Case(
-        name=f"autograd.validate_gradients/{width}",
-        run=lambda: validate_gradients(
-            operation, inputs, gradients, (True, True), graph=False
-        ),
-        layer="autograd",
-        validate=lambda: validate_gradients(
-            operation, inputs, gradients, (True, True), graph=False
-        ),
-        description=(
-            "check one operation's VJP result against the demand that was "
-            "made of it"
-        ),
-        **common,
-    ))
+    cases.append(
+        Case(
+            name=f"autograd.validate_gradients/{width}",
+            run=lambda: validate_gradients(
+                operation, inputs, gradients, (True, True), graph=False
+            ),
+            layer="autograd",
+            validate=lambda: validate_gradients(
+                operation, inputs, gradients, (True, True), graph=False
+            ),
+            description=(
+                "check one operation's VJP result against the demand that was "
+                "made of it"
+            ),
+            **common,
+        )
+    )
     return cases
 
 
 def _selective_cases(backend: str, depth: int, width: int) -> list[Case]:
     """Compare a full backward against a pruned, single-input request."""
     leaves = [
-        ts.Variable(
-            tensor((width,), dtype_name="float64", kind="constant", value=1.0)
-        )
+        ts.Variable(tensor((width,), dtype_name="float64", kind="constant", value=1.0))
         for _ in range(8)
     ]
     total = leaves[0]
@@ -432,38 +437,42 @@ def _higher_order_cases(backend: str, width: int) -> list[Case]:
     # Jacobian and Hessian run one reverse pass per output element, so they
     # are only tractable at small widths.
     if width <= 32:
-        cases.append(Case(
-            name=f"autograd.jacobian/{width}",
-            run=jacobian,
-            layer="autograd",
-            validate=jacobian,
-            description=(
-                f"a full Jacobian, which runs {width} reverse passes"
-            ),
-            **common,
-        ))
-        cases.append(Case(
-            name=f"autograd.gradcheck/{width}",
-            run=gradcheck,
-            layer="autograd",
-            validate=gradcheck,
-            description=(
-                "reverse-mode gradients verified against finite differences, "
-                f"which evaluates the objective {2 * width} more times"
-            ),
-            **common,
-        ))
-        cases.append(Case(
-            name=f"autograd.hessian/{width}",
-            run=hessian,
-            layer="autograd",
-            validate=hessian,
-            description=(
-                f"a full Hessian, which runs {width} differentiable reverse "
-                "passes and then one more each"
-            ),
-            **common,
-        ))
+        cases.append(
+            Case(
+                name=f"autograd.jacobian/{width}",
+                run=jacobian,
+                layer="autograd",
+                validate=jacobian,
+                description=(f"a full Jacobian, which runs {width} reverse passes"),
+                **common,
+            )
+        )
+        cases.append(
+            Case(
+                name=f"autograd.gradcheck/{width}",
+                run=gradcheck,
+                layer="autograd",
+                validate=gradcheck,
+                description=(
+                    "reverse-mode gradients verified against finite differences, "
+                    f"which evaluates the objective {2 * width} more times"
+                ),
+                **common,
+            )
+        )
+        cases.append(
+            Case(
+                name=f"autograd.hessian/{width}",
+                run=hessian,
+                layer="autograd",
+                validate=hessian,
+                description=(
+                    f"a full Hessian, which runs {width} differentiable reverse "
+                    "passes and then one more each"
+                ),
+                **common,
+            )
+        )
     return cases
 
 
@@ -479,7 +488,7 @@ def _matmul_cases(backend: str, side: int) -> list[Case]:
         f"matmul/{side}",
         lambda: ts.sum(left @ right),
         width=side * side,
-        operations=side ** 3,
+        operations=side**3,
         family="autograd/matmul",
         memory=True,
     )
@@ -526,12 +535,25 @@ def groups() -> list[Group]:
     result: list[Group] = []
 
     single_operations = (
-        "add", "multiply", "divide", "power", "exp", "log", "tanh", "relu",
-        "sum", "mean", "max", "std", "norm", "softmax",
+        "add",
+        "multiply",
+        "divide",
+        "power",
+        "exp",
+        "log",
+        "tanh",
+        "relu",
+        "sum",
+        "mean",
+        "max",
+        "std",
+        "norm",
+        "softmax",
     )
     for operation in single_operations:
         for dtype_name in FLOAT_DTYPES:
             for width in (1, 1_000, 100_000):
+
                 def single(
                     backend: str,
                     operation: str = operation,
@@ -547,15 +569,18 @@ def groups() -> list[Group]:
                         backend, operation, width, dtype_name
                     )
 
-                result.append(Group(
-                    name=f"autograd/single/{operation}/{dtype_name}/{width}",
-                    factory=single,
-                    suite="autograd",
-                ))
+                result.append(
+                    Group(
+                        name=f"autograd/single/{operation}/{dtype_name}/{width}",
+                        factory=single,
+                        suite="autograd",
+                    )
+                )
 
     for topology in ("chain", "branched", "accumulation"):
         for depth in (1, 10, 100, 500):
             for width in (1, 1_000, 100_000):
+
                 def topology_factory(
                     backend: str,
                     topology: str = topology,
@@ -563,57 +588,61 @@ def groups() -> list[Group]:
                     width: int = width,
                 ) -> Sequence[Case]:
                     if backend == "python" and depth * width > 20_000:
-                        raise Unsupported(
-                            "exceeds the Python backend gradient ceiling"
-                        )
+                        raise Unsupported("exceeds the Python backend gradient ceiling")
                     if depth * width > 10_000_000:
                         raise Unsupported(
                             f"a depth-{depth} graph over {width} elements "
                             "would retain more than this run permits"
                         )
-                    return _topology_cases(
-                        backend, topology, depth, width
-                    )
+                    return _topology_cases(backend, topology, depth, width)
 
-                result.append(Group(
-                    name=f"autograd/{topology}/{depth}/{width}",
-                    factory=topology_factory,
-                    suite="autograd",
-                ))
+                result.append(
+                    Group(
+                        name=f"autograd/{topology}/{depth}/{width}",
+                        factory=topology_factory,
+                        suite="autograd",
+                    )
+                )
 
     for depth in (10, 100, 500):
         for width in (1, 1_000):
+
             def components(
-                backend: str, depth: int = depth, width: int = width,
+                backend: str,
+                depth: int = depth,
+                width: int = width,
             ) -> Sequence[Case]:
                 if backend == "python" and depth * width > 20_000:
-                    raise Unsupported(
-                        "exceeds the Python backend gradient ceiling"
-                    )
+                    raise Unsupported("exceeds the Python backend gradient ceiling")
                 return _component_cases(backend, depth, width)
 
-            result.append(Group(
-                name=f"autograd/components/{depth}/{width}",
-                factory=components,
-                suite="autograd",
-            ))
+            result.append(
+                Group(
+                    name=f"autograd/components/{depth}/{width}",
+                    factory=components,
+                    suite="autograd",
+                )
+            )
 
             def selective(
-                backend: str, depth: int = depth, width: int = width,
+                backend: str,
+                depth: int = depth,
+                width: int = width,
             ) -> Sequence[Case]:
                 if backend == "python" and depth * width > 20_000:
-                    raise Unsupported(
-                        "exceeds the Python backend gradient ceiling"
-                    )
+                    raise Unsupported("exceeds the Python backend gradient ceiling")
                 return _selective_cases(backend, depth, width)
 
-            result.append(Group(
-                name=f"autograd/selective/{depth}/{width}",
-                factory=selective,
-                suite="autograd",
-            ))
+            result.append(
+                Group(
+                    name=f"autograd/selective/{depth}/{width}",
+                    factory=selective,
+                    suite="autograd",
+                )
+            )
 
     for width in (1, 8, 32, 1_000):
+
         def higher_order(backend: str, width: int = width) -> Sequence[Case]:
             if backend == "python" and width > 32:
                 raise Unsupported(
@@ -622,41 +651,47 @@ def groups() -> list[Group]:
                 )
             return _higher_order_cases(backend, width)
 
-        result.append(Group(
-            name=f"autograd/higher-order/{width}",
-            factory=higher_order,
-            suite="autograd",
-        ))
+        result.append(
+            Group(
+                name=f"autograd/higher-order/{width}",
+                factory=higher_order,
+                suite="autograd",
+            )
+        )
 
     for side in (8, 64, 256, 512):
+
         def matmul(backend: str, side: int = side) -> Sequence[Case]:
             if backend == "python" and side > 32:
-                raise Unsupported(
-                    "exceeds the Python backend matrix-gradient ceiling"
-                )
+                raise Unsupported("exceeds the Python backend matrix-gradient ceiling")
             return _matmul_cases(backend, side)
 
-        result.append(Group(
-            name=f"autograd/matmul/{side}",
-            factory=matmul,
-            suite="autograd",
-        ))
+        result.append(
+            Group(
+                name=f"autograd/matmul/{side}",
+                factory=matmul,
+                suite="autograd",
+            )
+        )
 
     for rows, columns in ((8, 64), (256, 256), (1_024, 512)):
+
         def broadcast(
-            backend: str, rows: int = rows, columns: int = columns,
+            backend: str,
+            rows: int = rows,
+            columns: int = columns,
         ) -> Sequence[Case]:
             if backend == "python" and rows * columns > 20_000:
-                raise Unsupported(
-                    "exceeds the Python backend gradient ceiling"
-                )
+                raise Unsupported("exceeds the Python backend gradient ceiling")
             return _broadcast_cases(backend, rows, columns)
 
-        result.append(Group(
-            name=f"autograd/broadcast/{rows}x{columns}",
-            factory=broadcast,
-            suite="autograd",
-        ))
+        result.append(
+            Group(
+                name=f"autograd/broadcast/{rows}x{columns}",
+                factory=broadcast,
+                suite="autograd",
+            )
+        )
 
     def convolution(backend: str) -> Sequence[Case]:
         if backend == "python":
@@ -666,11 +701,13 @@ def groups() -> list[Group]:
             )
         return _convolution_cases(backend)
 
-    result.append(Group(
-        name="autograd/conv2d",
-        factory=convolution,
-        suite="autograd",
-    ))
+    result.append(
+        Group(
+            name="autograd/conv2d",
+            factory=convolution,
+            suite="autograd",
+        )
+    )
     return result
 
 

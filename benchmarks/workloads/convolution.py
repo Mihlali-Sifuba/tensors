@@ -20,8 +20,7 @@ import tensors as ts
 from tensors.backend import execute_convolution, execute_convolution_gradient
 
 from ..case import Case, Group, Unsupported
-from ..workloads import ACCELERATED, FLOAT_DTYPES, dtype_of, tensor
-
+from ..inputs import ACCELERATED, FLOAT_DTYPES, dtype_of, tensor
 
 #: The public entry point for each rank.
 _PUBLIC = {1: ts.conv1d, 2: ts.conv2d, 3: ts.conv3d}
@@ -79,8 +78,11 @@ class Configuration:
     @property
     def output_extent(self) -> int:
         return _output_extent(
-            self.extent, self.kernel, self.stride,
-            self.padding, self.dilation,
+            self.extent,
+            self.kernel,
+            self.stride,
+            self.padding,
+            self.dilation,
         )
 
     @property
@@ -100,7 +102,7 @@ class Configuration:
     @property
     def multiply_accumulates(self) -> int:
         """Return the arithmetic the geometry implies, for throughput."""
-        patch = (self.in_channels // self.groups) * self.kernel ** self.rank
+        patch = (self.in_channels // self.groups) * self.kernel**self.rank
         return self.elements * patch
 
     @property
@@ -137,17 +139,19 @@ def _convolution_cases(
     padding = (configuration.padding,) * configuration.rank
     dilation = (configuration.dilation,) * configuration.rank
 
-    inputs = tensor(
-        configuration.input_shape, dtype_name=dtype_name, kind="ramp"
-    )
+    inputs = tensor(configuration.input_shape, dtype_name=dtype_name, kind="ramp")
     kernel = tensor(
-        configuration.kernel_shape, dtype_name=dtype_name,
-        kind="constant", value=0.1,
+        configuration.kernel_shape,
+        dtype_name=dtype_name,
+        kind="constant",
+        value=0.1,
     )
     bias = (
         tensor(
-            (configuration.out_channels,), dtype_name=dtype_name,
-            kind="constant", value=0.01,
+            (configuration.out_channels,),
+            dtype_name=dtype_name,
+            kind="constant",
+            value=0.01,
         )
         if configuration.bias
         else None
@@ -178,7 +182,9 @@ def _convolution_cases(
 
     def run_public() -> Any:
         return public(
-            inputs, kernel, bias,
+            inputs,
+            kernel,
+            bias,
             stride=configuration.stride,
             padding=configuration.padding,
             dilation=configuration.dilation,
@@ -191,21 +197,26 @@ def _convolution_cases(
 
     forward_common = dict(common)
     forward_common["tags"] = forward_tags
-    cases.append(Case(
-        name=f"public.conv{configuration.rank}d/{dtype_name}"
-             f"/{configuration.label}",
-        run=run_public,
-        layer="public",
-        validate=validate_public,
-        description="public convolution forward",
-        memory=True,
-        **forward_common,
-    ))
+    cases.append(
+        Case(
+            name=f"public.conv{configuration.rank}d/{dtype_name}"
+            f"/{configuration.label}",
+            run=run_public,
+            layer="public",
+            validate=validate_public,
+            description="public convolution forward",
+            memory=True,
+            **forward_common,
+        )
+    )
 
     if backend in ACCELERATED:
+
         def run_dispatch() -> Any:
             return execute_convolution(
-                inputs, kernel, bias,
+                inputs,
+                kernel,
+                bias,
                 dtype=dtype,
                 output_shape=configuration.output_shape,
                 stride=spatial,
@@ -223,25 +234,31 @@ def _convolution_cases(
 
         dispatch_common = dict(common)
         dispatch_common["tags"] = forward_tags
-        cases.append(Case(
-            name=f"dispatch.conv{configuration.rank}d/{dtype_name}"
-                 f"/{configuration.label}",
-            run=run_dispatch,
-            layer="dispatch",
-            validate=validate_dispatch,
-            description="execute_convolution: policy, im2col, and tiling",
-            backends=ACCELERATED,
-            **dispatch_common,
-        ))
+        cases.append(
+            Case(
+                name=f"dispatch.conv{configuration.rank}d/{dtype_name}"
+                f"/{configuration.label}",
+                run=run_dispatch,
+                layer="dispatch",
+                validate=validate_dispatch,
+                description="execute_convolution: policy, im2col, and tiling",
+                backends=ACCELERATED,
+                **dispatch_common,
+            )
+        )
 
         gradient = tensor(
-            configuration.output_shape, dtype_name=dtype_name,
-            kind="constant", value=1.0,
+            configuration.output_shape,
+            dtype_name=dtype_name,
+            kind="constant",
+            value=1.0,
         )
 
         def run_gradient() -> Any:
             return execute_convolution_gradient(
-                gradient, inputs, kernel,
+                gradient,
+                inputs,
+                kernel,
                 stride=spatial,
                 padding=padding,
                 dilation=dilation,
@@ -258,17 +275,19 @@ def _convolution_cases(
 
         backward_common = dict(common)
         backward_common["tags"] = backward_tags
-        cases.append(Case(
-            name=f"vjp.conv{configuration.rank}d/{dtype_name}"
-                 f"/{configuration.label}",
-            run=run_gradient,
-            layer="dispatch",
-            validate=validate_gradient,
-            description="all three convolution VJPs through dispatch",
-            backends=ACCELERATED,
-            memory=True,
-            **backward_common,
-        ))
+        cases.append(
+            Case(
+                name=f"vjp.conv{configuration.rank}d/{dtype_name}"
+                f"/{configuration.label}",
+                run=run_gradient,
+                layer="dispatch",
+                validate=validate_gradient,
+                description="all three convolution VJPs through dispatch",
+                backends=ACCELERATED,
+                memory=True,
+                **backward_common,
+            )
+        )
 
     return cases
 
@@ -331,7 +350,7 @@ def _ceiling(backend: str, configuration: Configuration) -> None:
     # size, so memory is the binding constraint rather than the output size.
     patch = (
         configuration.in_channels // configuration.groups
-    ) * configuration.kernel ** configuration.rank
+    ) * configuration.kernel**configuration.rank
     expansion_bytes = configuration.elements * patch * 8
     limit = EXPANSION_CEILING[backend]
     if expansion_bytes > limit:
@@ -355,17 +374,20 @@ def groups() -> list[Group]:
             settings["extent"] = extent
 
             def factory(
-                backend: str, settings: dict[str, Any] = settings,
+                backend: str,
+                settings: dict[str, Any] = settings,
             ) -> Sequence[Case]:
                 configuration = Configuration(**settings)
                 _ceiling(backend, configuration)
                 return _convolution_cases(backend, configuration, "float64")
 
-            result.append(Group(
-                name=f"convolution/extent/conv{rank}d/{extent}",
-                factory=factory,
-                suite="convolution",
-            ))
+            result.append(
+                Group(
+                    name=f"convolution/extent/conv{rank}d/{extent}",
+                    factory=factory,
+                    suite="convolution",
+                )
+            )
 
     # -- one curve per geometry knob, on 2-D --------------------------
     for curve_name, (attribute, values) in CURVES.items():
@@ -381,17 +403,20 @@ def groups() -> list[Group]:
                 settings["out_channels"] = 32
 
             def factory(
-                backend: str, settings: dict[str, Any] = settings,
+                backend: str,
+                settings: dict[str, Any] = settings,
             ) -> Sequence[Case]:
                 configuration = Configuration(**settings)
                 _ceiling(backend, configuration)
                 return _convolution_cases(backend, configuration, "float64")
 
-            result.append(Group(
-                name=f"convolution/{curve_name}/conv2d/{value}",
-                factory=factory,
-                suite="convolution",
-            ))
+            result.append(
+                Group(
+                    name=f"convolution/{curve_name}/conv2d/{value}",
+                    factory=factory,
+                    suite="convolution",
+                )
+            )
 
     # -- float32 against float64 on the reference geometry -------------
     for rank in (1, 2, 3):
@@ -405,49 +430,75 @@ def groups() -> list[Group]:
             ) -> Sequence[Case]:
                 configuration = Configuration(**settings)
                 _ceiling(backend, configuration)
-                return _convolution_cases(
-                    backend, configuration, dtype_name
-                )
+                return _convolution_cases(backend, configuration, dtype_name)
 
-            result.append(Group(
-                name=f"convolution/dtype/conv{rank}d/{dtype_name}",
-                factory=factory,
-                suite="convolution",
-            ))
+            result.append(
+                Group(
+                    name=f"convolution/dtype/conv{rank}d/{dtype_name}",
+                    factory=factory,
+                    suite="convolution",
+                )
+            )
 
     # -- a realistic image-model layer ----------------------------------
     # Batch sizes here are chosen so the im2col expansion fits the device
     # ceiling above; the layer geometry is what these cases are for.
     for name, settings in {
         "resnet-stem": dict(
-            rank=2, batch=2, in_channels=3, out_channels=64,
-            extent=112, kernel=7, stride=2, padding=3,
+            rank=2,
+            batch=2,
+            in_channels=3,
+            out_channels=64,
+            extent=112,
+            kernel=7,
+            stride=2,
+            padding=3,
         ),
         "resnet-block": dict(
-            rank=2, batch=2, in_channels=64, out_channels=64,
-            extent=28, kernel=3, stride=1, padding=1,
+            rank=2,
+            batch=2,
+            in_channels=64,
+            out_channels=64,
+            extent=28,
+            kernel=3,
+            stride=1,
+            padding=1,
         ),
         "pointwise": dict(
-            rank=2, batch=4, in_channels=128, out_channels=128,
-            extent=28, kernel=1,
+            rank=2,
+            batch=4,
+            in_channels=128,
+            out_channels=128,
+            extent=28,
+            kernel=1,
         ),
         "depthwise": dict(
-            rank=2, batch=8, in_channels=64, out_channels=64,
-            extent=56, kernel=3, padding=1, groups=64,
+            rank=2,
+            batch=8,
+            in_channels=64,
+            out_channels=64,
+            extent=56,
+            kernel=3,
+            padding=1,
+            groups=64,
         ),
     }.items():
+
         def factory(
-            backend: str, settings: dict[str, Any] = settings,
+            backend: str,
+            settings: dict[str, Any] = settings,
         ) -> Sequence[Case]:
             configuration = Configuration(**settings)
             _ceiling(backend, configuration)
             return _convolution_cases(backend, configuration, "float32")
 
-        result.append(Group(
-            name=f"convolution/realistic/{name}",
-            factory=factory,
-            suite="convolution",
-        ))
+        result.append(
+            Group(
+                name=f"convolution/realistic/{name}",
+                factory=factory,
+                suite="convolution",
+            )
+        )
 
     return result
 

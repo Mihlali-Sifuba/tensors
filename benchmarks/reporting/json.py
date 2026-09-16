@@ -68,6 +68,27 @@ def build_analysis(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+#: The version a report written today carries.
+#:
+#: ``/1`` labelled a record with the suite that produced it under the old
+#: flat layout, where ``layers`` covered arithmetic, the elementary
+#: functions, the activations, and the comparisons together, and ``memory``
+#: was a suite rather than a measurement pass. ``/2`` labels it with the
+#: semantic domain instead. The records themselves — their timings, samples,
+#: layers, and families — did not change, so a ``/1`` report is still
+#: readable; only what its ``suite`` and ``group`` strings refer to is.
+SCHEMA = "tensors-perfmap/2"
+
+#: Versions this package can read. A reader that accepts both must not
+#: silently treat their suite labels as the same vocabulary.
+READABLE_SCHEMAS: tuple[str, ...] = ("tensors-perfmap/1", SCHEMA)
+
+
+def schema_of(report: dict[str, Any]) -> str:
+    """Return a report's schema version, defaulting to the earliest."""
+    return str(report.get("schema", READABLE_SCHEMAS[0]))
+
+
 def build_report(
     *,
     metadata: dict[str, Any],
@@ -76,7 +97,7 @@ def build_report(
 ) -> dict[str, Any]:
     """Assemble the full report, including every derived table."""
     return {
-        "schema": "tensors-perfmap/1",
+        "schema": SCHEMA,
         "metadata": metadata,
         "settings": settings,
         "records": list(records),
@@ -85,7 +106,10 @@ def build_report(
 
 
 __all__ = [
+    "READABLE_SCHEMAS",
+    "SCHEMA",
     "build_analysis",
     "build_report",
+    "schema_of",
     "write_json",
 ]

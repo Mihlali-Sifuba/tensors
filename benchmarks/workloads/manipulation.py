@@ -21,7 +21,7 @@ from tensors.backend import (
 )
 
 from ..case import Case, Group, Unsupported
-from ..workloads import (
+from ..inputs import (
     ACCELERATED,
     dtype_of,
     kernel_module,

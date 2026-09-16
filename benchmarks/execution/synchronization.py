@@ -15,7 +15,7 @@ from typing import Any
 import tensors as ts
 from benchmarks.case import Case, Group, Unsupported
 from benchmarks.profiles import selected_sizes
-from benchmarks.workloads import CUDA_ONLY, tensor
+from benchmarks.inputs import CUDA_ONLY, tensor
 
 
 def _primitive_cases(backend: str) -> list[Case]:

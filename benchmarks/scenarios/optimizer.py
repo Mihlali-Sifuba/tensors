@@ -23,7 +23,7 @@ from tensors.backend import (
 )
 
 from ..case import Case, Group, Unsupported
-from ..workloads import ACCELERATED, FLOAT_DTYPES, dtype_of, tensor
+from ..inputs import ACCELERATED, FLOAT_DTYPES, dtype_of, tensor
 
 #: The optimizers and how to construct one over a parameter list.
 OPTIMIZERS: dict[str, Any] = {

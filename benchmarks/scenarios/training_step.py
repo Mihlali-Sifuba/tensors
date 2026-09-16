@@ -20,55 +20,8 @@ from typing import Any
 import tensors as ts
 
 from ..case import Case, Group, Unsupported
-from ..workloads import FLOAT_DTYPES, dtype_of, tensor
-
-
-class MultiLayerPerceptron(ts.Graph):
-    """A configurable fully connected network over its own parameters."""
-
-    def __init__(
-        self,
-        features: int,
-        hidden: int,
-        outputs: int,
-        depth: int,
-        dtype_name: str,
-    ) -> None:
-        super().__init__()
-        sizes = [features] + [hidden] * depth + [outputs]
-        weights = []
-        biases = []
-        for index, (fan_in, fan_out) in enumerate(zip(sizes, sizes[1:])):
-            scale = (2.0 / fan_in) ** 0.5
-            weights.append(ts.Variable(
-                tensor(
-                    (fan_in, fan_out), dtype_name=dtype_name,
-                    kind="constant", value=scale,
-                ),
-                name=f"weight_{index}",
-            ))
-            biases.append(ts.Variable(
-                tensor(
-                    (fan_out,), dtype_name=dtype_name,
-                    kind="constant", value=0.01,
-                ),
-                name=f"bias_{index}",
-            ))
-        # Assigned as tuples so the Graph metaclass finds them as parameters.
-        self.weights = tuple(weights)
-        self.biases = tuple(biases)
-        self.depth = depth
-
-    def forward(self, inputs: Any) -> Any:
-        current = inputs
-        last = len(self.weights) - 1
-        for index, (weight, bias) in enumerate(
-            zip(self.weights, self.biases)
-        ):
-            current = current @ weight + bias
-            if index != last:
-                current = ts.relu(current)
-        return current
+from ..inputs import FLOAT_DTYPES, dtype_of, tensor
+from .models.mlp import MultiLayerPerceptron
 
 
 def _training_cases(
@@ -113,9 +66,7 @@ def _training_cases(
         (batch, outputs), dtype_name=dtype_name, kind="constant", value=1.0
     )
 
-    model = MultiLayerPerceptron(
-        features, hidden, outputs, depth, dtype_name
-    )
+    model = MultiLayerPerceptron(features, hidden, outputs, depth, dtype_name)
     optimizer = ts.optim.Adam(model.parameters(), learning_rate=0.001)
 
     # A shared holder so the phase cases can hand intermediate values to
@@ -124,9 +75,7 @@ def _training_cases(
 
     def reset() -> None:
         state["predictions"] = model(inputs)
-        state["loss"] = ts.mean(
-            (state["predictions"] - targets) ** 2.0
-        )
+        state["loss"] = ts.mean((state["predictions"] - targets) ** 2.0)
         ts.backward(state["loss"])
 
     def run_forward() -> Any:
@@ -178,30 +127,34 @@ def _training_cases(
     ):
         phase_common = dict(common)
         phase_common["tags"] = {**common["tags"], "phase": phase}
-        cases.append(Case(
-            name=f"training.{phase}/{suffix}",
-            run=call,
-            layer=layer,
-            validate=call,
-            reset=reset,
-            description=description,
-            **phase_common,
-        ))
+        cases.append(
+            Case(
+                name=f"training.{phase}/{suffix}",
+                run=call,
+                layer=layer,
+                validate=call,
+                reset=reset,
+                description=description,
+                **phase_common,
+            )
+        )
 
     step_common = dict(common)
     step_common["tags"] = {**common["tags"], "phase": "step"}
-    cases.append(Case(
-        name=f"training.step/{suffix}",
-        run=run_step,
-        layer="training",
-        validate=run_step,
-        description=(
-            "one complete training step: forward, loss, zero, backward, "
-            "and optimizer"
-        ),
-        memory=True,
-        **step_common,
-    ))
+    cases.append(
+        Case(
+            name=f"training.step/{suffix}",
+            run=run_step,
+            layer="training",
+            validate=run_step,
+            description=(
+                "one complete training step: forward, loss, zero, backward, "
+                "and optimizer"
+            ),
+            memory=True,
+            **step_common,
+        )
+    )
 
     # Ten steps in one timed call, so accumulated per-iteration cost and
     # any growth across iterations are visible in a single number.
@@ -216,15 +169,17 @@ def _training_cases(
         "phase": "sustained",
         "curve": f"training-sustained-{name}|{dtype_name}",
     }
-    cases.append(Case(
-        name=f"training.ten_steps/{suffix}",
-        run=run_ten_steps,
-        layer="training",
-        validate=run_ten_steps,
-        description="ten consecutive training steps in one timed call",
-        memory=True,
-        **sustained_common,
-    ))
+    cases.append(
+        Case(
+            name=f"training.ten_steps/{suffix}",
+            run=run_ten_steps,
+            layer="training",
+            validate=run_ten_steps,
+            description="ten consecutive training steps in one timed call",
+            memory=True,
+            **sustained_common,
+        )
+    )
     return cases
 
 
@@ -232,19 +187,17 @@ def _eager_versus_compiled(
     backend: str, batch: int, hidden: int, dtype_name: str
 ) -> list[Case]:
     """Compare a retracing functional model against a compiled one."""
-    inputs = tensor(
-        (batch, hidden), dtype_name=dtype_name, kind="constant", value=0.5
-    )
+    inputs = tensor((batch, hidden), dtype_name=dtype_name, kind="constant", value=0.5)
     weight = ts.Variable(
         tensor(
-            (hidden, hidden), dtype_name=dtype_name,
-            kind="constant", value=0.05,
+            (hidden, hidden),
+            dtype_name=dtype_name,
+            kind="constant",
+            value=0.05,
         )
     )
     bias = ts.Variable(
-        tensor(
-            (hidden,), dtype_name=dtype_name, kind="constant", value=0.01
-        )
+        tensor((hidden,), dtype_name=dtype_name, kind="constant", value=0.01)
     )
 
     def body(values: Any) -> Any:
@@ -322,9 +275,12 @@ def groups() -> list[Group]:
             for dtype_name in FLOAT_DTYPES:
                 # Roughly how much arithmetic one forward pass performs,
                 # used only to gate a configuration by backend.
-                work = batch * geometry["hidden"] * max(
-                    geometry["features"], geometry["hidden"]
-                ) * (geometry["depth"] + 1)
+                work = (
+                    batch
+                    * geometry["hidden"]
+                    * max(geometry["features"], geometry["hidden"])
+                    * (geometry["depth"] + 1)
+                )
 
                 def factory(
                     backend: str,
@@ -351,16 +307,17 @@ def groups() -> list[Group]:
                         dtype_name,
                     )
 
-                result.append(Group(
-                    name=(
-                        f"training/{name}/{dtype_name}/b{batch}"
-                    ),
-                    factory=factory,
-                    suite="training",
-                ))
+                result.append(
+                    Group(
+                        name=(f"training/{name}/{dtype_name}/b{batch}"),
+                        factory=factory,
+                        suite="training",
+                    )
+                )
 
     for batch, hidden in ((1, 32), (64, 256), (256, 1_024)):
         for dtype_name in FLOAT_DTYPES:
+
             def mode_factory(
                 backend: str,
                 batch: int = batch,
@@ -369,20 +326,17 @@ def groups() -> list[Group]:
             ) -> Sequence[Case]:
                 if backend == "python" and batch * hidden > 20_000:
                     raise Unsupported(
-                        "exceeds the Python backend ceiling for this "
-                        "comparison"
+                        "exceeds the Python backend ceiling for this " "comparison"
                     )
-                return _eager_versus_compiled(
-                    backend, batch, hidden, dtype_name
-                )
+                return _eager_versus_compiled(backend, batch, hidden, dtype_name)
 
-            result.append(Group(
-                name=(
-                    f"training/execution-mode/{dtype_name}/{batch}x{hidden}"
-                ),
-                factory=mode_factory,
-                suite="training",
-            ))
+            result.append(
+                Group(
+                    name=(f"training/execution-mode/{dtype_name}/{batch}x{hidden}"),
+                    factory=mode_factory,
+                    suite="training",
+                )
+            )
     return result
 
 

@@ -22,7 +22,7 @@ import tensors as ts
 from tensors.backend import loading
 from tensors.backend.loading import load_backend
 from benchmarks.case import Case, Group, Unsupported
-from benchmarks.workloads import ACCELERATED, CUDA_ONLY, tensor
+from benchmarks.inputs import ACCELERATED, CUDA_ONLY, tensor
 
 _REPOSITORY = Path(__file__).resolve().parents[3]
 

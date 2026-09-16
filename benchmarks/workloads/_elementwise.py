@@ -1,43 +1,30 @@
-"""Layer ladders over elementwise work: provider to replayed graph.
+"""Ladders for operations that apply to each element independently.
 
-The same arithmetic is measured at every depth it can be isolated at, on the
-same values, so the difference between two rungs is the cost of the layer
-between them and nothing else.
+Arithmetic, the elementary functions, the trigonometric and hyperbolic
+families, the activations, and the comparisons all cost the same shape of
+thing: one pass over the buffer, with the per-element work varying. They are
+measured the same way, so the ladder that measures them lives here and each
+semantic domain says only which operations it owns.
 
-The rungs, innermost first:
-
-``provider``
-    ``numpy.add`` or ``cupy.add`` on native arrays.
-``kernel``
-    the internal guarded kernel, called directly with Tensors.
-``dispatch``
-    the dedicated arithmetic dispatch function, which adds the workload policy and kernel lookup.
-``public``
-    ``Tensor.__add__``, which adds dtype resolution, broadcasting
-    validation, and result construction.
-``variable``
-    ``Variable.__add__``, which additionally records graph structure and
-    compiles and runs a one-instruction program.
-``graph-replay``
-    ``Computation.forward()`` over the already-compiled program.
+A ladder is the point. The same computation is taken at the provider, the
+guarded kernel, dispatch, the public operation, an eager Variable, and a
+replayed graph, inside one group, so the difference between two rungs is
+overhead and not a difference of operand, size, or sampling round.
 """
 
 from __future__ import annotations
-from tensors.backend import dispatch as backend_dispatch
-from collections.abc import Sequence
+
 from typing import Any
+
 import tensors as ts
+from tensors.backend import dispatch as backend_dispatch
 from tensors.backend.dispatch import arithmetic
 from tensors.backend.loading import load_backend
 from tensors.graph import Computation
-from benchmarks.case import Case, Group, Unsupported
-from benchmarks.profiles import selected_sizes
-from benchmarks.workloads import (
+
+from ..case import Case, Unsupported
+from ..inputs import (
     ACCELERATED,
-    FLOAT_DTYPES,
-    INTEGER_DTYPES,
-    SIZE_CEILING,
-    ceiling_for,
     close,
     dtype_of,
     first,
@@ -54,7 +41,9 @@ _BINARY = {
     "multiply": ("multiply", lambda left, right: left * right),
     "divide": ("true_divide", lambda left, right: left / right),
 }
+
 _UNARY = ("exp", "log", "sqrt", "tanh", "sin", "abs", "sign")
+
 _PUBLIC_UNARY = {
     "exp": lambda value: ts.exp(value),
     "log": lambda value: ts.log(value),
@@ -67,7 +56,9 @@ _PUBLIC_UNARY = {
     "sigmoid": lambda value: ts.sigmoid(value),
     "softplus": lambda value: ts.softplus(value),
 }
+
 INTEGER_ELEMENTWISE_CEILING = 1_000_000
+
 _COMPARISONS = {
     "equal": ("equal", ts.equal),
     "less": ("less", ts.less),
@@ -75,7 +66,7 @@ _COMPARISONS = {
 }
 
 
-def _binary_ladder(
+def binary_ladder(
     backend: str, operation: str, dtype_name: str, size: int
 ) -> list[Case]:
     """Build every measurable rung of one binary operation."""
@@ -244,7 +235,7 @@ def _binary_ladder(
     return cases
 
 
-def _unary_ladder(
+def unary_ladder(
     backend: str, operation: str, dtype_name: str, size: int
 ) -> list[Case]:
     """Build provider, kernel, dispatch, and public rungs for a unary map."""
@@ -332,7 +323,7 @@ def _unary_ladder(
     return cases
 
 
-def _comparison_cases(
+def comparison_cases(
     backend: str, operation: str, dtype_name: str, size: int
 ) -> list[Case]:
     """Build provider, kernel, and public rungs for a comparison."""
@@ -407,102 +398,9 @@ def _comparison_cases(
     return cases
 
 
-def groups() -> list[Group]:
-    """Return one group per (operation, dtype, size) ladder."""
-    result: list[Group] = []
-    for operation in _BINARY:
-        for dtype_name in (*FLOAT_DTYPES, *INTEGER_DTYPES):
-            if operation == "divide" and is_integer(dtype_name):
-                continue
-            for size in selected_sizes((1, 10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000)):
-
-                def factory(
-                    backend: str,
-                    operation: str = operation,
-                    dtype_name: str = dtype_name,
-                    size: int = size,
-                ) -> Sequence[Case]:
-                    if size > ceiling_for(backend, SIZE_CEILING):
-                        raise Unsupported(
-                            f"{size} elements exceeds the {backend} ceiling of {ceiling_for(backend, SIZE_CEILING)}; the Python backend interprets element by element and the device has limited memory"
-                        )
-                    if is_integer(dtype_name) and size > INTEGER_ELEMENTWISE_CEILING:
-                        raise Unsupported(
-                            f"{size} integer elements exceeds the {INTEGER_ELEMENTWISE_CEILING} ceiling for integer elementwise work: no backend accelerates it (NumPy computes in object dtype, CUDA declines and uses the host reference implementation), so cost is per-element Python work in every case"
-                        )
-                    return _binary_ladder(backend, operation, dtype_name, size)
-
-                result.append(
-                    Group(
-                        name=f"layers/binary/{operation}/{dtype_name}/{size}",
-                        factory=factory,
-                        suite="layers",
-                    )
-                )
-    for operation in _UNARY:
-        for dtype_name in FLOAT_DTYPES:
-            for size in selected_sizes((1, 100, 10_000, 1_000_000, 10_000_000)):
-
-                def unary_factory(
-                    backend: str,
-                    operation: str = operation,
-                    dtype_name: str = dtype_name,
-                    size: int = size,
-                ) -> Sequence[Case]:
-                    if size > ceiling_for(backend, SIZE_CEILING):
-                        raise Unsupported(
-                            f"{size} elements exceeds the {backend} ceiling"
-                        )
-                    return _unary_ladder(backend, operation, dtype_name, size)
-
-                result.append(
-                    Group(
-                        name=f"layers/unary/{operation}/{dtype_name}/{size}",
-                        factory=unary_factory,
-                        suite="layers",
-                    )
-                )
-    for operation in ("relu", "sigmoid", "softplus"):
-        for size in selected_sizes((1, 10_000, 1_000_000)):
-
-            def activation_factory(
-                backend: str, operation: str = operation, size: int = size
-            ) -> Sequence[Case]:
-                if size > ceiling_for(backend, SIZE_CEILING):
-                    raise Unsupported(f"{size} elements exceeds the {backend} ceiling")
-                return _unary_ladder(backend, operation, "float64", size)
-
-            result.append(
-                Group(
-                    name=f"layers/activation/{operation}/{size}",
-                    factory=activation_factory,
-                    suite="layers",
-                )
-            )
-    for operation in _COMPARISONS:
-        for dtype_name in ("float64", "float32", "int64"):
-            for size in selected_sizes((1, 10_000, 1_000_000)):
-
-                def comparison_factory(
-                    backend: str,
-                    operation: str = operation,
-                    dtype_name: str = dtype_name,
-                    size: int = size,
-                ) -> Sequence[Case]:
-                    if size > ceiling_for(backend, SIZE_CEILING):
-                        raise Unsupported(
-                            f"{size} elements exceeds the {backend} ceiling"
-                        )
-                    return _comparison_cases(backend, operation, dtype_name, size)
-
-                result.append(
-                    Group(
-                        name=f"layers/comparison/{operation}/{dtype_name}/{size}",
-                        factory=comparison_factory,
-                        suite="layers",
-                    )
-                )
-    return result
-
-
-__all__ = ["groups"]
+__all__ = [
+    "INTEGER_ELEMENTWISE_CEILING",
+    "binary_ladder",
+    "comparison_cases",
+    "unary_ladder",
+]

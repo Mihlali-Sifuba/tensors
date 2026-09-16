@@ -19,7 +19,7 @@ from typing import Any
 
 from .console import print_summary
 from .csv import write_csv, write_samples_csv
-from .json import build_report, write_json
+from .json import READABLE_SCHEMAS, build_report, schema_of, write_json
 
 
 def _load(
@@ -33,8 +33,16 @@ def _load(
     stages: list[dict[str, Any]] = []
     duplicates = 0
 
+    schemas: list[str] = []
     for path in sorted(paths):
         report = json.loads(path.read_text(encoding="utf-8"))
+        version = schema_of(report)
+        if version not in READABLE_SCHEMAS:
+            raise ValueError(
+                f"{path.name} is schema {version}, which this package cannot "
+                f"read; it understands {', '.join(READABLE_SCHEMAS)}"
+            )
+        schemas.append(version)
         if not metadata:
             metadata = dict(report["metadata"])
         if not settings:
@@ -71,6 +79,10 @@ def _load(
         ),
         "commits": sorted(commits),
         "single_commit": len(commits) <= 1,
+        # Suite labels mean different things in different schema versions, so
+        # a merge across versions is recorded rather than smoothed over.
+        "schemas": sorted(set(schemas)),
+        "single_schema": len(set(schemas)) <= 1,
     }
     return metadata, settings, records
 

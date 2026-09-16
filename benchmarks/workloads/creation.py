@@ -21,7 +21,7 @@ from tensors.backend import (
 
 from ..case import Case, Group, Unsupported
 from benchmarks.profiles import selected_sizes
-from benchmarks.workloads import (
+from benchmarks.inputs import (
     ACCELERATED,
     FLOAT_DTYPES,
     INTEGER_DTYPES,

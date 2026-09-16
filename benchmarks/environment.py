@@ -38,9 +38,7 @@ def git_metadata() -> dict[str, Any]:
         "describe": _git("describe", "--always", "--dirty"),
         "dirty": None if status is None else bool(status),
         "dirty_paths": (
-            [] if not status else sorted(
-                line[3:] for line in status.splitlines()
-            )
+            [] if not status else sorted(line[3:] for line in status.splitlines())
         ),
         "upstream_commit": _git("rev-parse", "origin/main"),
     }

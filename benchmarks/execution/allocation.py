@@ -21,8 +21,8 @@ from tensors.graph import Computation
 from tensors.graph.state import get_graph_state
 
 from ..case import Case, Group, Unsupported
-from benchmarks.profiles import selected_sizes
-from benchmarks.workloads import tensor
+from ..profiles import selected_sizes
+from ..inputs import tensor
 
 
 def _operation_cases(backend: str, size: int) -> list[Case]:
@@ -36,10 +36,8 @@ def _operation_cases(backend: str, size: int) -> list[Case]:
         "tags": {"curve": f"memory-operation|{size}"},
     }
     value = tensor((size,), dtype_name="float64", kind="ramp")
-    matrix_side = max(int(size ** 0.5), 2)
-    matrix = tensor(
-        (matrix_side, matrix_side), dtype_name="float64", kind="ramp"
-    )
+    matrix_side = max(int(size**0.5), 2)
+    matrix = tensor((matrix_side, matrix_side), dtype_name="float64", kind="ramp")
 
     definitions: dict[str, Any] = {
         "add": lambda: value + value,
@@ -115,32 +113,36 @@ def _graph_growth_cases(backend: str, depth: int, size: int) -> list[Case]:
     def single_operation() -> Any:
         return persistent + persistent
 
-    cases.append(Case(
-        name=f"memory.persistent_leaf_edges/{size}",
-        run=single_operation,
-        layer="memory",
-        validate=single_operation,
-        description=(
-            "one eager operation on a long-lived leaf, repeated; retention "
-            "here is growth on the leaf's outgoing-edge list"
-        ),
-        **{**common, "work_items": 1},
-    ))
+    cases.append(
+        Case(
+            name=f"memory.persistent_leaf_edges/{size}",
+            run=single_operation,
+            layer="memory",
+            validate=single_operation,
+            description=(
+                "one eager operation on a long-lived leaf, repeated; retention "
+                "here is growth on the leaf's outgoing-edge list"
+            ),
+            **{**common, "work_items": 1},
+        )
+    )
 
     traced = eager_chain()
     computation = Computation(traced)
     computation.forward()
-    cases.append(Case(
-        name=f"memory.replay/{depth}/{size}",
-        run=computation.forward,
-        layer="memory",
-        validate=computation.forward,
-        description=(
-            "repeated replay of one compiled program, which should reuse "
-            "its Variables and allocate only its results"
-        ),
-        **common,
-    ))
+    cases.append(
+        Case(
+            name=f"memory.replay/{depth}/{size}",
+            run=computation.forward,
+            layer="memory",
+            validate=computation.forward,
+            description=(
+                "repeated replay of one compiled program, which should reuse "
+                "its Variables and allocate only its results"
+            ),
+            **common,
+        )
+    )
 
     differentiable = ts.Variable(value, requires_grad=True)
     current = differentiable
@@ -149,40 +151,42 @@ def _graph_growth_cases(backend: str, depth: int, size: int) -> list[Case]:
     reverse = Computation(ts.sum(current))
     reverse.forward()
     reverse.backward()
-    cases.append(Case(
-        name=f"memory.backward/{depth}/{size}",
-        run=reverse.backward,
-        layer="memory",
-        validate=reverse.backward,
-        description=(
-            "repeated reverse passes over one graph, which allocate "
-            "gradients and publish them onto the Variables"
-        ),
-        **common,
-    ))
+    cases.append(
+        Case(
+            name=f"memory.backward/{depth}/{size}",
+            run=reverse.backward,
+            layer="memory",
+            validate=reverse.backward,
+            description=(
+                "repeated reverse passes over one graph, which allocate "
+                "gradients and publish them onto the Variables"
+            ),
+            **common,
+        )
+    )
 
     def graph_state_size() -> int:
         return len(get_graph_state().nodes)
 
-    cases.append(Case(
-        name=f"memory.graph_state_nodes/{size}",
-        run=graph_state_size,
-        layer="memory",
-        validate=graph_state_size,
-        description=(
-            "reading the thread's node registry, whose cost grows with how "
-            "much live structure the registry holds"
-        ),
-        **{**common, "work_items": None, "memory": False},
-    ))
+    cases.append(
+        Case(
+            name=f"memory.graph_state_nodes/{size}",
+            run=graph_state_size,
+            layer="memory",
+            validate=graph_state_size,
+            description=(
+                "reading the thread's node registry, whose cost grows with how "
+                "much live structure the registry holds"
+            ),
+            **{**common, "work_items": None, "memory": False},
+        )
+    )
     return cases
 
 
-def _training_growth_cases(
-    backend: str, batch: int, hidden: int
-) -> list[Case]:
+def _training_growth_cases(backend: str, batch: int, hidden: int) -> list[Case]:
     """Measure retention across repeated training iterations."""
-    from .training import MultiLayerPerceptron
+    from ..scenarios.models.mlp import MultiLayerPerceptron
 
     common: dict[str, Any] = {
         "family": "memory/training",
@@ -195,12 +199,8 @@ def _training_growth_cases(
     }
     model = MultiLayerPerceptron(hidden, hidden, 10, 2, "float64")
     optimizer = ts.optim.Adam(model.parameters(), learning_rate=0.001)
-    inputs = tensor(
-        (batch, hidden), dtype_name="float64", kind="constant", value=0.5
-    )
-    targets = tensor(
-        (batch, 10), dtype_name="float64", kind="constant", value=1.0
-    )
+    inputs = tensor((batch, hidden), dtype_name="float64", kind="constant", value=0.5)
+    targets = tensor((batch, 10), dtype_name="float64", kind="constant", value=1.0)
 
     def step() -> None:
         predictions = model(inputs)
@@ -214,9 +214,7 @@ def _training_growth_cases(
     fresh: dict[str, Any] = {}
 
     def reset_fresh() -> None:
-        fresh["model"] = MultiLayerPerceptron(
-            hidden, hidden, 10, 2, "float64"
-        )
+        fresh["model"] = MultiLayerPerceptron(hidden, hidden, 10, 2, "float64")
         fresh["optimizer"] = ts.optim.Adam(
             fresh["model"].parameters(), learning_rate=0.001
         )
@@ -236,8 +234,7 @@ def _training_growth_cases(
             reset=reset_fresh,
             single_shot=True,
             description=(
-                "a first training step, including optimizer-state "
-                "allocation"
+                "a first training step, including optimizer-state " "allocation"
             ),
             **common,
         ),
@@ -269,9 +266,7 @@ def _cache_cases(backend: str, size: int) -> list[Case]:
     holder: dict[str, ts.Tensor] = {}
 
     def reset() -> None:
-        holder["value"] = tensor(
-            (size,), dtype_name="float64", kind="ramp"
-        )
+        holder["value"] = tensor((size,), dtype_name="float64", kind="ramp")
 
     def populate_all() -> None:
         value = holder["value"]
@@ -300,64 +295,71 @@ def groups() -> list[Group]:
     result: list[Group] = []
 
     for size in selected_sizes((1_000, 100_000, 1_000_000)):
+
         def operations(backend: str, size: int = size) -> Sequence[Case]:
             if backend == "python" and size > 100_000:
-                raise Unsupported(
-                    "exceeds the Python backend memory-probe ceiling"
-                )
+                raise Unsupported("exceeds the Python backend memory-probe ceiling")
             return _operation_cases(backend, size)
 
-        result.append(Group(
-            name=f"memory/operations/{size}",
-            factory=operations,
-            suite="memory",
-        ))
+        result.append(
+            Group(
+                name=f"memory/operations/{size}",
+                factory=operations,
+                suite="memory",
+            )
+        )
 
         def caches(backend: str, size: int = size) -> Sequence[Case]:
             if backend == "python" and size > 100_000:
-                raise Unsupported(
-                    "exceeds the Python backend memory-probe ceiling"
-                )
+                raise Unsupported("exceeds the Python backend memory-probe ceiling")
             return _cache_cases(backend, size)
 
-        result.append(Group(
-            name=f"memory/storage-cache/{size}",
-            factory=caches,
-            suite="memory",
-        ))
+        result.append(
+            Group(
+                name=f"memory/storage-cache/{size}",
+                factory=caches,
+                suite="memory",
+            )
+        )
 
     for depth in (10, 100):
         for size in selected_sizes((100, 10_000)):
+
             def graph_growth(
-                backend: str, depth: int = depth, size: int = size,
+                backend: str,
+                depth: int = depth,
+                size: int = size,
             ) -> Sequence[Case]:
                 if backend == "python" and depth * size > 100_000:
-                    raise Unsupported(
-                        "exceeds the Python backend memory-probe ceiling"
-                    )
+                    raise Unsupported("exceeds the Python backend memory-probe ceiling")
                 return _graph_growth_cases(backend, depth, size)
 
-            result.append(Group(
-                name=f"memory/graph/{depth}/{size}",
-                factory=graph_growth,
-                suite="memory",
-            ))
+            result.append(
+                Group(
+                    name=f"memory/graph/{depth}/{size}",
+                    factory=graph_growth,
+                    suite="memory",
+                )
+            )
 
     for batch, hidden in ((8, 64), (64, 256)):
+
         def training_growth(
-            backend: str, batch: int = batch, hidden: int = hidden,
+            backend: str,
+            batch: int = batch,
+            hidden: int = hidden,
         ) -> Sequence[Case]:
             if backend == "python" and batch * hidden > 20_000:
-                raise Unsupported(
-                    "exceeds the Python backend memory-probe ceiling"
-                )
+                raise Unsupported("exceeds the Python backend memory-probe ceiling")
             return _training_growth_cases(backend, batch, hidden)
 
-        result.append(Group(
-            name=f"memory/training/{batch}x{hidden}",
-            factory=training_growth,
-            suite="memory",
-        ))
+        result.append(
+            Group(
+                name=f"memory/training/{batch}x{hidden}",
+                factory=training_growth,
+                suite="memory",
+            )
+        )
     return result
 
 

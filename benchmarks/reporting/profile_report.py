@@ -21,7 +21,7 @@ import tensors as ts
 from ..environment import environment_metadata
 from .profiling import host_transfers, hot_functions, provider_calls
 from .json import write_json
-from ..workloads import tensor
+from ..inputs import tensor
 
 
 def _subjects(backend: str) -> dict[str, Callable[[], Any]]:

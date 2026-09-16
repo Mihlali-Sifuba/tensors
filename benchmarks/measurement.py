@@ -25,7 +25,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-
 #: The synchronization policy every timer in this module implements.
 SYNC_POLICY = (
     "device idle before the batch; no synchronization between measured "
@@ -167,9 +166,9 @@ class CudaTimer:
             self._cupy.add(left, right)
         self._end.record(self._stream)
         self._stream.synchronize()
-        barrier_seconds = self._cupy.cuda.get_elapsed_time(
-            self._start, self._end
-        ) / 1000.0
+        barrier_seconds = (
+            self._cupy.cuda.get_elapsed_time(self._start, self._end) / 1000.0
+        )
 
         # Both sides are taken as a minimum over repeats: host scheduling
         # jitter can only add time, so the smallest observation is the
@@ -202,8 +201,7 @@ class CudaTimer:
             # Absorbing most of the queued work is only possible by waiting
             # for it. Half the barrier is a wide margin against host jitter.
             "synchronizes": (
-                barrier_seconds > 0.0
-                and absorbed > 0.5 * barrier_seconds
+                barrier_seconds > 0.0 and absorbed > 0.5 * barrier_seconds
             ),
         }
 

@@ -20,8 +20,8 @@ from typing import Any
 import tensors as ts
 
 from ..case import Case, Group, Unsupported
-from ..workloads import FLOAT_DTYPES, tensor
-from .training import MultiLayerPerceptron
+from ..inputs import FLOAT_DTYPES, tensor
+from ..scenarios.models.mlp import MultiLayerPerceptron
 
 
 def _step(
