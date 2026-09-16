@@ -4,7 +4,7 @@ from __future__ import annotations
 import importlib
 import math
 import tensors as ts
-from tensors.math.cross_entropy import _one_hot_targets
+from tensors.operations.losses.cross_entropy import _one_hot_targets
 from benchmarks.runner import BenchmarkBackend, BenchmarkCase
 
 _ACCELERATED = frozenset[BenchmarkBackend]({"numpy", "cuda"})

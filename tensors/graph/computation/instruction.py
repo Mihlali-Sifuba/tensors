@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ...ops.operation import Operation
+from ...operations.base import Operation
 
 
 @dataclass(frozen=True, slots=True)

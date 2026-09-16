@@ -25,8 +25,10 @@ from ._typing import TensorData, TensorIndex, TensorLike, TensorOperand, Variabl
 from .dtype import DataType, from_typecode, result_dtype
 from .shape import Shape
 from .tensor import Tensor
-from .ops import Add, Sub, Mul, Div, Pow, Neg, Operation, Slice, Cast
-from .ops.pow import _power_dtype
+from .operations.arithmetic import Add, Div, Mul, Neg, Pow, Sub
+from .operations.base import Operation
+from .operations.manipulation import Cast, Slice
+from .operations.arithmetic.power import _power_dtype
 from .graph.node import VariableNode
 from .graph.state import get_graph_state
 
@@ -386,15 +388,15 @@ class Variable:
         return self._apply_operation(operation, (self,))
 
     def __abs__(self) -> Variable:
-        from .math import abs
+        from .operations.elementary.abs import abs
         return abs(self)
 
     def __matmul__(self, other: TensorLike) -> Variable:
-        from .linalg import matmul
+        from .operations.linalg.matmul import matmul
         return matmul(self, other)
 
     def __rmatmul__(self, other: TensorLike) -> Variable:
-        from .linalg import matmul
+        from .operations.linalg.matmul import matmul
         return matmul(other, self)
 
     def __getitem__(self, key: TensorIndex) -> Variable:

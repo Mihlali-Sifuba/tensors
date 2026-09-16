@@ -24,7 +24,7 @@ from .state import get_graph_state
 if TYPE_CHECKING:
     from .._typing import GraphOperand, TensorLike
     from ..dtype import DataType
-    from ..ops.operation import Operation
+    from ..operations.base import Operation
     from ..tensor import Tensor
     from ..variable import Variable
 

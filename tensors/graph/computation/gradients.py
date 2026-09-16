@@ -18,7 +18,7 @@ from ..._typing import TensorLike
 from ...tensor import Tensor
 
 if TYPE_CHECKING:
-    from ...ops.operation import Operation
+    from ...operations.base import Operation
     from ...variable import Variable
 
 
@@ -84,8 +84,8 @@ def sum_gradient_values(gradients: list[Tensor]) -> Tensor:
 
     first = gradients[0]
     if get_backend() != "python" and first.size >= 32:
-        from ...math import stack
-        from ...math import sum as tensor_sum
+        from ...operations.manipulation.stack import stack
+        from ...operations.reductions.sum import sum as tensor_sum
 
         return tensor_sum(stack(gradients, axis=0), axis=0)
 
@@ -103,7 +103,8 @@ def sum_gradient_graph(gradients: list[Variable]) -> Variable:
     if len(gradients) == 1:
         return gradients[0]
 
-    from ...math import stack, sum
+    from ...operations.manipulation.stack import stack
+    from ...operations.reductions.sum import sum
 
     return sum(stack(gradients, axis=0), axis=0)
 

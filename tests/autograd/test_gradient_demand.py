@@ -6,13 +6,13 @@ import tensors as ts
 from tensors.graph import Computation
 from tensors.ops import Operation
 from tensors.graph.state import reset_graph_state
-from tensors.math.binary_cross_entropy import BinaryCrossEntropy
-from tensors.math.cross_entropy import CrossEntropy
-from tensors.math.elementwise_extrema import Maximum, Minimum
-from tensors.math.where import Where
+from tensors.operations.losses.binary_cross_entropy import BinaryCrossEntropy
+from tensors.operations.losses.cross_entropy import CrossEntropy
+from tensors.operations.selection import Maximum, Minimum
+from tensors.operations.selection.where import Where
 from tensors.ops import Add, Div, Mul, Pow, Sub
-from tensors.ops.div import DivisionDenominatorGradient
-from tensors.ops.pow import PowerBaseGradient, PowerExponentGradient
+from tensors.operations.arithmetic.divide import DivisionDenominatorGradient
+from tensors.operations.arithmetic.power import PowerBaseGradient, PowerExponentGradient
 
 
 class _Recorder:
@@ -90,7 +90,7 @@ class OperationConfigurationTests(unittest.TestCase):
         self.assertGreater(seen, 40)
 
     def test_configured_operations_keep_their_mathematical_settings(self):
-        from tensors.math.sum import Sum
+        from tensors.operations.reductions.sum import Sum
 
         operation = Sum(axis=(1,), keepdims=True)
         self.assertEqual(operation.axis, (1,))

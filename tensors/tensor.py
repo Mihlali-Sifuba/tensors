@@ -626,9 +626,9 @@ class Tensor:
             return other.__radd__(self)
         if not isinstance(other, (int, float, Tensor)):
             return NotImplemented
-        from tensors.ops import Ops
+        from tensors.operations.arithmetic.add import add
 
-        return Ops.add(self, other)
+        return add(self, other)
 
     @overload
     def __radd__(self, other: Variable) -> Variable: ...
@@ -656,9 +656,9 @@ class Tensor:
             return other.__rsub__(self)
         if not isinstance(other, (int, float, Tensor)):
             return NotImplemented
-        from tensors.ops import Ops
+        from tensors.operations.arithmetic.subtract import subtract
 
-        return Ops.subtract(self, other)
+        return subtract(self, other)
 
     def __rsub__(self, other: Scalar | Tensor) -> Tensor:
         return -self + other
@@ -678,14 +678,14 @@ class Tensor:
             return other.__rmul__(self)
         if not isinstance(other, (int, float, Tensor)):
             return NotImplemented
-        from tensors.ops import Ops
+        from tensors.operations.arithmetic.multiply import multiply
 
-        return Ops.multiply(self, other)
+        return multiply(self, other)
 
     def __rmul__(self, other: Scalar | Tensor) -> Tensor:
-        from tensors.ops import Ops
+        from tensors.operations.arithmetic.multiply import multiply
 
-        return Ops.multiply(self, other)
+        return multiply(self, other)
 
     @overload
     def __truediv__(self, other: Variable) -> Variable: ...
@@ -702,9 +702,9 @@ class Tensor:
             return other.__rtruediv__(self)
         if not isinstance(other, (int, float, Tensor)):
             return NotImplemented
-        from tensors.ops import Ops
+        from tensors.operations.arithmetic.divide import divide
 
-        return Ops.divide(self, other)
+        return divide(self, other)
 
     def __rtruediv__(self, other: Scalar) -> Tensor:
         from tensors.ops import divide_scalar
@@ -736,9 +736,9 @@ class Tensor:
         return power_scalar_base(other, self)
 
     def __neg__(self) -> Tensor:
-        from tensors.ops import Ops
+        from tensors.operations.arithmetic.negate import negate
 
-        return Ops.neg(self)
+        return negate(self)
 
     def __abs__(self) -> Tensor:
         from tensors.math import abs

@@ -88,7 +88,7 @@ def gradcheck(
             raise TypeError(
                 "gradcheck function must return a Variable connected to its inputs"
             )
-        from ...math import sum
+        from ...operations.reductions.sum import sum
 
         objective = sum(output)
         analytical = grad(objective, analytical_inputs)

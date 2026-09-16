@@ -2,7 +2,7 @@
 
 The dependency direction is one-way:
 
-    tensors.math / tensors.ops / tensors.graph
+    tensors.operations / tensors.graph
         -> tensors.backend.dispatch
             -> tensors.backend.{python,numpy,cuda}
 
@@ -92,6 +92,7 @@ class BackendLayeringTests(unittest.TestCase):
 
     #: Layers that sit above the backend and must never be imported from it.
     FORBIDDEN = (
+        "tensors.operations",
         "tensors.math",
         "tensors.ops",
         "tensors.graph",
@@ -139,6 +140,7 @@ class NeutralUtilityLayeringTests(unittest.TestCase):
     FORBIDDEN = (
         "tensors.backend",
         "tensors.dispatch",
+        "tensors.operations",
         "tensors.math",
         "tensors.ops",
         "tensors.graph",

@@ -1,68 +1,205 @@
-"""Mathematical functions for tensors and differentiable Variables."""
+"""Mathematical functions for tensors and differentiable Variables.
 
-from .sum import Sum, sum
-from .mean import Mean, mean
-from .min import Min, min
-from .max import Max, max
-from .sqrt import Sqrt, sqrt
-from .exp import Exp, exp
-from .log import Log, log
-from .sin import Sin, sin
-from .cos import Cos, cos
-from .tan import Tan, tan
-from .arcsin import ArcSin, arcsin
-from .arccos import ArcCos, arccos
-from .arctan import ArcTan, arctan
-from .sinh import Sinh, sinh
-from .cosh import Cosh, cosh
-from .arcsinh import ArcSinh, arcsinh
-from .arccosh import ArcCosh, arccosh
-from .arctanh import ArcTanh, arctanh
-from .sign import Sign, sign
-from .relu import ReLU, relu
-from .sigmoid import Sigmoid, sigmoid
-from .tanh import Tanh, tanh
-from .softplus import Softplus, softplus
-from .softmax import Softmax, softmax
-from .logsumexp import LogSumExp, logsumexp
-from .log_softmax import LogSoftmax, log_softmax
-from .cross_entropy import CrossEntropy, cross_entropy
-from .binary_cross_entropy import BinaryCrossEntropy, binary_cross_entropy
-from .std import Std, std
-from .variance import Variance, variance
-from .reshape import Reshape, reshape
-from .stack import Stack, stack
-from .concat import Concat, concat
-from .convolution import conv1d, conv2d, conv3d
-from .abs import Abs, abs
-from .prod import Prod, prod
-from .clip import Clip, clip
-from .arg_extrema import ArgMax, ArgMin, argmax, argmin
-from .comparison import (
-    equal, not_equal, less, less_equal, greater, greater_equal,
+A convenience namespace over :mod:`tensors.operations`, which is where these
+operations are defined. It groups the functions a model is usually written
+with; import from ``tensors.operations`` when the semantic domain matters.
+"""
+
+from tensors.operations.activations import (
+    ReLU,
+    Sigmoid,
+    Softplus,
+    relu,
+    sigmoid,
+    softplus,
 )
-from .where import Where, where
-from .elementwise_extrema import Maximum, Minimum, maximum, minimum
+from tensors.operations.comparison import (
+    equal,
+    greater,
+    greater_equal,
+    less,
+    less_equal,
+    not_equal,
+)
+from tensors.operations.convolution import conv1d, conv2d, conv3d
+from tensors.operations.elementary import (
+    Abs,
+    Exp,
+    Log,
+    Sign,
+    Sqrt,
+    abs,
+    exp,
+    log,
+    sign,
+    sqrt,
+)
+from tensors.operations.hyperbolic import (
+    ArcCosh,
+    ArcSinh,
+    ArcTanh,
+    Cosh,
+    Sinh,
+    Tanh,
+    arccosh,
+    arcsinh,
+    arctanh,
+    cosh,
+    sinh,
+    tanh,
+)
+from tensors.operations.losses import (
+    BinaryCrossEntropy,
+    CrossEntropy,
+    binary_cross_entropy,
+    cross_entropy,
+)
+from tensors.operations.manipulation import (
+    Concat,
+    Reshape,
+    Stack,
+    concat,
+    reshape,
+    stack,
+)
+from tensors.operations.normalization import LogSoftmax, Softmax, log_softmax, softmax
+from tensors.operations.reductions import (
+    ArgMax,
+    ArgMin,
+    LogSumExp,
+    Max,
+    Mean,
+    Min,
+    Prod,
+    Std,
+    Sum,
+    Variance,
+    argmax,
+    argmin,
+    logsumexp,
+    max,
+    mean,
+    min,
+    prod,
+    std,
+    sum,
+    variance,
+)
+from tensors.operations.selection import (
+    Clip,
+    Maximum,
+    Minimum,
+    Where,
+    clip,
+    maximum,
+    minimum,
+    where,
+)
+from tensors.operations.trigonometric import (
+    ArcCos,
+    ArcSin,
+    ArcTan,
+    Cos,
+    Sin,
+    Tan,
+    arccos,
+    arcsin,
+    arctan,
+    cos,
+    sin,
+    tan,
+)
 
 __all__ = [
-    "Sum", "Mean", "Min", "Max", "Sqrt", "Exp", "Log", "Sin", "Cos", "Tan",
-    "ArcSin", "ArcCos", "ArcTan", "Sinh", "Cosh",
-    "ArcSinh", "ArcCosh", "ArcTanh", "Sign",
-    "ReLU", "Sigmoid", "Tanh", "Softplus", "Softmax", "LogSumExp",
-    "LogSoftmax", "CrossEntropy", "BinaryCrossEntropy", "Std", "Variance",
+    "Abs",
+    "ArcCos",
+    "ArcCosh",
+    "ArcSin",
+    "ArcSinh",
+    "ArcTan",
+    "ArcTanh",
+    "ArgMax",
+    "ArgMin",
+    "BinaryCrossEntropy",
+    "Clip",
+    "Concat",
+    "Cos",
+    "Cosh",
+    "CrossEntropy",
+    "Exp",
+    "Log",
+    "LogSoftmax",
+    "LogSumExp",
+    "Max",
+    "Maximum",
+    "Mean",
+    "Min",
+    "Minimum",
+    "Prod",
+    "ReLU",
     "Reshape",
-
-    "Stack", "Concat", "Abs", "Prod", "Clip", "ArgMax", "ArgMin",
-    "Where", "Maximum", "Minimum",
-    "sum", "mean", "min", "max", "prod", "abs", "clip",
-    "argmax", "argmin",
-    "sqrt", "exp", "log", "sin", "cos", "tan",
-    "arcsin", "arccos", "arctan",
-    "sinh", "cosh", "arcsinh", "arccosh", "arctanh", "sign",
-    "relu", "sigmoid", "tanh", "softplus", "softmax",
-    "logsumexp", "log_softmax", "cross_entropy", "binary_cross_entropy",
-    "std", "variance", "reshape", "stack", "concat",
-    "conv1d", "conv2d", "conv3d",
-    "equal", "not_equal", "less", "less_equal", "greater",
-    "greater_equal", "where", "maximum", "minimum",
+    "Sigmoid",
+    "Sign",
+    "Sin",
+    "Sinh",
+    "Softmax",
+    "Softplus",
+    "Sqrt",
+    "Stack",
+    "Std",
+    "Sum",
+    "Tan",
+    "Tanh",
+    "Variance",
+    "Where",
+    "abs",
+    "arccos",
+    "arccosh",
+    "arcsin",
+    "arcsinh",
+    "arctan",
+    "arctanh",
+    "argmax",
+    "argmin",
+    "binary_cross_entropy",
+    "clip",
+    "concat",
+    "conv1d",
+    "conv2d",
+    "conv3d",
+    "cos",
+    "cosh",
+    "cross_entropy",
+    "equal",
+    "exp",
+    "greater",
+    "greater_equal",
+    "less",
+    "less_equal",
+    "log",
+    "log_softmax",
+    "logsumexp",
+    "max",
+    "maximum",
+    "mean",
+    "min",
+    "minimum",
+    "not_equal",
+    "prod",
+    "relu",
+    "reshape",
+    "sigmoid",
+    "sign",
+    "sin",
+    "sinh",
+    "softmax",
+    "softplus",
+    "sqrt",
+    "stack",
+    "std",
+    "sum",
+    "tan",
+    "tanh",
+    "variance",
+    "where",
 ]

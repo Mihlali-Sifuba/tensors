@@ -11,49 +11,49 @@ from tensors.graph.node import OperationNode, VariableNode
 from tensors.graph.state import (
     GraphState, get_graph_state, reset_graph_state,
 )
-from tensors.linalg.dot import Dot
-from tensors.linalg.norm import Norm
-from tensors.linalg.transpose import Transpose
-from tensors.linalg.outer import Outer
-from tensors.math.abs import Abs
-from tensors.math.arccos import ArcCos
-from tensors.math.arccosh import ArcCosh
-from tensors.math.arcsin import ArcSin
-from tensors.math.arcsinh import ArcSinh
-from tensors.math.arctan import ArcTan
-from tensors.math.arctanh import ArcTanh
-from tensors.math.cos import Cos
-from tensors.math.cosh import Cosh
-from tensors.math.exp import Exp
-from tensors.math.binary_cross_entropy import BinaryCrossEntropy
-from tensors.math.clip import Clip
-from tensors.math.concat import Concat
-from tensors.math.convolution import ConvND
-from tensors.math.cross_entropy import CrossEntropy
-from tensors.math.elementwise_extrema import Maximum, Minimum
-from tensors.math.log import Log
-from tensors.math.log_softmax import LogSoftmax
-from tensors.math.logsumexp import LogSumExp
-from tensors.math.max import Max
-from tensors.math.mean import Mean
-from tensors.math.min import Min
-from tensors.math.prod import Prod
-from tensors.math.reshape import Reshape
-from tensors.math.softmax import Softmax
-from tensors.math.stack import Stack
-from tensors.math.where import Where
-from tensors.math.std import Std
-from tensors.math.sum import Sum
-from tensors.math.variance import Variance
-from tensors.math.relu import ReLU
-from tensors.math.sign import Sign
-from tensors.math.sin import Sin
-from tensors.math.sinh import Sinh
-from tensors.math.softplus import Softplus
-from tensors.math.sqrt import Sqrt
-from tensors.math.tan import Tan
-from tensors.math.tanh import Tanh
-from tensors.math.sigmoid import Sigmoid
+from tensors.operations.linalg.matmul import MatMul
+from tensors.operations.reductions.norm import Norm
+from tensors.operations.manipulation.transpose import Transpose
+from tensors.operations.linalg.outer import Outer
+from tensors.operations.elementary.abs import Abs
+from tensors.operations.trigonometric.arccos import ArcCos
+from tensors.operations.hyperbolic.arccosh import ArcCosh
+from tensors.operations.trigonometric.arcsin import ArcSin
+from tensors.operations.hyperbolic.arcsinh import ArcSinh
+from tensors.operations.trigonometric.arctan import ArcTan
+from tensors.operations.hyperbolic.arctanh import ArcTanh
+from tensors.operations.trigonometric.cos import Cos
+from tensors.operations.hyperbolic.cosh import Cosh
+from tensors.operations.elementary.exp import Exp
+from tensors.operations.losses.binary_cross_entropy import BinaryCrossEntropy
+from tensors.operations.selection.clip import Clip
+from tensors.operations.manipulation.concat import Concat
+from tensors.operations.convolution.convolution import ConvND
+from tensors.operations.losses.cross_entropy import CrossEntropy
+from tensors.operations.selection import Maximum, Minimum
+from tensors.operations.elementary.log import Log
+from tensors.operations.normalization.log_softmax import LogSoftmax
+from tensors.operations.reductions.logsumexp import LogSumExp
+from tensors.operations.reductions.max import Max
+from tensors.operations.reductions.mean import Mean
+from tensors.operations.reductions.min import Min
+from tensors.operations.reductions.prod import Prod
+from tensors.operations.manipulation.reshape import Reshape
+from tensors.operations.normalization.softmax import Softmax
+from tensors.operations.manipulation.stack import Stack
+from tensors.operations.selection.where import Where
+from tensors.operations.reductions.std import Std
+from tensors.operations.reductions.sum import Sum
+from tensors.operations.reductions.variance import Variance
+from tensors.operations.activations.relu import ReLU
+from tensors.operations.elementary.sign import Sign
+from tensors.operations.trigonometric.sin import Sin
+from tensors.operations.hyperbolic.sinh import Sinh
+from tensors.operations.activations.softplus import Softplus
+from tensors.operations.elementary.sqrt import Sqrt
+from tensors.operations.trigonometric.tan import Tan
+from tensors.operations.hyperbolic.tanh import Tanh
+from tensors.operations.activations.sigmoid import Sigmoid
 from tensors.ops import Add, Div, Mul, Pow, Sub
 
 
@@ -246,14 +246,14 @@ class StructuralExpressionTests(unittest.TestCase):
         product = inputs @ weight
 
         self.assertFalse(product.is_bound)
-        self.assertIsInstance(product.producer.operation, Dot)
+        self.assertIsInstance(product.producer.operation, MatMul)
         self.assertEqual(
             product.producer.operand_nodes, (inputs, weight.node)
         )
         # The public function records the same operation.
         through_function = ts.matmul(inputs, weight)
         self.assertFalse(through_function.is_bound)
-        self.assertIsInstance(through_function.producer.operation, Dot)
+        self.assertIsInstance(through_function.producer.operation, MatMul)
 
     def test_relu_records_structurally(self):
         node = VariableNode()
@@ -316,7 +316,7 @@ class StructuralExpressionTests(unittest.TestCase):
 
         self.assertEqual(
             [instruction.operation.name for instruction in instructions],
-            ["dot", "add", "relu"],
+            ["matmul", "add", "relu"],
         )
         self.assertEqual(
             compiler.output_slots, (compiler.node_slots[output],)
@@ -354,7 +354,7 @@ class StructuralExpressionTests(unittest.TestCase):
             patch.object(Compiler, "compile", counted_compile),
             patch.object(Computation, "from_nodes", forbidden),
             patch.object(Add, "forward", counted_forward),
-            patch.object(Dot, "forward", counted_forward),
+            patch.object(MatMul, "forward", counted_forward),
             patch.object(ReLU, "forward", counted_forward),
         ):
             output = ts.relu((inputs @ weight) + bias)

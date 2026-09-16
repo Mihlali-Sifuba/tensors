@@ -8,9 +8,9 @@ from .backend import (
     set_backend,
     use_backend,
 )
-from . import creation, graph, init, linalg, math, ops, optim, random
+from . import creation, graph, init, linalg, math, operations, ops, optim, random
 from .creation import arange, eye, full, linspace, ones, zeros
-from .ops import Ops, pow
+from .ops import pow
 from .dtype import DataType, float64, float32, int64, int32, int16, int8, uint8
 from .variable import Variable
 from .graph import (
@@ -29,17 +29,13 @@ from .math import (
     where, maximum, minimum,
 )
 
-# Lift all Ops static methods to package-level functions
-add = Ops.add
-subtract = Ops.subtract
-multiply = Ops.multiply
-divide = Ops.divide
+from .operations.arithmetic import add, divide, multiply, subtract
 
 __all__ = [
     "Tensor", "Shape", "Strides", "Variable", "Graph", "GradcheckError",
     "available_backends", "get_backend", "set_backend", "use_backend",
-    "backward", "grad", "gradcheck", "hessian", "jacobian", "Ops", "DataType",
-    "creation", "graph", "init", "ops", "linalg", "math", "optim", "random",
+    "backward", "grad", "gradcheck", "hessian", "jacobian", "DataType",
+    "creation", "graph", "init", "operations", "ops", "linalg", "math", "optim", "random",
     "float64", "float32", "int64", "int32", "int16", "int8", "uint8",
     "add", "subtract", "multiply", "divide", "pow",
     "zeros", "ones", "full", "eye", "arange", "linspace",

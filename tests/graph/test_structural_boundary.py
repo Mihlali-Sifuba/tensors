@@ -13,14 +13,14 @@ from tensors.graph.computation.compiler import Compiler
 from tensors.graph.expression import UnsupportedStructuralExpression
 from tensors.graph.node import VariableNode
 from tensors.graph.state import reset_graph_state
-from tensors.math.concat import Concat
-from tensors.math.arg_extrema import ArgMax, ArgMin
-from tensors.math.stack import Stack
+from tensors.operations.manipulation.concat import Concat
+from tensors.operations.reductions import ArgMax, ArgMin
+from tensors.operations.manipulation.stack import Stack
 
 # The math package binds each public function over its module, so the module
 # holding the coercion boundary has to be named directly.
-concat_module = import_module("tensors.math.concat")
-stack_module = import_module("tensors.math.stack")
+concat_module = import_module("tensors.operations.manipulation.concat")
+stack_module = import_module("tensors.operations.manipulation.stack")
 
 
 def runtime_imported_names(module) -> set[str]:
@@ -394,12 +394,12 @@ class OperationForwardIndependenceTests(unittest.TestCase):
         # The two that reached upward for coercion, and enough of the rest
         # to show the scan really covers the numerical layer.
         for owner in (
-            "math/concat.py:Concat",
-            "math/stack.py:Stack",
-            "math/convolution.py:ConvND",
-            "math/arg_extrema.py:_ArgExtremum",
-            "math/where.py:Where",
-            "ops/add.py:Add",
+            "operations/manipulation/concat.py:Concat",
+            "operations/manipulation/stack.py:Stack",
+            "operations/convolution/convolution.py:ConvND",
+            "operations/reductions/_arg_extremum.py:_ArgExtremum",
+            "operations/selection/where.py:Where",
+            "operations/arithmetic/add.py:Add",
         ):
             with self.subTest(forward=owner):
                 self.assertIn(owner, sources)

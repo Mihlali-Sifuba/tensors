@@ -2,9 +2,9 @@ import unittest
 
 import tensors as ts
 from tensors.ops import Operation
-from tensors.math.max import Max
-from tensors.math.min import Min
-from tensors.math.sum import Sum
+from tensors.operations.reductions.max import Max
+from tensors.operations.reductions.min import Min
+from tensors.operations.reductions.sum import Sum
 from tensors.ops import Add, Div
 
 
@@ -72,11 +72,11 @@ class OperationOwnershipTests(unittest.TestCase):
     """Operation belongs to the operations subsystem, not the graph."""
 
     def test_operation_lives_in_the_ops_subsystem(self):
-        import tensors.ops.operation as module
+        import tensors.operations.base as module
 
         self.assertIs(Operation, module.Operation)
         self.assertIs(ts.ops.Operation, Operation)
-        self.assertEqual(Operation.__module__, "tensors.ops.operation")
+        self.assertEqual(Operation.__module__, "tensors.operations.base")
 
     def test_the_graph_package_does_not_define_an_operation(self):
         import tensors.graph as graph

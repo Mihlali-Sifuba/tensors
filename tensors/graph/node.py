@@ -13,17 +13,31 @@ concrete subclasses, and execution state belongs to
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 from weakref import ReferenceType, ref
-
-from ..ops import Add, Div, Mul, Neg, Pow, Slice, Sub
 
 if TYPE_CHECKING:
     from .._typing import GraphOperand, TensorIndex, VariableData
     from ..variable import Variable
     from ..tensor import Tensor
     from .edge import Edge
-    from ..ops.operation import Operation
+    from ..operations.base import Operation
+
+
+def _operation(name: str) -> Any:
+    """Return an operation class, imported on first use.
+
+    A recorded operator builds a concrete operation, but the operation modules
+    reach back into :mod:`tensors.graph.expression` to apply themselves to a
+    graph operand. Importing them here at module scope would close that cycle
+    during package initialization, so the lookup is deferred to the call.
+    """
+    from tensors.operations import arithmetic, manipulation
+
+    if name == "Slice":
+        return manipulation.Slice
+    return getattr(arithmetic, name)
+
 
 
 class UnboundVariableNodeError(RuntimeError):
@@ -112,7 +126,7 @@ class VariableNode(Node):
 
         VariableNode(a) ──input_0──┐
                                    ▼
-                            OperationNode(Add())
+                            OperationNode(_operation("Add")())
                                    ▲
         VariableNode(b) ──input_1──┘
                                    │
@@ -230,51 +244,51 @@ class VariableNode(Node):
         return record_structurally(operation, operands)
 
     def __add__(self, other: GraphOperand | Tensor) -> VariableNode:
-        return self._record(Add(), (self, other))
+        return self._record(_operation("Add")(), (self, other))
 
     def __radd__(self, other: GraphOperand | Tensor) -> VariableNode:
-        return self._record(Add(), (other, self))
+        return self._record(_operation("Add")(), (other, self))
 
     def __sub__(self, other: GraphOperand | Tensor) -> VariableNode:
-        return self._record(Sub(), (self, other))
+        return self._record(_operation("Sub")(), (self, other))
 
     def __rsub__(self, other: GraphOperand | Tensor) -> VariableNode:
-        return self._record(Sub(), (other, self))
+        return self._record(_operation("Sub")(), (other, self))
 
     def __mul__(self, other: GraphOperand | Tensor) -> VariableNode:
-        return self._record(Mul(), (self, other))
+        return self._record(_operation("Mul")(), (self, other))
 
     def __rmul__(self, other: GraphOperand | Tensor) -> VariableNode:
-        return self._record(Mul(), (other, self))
+        return self._record(_operation("Mul")(), (other, self))
 
     def __truediv__(self, other: GraphOperand | Tensor) -> VariableNode:
-        return self._record(Div(), (self, other))
+        return self._record(_operation("Div")(), (self, other))
 
     def __rtruediv__(self, other: GraphOperand | Tensor) -> VariableNode:
         # Operand order carries the semantics: the numerator is input_0.
-        return self._record(Div(), (other, self))
+        return self._record(_operation("Div")(), (other, self))
 
     def __pow__(self, other: GraphOperand | Tensor) -> VariableNode:
-        return self._record(Pow(), (self, other))
+        return self._record(_operation("Pow")(), (self, other))
 
     def __rpow__(self, other: GraphOperand | Tensor) -> VariableNode:
-        return self._record(Pow(), (other, self))
+        return self._record(_operation("Pow")(), (other, self))
 
     def __matmul__(self, other: GraphOperand | Tensor) -> VariableNode:
-        from ..linalg.dot import Dot
+        from ..operations.linalg.matmul import MatMul
 
-        return self._record(Dot(), (self, other))
+        return self._record(MatMul(), (self, other))
 
     def __rmatmul__(self, other: GraphOperand | Tensor) -> VariableNode:
-        from ..linalg.dot import Dot
+        from ..operations.linalg.matmul import MatMul
 
-        return self._record(Dot(), (other, self))
+        return self._record(MatMul(), (other, self))
 
     def __neg__(self) -> VariableNode:
-        return self._record(Neg(), (self,))
+        return self._record(_operation("Neg")(), (self,))
 
     def __getitem__(self, key: TensorIndex) -> VariableNode:
-        return self._record(Slice(key=key), (self,))
+        return self._record(_operation("Slice")(key=key), (self,))
 
     def __iter__(self) -> NoReturn:
         # Without this, Python would iterate a vertex through __getitem__ and
