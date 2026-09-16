@@ -31,6 +31,7 @@ SUITE_MODULES: dict[str, str] = {
     "autograd": "autograd",
     "optimizer": "optimizer",
     "training": "training",
+    "threading": "threading",
     "fusion": "fusion",
     "cuda": "cudasync",
     "startup": "startup",

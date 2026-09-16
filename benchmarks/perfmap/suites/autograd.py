@@ -388,6 +388,15 @@ def _higher_order_cases(backend: str, width: int) -> list[Case]:
         output = ts.sum(leaf * leaf * leaf)
         return ts.hessian(output, leaf)
 
+    def third_order() -> Any:
+        output = ts.sum(leaf * leaf * leaf)
+        first = ts.grad(output, leaf, create_graph=True)
+        second = ts.grad(ts.sum(first), leaf, create_graph=True)
+        return ts.grad(ts.sum(second), leaf)
+
+    def gradcheck() -> Any:
+        return ts.gradcheck(lambda value: ts.sum(value * value + value * 3.0), leaf)
+
     cases = [
         Case(
             name=f"autograd.first_order/{width}",
@@ -395,6 +404,17 @@ def _higher_order_cases(backend: str, width: int) -> list[Case]:
             layer="autograd",
             validate=first_order,
             description="trace and differentiate a cubic once",
+            **common,
+        ),
+        Case(
+            name=f"autograd.third_order/{width}",
+            run=third_order,
+            layer="autograd",
+            validate=third_order,
+            description=(
+                "three reverse passes, the first two recorded so the next "
+                "can differentiate them"
+            ),
             **common,
         ),
         Case(
@@ -419,6 +439,17 @@ def _higher_order_cases(backend: str, width: int) -> list[Case]:
             validate=jacobian,
             description=(
                 f"a full Jacobian, which runs {width} reverse passes"
+            ),
+            **common,
+        ))
+        cases.append(Case(
+            name=f"autograd.gradcheck/{width}",
+            run=gradcheck,
+            layer="autograd",
+            validate=gradcheck,
+            description=(
+                "reverse-mode gradients verified against finite differences, "
+                f"which evaluates the objective {2 * width} more times"
             ),
             **common,
         ))
