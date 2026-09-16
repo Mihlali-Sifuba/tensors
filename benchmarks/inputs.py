@@ -15,6 +15,8 @@ from typing import Any
 import tensors as ts
 from tensors.shape import Shape
 from benchmarks import profiles
+from benchmarks import baselines
+from benchmarks.baselines import _native as native
 from benchmarks.case import Unsupported
 
 ACCELERATED = frozenset({"numpy", "cuda"})
@@ -75,14 +77,12 @@ def is_integer(dtype_name: str) -> bool:
 
 
 def provider_module(backend: str) -> Any:
-    """Return the raw array provider backing ``backend``."""
-    if backend == "cuda":
-        return importlib.import_module("cupy")
-    if backend == "numpy":
-        return importlib.import_module("numpy")
-    raise Unsupported(
-        "the Python backend has no array provider to compare against; its reference kernels are the implementation"
-    )
+    """Return the external library ``backend`` is measured against.
+
+    Defined in :mod:`benchmarks.baselines`, so that "raw NumPy" means the
+    same thing to every suite that compares against it.
+    """
+    return baselines.module(backend)
 
 
 def kernel_module(backend: str) -> Any:
@@ -188,27 +188,13 @@ def tensor(
         )
         return ts.Tensor(values, dtype=dtype, shape=shape)
     provider = provider_module(backend)
-    native = _pattern_array(provider, size, dtype_name, kind)
-    storage = _native_storage(backend, native, dtype)
+    # The same builder the baselines use, so a Tensor and the array it is
+    # compared against hold identical values rather than merely similar ones.
+    buffer = native.pattern(provider, size, dtype_name, kind)
+    storage = _native_storage(backend, buffer, dtype)
     return ts.Tensor._from_owned_storage(
         storage, dtype=dtype, shape=Shape.from_iterable(shape)
     )
-
-
-def _pattern_array(provider: Any, size: int, dtype_name: str, kind: str) -> Any:
-    """Build the value pattern with provider arithmetic rather than a list."""
-    native_dtype = getattr(provider, dtype_name)
-    index = provider.arange(size, dtype=provider.int64)
-    if is_integer(dtype_name):
-        magnitude = index % 97 + 1
-    else:
-        magnitude = 1.0 + index % 97 / 97.0
-    if kind == "mixed":
-        signs = provider.where(index % 2 == 1, 1, -1)
-        magnitude = magnitude * signs
-    elif kind != "ramp":
-        raise ValueError(f"unknown value kind {kind!r}")
-    return magnitude.astype(native_dtype)
 
 
 def _native_storage(backend: str, native: Any, dtype: Any) -> Any:
@@ -230,11 +216,7 @@ def provider_array(
     value: float = 1.5,
 ) -> Any:
     """Build the provider-native array matching :func:`tensor`."""
-    size = math.prod(shape) if shape else 1
-    native_dtype = getattr(provider, dtype_name)
-    if kind == "constant":
-        return provider.full(shape, value, dtype=native_dtype)
-    return _pattern_array(provider, size, dtype_name, kind).reshape(shape)
+    return native.build(provider, shape, dtype_name=dtype_name, kind=kind, value=value)
 
 
 def variable(
