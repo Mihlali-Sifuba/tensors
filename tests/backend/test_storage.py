@@ -67,5 +67,89 @@ class CudaResidencyTests(unittest.TestCase):
         self.assertAlmostEqual(parameter.data[0], 0.95)
 
 
+class BatchedOptimizerStorageTests(unittest.TestCase):
+    """A batched optimizer update splits one result into per-parameter storage.
+
+    Each parameter must receive its own backend's storage type, and the
+    slices must stay independent: wrapping them in another backend's storage
+    class, or handing two parameters the same buffer, both survive a values
+    comparison and only show up as a type or aliasing check.
+    """
+
+    OPTIMIZERS = ("SGD", "Adam", "RMSprop")
+    STORAGE_TYPES = {"numpy": NumPyStorage, "cuda": CudaStorage}
+
+    def setUp(self):
+        self.previous_backend = ts.get_backend()
+
+    def tearDown(self):
+        ts.set_backend(self.previous_backend)
+
+    def _stepped_parameters(self, backend, name, count=4):
+        with ts.use_backend(backend):
+            parameters = []
+            for index in range(count):
+                parameter = ts.Variable(ts.full((64,), float(index + 1)))
+                parameter.grad = ts.full((64,), 0.5 * (index + 1))
+                parameters.append(parameter)
+            getattr(ts.optim, name)(parameters, learning_rate=0.1).step()
+        return parameters
+
+    def test_every_parameter_keeps_its_own_backend_storage(self):
+        for backend, storage_type in self.STORAGE_TYPES.items():
+            if backend not in ts.available_backends():
+                continue
+            for name in self.OPTIMIZERS:
+                with self.subTest(backend=backend, optimizer=name):
+                    parameters = self._stepped_parameters(backend, name)
+                    for index, parameter in enumerate(parameters):
+                        self.assertIsInstance(
+                            parameter.data._storage,
+                            storage_type,
+                            f"parameter {index} left the {backend} backend",
+                        )
+
+    def test_batched_results_do_not_alias_each_other(self):
+        for backend in self.STORAGE_TYPES:
+            if backend not in ts.available_backends():
+                continue
+            for name in self.OPTIMIZERS:
+                with self.subTest(backend=backend, optimizer=name):
+                    parameters = self._stepped_parameters(backend, name)
+                    buffers = [p.data._storage.buffer for p in parameters]
+                    for index, buffer in enumerate(buffers):
+                        for other_index, other in enumerate(buffers[index + 1 :]):
+                            self.assertIsNot(
+                                buffer,
+                                other,
+                                f"parameters {index} and {other_index} share a buffer",
+                            )
+                    values = [p.data.tolist() for p in parameters]
+                    for index, row in enumerate(values):
+                        for other in values[index + 1 :]:
+                            self.assertNotEqual(row, other)
+
+    def test_batched_and_individual_updates_agree(self):
+        entry_points = {
+            "SGD": "execute_sgd_updates",
+            "Adam": "execute_adam_updates",
+            "RMSprop": "execute_rmsprop_updates",
+        }
+        for backend in self.STORAGE_TYPES:
+            if backend not in ts.available_backends():
+                continue
+            for name in self.OPTIMIZERS:
+                with self.subTest(backend=backend, optimizer=name):
+                    batched = self._stepped_parameters(backend, name)
+                    module = f"tensors.optim.{name.lower()}"
+                    with patch(f"{module}.{entry_points[name]}", return_value=None):
+                        individual = self._stepped_parameters(backend, name)
+                    for left, right in zip(batched, individual):
+                        for expected, actual in zip(
+                            left.data.tolist(), right.data.tolist()
+                        ):
+                            self.assertAlmostEqual(actual, expected)
+
+
 if __name__ == "__main__":
     unittest.main()
