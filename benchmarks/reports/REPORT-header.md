@@ -19,11 +19,11 @@ findings at the end are candidates for investigation, not changes made.
 | `git describe` | `v0.6.0-67-g04e8dd2` |
 | Branch measured from | `perf/comprehensive-benchmarking` |
 | `main == origin/main` | yes, verified before starting |
-| Working tree | production tree **clean**; only `benchmarks/perfmap/` and `benchmarks/results/` added |
+| Working tree | production tree **clean**; only `benchmarks/perfmap/` and `benchmarks/reports/` added |
 | Production code changed | **none** — `git status --porcelain -- tensors/` is empty |
 
 The recorded `git.dirty_paths` in every result file is exactly
-`["benchmarks/perfmap/", "benchmarks/results/"]`, which is the machine-readable
+`["benchmarks/perfmap/", "benchmarks/reports/"]`, which is the machine-readable
 form of that guarantee.
 
 ### Machine

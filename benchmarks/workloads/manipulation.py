@@ -23,7 +23,6 @@ from tensors.backend import (
 from ..case import Case, Group, Unsupported
 from ..inputs import (
     ACCELERATED,
-    dtype_of,
     kernel_module,
     provider_array,
     provider_module,

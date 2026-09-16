@@ -25,7 +25,6 @@ from ..inputs import (
     RECTANGULAR_SHAPES,
     dtype_of,
     kernel_module,
-    label,
     provider_array,
     provider_module,
     tensor,

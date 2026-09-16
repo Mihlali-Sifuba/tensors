@@ -5,7 +5,7 @@ it, so every figure in it is traceable to a record.
 
 Usage::
 
-    python -m benchmarks.tables benchmarks/results/perfmap.json \
+    python -m benchmarks.reporting.tables benchmarks/reports/perfmap.json \
         --section all > report-tables.md
 """
 
@@ -676,7 +676,7 @@ def bottleneck_table(report: dict[str, Any], *, limit: int = 25) -> str:
                     "backend",
                     "dtype",
                     "elements",
-                    f"innermost",
+                    "innermost",
                     "outermost",
                     "absolute overhead",
                     "ratio",
@@ -873,7 +873,7 @@ SECTIONS: dict[str, Callable[[dict[str, Any]], str]] = {
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m benchmarks.tables",
+        prog="python -m benchmarks.reporting.tables",
         description="Render a performance map as markdown tables.",
     )
     parser.add_argument("input", type=Path)

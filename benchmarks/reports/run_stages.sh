@@ -6,7 +6,7 @@
 # on Windows the process tree is not reliably reaped when the shell is
 # stopped. One process at a time, one log, no readers.
 set -u
-OUT="benchmarks/results/baseline"
+OUT="benchmarks/reports/baseline"
 LOG="$OUT/run.log"
 PY=".venv/Scripts/python.exe"
 ROUNDS="${ROUNDS:-5}"

@@ -68,7 +68,6 @@ def _table(
 
 def print_summary(report: dict[str, Any], *, limit: int = 20) -> None:
     """Print the tables that make a run readable without opening the JSON."""
-    records = report["records"]
     derived = report["analysis"]
     counts = derived["classifications"]["counts"]
     print(

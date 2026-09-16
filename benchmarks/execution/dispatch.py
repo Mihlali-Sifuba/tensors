@@ -14,7 +14,7 @@ the case says so.
 from __future__ import annotations
 from typing import Any
 import tensors as ts
-from tensors.backend import config, execute_add, loading
+from tensors.backend import execute_add, loading
 from tensors.backend.policy import _array_work_is_large_enough, _shape_size
 from tensors.backend.python.storage import PythonStorage
 from tensors.dtype import result_dtype

@@ -6,7 +6,7 @@ comes from instrumented execution and must not be compared against a timing.
 
 Usage::
 
-    python -m benchmarks.profile_report --output out/profiling.json
+    python -m benchmarks.reporting.profile_report --output out/profiling.json
 """
 
 from __future__ import annotations
@@ -150,7 +150,7 @@ def _tracing_subjects(backend: str) -> dict[str, Callable[[], Any]]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m benchmarks.profile_report",
+        prog="python -m benchmarks.reporting.profile_report",
         description=(
             "Run targeted diagnostics that attribute benchmark findings to "
             "provider calls, host transfers, and Python functions."

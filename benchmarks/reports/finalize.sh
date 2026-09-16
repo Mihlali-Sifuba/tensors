@@ -3,8 +3,10 @@
 # merge everything, then run the diagnostic profiling.
 #
 # Two reasons a suite is re-measured:
-#   framework, cuda - measured first, while the machine was still settling
-#   shape, storage  - a short verification script shared the machine with
+#   dispatch, synchronization - measured first, while the machine was
+#                    still settling
+#   manipulation, storage - a short verification script shared the machine
+#                    with
 #                     them (a merge test and a profiling-path check)
 #   creation        - stopped mid-suite once an ungated integer size was
 #                     found to build ten million Python ints per call
@@ -12,7 +14,7 @@
 # The first readings are kept under baseline/early/ as evidence; only the
 # steady-state readings enter the merge.
 set -u
-OUT="benchmarks/results/baseline"
+OUT="benchmarks/reports/baseline"
 LOG="$OUT/run.log"
 PY=".venv/Scripts/python.exe"
 ROUNDS="${ROUNDS:-5}"
@@ -27,7 +29,7 @@ if command -v tasklist >/dev/null 2>&1; then
 fi
 
 mkdir -p "$OUT/early"
-SUSPECT="framework cuda shape storage creation"
+SUSPECT="dispatch synchronization manipulation storage creation"
 
 for suite in $SUSPECT; do
   for extension in json csv; do
@@ -47,12 +49,12 @@ for suite in $SUSPECT; do
 done
 
 echo "########## merge ##########" >> "$LOG"
-"$PY" -m benchmarks.merge "$OUT/*.json" \
-  --output benchmarks/results/perfmap.json >> "$LOG" 2>&1
+"$PY" -m benchmarks.reporting.merge "$OUT/*.json" \
+  --output benchmarks/reports/perfmap.json >> "$LOG" 2>&1
 echo "---------- merge exit $? ----------" >> "$LOG"
 
 echo "########## profiling ##########" >> "$LOG"
-"$PY" -m benchmarks.profile_report \
-  --output benchmarks/results/profiling.json >> "$LOG" 2>&1
+"$PY" -m benchmarks.reporting.profile_report \
+  --output benchmarks/reports/profiling.json >> "$LOG" 2>&1
 echo "---------- profiling exit $? ----------" >> "$LOG"
 echo "=== finalize complete $(date -u +%FT%TZ) ===" >> "$LOG"

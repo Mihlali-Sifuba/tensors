@@ -165,7 +165,6 @@ def _construction_cases(backend: str, size: int, dtype_name: str) -> list[Case]:
 
 def _conversion_cases(backend: str, size: int, dtype_name: str) -> list[Case]:
     """Measure representation conversion, caching, and invalidation."""
-    dtype = dtype_of(dtype_name)
     shape = (size,)
     native_kind = _NATIVE_KIND[backend]
     cases: list[Case] = []

@@ -20,7 +20,7 @@ from typing import Any
 import tensors as ts
 
 from ..case import Case, Group, Unsupported
-from ..inputs import FLOAT_DTYPES, dtype_of, tensor
+from ..inputs import FLOAT_DTYPES, tensor
 from .models.mlp import MultiLayerPerceptron
 
 
@@ -35,7 +35,6 @@ def _training_cases(
     dtype_name: str,
 ) -> list[Case]:
     """Build phase and combined-step cases for one model configuration."""
-    dtype = dtype_of(dtype_name)
     suffix = f"{name}/{dtype_name}/b{batch}/h{hidden}/d{depth}"
     parameter_count = sum(
         fan_in * fan_out + fan_out

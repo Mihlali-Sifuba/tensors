@@ -1,40 +1,92 @@
-# perfmap — a layered performance map of `tensors`
+# Benchmarks — a layered performance map of `tensors`
 
-`perfmap` measures the same computations at several depths of the execution
-stack so that overhead can be **attributed to a layer** rather than merely
-observed. It is measurement only: it imports the package under test and never
-modifies it.
+These benchmarks measure the same computations at several depths of the
+execution stack, so that overhead can be **attributed to a layer** rather than
+merely observed. They are measurement only: the package under test is
+imported, never modified.
 
-The original `benchmarks` suite remains available and unchanged
-(`python -m benchmarks`). `perfmap` is a separate, broader harness.
+There is one benchmark system. One case model, one runner, one timing and
+synchronization policy, one statistics implementation, one registry, one
+command, and one result schema.
+
+## How it is organized
+
+A suite answers one of three questions, and its directory says which.
+
+| Directory | Question | Examples |
+| --- | --- | --- |
+| `workloads/` | What does this operation cost, and where does that cost enter? | `arithmetic`, `reductions`, `linalg`, `convolution` |
+| `execution/` | What does the machinery around an operation cost on its own? | `graph`, `backward`, `fusion`, `storage`, `startup` |
+| `scenarios/` | What does a whole workflow cost, every layer included? | `training`, `optimizer` |
+
+Workloads are organized by what an operation **means**, never by backend: one
+workload definition runs on Python, NumPy, and CUDA. A workload also owns its
+**complete ladder** — the same computation measured at the provider, the
+guarded kernel, dispatch, the public operation, an eager `Variable`, and a
+replayed graph — and those rungs stay in one group, so the difference between
+two of them is overhead rather than a difference of operand or sampling round.
+
+Two more directories hold things a suite uses rather than measures:
+
+- `baselines/` — direct access to NumPy and CuPy, called on their own terms.
+  This is deliberately separate from selecting a `tensors` backend: the point
+  of a baseline is to show what the Tensor, the dtype decision, the dispatch,
+  and the storage wrapper cost by leaving them out.
+- `scenarios/models/` — the models a scenario runs, so a suite measures a
+  model rather than defining one.
 
 ## Run it
 
 ```powershell
-# everything (long; prefer the staged form below)
-python -m benchmarks --output benchmarks/results/perfmap.json --memory
+# a fast check that the harness and the suites still work
+python -m benchmarks --profile quick
 
-# one suite
-python -m benchmarks --suite reductions --output out/reductions.json
+# the full matrix
+python -m benchmarks --profile standard --output out/map.json
 
-# one narrow question
-python -m benchmarks --suite layers --match "binary/add/float64" --backend cuda
+# one suite, one question
+python -m benchmarks --suite arithmetic --match "add/float64" --backend cuda
 
 # what exists
 python -m benchmarks --list-suites
 python -m benchmarks --suite fusion --list-groups
+
+# what would be measured, without measuring it
+python -m benchmarks.inventory --summary
 ```
 
 Staged, which is how the baseline was produced:
 
 ```bash
-bash benchmarks/results/run_stages.sh framework cuda layout shape storage ...
-python -m benchmarks.merge "benchmarks/results/baseline/*.json" \
-    --output benchmarks/results/perfmap.json
+bash benchmarks/reports/run_stages.sh dispatch synchronization layout ...
+python -m benchmarks.reporting.merge "benchmarks/reports/baseline/*.json" \
+    --output benchmarks/reports/map.json
 ```
 
 Merging re-derives every analysis table from the combined records, so a ladder
 whose rungs come from different suites still resolves.
+
+## Profiles
+
+A workload says *what* to measure and at which sizes the question is
+interesting. A profile says how much of that to run today. The two are kept
+apart because they change for different reasons: a size belongs in a curve
+because the cost changes there, and it is skipped because there is no time.
+
+| Profile | Rounds | Sample | Selection |
+| --- | --- | --- | --- |
+| `quick` | 3 | 10 ms | both ends of each curve, float64 only, tight ceilings |
+| `standard` | 5 | 50 ms | everything the suites declare |
+| `comprehensive` | 9 | 100 ms | everything, longer, plus the allocation pass |
+
+A profile **filters** a declared curve rather than supplying one, so no
+profile can introduce a case a suite did not declare, and `standard` runs
+exactly the full matrix. `--rounds` and `--target-time` override the chosen
+profile explicitly.
+
+Memory is a dimension of a run, not a suite: a case declares `memory=True`,
+and `--memory` or the `comprehensive` profile turns the separate allocation
+pass on.
 
 ## Layers
 
@@ -56,9 +108,9 @@ computation is the whole point.
 | `training` | complete steps and their phases |
 | `storage` | construction, conversion, caching, materialization |
 | `fusion` | fused execution and planning |
-| `sync` | CUDA launch, barrier, transfer, and allocation primitives |
 | `startup` | cold start, and cold-versus-warm caches |
 | `memory` | cases that exist for the allocation pass |
+| `sync` | CUDA launch, barrier, transfer, and allocation primitives |
 
 ## How comparisons are wired
 
@@ -127,9 +179,19 @@ a batch of calls fails to release.
 **Unsupported combinations are recorded, never omitted.** A factory raises
 `Unsupported` with a stated reason, and the record carries
 `classification="unsupported"` plus that reason. Size ceilings are declared per
-backend in `workloads.py` for the same reason.
+backend in `inputs.py` for the same reason, and a profile may tighten
+them further for a particular run.
 
 ## Outputs
+
+A report carries `"schema": "tensors-perfmap/2"`. Version `/1` labelled
+a record with the suite that produced it under the earlier flat layout,
+where one `layers` suite covered arithmetic, the elementary functions,
+the activations, and the comparisons together. The timings, samples,
+layers, and families did not change, so a `/1` report is still readable
+and the merge path accepts both — but its `suite` and `group` strings
+name a different vocabulary, and a merge across versions records that
+rather than smoothing it over.
 
 `--output x.json` writes three files:
 
@@ -145,7 +207,9 @@ compute capability, SM count and memory, CPU, and the synchronization policy.
 
 ## Adding a case
 
-Add it to the relevant `suites/*.py`, from a factory that receives the active
+Add it to the module that owns the question: a semantic domain under
+`workloads/`, framework behaviour under `execution/`, a whole workflow
+under `scenarios/`. Write it as a factory that receives the active
 backend. Build shared inputs in the factory (not in `run`), give it a
 `validate`, assign the closest `layer`, and tag it into whichever comparison it
 belongs to. Raise `Unsupported` with a real reason rather than returning
@@ -153,5 +217,16 @@ nothing. Use `reset` when the timed callable mutates state, `single_shot` when a
 sample is one transition, `gc_enabled` when each call builds cyclic objects, and
 `memory=True` when allocation behavior is part of the question.
 
-Draw sizes and dtypes from `workloads.py` so a curve means the same thing
-everywhere, and prefer a curve to a single representative size.
+Draw shared curves, dtypes, ceilings, and input builders from
+`inputs.py`, and wrap a curve in `profiles.selected_sizes` so a profile
+can narrow it. Prefer a curve to a single representative size.
+
+Geometry that belongs to one workload stays with it: convolution
+shapes, matrix aspect ratios, and model dimensions are part of the
+question that workload asks, not shared configuration.
+
+Before and after any structural change, compare
+`python -m benchmarks.inventory` against itself. It lists every case
+the suites would build, with its backend, layer, family, dtype, shape,
+element count, tags, and supported status, so a move that was meant to
+be structural can be shown to have been.

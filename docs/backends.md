@@ -170,19 +170,22 @@ Use the benchmark attribution suites instead of one small operation to choose a
 backend:
 
 ```powershell
-python -m benchmarks --backend accelerated --suite provider
-python -m benchmarks --backend accelerated --suite scaling
-python -m benchmarks --backend accelerated --suite storage
-python -m benchmarks --backend accelerated --suite graph --match width-100000
-python -m benchmarks --backend accelerated --suite optimizer
-python -m benchmarks --backend accelerated --suite convolution
+python -m benchmarks --backend numpy --backend cuda --suite arithmetic
+python -m benchmarks --backend numpy --backend cuda --suite storage
+python -m benchmarks --backend numpy --backend cuda --suite graph --match width-100000
+python -m benchmarks --backend numpy --backend cuda --suite optimizer
+python -m benchmarks --backend numpy --backend cuda --suite convolution
 ```
 
-The `provider` suite separates NumPy or CuPy time from internal kernel guards,
-`storage` exposes transfer and materialization costs, and `scaling` shows the
-size at which an accelerator begins to repay its fixed overhead. CUDA timings
-include stream synchronization, so they represent completed device work. See
-the [benchmark guide](../benchmarks/README.md) for the complete methodology.
+Each workload measures the same computation at every depth of the stack, so
+one run separates the raw NumPy or CuPy call from the internal kernel guard,
+the guard from dispatch, and dispatch from the public operation. Reading the
+size curve rather than one point is what shows where an accelerator begins to
+repay its fixed overhead; `storage` exposes transfer and materialization costs
+separately. CUDA timings are reported three ways — submission, completion, and
+device time — so a number is never ambiguous about whether the device had
+finished. See the [benchmark guide](../benchmarks/README.md) for the complete
+methodology.
 
 ## Behaviour contract
 

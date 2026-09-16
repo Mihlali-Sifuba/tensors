@@ -13,7 +13,7 @@ optimization branch can be compared against it on equal terms.
 | Measurement branch | `perf/comprehensive-benchmarking` |
 | Production code changed | none — nothing under `tensors/` was modified |
 
-The measurement branch adds `benchmarks/perfmap/` and `benchmarks/results/`
+The measurement branch adds `benchmarks/perfmap/` and `benchmarks/reports/`
 only. The pre-existing `benchmarks/` suite is untouched and still runs as
 `python -m benchmarks`.
 
@@ -23,11 +23,11 @@ Suites were run one at a time so that a long run could be monitored and a
 single failure would not discard the rest:
 
 ```bash
-ROUNDS=5 TARGET=0.02 bash benchmarks/results/run_stages.sh <suite> ...
-python -m benchmarks.merge "benchmarks/results/baseline/*.json" \
-    --output benchmarks/results/perfmap.json
-python -m benchmarks.profile_report \
-    --output benchmarks/results/profiling.json
+ROUNDS=5 TARGET=0.02 bash benchmarks/reports/run_stages.sh <suite> ...
+python -m benchmarks.reporting.merge "benchmarks/reports/baseline/*.json" \
+    --output benchmarks/reports/perfmap.json
+python -m benchmarks.reporting.profile_report \
+    --output benchmarks/reports/profiling.json
 ```
 
 Per-suite settings: 5 measured samples per case (one per interleaved round),

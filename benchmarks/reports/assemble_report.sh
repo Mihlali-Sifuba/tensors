@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Assemble REPORT.md from the narrative files and the generated tables.
 #
-# Every table comes from benchmarks/results/perfmap.json via
-# `python -m benchmarks.tables`, so no figure in the report is
+# Every table comes from benchmarks/reports/perfmap.json via
+# `python -m benchmarks.reporting.tables`, so no figure in the report is
 # transcribed by hand.
 set -eu
 cd "$(dirname "$0")/../.."
 PY=".venv/Scripts/python.exe"
-MAP="benchmarks/results/perfmap.json"
-OUT="benchmarks/results/REPORT.md"
-HERE="benchmarks/results"
+MAP="benchmarks/reports/perfmap.json"
+OUT="benchmarks/reports/REPORT.md"
+HERE="benchmarks/reports"
 
-table() { "$PY" -m benchmarks.tables "$MAP" --section "$1"; }
+table() { "$PY" -m benchmarks.reporting.tables "$MAP" --section "$1"; }
 
 {
   cat "$HERE/REPORT-header.md"
