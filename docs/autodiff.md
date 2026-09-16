@@ -570,14 +570,15 @@ needs its output or plan. A released Computation cannot be reused.
 
 ## The operation contract
 
-`ts.ops.Operation` is an abstract base class. It lives in the operations
-subsystem because it is the contract every concrete mathematical operation
-implements; the graph package references an operation rather than defining
-what one is. A concrete operation inherits from it and implements `forward()`
-and `backward()`:
+`Operation` is an abstract base class defined in
+`tensors.operations.base`, and re-exported as `ts.ops.Operation`. It lives in
+the operations subsystem because it is the contract every concrete
+mathematical operation implements; the graph package references an operation
+rather than defining what one is. A concrete operation inherits from it and
+implements `forward()` and `backward()`:
 
 ```python
-from tensors.ops import Operation
+from tensors.operations import Operation      # or: from tensors.ops import Operation
 
 
 class Identity(Operation):

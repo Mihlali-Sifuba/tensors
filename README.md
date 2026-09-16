@@ -360,9 +360,10 @@ tensors/
 │   ├── backend/           # backend selection and optional kernels
 │   │   └── storage/       # Python, NumPy, and CUDA native storage
 │   ├── graph/             # computation graphs and automatic differentiation
-│   ├── linalg/            # linear-algebra operations
-│   ├── math/              # reductions, activations, losses, and shape operations
-│   ├── ops/               # primitive differentiable operations
+│   ├── operations/        # every operation, grouped by semantic domain
+│   ├── linalg/            # facade over operations.linalg
+│   ├── math/              # facade over the mathematical domains
+│   ├── ops/               # facade over the Operation contract and primitives
 │   ├── optim/             # SGD, Adam, and RMSprop
 │   ├── init/              # functional parameter initializers
 │   ├── random/            # backend-native RNG state and generation

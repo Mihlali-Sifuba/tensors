@@ -139,17 +139,33 @@ tensors/
 │   ├── indexing.py
 │   ├── lists.py
 │   └── slicing.py
-├── ops/                   # the Operation contract and its implementations
-│   ├── operation.py       # the Operation abstract base class
-│   ├── add.py, sub.py, mul.py, div.py, neg.py
-│   └── pow.py, slice.py, cast.py
-├── linalg/                # linear algebra
-│   ├── dot.py
-│   ├── matmul.py
-│   ├── norm.py
-│   ├── outer.py
-│   └── transpose.py
-├── math/                  # functions, reductions, activations, and losses
+├── operations/            # the semantic operation hierarchy (canonical)
+│   ├── base.py            # the Operation abstract base class, UNARY_DEMAND
+│   ├── _gradient_shaping.py  # cross-domain VJP shaping operations
+│   ├── arithmetic/        # add.py, subtract.py, multiply.py, divide.py,
+│   │                      # negate.py, power.py
+│   ├── elementary/        # abs.py, sign.py, sqrt.py, exp.py, log.py
+│   ├── trigonometric/     # sin.py, cos.py, tan.py, arcsin.py, arccos.py,
+│   │                      # arctan.py
+│   ├── hyperbolic/        # sinh.py, cosh.py, tanh.py, arcsinh.py,
+│   │                      # arccosh.py, arctanh.py
+│   ├── activations/       # relu.py, sigmoid.py, softplus.py
+│   ├── comparison/        # equal.py, not_equal.py, less.py, less_equal.py,
+│   │                      # greater.py, greater_equal.py, _operands.py
+│   ├── selection/         # minimum.py, maximum.py, clip.py, where.py,
+│   │                      # _extremum.py
+│   ├── reductions/        # sum.py, mean.py, prod.py, min.py, max.py,
+│   │                      # variance.py, std.py, norm.py, logsumexp.py,
+│   │                      # argmin.py, argmax.py, _arg_extremum.py
+│   ├── manipulation/      # reshape.py, transpose.py, concat.py, stack.py,
+│   │                      # slice.py, cast.py
+│   ├── linalg/            # matmul.py, outer.py
+│   ├── normalization/     # softmax.py, log_softmax.py
+│   ├── losses/            # binary_cross_entropy.py, cross_entropy.py
+│   └── convolution/       # convolution.py
+├── ops/                   # facade: the Operation contract and primitives
+├── linalg/                # facade: linear algebra
+├── math/                  # facade: functions, reductions, activations, losses
 ├── optim/                 # parameter-update algorithms
 │   ├── optimizer.py
 │   ├── sgd.py
@@ -192,9 +208,28 @@ ts.math.exp(x)
 ts.math.mean(x)
 ```
 
-Primitive operation classes remain available through `ts.ops` for advanced
-inspection, and the compatibility namespace exposes calls such as
-`ts.Ops.add(x, y)`.
+`tensors.operations` is where every operation is defined, grouped by what it
+means. `ts.math`, `ts.linalg`, and `ts.ops` are convenience namespaces over
+it: they re-export selected names and define nothing of their own, so
+`ts.math.exp` and `tensors.operations.elementary.exp` are the same object.
+Import from `tensors.operations` when the semantic domain matters, and from a
+facade when the shorter name reads better.
+
+```python
+from tensors.operations.linalg import matmul
+from tensors.operations.reductions import mean
+from tensors.ops import Operation      # defined in tensors.operations.base
+```
+
+The `Ops` static-method namespace has been removed. The functions it wrapped
+are root-level calls:
+
+```python
+ts.add(x, y)        # was ts.Ops.add(x, y)
+ts.subtract(x, y)
+ts.multiply(x, y)
+ts.divide(x, y)
+```
 
 Common math functions are also root aliases for concise model code:
 
@@ -251,11 +286,33 @@ The folders have deliberately narrow responsibilities:
   [Tensor memory model](memory-model.md).
 - `creation` provides public constructors for mathematically defined tensor
   values, including zeros, ones, ranges, and identity matrices.
-- `ops` owns `Operation`, the abstract contract every concrete mathematical
-  operation implements, plus the primitive differentiable operations such as
-  arithmetic, powers, slicing, and casting. The graph package references an
-  operation through `OperationNode` and `Instruction`; it does not define what
-  an operation is.
+- `operations` owns every computation the library exposes, grouped by what
+  the operation *means* rather than by how a backend executes it or by which
+  Python syntax reaches it. `base.py` holds `Operation`, the abstract contract
+  every concrete operation implements, and `UNARY_DEMAND`. The graph package
+  references an operation through `OperationNode` and `Instruction`; it does
+  not define what an operation is.
+
+  An operation module owns its input and configuration validation, its output
+  shape and dtype, the dispatch call that evaluates it, the storage it wraps,
+  and its reverse-mode and higher-order derivative rules. It never names a
+  concrete backend: choosing one is dispatch's job.
+
+  A semantic domain and a backend execution domain are different
+  classifications and need not share names. `trigonometric`, `hyperbolic`,
+  `activations`, and `selection` all dispatch to backend *elementwise*
+  kernels; the semantic folder says what the operation means, the backend
+  folder says how it runs.
+
+  Two modules start with an underscore because they are shared structure
+  rather than operations: `_gradient_shaping.py` holds the small graph
+  operations a VJP needs to broadcast a gradient back to an operand's shape,
+  and each `_extremum.py`, `_arg_extremum.py`, and `_operands.py` holds what a
+  pair or family of neighbouring operations genuinely shares.
+- `ops`, `linalg`, and `math` are public facade packages. Each is a single
+  `__init__.py` that re-exports names from `tensors.operations`; none of them
+  holds an implementation. They exist because they are documented, familiar
+  user-facing namespaces, not as compatibility adapters.
 - `utils/coordinates.py` converts between logical coordinates and canonical
   row-major logical linear indices using `Shape` and canonical contiguous
   strides derived from that `Shape`; arbitrary Tensor strides and `offset`
@@ -267,11 +324,11 @@ The folders have deliberately narrow responsibilities:
   Tensor broadcasting. Pure broadcast-shape inference lives on `Shape`, while
   stride construction lives on `Strides`. The `utils` package is not
   re-exported from the root.
-- `linalg` contains linear-algebra operations such as dot products and matrix
-  multiplication.
-- `math` contains all mathematical functions, including reductions and
-  activation functions. It remains flat rather than separating activations or
-  reductions into extra namespaces.
+- `matmul` is one operation with two public names. `ts.matmul` and `ts.dot`
+  both contract the final axes with matrix-product semantics and broadcast any
+  leading batch axes; `dot` is an entry point to the same `MatMul` class, not
+  a second contraction. The class is named for what it does, and matches the
+  vocabulary dispatch and the kernels already use.
 - `graph` owns the recorded structure, tracing state, and the public `Graph`
   abstraction; its `computation` subpackage owns the executable,
   differentiable form of that structure. A recorded graph
