@@ -707,7 +707,7 @@ class Tensor:
         return divide(self, other)
 
     def __rtruediv__(self, other: Scalar) -> Tensor:
-        from tensors.ops import divide_scalar
+        from tensors.operations.arithmetic.divide import divide_scalar
 
         return divide_scalar(other, self)
 
@@ -726,12 +726,12 @@ class Tensor:
             return other.__rpow__(self)
         if not isinstance(other, (int, float, Tensor)):
             return NotImplemented
-        from tensors.ops import power
+        from tensors.operations.arithmetic.power import power
 
         return power(self, other)
 
     def __rpow__(self, other: Scalar) -> Tensor:
-        from tensors.ops import power_scalar_base
+        from tensors.operations.arithmetic.power import power_scalar_base
 
         return power_scalar_base(other, self)
 
@@ -741,7 +741,7 @@ class Tensor:
         return negate(self)
 
     def __abs__(self) -> Tensor:
-        from tensors.math import abs
+        from tensors.operations.elementary.abs import abs
 
         return abs(self)
 
@@ -752,7 +752,7 @@ class Tensor:
     def __matmul__(self, other: TensorData) -> Tensor: ...
 
     def __matmul__(self, other: TensorLike) -> Union[Tensor, Variable]:
-        from tensors.linalg import matmul
+        from tensors.operations.linalg.matmul import matmul
 
         return matmul(self, other)
 
@@ -763,6 +763,6 @@ class Tensor:
     def __rmatmul__(self, other: TensorData) -> Tensor: ...
 
     def __rmatmul__(self, other: TensorLike) -> Union[Tensor, Variable]:
-        from tensors.linalg import matmul
+        from tensors.operations.linalg.matmul import matmul
 
         return matmul(other, self)

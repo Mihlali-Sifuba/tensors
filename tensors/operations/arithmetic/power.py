@@ -355,7 +355,7 @@ class PowerBaseGradient(Operation):
         ]
 
     def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        from tensors.math import log
+        from tensors.operations.elementary.log import log
 
         grad, base, exponent = inputs
         need_grad, need_base, need_exponent = needs_input_grad
@@ -469,7 +469,7 @@ class PowerExponentGradient(Operation):
         ]
 
     def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        from tensors.math import log
+        from tensors.operations.elementary.log import log
 
         grad, base, exponent = inputs
         need_grad, need_base, need_exponent = needs_input_grad

@@ -62,7 +62,8 @@ def sum_products_to_shape(
 
 def sum_to_shape_graph(gradient, shape: tuple[int, ...]):
     """Differentiably reduce a broadcasted Variable back to ``shape``."""
-    from tensors.math import reshape, sum
+    from tensors.operations.manipulation.reshape import reshape
+    from tensors.operations.reductions.sum import sum
 
     if gradient.shape == shape:
         return gradient

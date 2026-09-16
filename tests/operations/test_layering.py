@@ -198,6 +198,66 @@ class ObsoleteModuleTests(unittest.TestCase):
                 self.assertEqual(modules, ["__init__.py"])
 
 
+class FacadeDirectionTests(unittest.TestCase):
+    """The facades are for users of the library, not for the library.
+
+    ``tensors.math``, ``tensors.ops``, and ``tensors.linalg`` re-export from
+    ``tensors.operations``, so an operation that imports one of them depends
+    on a module that depends on it. The import works, because these are all
+    deferred inside functions, but it makes the canonical location ambiguous:
+    ``sum`` would have two import paths with no rule saying which is meant.
+
+    Internal code names the canonical module; the facades face outward.
+    """
+
+    FACADES = ("tensors.math", "tensors.ops", "tensors.linalg")
+
+    #: ``tensors/__init__.py`` assembles the root namespace from the three
+    #: documented namespaces. That is one public surface composing another,
+    #: not an implementation reaching sideways through one.
+    COMPOSES_THE_PUBLIC_API = ("tensors/__init__.py",)
+
+    def _violations(self, *roots):
+        found = []
+        for path in modules_under(*roots):
+            posix = _posix(path)
+            if posix in self.COMPOSES_THE_PUBLIC_API:
+                continue
+            if posix in {f"{f.replace('.', '/')}/__init__.py" for f in self.FACADES}:
+                continue  # a facade re-exporting is the point of a facade
+            for module, line in imported_modules(path):
+                if module in self.FACADES or module.startswith(
+                    tuple(f"{name}." for name in self.FACADES)
+                ):
+                    found.append(f"{posix}:{line} imports {module}")
+        return found
+
+    def test_no_operation_imports_a_facade(self):
+        violations = self._violations(OPERATIONS)
+        self.assertEqual(
+            violations,
+            [],
+            "an operation must name its canonical sibling, not a facade:\n"
+            + "\n".join(violations),
+        )
+
+    def test_no_internal_module_imports_a_facade(self):
+        """The same rule for the rest of the package.
+
+        ``Tensor.__abs__`` and ``Tensor.__matmul__`` reached through
+        ``tensors.math`` and ``tensors.linalg`` while their neighbours already
+        named the operation module, so the guard covers every internal module
+        rather than only the operation layer.
+        """
+        violations = self._violations("tensors")
+        self.assertEqual(
+            violations,
+            [],
+            "internal modules must name canonical operation modules:\n"
+            + "\n".join(violations),
+        )
+
+
 class FacadeResolutionTests(unittest.TestCase):
     """Every documented namespace is a view onto the canonical objects."""
 
