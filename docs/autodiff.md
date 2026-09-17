@@ -562,6 +562,51 @@ upstream gradient through the sequence is calculated regardless, because
 reverse propagation needs it even when it is never published. Intermediate
 `.data` and `.grad` values are still published, so fusion changes execution
 cost rather than graph semantics.
+
+### Numerical equivalence under optimisation
+
+> **Status: approved target contract, awaiting implementation.**
+
+An optimisation must preserve the numerical result of the original sequence of
+typed operations. Fusion may remove intermediate allocations and memory
+traffic; it may not change what the function computes.
+
+Concretely, for an expression evaluated in dtype `d`, the unfused form rounds
+at every operation:
+
+```text
+t = round_d(a * b)
+r = round_d(t + c)
+```
+
+A fused kernel must preserve **both** rounding boundaries. It must not
+contract the pair into a fused multiply-add that rounds once, because that
+changes the result. On CUDA this is not hypothetical: NVRTC contracts `a*b+c`
+into an FMA by default, and the current fusion kernels are compiled with no
+options, so contraction is possible today. The measured difference on a
+representative float32 triple is one ulp.
+
+The same constraint forbids a fused kernel from carrying an intermediate at
+wider precision than the declared dtype, for the reason given in
+[Arithmetic semantics §5.5](arithmetic-semantics.md#55-why-declared-precision-matters).
+
+Two consequences follow:
+
+- **Replay.** A Computation replayed with fusion enabled must produce the same
+  values as the same Computation replayed without it. Fusion is an execution
+  plan, and a plan does not change the function.
+- **Backend switching.** The same graph replayed on a different backend must
+  produce the same values, fused or not. A fused CUDA kernel and an unfused
+  Python execution of one expression are two implementations of one specified
+  function.
+
+If a relaxed numerical mode permitting contraction or reassociation is wanted
+later, it must be an explicit, separately documented execution mode. It is not
+introduced now.
+
+The arithmetic rules themselves — rounding, overflow, dtype, promotion — are
+specified once, in [Arithmetic semantics](arithmetic-semantics.md), and are
+not restated here.
 Native backend VJPs are also used for supported reductions and elementwise
 operations; numerically delicate inputs return to the stable Python rules.
 

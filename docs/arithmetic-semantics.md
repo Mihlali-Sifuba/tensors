@@ -5,99 +5,116 @@
 > **Status: approved target contract, awaiting implementation.**
 >
 > This document specifies what MS-Tensors arithmetic **will** do. It is not a
-> description of what the package does today. Sections marked *Current
-> behaviour* record the present implementation so the difference is visible;
-> everywhere else, the specified behaviour is the target. Do not read this
-> document as a description of the installed package, and do not cite it as
-> evidence that a behaviour is already implemented.
+> description of what the package does today. Passages marked *Current
+> behaviour* record the present implementation, verified by running it, so the
+> difference is visible. Everywhere else, the specified behaviour is the
+> target. Do not cite this document as evidence that a behaviour is already
+> implemented.
 >
-> [Section 10](#10-migration-and-compatibility) lists the known differences
+> [Section 10](#10-migration-and-compatibility) lists every known difference
 > between the specification and the current implementation.
+
+This document is the **authoritative numerical specification**. Backend
+selection and execution requirements are in [Numerical backends](backends.md);
+graph execution and optimisation requirements are in
+[Automatic differentiation](autodiff.md). Those documents reference this one
+rather than restating it.
 
 ### In scope
 
-Elementwise **addition**, **subtraction** and **multiplication** where both
-operands have the **same** dtype, for the four scalar numeric dtypes:
+Elementwise **addition**, **subtraction**, **multiplication** and **division**
+over the seven public scalar dtypes, for tensor operands and for Python scalar
+operands, including mixed-dtype combinations and the promotion rules that
+govern them.
 
-| dtype | `DataType` name | Typecode | Width |
+| dtype | Kind | Typecode | Width |
 | --- | --- | --- | --- |
-| 32-bit signed integer | `int32` | `i` | 4 bytes |
-| 64-bit signed integer | `int64` | `q` | 8 bytes |
-| IEEE 754 binary32 | `float32` | `f` | 4 bytes |
-| IEEE 754 binary64 | `float64` | `d` | 8 bytes |
+| `uint8` | unsigned integer | `B` | 1 byte |
+| `int8` | signed integer | `b` | 1 byte |
+| `int16` | signed integer | `h` | 2 bytes |
+| `int32` | signed integer | `i` | 4 bytes |
+| `int64` | signed integer | `q` | 8 bytes |
+| `float32` | IEEE 754 binary32 | `f` | 4 bytes |
+| `float64` | IEEE 754 binary64 | `d` | 8 bytes |
 
-**Division** is specified separately in [section 7](#7-division), because it
-does not share the result-dtype rule of the other three operations.
+These are exactly the `DataType` values exported from `tensors.dtype` and
+re-exported in `tensors.__all__`; the list was audited against the package
+rather than assumed.
 
 ### Out of scope
 
-This document does **not** specify, and no part of it may be read as
-authorising:
-
-- mixed-dtype arithmetic or a promotion table ([section 6](#6-result-dtypes-and-promotion));
-- integer division semantics ([section 7](#7-division));
-- the dtypes `int16`, `int8` and `uint8`, which `tensors.dtype` defines but
-  which this contract does not cover;
-- comparison, reduction, linear-algebra, transcendental or fused operations;
-- tensor–scalar arithmetic, where the scalar has no declared dtype;
-- broadcasting rules, which are a shape concern
-  ([section 3.4](#34-broadcasting-and-storage));
-- automatic differentiation.
-
-Where a rule is absent, it is absent because it has not been decided. Absence
-is not permission to inherit a backend's default. Every undecided point is
-listed in [section 11](#11-open-specification-questions).
+- **Floor division** and any integer-valued division operator
+  ([section 7.4](#74-floor-division-is-a-separate-operation)).
+- Comparison, reduction, linear-algebra and transcendental operations.
+- Tensor construction and explicit casting, except to distinguish them from
+  arithmetic ([section 4.5](#45-arithmetic-is-not-construction-or-casting)).
+- Broadcasting, which decides *which* element pairs combine, not what a pair
+  produces.
+- Automatic differentiation, beyond the requirement that graph optimisation
+  preserve these semantics ([section 8.5](#85-graph-optimisation)).
 
 ---
 
 ## 2. Architectural principles
 
-### 2.1 The specification is the authority
+These six principles govern this document, [backends.md](backends.md) and
+[autodiff.md](autodiff.md) alike.
 
-> **The declared dtype and this specification define an operation's semantics.
-> Python, NumPy and CUDA are implementations of that specification. No backend
-> is the semantic authority.**
+**P1. The declared dtype and this specification determine semantics.** Not the
+values stored, not the backend, not the tensor's size, not the execution path
+chosen for it.
 
-Performance may differ between backends. The specified results, result dtypes
-and exceptional behaviour must not.
+**P2. Python, NumPy and CUDA are implementations. None is the semantic
+authority.** Where a backend and this document disagree, the backend is wrong
+— including the Python backend.
 
-This inverts the arrangement the package was built with. Today the Python
-backend's behaviour *is* the definition: the NumPy and CUDA kernels are
-written to reproduce it, and decline to run whenever they cannot. The
-consequences are visible in the implementation:
+**P3. A supported operation behaves identically regardless of backend, tensor
+size or execution path.** An operation must not change its results because a
+tensor was small enough to take one path or large enough to take another.
 
-- `tensors/backend/numpy/conversion.py` converts every floating operand to
-  `numpy.float64` regardless of the declared dtype, and computes integer
+**P4. Selecting a backend explicitly is an execution requirement, not a
+preference.** `ts.set_backend("cuda")` means the operation runs on CUDA or
+reports that it cannot. See [backends.md](backends.md).
+
+**P5. Graph optimisation preserves the numerical semantics of the function it
+optimises.** Fusion may remove allocations and memory traffic. It may not
+change results. See [section 8.5](#85-graph-optimisation) and
+[autodiff.md](autodiff.md).
+
+**P6. Legacy behaviour is not preserved merely for compatibility when it
+contradicts this architecture.** Adopting this specification introduces
+deliberate breaking changes, listed in
+[section 10](#10-migration-and-compatibility).
+
+### 2.1 What this replaces
+
+The package was built with the Python backend's behaviour as the definition.
+The NumPy and CUDA kernels reproduce it, and decline when they cannot. The
+cost is visible in the implementation:
+
+- `tensors/backend/numpy/conversion.py` widens every floating operand to
+  `numpy.float64` regardless of declared dtype, and computes integer
   arithmetic in `object` arrays of Python integers.
 - `tensors/backend/cuda/conversion.py` refuses integer dtypes outright, so
   every integer operation falls back to the Python kernel.
-- A `float32` result that would round to infinity causes the NumPy kernel to
-  decline, because the Python reference does not produce that overflow.
+- Both decline a `float32` result that would round to infinity, because the
+  Python reference does not produce that overflow.
+- Both force a host synchronisation on every division to test for a zero
+  denominator, and on every narrowing float result to test for overflow.
 
-Under this specification the direction of authority reverses. A backend is
-correct when it matches this document, not when it matches Python.
+Under this specification that machinery is unnecessary, and the direction of
+authority reverses.
 
-### 2.2 Independent of Python and NumPy
+### 2.2 Independence from Python and NumPy
 
-The specification is deliberately independent of:
+The specification does not inherit from Python's built-in numeric types.
+Python's `int` is arbitrary-precision and its `float` is always binary64;
+neither models a typed tensor library, where the declared width *is* the
+contract. **No requirement in this document exists to reproduce the behaviour
+of Python's built-in `float` or `int`.**
 
-- **Python's built-in numerical types.** Python's `int` is arbitrary-precision
-  and its `float` is always binary64. Neither is a model for a typed tensor
-  library. A tensor declares a width, and the width is the contract.
-- **NumPy's incidental behaviour.** Where this document and NumPy agree, it is
-  because the same standard was applied, not because NumPy was consulted.
-  Where NumPy's behaviour is an artefact of its own history, it does not bind
-  this package.
-
-### 2.3 Declared dtype is the contract
-
-An operation's semantics are determined by the **declared** dtype of its
-operands, not by the values they happen to hold, the backend selected, the
-storage representation in use, or the size of the tensor.
-
-In particular, an operation must not change its semantics because a tensor is
-small enough to take a different execution path, or large enough to take an
-accelerated one.
+Where this document and NumPy agree, it is because the same standard was
+applied, not because NumPy was consulted.
 
 ---
 
@@ -105,102 +122,116 @@ accelerated one.
 
 ### 3.1 Integer dtypes
 
-Both integer dtypes are **signed** and **two's complement**.
+| dtype | Signed | Width \(w\) | Minimum | Maximum |
+| --- | --- | --- | --- | --- |
+| `uint8` | no | 8 | `0` | `255` |
+| `int8` | yes | 8 | `-128` | `127` |
+| `int16` | yes | 16 | `-32768` | `32767` |
+| `int32` | yes | 32 | `-2147483648` | `2147483647` |
+| `int64` | yes | 64 | `-9223372036854775808` | `9223372036854775807` |
 
-| dtype | Width \(w\) | Minimum | Maximum |
-| --- | --- | --- | --- |
-| `int32` | 32 | `-2147483648` (\(-2^{31}\)) | `2147483647` (\(2^{31}-1\)) |
-| `int64` | 64 | `-9223372036854775808` (\(-2^{63}\)) | `9223372036854775807` (\(2^{63}-1\)) |
-
-These match `_INTEGER_LIMITS` in `tensors/dtype.py`.
+Signed types are two's complement. These match `_INTEGER_LIMITS` in
+`tensors/dtype.py`.
 
 ### 3.2 Floating dtypes
 
-| dtype | Format | Significand | Max finite | Min normal | Min subnormal | Epsilon |
+| dtype | Format | Precision \(p\) | Max finite | Min normal | Min subnormal | Epsilon |
 | --- | --- | --- | --- | --- | --- | --- |
-| `float32` | IEEE 754 binary32 | 24 bits | `3.4028235e+38` | `1.1754944e-38` | `1e-45` | `1.1920929e-07` |
-| `float64` | IEEE 754 binary64 | 53 bits | `1.7976931348623157e+308` | `2.2250738585072014e-308` | `5e-324` | `2.220446049250313e-16` |
+| `float32` | binary32 | 24 bits | `3.4028235e+38` | `1.1754944e-38` | `1e-45` | `1.1920929e-07` |
+| `float64` | binary64 | 53 bits | `1.7976931348623157e+308` | `2.2250738585072014e-308` | `5e-324` | `2.220446049250313e-16` |
 
-Each format represents signed zeros, signed infinities and NaNs in addition to
-the finite values above.
+Each constant above is the shortest decimal that round-trips exactly to the
+intended value in its own format; this was verified.
 
-### 3.3 Values outside the range
+Each format also represents signed zeros, signed infinities and NaNs.
 
-An integer value outside a dtype's range is not representable in that dtype.
-What happens to such a value is the subject of [section 4](#4-integer-arithmetic):
-it is **wrapped**, not rejected and not promoted.
+### 3.3 Exact integer representation in floating formats
 
-A finite real number whose magnitude exceeds a floating dtype's maximum is not
-representable either. What happens to it is the subject of
-[section 5](#5-floating-point-arithmetic): it **rounds to infinity**, and that
-infinity is a result, not an error.
+A binary format with precision \(p\) represents every integer in
+\([-2^{p},\, 2^{p}]\) exactly, and \(2^{p}+1\) is the first positive integer it
+cannot. This bound decides integer–floating promotion
+([section 6.3](#63-integer-with-floating)).
 
-### 3.4 Broadcasting and storage
+| Integer dtype | Exact in `float32` (\(2^{24}\)) | Exact in `float64` (\(2^{53}\)) |
+| --- | --- | --- |
+| `uint8`, `int8`, `int16` | yes | yes |
+| `int32` | **no** (\(2^{31}-1 > 2^{24}\)) | yes |
+| `int64` | **no** | **no** (\(2^{63}-1 > 2^{53}\)) |
 
-Broadcasting determines **which pairs of elements** an operation combines.
-This specification determines **what each pair produces**. The two are
-independent: broadcasting a `(3, 1)` tensor against a `(3, 4)` one does not
-change the arithmetic applied to any resulting pair, and no rule in this
-document depends on operand shape.
+Verified: `float32(2147483647)` is `2147483648`; `float64(9223372036854775807)`
+is `9223372036854775808`.
 
-Storage representation is likewise independent of semantics. A `float32`
-tensor may be held in a Python `array('f')`, a `numpy.ndarray` of
-`numpy.float32`, or a device-resident `cupy.ndarray`. All three must yield the
-same values for the same operation. A backend may choose any internal
-representation that produces the specified result, but the **declared dtype of
-the result must be stored as that dtype**: a `float32` result is a `float32`
-tensor, not a `float64` tensor carrying a `float32` label.
+### 3.4 Storage residency is not semantics
+
+A `float32` tensor may live in a Python `array('f')`, a `numpy.ndarray`, or a
+device-resident `cupy.ndarray`. All three must produce the same values. A
+backend may use any internal representation that yields the specified result,
+but **a result of declared dtype `D` is stored as `D`** — a `float32` result is
+a `float32` tensor, not a `float64` buffer carrying a `float32` label.
+
+Where results physically reside, and which transfers are permitted, is
+specified in [backends.md](backends.md).
 
 ---
 
 ## 4. Integer arithmetic
 
-### 4.1 Decided rules
+### 4.1 Rules
 
-For `int32` and `int64`, where **both operands have that same dtype**:
+For addition, subtraction and multiplication where **both operands have the
+same integer dtype**:
 
-1. **Addition, subtraction and multiplication preserve the input dtype.**
-   `int32 + int32 → int32`; `int64 * int64 → int64`.
-2. **Arithmetic is fixed-width and two's complement, with wraparound.**
-3. **Overflow does not raise.** For these three operations there is no
-   overflow error, no promotion to a wider dtype, and no promotion to a
-   floating dtype.
-4. **Results are identical across every supported backend**, bit for bit.
+1. **The result has that dtype.**
+2. **Arithmetic is fixed-width with wraparound.**
+3. **Overflow does not raise**, and does not promote to a wider dtype.
+4. **Results are bit-identical across every backend.**
 
 ### 4.2 The wraparound rule
 
-Let \(r\) be the **mathematical** result of the operation — the exact value
-that addition, subtraction or multiplication of the two operand values
-produces over the integers, computed without any width limit and before any
-wrapping is applied. For a signed integer dtype of width \(w\), the stored
-result is
+Let \(r\) be the **mathematical** result of the operation: the exact value over
+the integers, computed with no width limit, before any wrapping.
+
+For a **signed** dtype of width \(w\):
 
 $$
 \operatorname{wrap}_w(r) \;=\; \bigl((r + 2^{\,w-1}) \bmod 2^{\,w}\bigr) - 2^{\,w-1}
 $$
 
-where \(\bmod\) is the non-negative remainder (the result of
-\(x \bmod 2^w\) lies in \([0,\, 2^w)\) for every integer \(x\), including
-negative \(x\)).
+For an **unsigned** dtype of width \(w\):
 
-Equivalently: \(\operatorname{wrap}_w(r)\) is the unique value in
-\([-2^{w-1},\, 2^{w-1}-1]\) congruent to \(r\) modulo \(2^w\).
+$$
+\operatorname{wrap}^{\mathrm{unsigned}}_w(r) \;=\; r \bmod 2^{\,w}
+$$
 
-When \(r\) is already representable, \(\operatorname{wrap}_w(r) = r\), so the
-rule describes ordinary arithmetic as well as overflow.
+In both, \(\bmod\) is the non-negative remainder, so the result is defined for
+negative \(r\). Equivalently, each returns the unique value in the dtype's
+range congruent to \(r\) modulo \(2^w\). When \(r\) is already representable,
+the rule returns \(r\), so it describes ordinary arithmetic as well as
+overflow.
 
-> \(r\) is a definitional device, not an implementation requirement. It
-> specifies *which* value must be stored. It does not require an
-> implementation to compute \(r\) exactly and then reduce it — see
+`uint8` is the only unsigned public dtype, so the unsigned form applies to it
+alone.
+
+> \(r\) is definitional, not an implementation requirement. It says *which*
+> value must be stored, not how to compute it — see
 > [section 4.4](#44-implementation-freedom).
 
 ### 4.3 Worked examples
 
-Every value below was checked against the formula and against native
-fixed-width arithmetic; the two agree in all cases.
+Every row was checked against the formula **and** against native fixed-width
+arithmetic; the two agree in all cases.
 
 | dtype | Expression | Mathematical \(r\) | Stored result |
 | --- | --- | --- | --- |
+| `uint8` | `255 + 1` | `256` | `0` |
+| `uint8` | `0 - 1` | `-1` | `255` |
+| `uint8` | `16 * 16` | `256` | `0` |
+| `int8` | `127 + 1` | `128` | `-128` |
+| `int8` | `-128 - 1` | `-129` | `127` |
+| `int8` | `-128 * -1` | `128` | `-128` |
+| `int16` | `32767 + 1` | `32768` | `-32768` |
+| `int16` | `-32768 - 1` | `-32769` | `32767` |
+| `int16` | `256 * 256` | `65536` | `0` |
 | `int32` | `2147483647 + 1` | `2147483648` | `-2147483648` |
 | `int32` | `-2147483648 - 1` | `-2147483649` | `2147483647` |
 | `int32` | `1000000 * 1000` | `1000000000` | `1000000000` |
@@ -211,8 +242,7 @@ fixed-width arithmetic; the two agree in all cases.
 | `int64` | `-9223372036854775808 - 1` | `-9223372036854775809` | `9223372036854775807` |
 | `int64` | `4294967296 * 4294967296` | `18446744073709551616` | `0` |
 
-Reading the first row through the formula, with \(w = 32\) and
-\(r = 2147483648\):
+Reading the first `int32` row through the formula, with \(w = 32\):
 
 $$
 \operatorname{wrap}_{32}(2147483648)
@@ -221,136 +251,191 @@ $$
 = -2147483648
 $$
 
-Note the last `int32` row: `-2147483648 * -1` wraps to itself. The negation of
-the minimum value is not representable, so \(\operatorname{wrap}\) returns the
-minimum again. This is a consequence of the rule, not an exception to it.
+Note `-128 * -1` in `int8` and `-2147483648 * -1` in `int32`: the negation of
+the minimum is not representable, so the rule returns the minimum again. That
+is a consequence of the rule, not an exception to it.
 
 ### 4.4 Implementation freedom
 
-An implementation may compute the result by any means that produces the
-specified value. It may use native fixed-width machine arithmetic that wraps
-in hardware, compute in a wider type and reduce, or mask the low \(w\) bits.
+An implementation may produce the specified value by any means: native
+fixed-width machine arithmetic that wraps in hardware, computation in a wider
+type followed by reduction, or masking the low \(w\) bits.
 
-**Arbitrary-precision arithmetic is not required and must not be assumed to be
-required.** The current NumPy path computes integer arithmetic in `object`
-arrays of Python integers in order to reproduce Python's arbitrary-precision
-intermediates. Under this specification that is unnecessary: native `int32`
-and `int64` arithmetic already wraps exactly as the rule requires, which is
-the cheapest correct implementation on every backend.
+**Arbitrary-precision arithmetic is not required.** The current NumPy path
+computes in `object` arrays of Python integers to reproduce Python's
+arbitrary-precision intermediates. Under this specification that is
+unnecessary: native `uint8`, `int8`, `int16`, `int32` and `int64` arithmetic
+already wraps exactly as the rule requires, which is also the cheapest correct
+implementation on every backend.
+
+### 4.5 Arithmetic is not construction or casting
+
+Wraparound is a rule about **arithmetic**. It does not apply to:
+
+- **Tensor construction.** `ts.Tensor([256], dtype=ts.uint8)` supplies a value
+  the dtype cannot represent. That is a caller error, and it raises.
+- **Explicit casting.** `tensor.astype(ts.uint8)` on a value outside `uint8`
+  raises for integer targets.
+
+*Current behaviour (verified):* both already raise `OverflowError`, with
+messages from the underlying typed buffer. Float→float casting that exceeds
+the target range yields `inf`, and float→integer casting truncates toward
+zero. **This specification changes none of it.** Only arithmetic wraps.
+
+The distinction is deliberate. An out-of-range *literal* is almost always a
+mistake; an out-of-range *arithmetic result* is a defined consequence of
+finite width.
 
 ---
 
 ## 5. Floating-point arithmetic
 
-### 5.1 Decided rules
+### 5.1 Rules
 
-1. **Same-dtype arithmetic preserves the dtype.** `float32 op float32 →
-   float32`; `float64 op float64 → float64`, for addition, subtraction,
-   multiplication and division.
-2. **Operations follow the declared precision.** An implementation must not
-   unconditionally widen `float32` operands to `float64`.
-3. **An implementation must not compute in `float64` and narrow to `float32`
-   merely to imitate Python's built-in `float`.** Section 5.5 explains why
-   this matters, and precisely where it does and does not change results.
-4. **Floating-point overflow is a result, not a fallback.** An operation whose
-   correctly-rounded result exceeds the dtype's finite range produces a signed
-   infinity. It must not raise, and must not cause a backend to decline and
-   defer to the Python kernel.
+1. **Same-dtype arithmetic preserves the dtype** for `+`, `-`, `*`, `/`.
+2. **Operations are performed in the declared precision.** `float32` operands
+   are not unconditionally widened to `float64`.
+3. **Overflow produces a signed infinity.** It does not raise, and does not
+   cause a backend to decline and defer to another.
+4. **Infinities and NaNs propagate** as IEEE 754 specifies.
+5. **Signed zero is preserved.**
+6. **Results are stored in their declared dtype.**
 
-The numerical foundation is **IEEE 754**: binary32 for `float32`, binary64 for
-`float64`.
+The foundation is **IEEE 754**: binary32 for `float32`, binary64 for `float64`.
 
 ### 5.2 Rounding
 
 Addition, subtraction, multiplication and division are **correctly rounded**:
-the result is the representable value nearest the exact mathematical result,
-computed as if with unbounded range and precision and then rounded once.
+the delivered result is the representable value nearest the exact mathematical
+result, as if computed with unbounded range and precision and rounded once.
 
-The rounding mode is **round-to-nearest, ties-to-even**, the IEEE 754 default.
-No other rounding mode is specified, and an implementation must not select one.
+The rounding mode is **round-to-nearest, ties-to-even**. No other mode is
+specified and an implementation must not select one.
 
 Correct rounding is what makes cross-backend agreement attainable: for these
-four operations the result is *uniquely determined* by the two operand values,
-the dtype and the rounding mode. There is no latitude for a conforming
+four operations the result is *uniquely determined* by the operand values, the
+dtype and the rounding mode. There is no latitude for a conforming
 implementation to differ. This is not true of transcendental functions, which
-IEEE 754 does not require to be correctly rounded, and which this document
-does not cover.
-
-Example, at the rounding boundary:
+IEEE 754 does not require to be correctly rounded and which this document does
+not cover.
 
 | dtype | Expression | Result | Why |
 | --- | --- | --- | --- |
-| `float32` | `1.0 + 2**-24` | `1.0` | exactly half an ulp; ties-to-even selects the even significand |
+| `float32` | `1.0 + 2**-24` | `1.0` | exactly half an ulp; ties-to-even picks the even significand |
 | `float32` | `1.0 + 2**-23` | `1.0000001` | one ulp above `1.0`, exactly representable |
 
 ### 5.3 Infinities, NaNs and signed zero
 
-| Case | `float32` | `float64` |
-| --- | --- | --- |
-| Overflow: `3.0e38 + 3.0e38` | `inf` | (no overflow at this magnitude) |
-| Overflow: `max * 2` | `inf` | `inf` |
-| `inf + 1.0` | `inf` | `inf` |
-| `inf - inf` | `nan` | `nan` |
-| `0.0 * inf` | `nan` | `nan` |
-| `nan + 1.0` | `nan` | `nan` |
-| `nan == nan` | `False` | `False` |
+| Case | Result |
+| --- | --- |
+| `3.0e38 + 3.0e38` (`float32`) | `inf` |
+| `max * 2` | `inf` |
+| `inf + 1.0` | `inf` |
+| `inf - inf` | `nan` |
+| `inf / inf` | `nan` |
+| `0.0 * inf` | `nan` |
+| `nan + 1.0` | `nan` |
+| `nan == nan` | `False` |
+| `0.0 + -0.0` | `+0.0` |
+| `-0.0 + -0.0` | `-0.0` |
+| `-0.0 == 0.0` | `True` |
 
-- **Infinities** are produced by overflow and propagate through arithmetic.
-  They are values, not errors.
-- **NaN** propagates: any arithmetic operation with a NaN operand produces
-  NaN. NaN compares unequal to everything, including itself.
-- **NaN payloads and the sign bit of a NaN are not specified.** A conformance
-  test must treat all NaNs as equivalent and must not compare NaN bit
-  patterns.
-- **Signed zero** is preserved as IEEE 754 defines it: `0.0 + -0.0` is `+0.0`
-  under round-to-nearest, `-0.0 + -0.0` is `-0.0`, and `-0.0 == 0.0` is
-  `True`. The sign of a zero is observable through division
-  (`1.0 / -0.0` is `-inf`) and must not be discarded.
+- **Infinities** are produced by overflow and propagate. They are values, not
+  errors.
+- **NaN** propagates through every arithmetic operation. **NaN payloads and
+  the NaN sign bit are not specified**; conformance tests must treat all NaNs
+  as equivalent and must not compare NaN bit patterns.
+- **Signed zero** follows IEEE 754 and is observable through division
+  (`1.0 / -0.0` is `-inf`). It must not be discarded.
 
-The current implementation already propagates infinities and NaNs correctly
-and identically on all three backends for addition and subtraction; this was
-checked directly. What changes under this specification is overflow, which
-must stop triggering a fallback.
+*Current behaviour (verified):* infinities and NaNs already propagate
+correctly and identically on all three backends for addition and subtraction.
+What changes is overflow, which must stop triggering a fallback.
 
-### 5.4 Subnormals — partially open
+### 5.4 Subnormals: gradual underflow is required
 
-IEEE 754 specifies **gradual underflow**: a result too small to be normal is
-represented as a subnormal rather than flushed to zero. For `float32`:
+**IEEE 754 gradual underflow is required**, for both subnormal **operands** and
+subnormal **results**. Flush-to-zero is not an accepted deviation.
 
-| Expression | IEEE 754 result |
+| Expression (`float32`) | Required result |
 | --- | --- |
 | `min_normal / 2` | `5.877472e-39` (subnormal) |
-| `min_subnormal / 2` | `0.0` (underflows to zero) |
+| `min_subnormal / 2` | `0.0` (genuine underflow to zero) |
+| `1e-40 * 1.0` | `1e-40` (subnormal operand preserved) |
 
-**Whether every backend must implement gradual underflow is an open
-question.** It is measured, not assumed — see
-[section 9.3](#93-what-cross-backend-equality-is-achievable) and
-[open question O4](#o4-subnormal-handling-on-cuda). The CUDA backend
-as currently configured flushes subnormals to zero, and that is the *only*
-source of cross-backend disagreement found.
+*Current behaviour and capability (verified on CuPy 14.2, CUDA 13.0, compute
+capability 8.6):*
+
+| Path | Subnormal preserved? |
+| --- | --- |
+| `float64`, every CUDA path tested | **yes** |
+| Host→device transfer and a pure copy kernel, `float32` | **yes** |
+| `cupy.multiply`, `cupy.divide` ufunc, `float32` | no — flushed |
+| `cupy.ElementwiseKernel` with `z = x * y`, `float32` | no — flushed |
+| `cupy.RawModule`, `float32`, with and without `--ftz=false` | no — flushed |
+| **Raw kernel or `ElementwiseKernel` with inline PTX `mul.rn.f32`, `add.rn.f32`, `sub.rn.f32`, `div.rn.f32`** | **yes — bit-identical to the CPU** |
+
+This is a **CuPy code-generation default, not a hardware limitation.** The
+device supports binary32 gradual underflow: inline PTX `mul.rn.f32` and
+`add.rn.f32` reproduce the CPU result exactly, including subnormal operands and
+subnormal results. NVRTC emits the IEEE instruction `mul.f32` by default
+(`--ftz=true` emits `mul.ftz.f32`), so the flush is introduced below PTX, in
+the path CuPy uses to reach a loadable module.
+
+**A conforming CUDA implementation is therefore achievable**, by generating
+the `.rn` PTX forms for `float32` elementwise arithmetic instead of relying on
+CuPy's default code generation. Until such an implementation exists,
+[section 8.4](#84-when-a-backend-cannot-conform) governs what strict CUDA
+selection must do.
 
 ### 5.5 Why declared precision matters
 
-This is the subtlest part of the contract, and the naive argument for it is
-wrong. It is worth stating precisely, because an implementer who believes the
-wrong version will draw the wrong conclusions about what must be fixed.
+The naive argument for this requirement is wrong, and an implementer who
+believes the wrong version will fix the wrong thing.
 
-**A single widened operation is not observably different.** If two `float32`
-operands are widened to binary64, one operation is performed, and the result
-is rounded once to binary32, the result is **bit-identical** to native
-binary32 arithmetic. This is the classical safe-double-rounding property:
-double rounding through a wider format is innocuous when the wider format has
-at least \(2p + 2\) bits, and binary64's 53 bits exceed the
-\(2 \times 24 + 2 = 50\) that binary32 requires. This was verified directly:
-across 200,000 random `float32` pairs per operation, native binary32 and
-widen-compute-narrow agreed bit for bit on **every** pair, for addition,
-subtraction, multiplication and division.
+#### 5.5.1 A single widened operation is not observably different
 
-So widening is not wrong because it corrupts a single operation. It is wrong
-for three other reasons:
+Let \(\circ\) be one of \(+, -, \times, \div\) on two binary32 operands.
+Compute \(\circ\) exactly, round to binary64 (round-to-nearest-even), then
+round that to binary32 (round-to-nearest-even). This **double rounding is
+innocuous** — it yields the correctly-rounded binary32 result — under the
+classical condition on the two precisions:
 
-**(a) The intermediate range is different.** binary64 has a far wider exponent
-range, so an intermediate that overflows binary32 survives in binary64:
+$$
+p_{\text{wide}} \;\ge\; 2\,p_{\text{narrow}} + 2
+$$
+
+For binary32 inside binary64: \(p_{\text{narrow}} = 24\),
+\(p_{\text{wide}} = 53\), and \(53 \ge 2 \times 24 + 2 = 50\). The condition
+holds, so a **single** widened binary32 operation is bit-identical to native
+binary32.
+
+Conditions and limits that must accompany that statement:
+
+- **The condition is on precision, and it is not general.** For binary64
+  inside x87 80-bit extended, \(p_{\text{narrow}} = 53\) and
+  \(p_{\text{wide}} = 64\), while the condition demands 108. Double rounding
+  through 80-bit extended is **not** innocuous for `float64`. This reasoning
+  must not be transferred to `float64`.
+- **Overflow is safe for a single operation.** A binary64 intermediate beyond
+  binary32's finite range rounds to \(\pm\infty\) on the second rounding,
+  matching native binary32.
+- **Underflow is safe for a single operation**, because binary64's exponent
+  range extends far below binary32's, so the intermediate cannot itself
+  underflow; the binary32 subnormal result is reached by one rounding of an
+  exact-enough intermediate.
+- **It applies to exactly one operation.** The condition says nothing about a
+  sequence.
+
+Targeted sweeps over random and subnormal-range operands found no
+disagreement, which is consistent with the theorem. **That agreement is not
+the justification** — the precision condition is. Sampling cannot establish a
+universal claim.
+
+#### 5.5.2 Why widening is nevertheless wrong
+
+**(a) The intermediate range differs.** binary64's exponent range is far
+wider, so an intermediate that must overflow in binary32 survives:
 
 ```text
 a = 1e30, b = 1e20, c = 1e25   (all float32)
@@ -360,15 +445,14 @@ float64 throughout    : (a * b) / c  ->  1.0000001e+25
 ```
 
 A `float32` computation that overflows must overflow. Carrying the
-intermediate in binary64 silently rescues it, which is a different
-computation, not a more accurate one.
+intermediate in binary64 silently rescues it — a different function, not a
+more accurate one.
 
-**(b) Precision is retained across operations.** The safe-rounding property
-covers *one* operation. As soon as a widened intermediate is fed to the next
-operation without being rounded back to binary32, the results diverge. Across
-200,000 random `float32` triples, `(a * b) + c` computed per-operation in
-binary32 differed from the same expression evaluated entirely in binary64 in
-**25%** of cases:
+**(b) Precision is retained across operations.** Section 5.5.1 covers *one*
+operation. Feed a widened intermediate to the next operation without rounding
+it back, and results diverge. Across 200,000 random `float32` triples,
+`(a * b) + c` computed per-operation in binary32 differed from the same
+expression evaluated entirely in binary64 in **25%** of cases:
 
 ```text
 a = 38.24823, b = 280.5834, c = -0.4536956
@@ -377,67 +461,160 @@ per-operation float32 : 10731.364   (bits 0x4627ad75)
 float64 throughout    : 10731.365   (bits 0x4627ad76)
 ```
 
-This matters wherever an evaluation strategy spans more than one operation —
-fusion, in particular — and it means "we round the final result to float32"
-is not a sufficient defence.
+This is why "we round the final result to float32" is not a sufficient
+defence, and why [section 8.5](#85-graph-optimisation) constrains fusion.
 
 **(c) It costs what it was meant to save.** Widening every operand allocates
-and converts a buffer of twice the width, and then converts back. On the
-accelerated backends this is the dominant cost of a small operation, and it
-buys nothing, because per operation the result is identical.
+and converts a buffer of twice the width and converts back. On the accelerated
+backends that is the dominant cost of a small operation, and per operation it
+buys nothing.
 
-The requirement is therefore stated in terms of what is *observable*: a
+The requirement is therefore stated in terms of what is observable: a
 `float32` operation must produce the correctly-rounded binary32 result, must
-overflow when binary32 overflows, and must produce a `float32` result stored
-as `float32`. An implementation that achieves this by widening a single
-operation is conforming but wasteful; one that widens across an expression is
-not conforming.
+overflow when binary32 overflows, must underflow gradually as binary32 does,
+and must produce a `float32` result stored as `float32`. An implementation
+that achieves this by widening a single operation is conforming but wasteful;
+one that widens across an expression is not conforming.
 
 ---
 
 ## 6. Result dtypes and promotion
 
-### 6.1 Decided: same-dtype operands
+Promotion depends on **operand dtypes only**. It never depends on the values
+stored in individual tensor elements. (Python scalars, which have no dtype, are
+specified separately in [section 6.5](#65-python-scalars).)
 
-| Left | Right | Operation | Result dtype |
-| --- | --- | --- | --- |
-| `int32` | `int32` | `+` `-` `*` | `int32` |
-| `int64` | `int64` | `+` `-` `*` | `int64` |
-| `float32` | `float32` | `+` `-` `*` | `float32` |
-| `float64` | `float64` | `+` `-` `*` | `float64` |
+### 6.1 Principles
 
-Division is not in this table; see [section 7](#7-division).
+- **P-a.** Same-dtype operands preserve their dtype, except where an operation
+  defines a different result type (division does; see
+  [section 7](#7-division)).
+- **P-b.** Mixed integer operands promote to the **smallest public integer
+  dtype whose range contains both operand ranges**.
+- **P-c.** Mixed floating operands promote to the **wider** floating dtype.
+- **P-d.** Integer with floating promotes to the **narrowest floating dtype
+  that represents every value of the integer dtype exactly**
+  ([section 3.3](#33-exact-integer-representation-in-floating-formats)), and
+  never narrower than the floating operand.
+- **P-e.** If no public dtype satisfies the rule, the operation **raises and
+  requires an explicit cast**. It must not silently choose a lossy result.
 
-### 6.2 Undecided: mixed dtypes
+### 6.2 The promotion table
 
-> **Mixed-dtype arithmetic is not specified by this document.**
+Rows and columns are operand dtypes; cells are the result dtype for `+`, `-`
+and `*`. **`cast`** means the operation raises and the caller must cast
+explicitly.
 
-`tensors/dtype.py` contains a `result_dtype` function that today produces a
-result dtype for mixed operands. Its existence is **not** a specification. It
-was written to serve the current implementation, it has not been reviewed
-against this contract, and it must not be treated as the decided rule.
+|  | `uint8` | `int8` | `int16` | `int32` | `int64` | `float32` | `float64` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **`uint8`** | `uint8` | `int16` | `int16` | `int32` | `int64` | `float32` | `float64` |
+| **`int8`** | `int16` | `int8` | `int16` | `int32` | `int64` | `float32` | `float64` |
+| **`int16`** | `int16` | `int16` | `int16` | `int32` | `int64` | `float32` | `float64` |
+| **`int32`** | `int32` | `int32` | `int32` | `int32` | `int64` | **`float64`** | `float64` |
+| **`int64`** | `int64` | `int64` | `int64` | `int64` | `int64` | **`cast`** | **`cast`** |
+| **`float32`** | `float32` | `float32` | `float32` | **`float64`** | **`cast`** | `float32` | `float64` |
+| **`float64`** | `float64` | `float64` | `float64` | `float64` | **`cast`** | `float64` | `float64` |
 
-**Promotion rules must be defined before any mixed-dtype implementation is
-changed.** An implementation task acting on this document must:
+The table is complete (49 cells) and **symmetric**, which was checked
+mechanically: `promote(a, b) == promote(b, a)` for every pair. Symmetry is
+required because `+` and `*` are commutative, and it would be incoherent for
+`-` and `/` to promote differently from `+`.
 
-- implement the same-dtype rules in [section 6.1](#61-decided-same-dtype-operands);
-- leave mixed-dtype behaviour exactly as it is;
-- not derive a promotion rule from NumPy, from Python, or from the existing
-  `result_dtype` function.
+Worked justifications for the non-obvious cells:
 
-Questions that a promotion specification will have to answer are listed as
-[O1](#o1-mixed-dtype-promotion).
+- **`uint8` with `int8` → `int16`.** The union of \([0, 255]\) and
+  \([-128, 127]\) is \([-128, 255]\). Neither `uint8` nor `int8` contains it;
+  `int16` is the smallest public dtype that does (P-b).
+- **`int32` with `float32` → `float64`.** `float32` represents integers
+  exactly only to \(2^{24}\), and `int32` reaches \(2^{31}-1\). `float64`
+  reaches \(2^{53}\) and contains `int32` exactly (P-d).
+- **`int64` with either floating dtype → `cast`.** \(2^{63}-1\) exceeds
+  \(2^{53}\), so neither public floating dtype represents every `int64` value.
+  No public dtype satisfies P-d, so P-e applies.
+
+### 6.3 Integer with floating
+
+P-d exists to prevent silent, avoidable integer precision loss. `int32 +
+float32` promoting to `float32` would silently round operands above
+\(2^{24}\); promoting to `float64` does not.
+
+The `int64` cells are the deliberate consequence. There is no public dtype
+that holds every `int64` value and every floating value, so the specification
+refuses rather than choosing a lossy answer. The caller writes what they meant:
+
+```python
+big.astype(ts.float64) + scale        # accept the rounding, explicitly
+```
+
+`Tensor.astype` already exists and is the required mechanism; no new API is
+needed for this.
+
+### 6.4 What is not promoted
+
+Promotion never inspects element values. `int64` tensors holding only small
+values still promote as `int64`. This keeps the result dtype a static property
+of the expression, which graph compilation and replay require.
+
+### 6.5 Python scalars
+
+A Python scalar has no declared dtype, so it cannot participate in the table
+above. It is **weakly typed**: it adopts the tensor's dtype when its value is
+exactly representable there, and otherwise the operation raises.
+
+> **Rule S.** For `tensor ∘ scalar` (and the reflected form), the scalar is
+> converted to the tensor's dtype if its value is exactly representable in
+> that dtype. If it is not, the operation raises `TypeError` and the caller
+> must supply a typed operand or cast the tensor.
+
+The result dtype is therefore the tensor's dtype. Using the scalar's *value*
+here is not a violation of [section 6.4](#64-what-is-not-promoted): that rule
+constrains **tensor** operands, whose elements vary. A Python scalar is a
+single literal value, and its value is the only information it carries.
+
+| Expression | Scalar exactly representable? | Result |
+| --- | --- | --- |
+| `float32_tensor + 2.0` | yes, in `float32` | `float32` |
+| `int32_tensor + 2` | yes, in `int32` | `int32` |
+| `uint8_tensor + 255` | yes, in `uint8` | `uint8` |
+| `uint8_tensor + 256` | no | raises `TypeError` |
+| `uint8_tensor + (-1)` | no | raises `TypeError` |
+| `int32_tensor + 3.5` | no — `3.5` is not an `int32` value | raises `TypeError` |
+| `float32_tensor + 1e300` | no — beyond `float32` range | raises `TypeError` |
+| `float32_tensor + 0.1` | yes — `0.1` rounds to the nearest `float32` | `float32` |
+| `int64_tensor + 1` | yes | `int64` |
+| `float64_tensor + 2` | yes | `float64` |
+
+Two consequences worth stating plainly:
+
+- **`int32_tensor + 3.5` raises.** Under the previous architecture it promoted
+  to `float64`. Refusing is the consistent reading of P-e: the caller asked to
+  combine an integer tensor with a non-integral value, and which dtype they
+  wanted is genuinely ambiguous. `t.astype(ts.float64) + 3.5` says it.
+- **"Exactly representable" for floating targets means the literal's value is
+  finite and within range**, not that the decimal is exact in binary. `0.1` is
+  accepted and rounds to the nearest `float32`, exactly as a `float32` literal
+  would. Only values that overflow the target's range are refused.
+
+Booleans are not a public dtype and Python `bool` is not accepted as a numeric
+scalar.
+
+### 6.6 Arithmetic after promotion
+
+Promotion selects the result dtype. **The arithmetic is then performed in that
+dtype**, under the rules of [section 4](#4-integer-arithmetic) or
+[section 5](#5-floating-point-arithmetic). So `int8 + int8` wraps at 8 bits,
+while `int8 + int16` promotes to `int16` first and then wraps at 16 bits.
 
 ---
 
 ## 7. Division
 
-Division is separated from the other three operations because its result dtype
-does not follow theirs, and because its exceptional behaviour is unresolved.
+Division is specified separately because its result dtype does not follow the
+rule for `+`, `-` and `*`.
 
-### 7.1 Decided: floating division
+### 7.1 Floating division
 
-For operands of the same floating dtype:
+For same-dtype floating operands:
 
 | Left | Right | Result dtype |
 | --- | --- | --- |
@@ -445,294 +622,458 @@ For operands of the same floating dtype:
 | `float64` | `float64` | `float64` |
 
 Division is correctly rounded under round-to-nearest ties-to-even, exactly as
-[section 5.2](#52-rounding) specifies for the other operations.
+[section 5.2](#52-rounding) specifies. Mixed floating operands follow
+[section 6.2](#62-the-promotion-table).
 
-### 7.2 Undecided: division by zero
+### 7.2 Division by zero
 
-> **The behaviour of division by zero is an open specification question.**
+**Floating-point division adopts IEEE 754 results. It does not raise.**
 
-IEEE 754 defines `x / 0.0` for finite non-zero `x` as a signed infinity, and
-`0.0 / 0.0` as NaN, raising the *divide-by-zero* and *invalid* flags
-respectively — flags, not exceptions.
+| Expression | Result |
+| --- | --- |
+| `1.0 / +0.0` | `+inf` |
+| `1.0 / -0.0` | `-inf` |
+| `-1.0 / +0.0` | `-inf` |
+| `-1.0 / -0.0` | `+inf` |
+| `0.0 / 0.0` | `nan` |
+| `inf / inf` | `nan` |
+| `0.0 / inf` | `+0.0` |
+| `inf / 0.0` | `+inf` |
 
-**MS-Tensors does not currently do this.** Division by zero raises
-`ZeroDivisionError`, and this is a deliberate, package-level decision rather
-than a backend artefact: the guard appears in the operation layer
+**`ZeroDivisionError` must not be raised for floating-point division.**
+
+**A backend must not introduce a host synchronisation to detect zero
+denominators.** The IEEE result is produced by the hardware; there is nothing
+to check.
+
+*Current behaviour (verified):* floating division by zero raises
+`ZeroDivisionError`. The guard sits in the operation layer
 (`tensors/operations/arithmetic/divide.py`) and is mirrored in all three
-backend kernels. It is consistent across backends today.
+backend kernels. On CUDA it is implemented as
+`bool(cupy.any(right_array == 0))`, which forces a host synchronisation on
+**every** division. Removing it is both a semantic change and a performance
+change.
 
-This document does **not** decide to change it. Adopting IEEE semantics here
-would be a separate, deliberate change to a documented behaviour that users
-may depend on, and it was not part of the decision this specification records.
-See [O2](#o2-division-by-zero).
+**Integer division by zero raises `ZeroDivisionError`.** There is no integer
+infinity and no integer NaN, so there is no value to deliver. This is the one
+case where division raises.
 
-### 7.3 Undecided: integer division
+#### IEEE exception flags are not public API
 
-> **Integer division semantics are an open specification question.**
+IEEE 754 defines sticky status flags — *divide-by-zero*, *invalid*,
+*overflow*, *underflow*, *inexact* — raised alongside these results.
 
-Nothing in this document should be read as deciding that `/` on two integer
-tensors preserves an integer dtype, that it produces a floating dtype, or that
-it follows Python's true-division or floor-division rules.
+**This refactor does not make those flags part of the public API.** No
+accessor, no trapping mode, no per-operation status. An implementation may
+leave them in whatever state the underlying hardware or library produces; no
+behaviour depends on reading them. Exposing them would be a separate, additive
+API decision.
 
-Recorded for reference, not as specification: the current implementation
-produces `float64` from `int32 / int32` and from `int64 / int64`.
+The distinction matters: "division by zero raises the *divide-by-zero flag*"
+is a statement about IEEE 754, and "division by zero raises a *Python
+exception*" is a statement about this package. Under this specification the
+first happens invisibly and the second does not happen at all for floating
+division.
 
-An implementation task must not change integer division on the strength of
-this document. See [O3](#o3-integer-division).
+### 7.3 Integer true division
+
+`/` is **true division**: the result is a floating-point value, never an
+integer.
+
+> **Rule D.** Integer true division is supported when the operand dtypes
+> promote to a floating dtype under P-d
+> ([section 6.2](#62-the-promotion-table)) — that is, when a public floating
+> dtype represents every value of both integer operand dtypes exactly.
+> Otherwise the operation raises and requires an explicit cast.
+
+Applying the table to every public integer dtype:
+
+| Left | Right | `/` result dtype | Why |
+| --- | --- | --- | --- |
+| `uint8` | `uint8` | `float32` | `uint8` exact in `float32` |
+| `int8` | `int8` | `float32` | exact in `float32` |
+| `int16` | `int16` | `float32` | exact in `float32` |
+| `uint8` | `int8` | `float32` | promotes to `int16`, exact in `float32` |
+| `uint8` | `int16` | `float32` | promotes to `int16` |
+| `int8` | `int16` | `float32` | promotes to `int16` |
+| `int32` | `int32` | `float64` | `int32` needs \(2^{53}\) |
+| `int16` | `int32` | `float64` | promotes to `int32` |
+| `uint8` | `int32` | `float64` | promotes to `int32` |
+| `int64` | anything integer | **`cast`** | `int64` exact in no public floating dtype |
+| any integer | `int64` | **`cast`** | as above |
+
+So integer true division is supported for every public integer dtype except
+`int64`, where it requires `x.astype(ts.float64) / y.astype(ts.float64)` and
+the caller thereby accepts the rounding above \(2^{53}\).
+
+*Current behaviour (verified):* `int32 / int32` and `int64 / int64` both
+produce `float64`. Under this specification the first becomes `float64` (same
+result, now by rule rather than by accident) and the second raises.
+
+The rule means integer true division never silently converts `int64` to
+`float64`, which is precisely the conversion that loses integer precision.
+
+### 7.4 Floor division is a separate operation
+
+Floor division, and any other integer-valued division, is a **separate
+operation with its own future specification**. Nothing here decides its
+semantics, its result dtype, or its behaviour on zero denominators or on the
+`min // -1` boundary.
+
+This task does not change any floor-division implementation and does not
+introduce a new public operator. See [O1](#o1-floor-division).
 
 ---
 
 ## 8. Backend conformance
 
+Backend *selection* and *execution* requirements live in
+[backends.md](backends.md). This section states only what conformance means
+numerically.
+
 ### 8.1 Requirements
 
-1. **Python, NumPy and CUDA implement the same contract.** All three are
+1. **Python, NumPy and CUDA implement the same contract.** All are
    implementations; none is the definition.
-2. **The Python backend is not the semantic reference.** Its being the
-   simplest and most readable implementation makes it a useful cross-check,
-   not an authority. Where the Python kernel and this document disagree, the
-   Python kernel is wrong.
-3. **A backend must not silently change dtype or arithmetic semantics.** It
-   must not return a result of a different dtype than specified, and must not
-   store a result in a wider representation than its declared dtype.
-4. **A backend must not fall back to Python merely because native arithmetic
-   differs from Python's built-in semantics.** Native fixed-width integer
-   wraparound and native binary32 arithmetic are *correct* under this
-   contract. They are the reason the fallbacks exist today, and they are not
-   grounds for a fallback under this specification.
-5. **Native kernels should be used wherever they can satisfy the contract.**
+2. **The Python backend is not the reference.** It is the simplest and most
+   readable implementation, which makes it a useful cross-check, not an
+   authority. Where it and this document disagree, it is wrong.
+3. **A backend must not silently change dtype or arithmetic semantics**, and
+   must not store a result in a representation wider than its declared dtype.
+4. **A backend must not fall back to another merely because native arithmetic
+   differs from Python's built-in semantics.** Native fixed-width wraparound
+   and native binary32 arithmetic are *correct* here. They are the reason the
+   current fallbacks exist, and they are not grounds for one.
+5. **Native kernels should be used wherever they satisfy the contract.**
 
 ### 8.2 Conformance is not coverage
 
-Semantic consistency and operation coverage are different questions, and this
-document only settles the first.
-
-Requiring that every backend produce the same result **does not** assert that
-every operation is natively implemented on every backend. It is not the case
-today and this document does not claim otherwise: integer arithmetic on CUDA
-is currently rejected outright, and small workloads are routed to the Python
-kernel by the workload policy described in
-[Numerical backends](backends.md).
+Requiring identical results **does not** assert that every operation is
+natively implemented on every backend. It is not true today: integer
+arithmetic on CUDA is rejected outright, and small workloads are routed to the
+Python kernel by the policy in `tensors/backend/policy.py`.
 
 ### 8.3 Legitimate fallback
 
-An implementation may fall back to another backend's kernel when an operation
-is **genuinely unsupported** there — the library is unavailable, the dtype has
-no device equivalent, or no correct native implementation exists.
-
-A fallback must:
-
-- **preserve the contract.** A fallback is an execution choice. It must
-  produce exactly the specified result, dtype and exceptional behaviour.
-- **be explicit and observable.** It must be visible through diagnostics or
-  benchmarking rather than inferred from a timing anomaly. The benchmark
-  suite already records where a case executes; a fallback that cannot be seen
-  cannot be reviewed.
+Under **automatic** selection, an implementation may execute an operation on a
+backend other than the nominally selected one when it is genuinely unsupported
+there. Such a fallback must **preserve the contract exactly** and must be
+**observable**. See [backends.md](backends.md) for the selection modes and the
+observability requirement.
 
 A fallback is **not** legitimate when it exists to reproduce Python's
 arithmetic semantics. That is the situation this specification removes.
+
+### 8.4 When a backend cannot conform
+
+If a backend cannot satisfy this specification for a supported operation, the
+implementation must, under **explicit** backend selection, report that
+operation as **unsupported** rather than silently producing a
+non-conforming result or silently executing elsewhere.
+
+This applies now to exactly one case, with the evidence in
+[section 5.4](#54-subnormals-gradual-underflow-is-required): CUDA `float32`
+elementwise arithmetic flushes subnormals under CuPy's default code
+generation. Because a conforming implementation **is** achievable through
+inline PTX, this is a temporary implementation gap rather than a permanent
+capability limit, and closing it is part of the work
+([section 10.4](#104-implementation-sequence), stage 3).
+
+### 8.5 Graph optimisation
+
+> **An optimisation must preserve the numerical result of the original
+> sequence of typed operations.**
+
+For an expression evaluated in dtype \(d\):
+
+$$
+t = \operatorname{round}_{d}(a \times b), \qquad
+r = \operatorname{round}_{d}(t + c)
+$$
+
+A fused implementation must preserve **both** rounding boundaries. It must not
+replace the pair with a fused multiply-add that rounds only once, because that
+changes the result.
+
+*Verified:* compiling `out = a * b + c` for CUDA with NVRTC's default
+`--fmad=true` contracts the pair into an FMA and yields `1.0731365e+04`, while
+`--fmad=false` yields `1.0731364e+04` — the per-operation result, bit-identical
+to the CPU. The current fusion kernels are built with
+`cupy.RawKernel(source, name)` and **no options**
+(`tensors/backend/cuda/kernels/fusion/fused_elementwise.py`), so the default
+applies and contraction is possible today.
+
+Fusion may eliminate intermediate allocations and memory traffic. It may not
+alter observable numerical semantics. The consequences for replay and backend
+switching are in [autodiff.md](autodiff.md).
+
+If a relaxed numerical mode is ever wanted, it must be an **explicit,
+separately documented execution mode**. It is not introduced now.
 
 ---
 
 ## 9. Conformance testing requirements
 
-This section describes the tests a future implementation must add. **No such
-tests exist yet**, and nothing here has been executed.
+**The specification is the oracle.** Expected values must be derived from this
+document and written into the tests. A test must not compute its expectation
+by running another backend, and must not treat the Python backend's output as
+correct by construction.
 
-### 9.1 What every case must assert
+**No such tests exist yet.** Nothing in this section has been executed.
 
-For each operation, dtype and backend, a conformance test must check:
+### 9.1 Required coverage
 
-1. the **value** of the result;
-2. the **dtype** of the result, by identity (`assertIs(result.dtype, ts.int32)`);
-3. the **storage width**, so a `float32` result is not held as `float64`;
-4. **exceptional behaviour** — that overflow does not raise for the cases in
-   [section 4](#4-integer-arithmetic) and produces infinity for those in
-   [section 5](#5-floating-point-arithmetic).
-
-### 9.2 Required boundary values
-
-| Category | Values |
+| Area | What must be covered |
 | --- | --- |
-| `int32` boundaries | `-2147483648`, `-1`, `0`, `1`, `2147483647` |
-| `int64` boundaries | `-9223372036854775808`, `-1`, `0`, `1`, `9223372036854775807` |
-| Integer overflow | `max + 1`, `min - 1`, `min * -1`, `max * max`, `65536 * 65536` (`int32`) |
-| `float32` magnitudes | `0.0`, `-0.0`, `min_subnormal`, `min_normal`, `1.0`, `max`, `inf`, `-inf`, `nan` |
-| `float64` magnitudes | the same set at binary64 |
-| Rounding | `1.0 + 2**-24`, `1.0 + 2**-23` (`float32`) |
-| Overflow | `3.0e38 + 3.0e38`, `max * 2` |
+| Integer dtypes | `uint8`, `int8`, `int16`, `int32`, `int64`, each with `+`, `-`, `*` |
+| Overflow boundaries | signed `max + 1`, `min - 1`, `min * -1`; unsigned `max + 1`, `0 - 1` |
+| Wraparound | every row of [section 4.3](#43-worked-examples) |
+| Construction and casting | out-of-range literal and `astype` still raise; **not** wrapped |
+| Same-dtype promotion | every dtype with itself |
+| Mixed-dtype promotion | all 49 cells of [section 6.2](#62-the-promotion-table), including the four `cast` cells raising |
+| Promotion symmetry | `promote(a, b) == promote(b, a)` for all pairs |
+| Scalar conversion | every row of [section 6.5](#65-python-scalars), including the raising cases |
+| Floating specials | `inf`, `-inf`, `nan`, `+0.0`, `-0.0`, and their propagation |
+| Division by zero | the eight rows of [section 7.2](#72-division-by-zero); integer division by zero raising |
+| Subnormals | subnormal operands **and** subnormal results, on every backend |
+| Rounding boundaries | `1.0 + 2**-24`, `1.0 + 2**-23` in `float32`, and the binary64 equivalents |
+| Signed zero | `0.0 + -0.0`, `-0.0 + -0.0`, `1.0 / -0.0` |
+| Integer true division | every row of [section 7.3](#73-integer-true-division) |
+| Cross-backend consistency | every case above, on every installed backend |
+| Execution location | [section 9.4](#94-semantic-tests-versus-execution-tests) |
+| Graph equivalence | fused and unfused execution of the same expression; replay after a backend switch |
 
-### 9.3 What cross-backend equality is achievable
+### 9.2 Required strictness
 
-The brief for this document warned against promising bitwise cross-backend
-equality before establishing that it is achievable. It was therefore measured
-rather than assumed.
+- **Integer arithmetic: exact equality.** No tolerance, ever.
+- **Floating arithmetic: the correctly rounded result**, compared **bitwise**,
+  including the sign bit of zeros and infinities.
+- **NaN: classified, not compared.** Assert that the result is NaN. Do not
+  compare payloads or sign bits.
+- **Result dtype**, asserted by identity (`assertIs(result.dtype, ts.int32)`).
+- **Storage width**, so a `float32` result is not held as `float64`.
 
-**Integers.** Fixed-width two's-complement arithmetic is exact. Bitwise
-equality across backends is required and trivially achievable.
+> **A numerical tolerance must not be used to conceal a backend's failure to
+> implement a correctly rounded elementary operation.** For `+`, `-`, `*` and
+> `/` the correct result is uniquely determined, so any tolerance would be
+> hiding a defect. Tolerances belong to operations IEEE 754 does not require to
+> be correctly rounded, which this document does not cover.
 
-**Floating point.** IEEE 754 requires addition, subtraction, multiplication
-and division to be correctly rounded, so the result is uniquely determined.
-Measuring NumPy on the CPU against CuPy on the GPU over ~394,000 random
-`float32` operand pairs per operation:
+### 9.3 Cross-backend equality: what is achievable
 
-| Restriction | add | sub | mul | div |
-| --- | --- | --- | --- | --- |
-| All finite operands | 198359/198486 | 198359/198486 | 189224/198486 | 189114/198486 |
-| **Normal operands and normal result** | **393651/393651** | **393648/393648** | **326917/326917** | **328447/328447** |
+Bitwise cross-backend equality is **required** for all four operations on both
+floating dtypes, and for every integer operation.
 
-Every single disagreement involved a **subnormal** — a subnormal operand
-treated as zero on the device, or a subnormal result flushed to zero. With
-subnormals excluded, CPU and GPU agreed **bit for bit on every pair**, for all
-four operations.
+It is also **achievable**, which was established rather than assumed. IEEE 754
+requires these four operations to be correctly rounded, so the result is
+uniquely determined; and measurement confirms no obstacle beyond the CuPy
+default described in [section 5.4](#54-subnormals-gradual-underflow-is-required).
 
-The conformance requirement follows from the measurement rather than from
-optimism:
+> **Correction to an earlier statement.** A previous revision of this document
+> reported an experiment comparing NumPy on the CPU with CuPy on the GPU over
+> ~394,000 random `float32` pairs per operation, and summarised it as showing
+> agreement "for normal results". That summary was wrong, and the distinction
+> matters.
+>
+> What the experiment established is agreement when **the operands were
+> restricted to normal values and the result was also normal**. It did **not**
+> establish agreement whenever only the result is normal: a subnormal
+> *operand* flushed to zero on the device can produce a perfectly normal — and
+> wrong — result. The `1e-40 * 1.0` case in
+> [section 5.4](#54-subnormals-gradual-underflow-is-required) is of exactly
+> that shape, and `2.1169182e-33 + -4.406691e-39` is an observed instance
+> where both operands are finite, the result is normal on both sides, and the
+> two disagree because the smaller operand was flushed.
+>
+> A conformance test must therefore **not** filter by result classification.
+> It must cover subnormal operands explicitly, whatever the result looks like.
 
-- **Required: exact bitwise equality** across backends for all results that
-  are normal, zero or infinite, for `+`, `-`, `*` and `/`, on both floating
-  dtypes.
-- **NaN**: required to be NaN, with payload and sign unspecified and not
-  compared.
-- **Subnormal results**: pending [O4](#o4-subnormal-handling-on-cuda). Until
-  that is decided, a conformance test must either exclude subnormal results or
-  record the CUDA divergence as a known, specified exception.
+### 9.4 Semantic tests versus execution tests
 
-**No numerical tolerance is specified, because none is needed.** A tolerance
-would be an admission that the result is not determined; for these four
-operations it is. Tolerances belong to operations IEEE 754 does not require to
-be correctly rounded, which this document does not cover.
+These are different questions and belong in different tests:
 
-### 9.4 Tests that will need revisiting
+- **Semantic conformance** — does the operation produce the specified value,
+  dtype and exceptional behaviour? Runs on every backend; asserts against
+  values from this document.
+- **Execution location** — did the operation execute on the selected backend,
+  and where does its result reside? Asserts about storage type and reported
+  execution, not about numbers.
+
+A semantic test that passes because the operation quietly fell back to another
+backend is not evidence that the selected backend conforms. Keeping the two
+separate is what makes that visible. The observability mechanism required for
+the second is specified in [backends.md](backends.md).
+
+### 9.5 The existing parity helper
 
 `tests/backend/_support.py` defines `NumPyParityTestCase`, whose
 `assertOperationParity` evaluates an expression on the Python backend and
-asserts the NumPy backend matches it. That is the "Python is the reference"
-arrangement expressed as a test helper.
+asserts NumPy matches it. That is "Python is the reference" expressed as a test
+helper.
 
-It remains a useful *cross-check* — two independent implementations agreeing
-is evidence — but it must stop being the definition of correctness. Conformance
-tests must assert against values written in the test, derived from this
-document, not against whatever the Python backend produces.
+It remains useful as a **cross-check** — two independent implementations
+agreeing is evidence — but it must stop being the definition of correctness.
+It must be re-cast so that both backends are compared against specified
+values, not against each other.
 
 ---
 
 ## 10. Migration and compatibility
 
-> Adopting this specification is a **deliberate semantic change**, not a
-> bug fix. It will change observable results.
+> Adopting this specification is a **deliberate set of breaking changes**, not
+> a bug fix. Results, dtypes and raised exceptions all change.
 
-### 10.1 Known differences from current behaviour
+### 10.1 Breaking changes
 
-Each row was verified against the installed package on all three backends.
-
-| Area | Current behaviour | Specified behaviour |
-| --- | --- | --- |
-| Integer overflow | Raises `OverflowError: Python int too large to convert to C long` on every backend | Wraps: `int32` `2147483647 + 1` → `-2147483648` |
-| Integer intermediates | NumPy computes in `object` arrays of Python integers to keep arbitrary precision | Native fixed-width arithmetic |
-| CUDA integers | Rejected in `_operand`; every integer operation falls back to the Python kernel | Executes natively |
-| `float32` working precision | Operands widened to `float64` unconditionally, then narrowed | Computed at declared precision |
-| `float32` overflow | NumPy and CUDA decline, and the operation falls back to the Python kernel | Produces `inf` on the native kernel |
-| Result storage | A `float32` result is stored as `float32` when accelerated | Unchanged |
-| Infinity and NaN propagation | Correct and identical on all three backends | Unchanged |
-
-The integer-overflow change is the largest. Today the error surfaces from the
-Python `array` conversion, which is why it appears identically on all three
-backends: every path ultimately stores through the same typed buffer.
+| # | Area | Current behaviour (verified) | Specified behaviour |
+| --- | --- | --- | --- |
+| B1 | Integer overflow | Raises `OverflowError` on every backend | Wraps silently: `int32` `2147483647 + 1` → `-2147483648` |
+| B2 | Unsigned overflow | Raises | Wraps modulo \(2^8\) for `uint8` |
+| B3 | Float division by zero | Raises `ZeroDivisionError` | IEEE result: `±inf`, or `nan` for `0/0` |
+| B4 | Integer division by zero | Raises `ZeroDivisionError` | Unchanged — still raises |
+| B5 | `int32 + float32` | `float64` (by `result_dtype`) | `float64` — same result, now by rule |
+| B6 | `int64` with any float | Promotes to `float64`, losing precision above \(2^{53}\) | Raises; explicit cast required |
+| B7 | `int64 / int64` | `float64` | Raises; explicit cast required |
+| B8 | `int32_tensor + 3.5` | Promotes to `float64` | Raises `TypeError` |
+| B9 | Scalar out of tensor range | Promotes to a wider dtype | Raises `TypeError` |
+| B10 | `float32` working precision | Operands widened to `float64`, then narrowed | Computed at declared precision |
+| B11 | `float32` overflow | NumPy and CUDA decline; falls back to Python | Produces `inf` natively |
+| B12 | CUDA integer arithmetic | Rejected in `_operand`; always falls back to Python | Executes natively |
+| B13 | CUDA `float32` subnormals | Flushed to zero | Gradual underflow required |
+| B14 | Fused `a*b+c` on CUDA | May contract to an FMA (one rounding) | Must preserve both roundings |
+| B15 | Explicit backend selection | May silently fall back to Python | Must execute or report unsupported |
 
 ### 10.2 What may depend on the old behaviour
 
-- **Code relying on `OverflowError`** as a signal that an integer computation
+- **Code relying on `OverflowError`** to signal that an integer computation
   left its range will stop receiving it. Wraparound is silent by design.
-- **Numerical results in `float32`** may change in the last ulp wherever an
-  evaluation strategy previously carried a binary64 intermediate across more
-  than one operation. Per single operation, results will not change
-  ([section 5.5](#55-why-declared-precision-matters)).
-- **Tests asserting current behaviour.** No test currently asserts
-  `OverflowError`; that was checked. Tests that compare a backend against the
-  Python backend rather than against specified values
-  ([section 9.4](#94-tests-that-will-need-revisiting)) will need review.
-- **Benchmark baselines.** Stored measurements predate the change. Numbers
-  taken before and after are not comparable, because the fallbacks being
-  removed are a large part of what the current numbers measure.
+- **Code relying on `ZeroDivisionError`** from floating division will now
+  receive `inf` or `nan` and must check explicitly.
+- **Code mixing `int64` with floats**, or dividing `int64`, now needs an
+  explicit cast.
+- **`float32` results** may change in the last ulp wherever an evaluation
+  strategy previously carried a binary64 intermediate across more than one
+  operation. Per single operation they will not change
+  ([section 5.5.1](#551-a-single-widened-operation-is-not-observably-different)).
+- **Benchmark baselines.** Measurements taken before this refactor are not
+  comparable with measurements after it, because the conversions and fallbacks
+  being removed are a large part of what the current numbers measure.
 
-### 10.3 What has not happened
+*Verified:* no test currently asserts `OverflowError`, and none asserts
+`ZeroDivisionError`.
 
-**No implementation change has been made.** At the time of writing, the
-package behaves as the "Current behaviour" column describes. This document
-records an approved target, and an implementation task will enforce it.
+### 10.3 Implementation paths requiring review
+
+**None of these has been modified.** They are listed so the implementation
+agent knows the surface.
+
+| Path | Why |
+| --- | --- |
+| `tensors/dtype.py` — `result_dtype`, `_integer_scalar_result_dtype`, `_INTEGER_LIMITS` | Promotion must be rewritten to [section 6.2](#62-the-promotion-table). The value-dependent scalar promotion contradicts [section 6.4](#64-what-is-not-promoted). |
+| `tensors/backend/numpy/conversion.py` — `_operand`, `_storage` | Widens floats to `float64`; computes integers in `object` arrays; declines on narrowing overflow via a `bool(numpy.any(...))` check. |
+| `tensors/backend/cuda/conversion.py` — `_operand`, `_storage` | Refuses integer dtypes; widens floats to `float64`; `bool(cupy.any(...))` forces a host synchronisation. |
+| `tensors/backend/{python,numpy,cuda}/kernels/arithmetic/` | `add`, `subtract`, `multiply`, `divide` for all three backends. |
+| `tensors/operations/arithmetic/divide.py` | Holds the operation-layer `ZeroDivisionError` guard (three sites). |
+| `tensors/backend/policy.py` | Workload thresholds decide which path runs; under P3 the path must not change results, and under P4 it must not override explicit selection. |
+| `tensors/backend/cuda/kernels/fusion/fused_elementwise.py`, `fused_elementwise_backward.py` | `cupy.RawKernel(source, name)` with no options permits FMA contraction (B14). |
+| `tensors/backend/config.py`, `types.py` | Backend selection; strict mode has no representation today. |
+| `tests/backend/_support.py` — `NumPyParityTestCase` | Encodes Python-as-reference ([section 9.5](#95-the-existing-parity-helper)). |
+| `docs/backends.md`, `docs/autodiff.md` | Updated alongside this document. |
+
+### 10.4 Implementation sequence
+
+Reviewable stages, each leaving the tree working:
+
+1. **Establish specification-derived conformance tests.** Written from this
+   document, with expectations in the test. They will fail; that is the point.
+2. **Implement dtype and integer arithmetic semantics.** Wraparound for all
+   five integer dtypes; remove the `object`-array path; enable native CUDA
+   integer kernels.
+3. **Implement floating-point arithmetic semantics.** Declared precision; IEEE
+   overflow; gradual underflow, including the inline-PTX `float32` path on
+   CUDA ([section 5.4](#54-subnormals-gradual-underflow-is-required)).
+4. **Implement promotion and division rules.** The table in
+   [section 6.2](#62-the-promotion-table), scalar rule S, IEEE division by
+   zero, integer true division rule D. Remove the host-synchronising zero
+   check.
+5. **Enforce backend execution requirements.** Strict versus automatic
+   selection, the unsupported-operation error, and the observability mechanism
+   ([backends.md](backends.md)).
+6. **Verify graph and fusion equivalence.** Fused output must equal unfused
+   output bitwise; compile fusion kernels so contraction cannot occur.
+7. **Run the full test suite and the benchmarks.**
+
+**Stage 7 must compare against the comprehensive benchmark baseline collected
+before this refactor**, using the suite described in
+[`benchmarks/README.md`](../benchmarks/README.md). Note that pre-refactor and
+post-refactor numbers measure different code paths, so the comparison is for
+detecting regressions and quantifying the change, not for claiming a
+speed-up.
+
+**No performance target is set here, and no improvement is claimed.** The
+conversions and fallbacks being removed are expected to cost something, but
+what they cost is a measurement, not a prediction.
 
 ---
 
 ## 11. Open specification questions
 
-These must be decided before the behaviour they govern is implemented or
-changed. An implementation task must treat each as **do not touch**.
+Each must be decided before the behaviour it governs is implemented. An
+implementation agent must treat these as **do not touch**.
 
-### O1. Mixed-dtype promotion
+Every question that the previous revision left open because the implementation
+behaved differently has now been decided: integer wraparound extends to all
+five integer dtypes ([section 4](#4-integer-arithmetic)), division by zero is
+resolved ([section 7.2](#72-division-by-zero)), integer true division is
+resolved ([section 7.3](#73-integer-true-division)), promotion is resolved
+([section 6](#6-result-dtypes-and-promotion)), and CUDA subnormal handling is
+resolved as a requirement with an achievable implementation
+([section 5.4](#54-subnormals-gradual-underflow-is-required)).
 
-What is the result dtype of an operation on operands of different dtypes?
-Sub-questions: `int32` with `int64`; an integer dtype with a floating dtype;
-`float32` with `float64`; whether promotion depends on operand values; how
-tensor–scalar arithmetic, where the scalar has no declared dtype, is treated;
-and whether the existing `result_dtype` behaviour is retained, amended or
-replaced. See [section 6.2](#62-undecided-mixed-dtypes).
+### O1. Floor division
 
-### O2. Division by zero
+What operation provides integer-valued division, what is its result dtype, how
+does it round (toward zero, or toward negative infinity), what happens at
+`min // -1`, and what happens on a zero denominator? A new public operator or
+method would be an API addition and is out of scope here
+([section 7.4](#74-floor-division-is-a-separate-operation)).
 
-Does floating division by zero continue to raise `ZeroDivisionError`, or adopt
-the IEEE 754 result (signed infinity, and NaN for `0/0`)? If IEEE semantics
-are adopted, are the exception flags observable, and what happens to the
-existing guard in the operation layer? See
-[section 7.2](#72-undecided-division-by-zero).
+### O2. Remainder and divmod
 
-### O3. Integer division
+Not currently public. If added, its sign convention must be specified together
+with floor division, since the two are linked by the division identity.
 
-What does `/` on two integer tensors mean, and what dtype does it produce?
-Is a separate floor-division operation wanted? What happens on division by
-zero under integer semantics, where there is no infinity to return? See
-[section 7.3](#73-undecided-integer-division).
+### O3. Relaxed numerical mode
 
-### O4. Subnormal handling on CUDA
+[Section 8.5](#85-graph-optimisation) forbids fusion from changing results. If
+a faster, explicitly-opted-in mode permitting FMA contraction or reassociation
+is wanted later, its selection mechanism, scope and documentation are
+undecided. It is not introduced now.
 
-Must the CUDA backend implement IEEE gradual underflow, or is flush-to-zero an
-accepted, documented deviation? This is the only measured source of
-cross-backend disagreement ([section 9.3](#93-what-cross-backend-equality-is-achievable)).
-Deciding it requires knowing whether the device kernels can be built with
-denormal support at acceptable cost, and whether the affected magnitudes
-(below `1.1754944e-38` in `float32`) matter for the workloads this package
-serves.
+### O4. IEEE exception flag exposure
 
-### O5. Dtypes outside this contract
+[Section 7.2](#ieee-exception-flags-are-not-public-api) states that the flags
+are not public API in this refactor. Whether to expose them later — as an
+accessor, a context manager, or a trapping mode — is undecided.
 
-`int16`, `int8` and `uint8` are defined in `tensors/dtype.py` but not covered
-here. `uint8` in particular is **unsigned**, so the wraparound rule of
-[section 4.2](#42-the-wraparound-rule) does not apply to it as written: the
-unsigned form is \(r \bmod 2^{w}\).
+### O5. Unsigned dtypes beyond `uint8`
 
-### O6. Fused evaluation
-
-The fusion path evaluates several operations as one kernel. Whether a fused
-kernel must produce the same result as the equivalent sequence of individual
-operations — which forbids retaining a wider intermediate, and forbids
-contracting a multiply and an add into a fused multiply-add — is not decided
-here. [Section 5.5(b)](#55-why-declared-precision-matters) shows that the
-difference is observable in 25% of random `float32` triples, so this is a
-question with consequences, not a formality.
-
-### O7. Scope of "no fallback"
-
-[Section 8.3](#83-legitimate-fallback) requires a fallback to be explicit and
-observable, but does not define the mechanism. Whether that means a warning, a
-counter, a structured diagnostic, or a benchmark-visible label is undecided.
+`uint8` is the only public unsigned dtype. If `uint16`, `uint32` or `uint64`
+were added, the promotion table would need new rows, and `uint64` with `int64`
+would have no common public integer dtype — which P-e would turn into a
+required cast.
 
 ---
 
 ## Related documents
 
-- [Numerical backends](backends.md) — backend selection, native storage,
-  kernel coverage, the workload policy and the current behaviour contract.
-- [Tensor memory model](memory-model.md) — logical shape, strides and physical
+- [Numerical backends](backends.md) — backend selection, strict and automatic
+  execution, operation support, fallback, observability and storage residency.
+- [Automatic differentiation](autodiff.md) — graph execution, replay, and the
+  numerical equivalence required of fusion.
+- [Tensor memory model](memory-model.md) — logical shape, strides, physical
   storage.
 - [Package structure](package-structure.md) — where operations, dispatch and
-  the backend kernels live.
+  backend kernels live.
+- [Benchmarks](../benchmarks/README.md) — the measurement suite and the
+  baseline the refactor is compared against.

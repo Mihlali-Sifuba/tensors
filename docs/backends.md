@@ -96,6 +96,122 @@ Calling `ts.random.seed` resets independent backend streams without changing
 the provider-global RNGs. See [Parameter initialization](initialization.md) for
 the mathematical definitions and reproducibility contract.
 
+## Execution requirements
+
+> **Status: approved target contract, awaiting implementation.** This section
+> specifies what backend selection **will** mean. The sections that follow it
+> describe current behaviour, which differs. Numerical semantics are specified
+> in [Arithmetic semantics](arithmetic-semantics.md); this section covers only
+> *where* and *whether* an operation executes.
+
+Selecting a backend explicitly is an **execution requirement**, not a
+performance preference.
+
+### Vocabulary
+
+Four questions are distinct and are answered separately.
+
+| Term | Question | Answer |
+| --- | --- | --- |
+| **Availability** | Is the backend usable in this environment? | `ts.available_backends()` |
+| **Operation support** | Can this backend execute this operation, at this dtype, conformingly? | per operation and dtype |
+| **Fallback** | May another backend execute it instead? | only under automatic selection |
+| **Execution location** | Where did this operation actually run, and where does its result live? | observable; see below |
+
+A backend being *available* does not imply it *supports* every operation.
+An operation being supported does not imply it *executed* there — unless
+selection was explicit.
+
+### Explicit selection
+
+```python
+ts.set_backend("cuda")      # or "numpy", or a scoped use_backend(...)
+```
+
+Under explicit selection, for a **supported** operation:
+
+- the operation **must execute using that backend's implementation**;
+- it **must not** silently invoke another backend's kernel, including the
+  Python arithmetic kernel;
+- if it cannot execute correctly there, it **must raise a clear
+  unsupported-operation error** naming the operation, the dtype and the
+  backend.
+
+The same rule applies to explicit NumPy selection.
+
+An error is the correct outcome when a backend cannot conform. A silent
+fallback denies the caller the one thing explicit selection was for: knowing
+where the work ran. Where a backend currently cannot conform, and what must be
+implemented to close the gap, is recorded in
+[Arithmetic semantics §5.4](arithmetic-semantics.md#54-subnormals-gradual-underflow-is-required)
+and [§8.4](arithmetic-semantics.md#84-when-a-backend-cannot-conform).
+
+Workload-size policy must not override explicit selection. A small tensor is
+still executed on the selected backend; the policy may decide *how*, never
+*where*.
+
+### Automatic selection
+
+```python
+ts.set_backend("auto")
+```
+
+Automatic selection may use documented workload policies and may fall back to
+another backend, **provided the executing path satisfies the numerical
+contract**. Fallback is a performance and coverage decision; it is never a
+licence to produce a different result.
+
+A fallback taken because a backend's arithmetic differs from Python's is not
+legitimate under the new contract. That is the situation the contract removes.
+
+### Observability
+
+Actual execution location must be observable, so that a fallback is visible
+rather than inferred from a timing anomaly, and so that a conformance test can
+distinguish "computed correctly here" from "computed correctly somewhere else".
+
+**The public API has no such mechanism today.** `ts.available_backends()`,
+`ts.get_backend()`, `ts.set_backend()` and `ts.use_backend()` report *selection*
+only; nothing reports where an operation ran. Storage type is an indirect and
+incomplete proxy: a result in `PythonStorage` after selecting CUDA implies a
+fallback, but a device-resident result does not prove every step ran on the
+device.
+
+The required API addition is therefore stated rather than invented here:
+
+> **Required.** A way to observe, for a completed operation or a scoped block,
+> which backend actually executed it, and whether a fallback occurred. The
+> benchmark harness needs this per case; a conformance test needs it per
+> operation.
+
+Its exact shape — a context manager, a counter, a structured record, or a
+per-result attribute — is an open API decision and is **not** settled by this
+document. What is settled is that a fallback must not be silent.
+
+The benchmark suite already records where each case executes and can consume
+such a mechanism once it exists; see [`benchmarks/README.md`](../benchmarks/README.md).
+
+### Storage residency and transfers
+
+- An operation's result is stored in its **declared dtype**
+  ([Arithmetic semantics §3.4](arithmetic-semantics.md#34-storage-residency-is-not-semantics)).
+- Under explicit CUDA selection, a supported operation's result is
+  **device-resident**. It must not be materialised on the host as a
+  side effect of arithmetic.
+- **Intentional host-facing operations transfer by definition.** `tolist()`,
+  `item()`, printing, and comparison to a Python value all read values on the
+  host; that transfer is the caller's request and is expected.
+- **Ordinary arithmetic must not transfer.** A device-to-host copy during
+  `a + b`, or a host synchronisation to inspect operand values, is a defect
+  under this contract.
+
+The second point has teeth today: the CUDA divide kernel evaluates
+`bool(cupy.any(right_array == 0))` to detect a zero denominator, which forces a
+host synchronisation on **every** division, and `_storage` does the same to
+detect float overflow. Both exist to reproduce Python's exception behaviour,
+and both are removed by
+[Arithmetic semantics §7.2](arithmetic-semantics.md#72-division-by-zero).
+
 ## Kernel coverage and fallback
 
 Each backend owns its own kernels. `tensors/backend/python`, `.../numpy`, and
@@ -108,6 +224,13 @@ fused optimizer updates. Convolution and its VJPs use bounded matrix-product
 tiles, so grouped and dilated kernels stay device-resident without materializing
 an unbounded receptive-field matrix. Float32 convolution remains float32 on
 accelerated backends; mixed inputs use the public result dtype.
+
+> **Changing.** The Python implementation currently defines shape, dtype,
+> error, and differentiation semantics, and the paragraph below describes that
+> arrangement. Under the approved contract it stops being the definition:
+> [Arithmetic semantics](arithmetic-semantics.md) is the authority, and the
+> declining and falling back described here is removed for arithmetic. See
+> [Execution requirements](#execution-requirements) above.
 
 The Python implementation defines shape, dtype, error, and differentiation
 semantics. `tensors/backend/dispatch` holds one `execute_*` entry point per
@@ -189,14 +312,22 @@ methodology.
 
 ## Behaviour contract
 
-Exact integer results and structural behaviour must match the Python reference.
-Floating-point results are expected to agree within dtype-appropriate
-tolerances. Changing a backend is an execution choice, not a change to the
-mathematical API.
+**Current behaviour.** Exact integer results and structural behaviour match the
+Python reference. Floating-point results are expected to agree within
+dtype-appropriate tolerances. Changing a backend is an execution choice, not a
+change to the mathematical API.
 
-This describes the arrangement in force today, in which the Python backend
-defines the semantics the other two reproduce. That arrangement is being
-replaced: see [Arithmetic semantics](arithmetic-semantics.md), the approved
-target contract in which the declared dtype and a written specification define
-an operation's behaviour and no backend is the authority. That document is
-awaiting implementation and does not describe current behaviour.
+**Approved target contract.** The declared dtype and a written specification
+define an operation's behaviour; no backend is the semantic authority, the
+Python backend included. Results, result dtypes and exceptional behaviour are
+identical across backends, and for elementary arithmetic that identity is
+required **bitwise** rather than within a tolerance, because IEEE 754 requires
+those operations to be correctly rounded. The full contract, the breaking
+changes it introduces and the conformance requirements are in
+[Arithmetic semantics](arithmetic-semantics.md), which is awaiting
+implementation and does not describe current behaviour.
+
+Changing a backend remains an execution choice and not a change to the
+mathematical API — but under the target contract, *choosing* one explicitly is
+a requirement about where execution happens, not only a hint. See
+[Execution requirements](#execution-requirements).
