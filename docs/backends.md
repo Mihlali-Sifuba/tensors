@@ -262,11 +262,26 @@ semantics for the operations outside the arithmetic contract; for `+`, `-`,
 [Arithmetic semantics](arithmetic-semantics.md), and their dispatch is
 described under [Execution requirements](#execution-requirements) above.
 `tensors/backend/dispatch` holds one `execute_*` entry point per
-operation; for every operation other than those four, that entry point applies
-the workload policy, calls the selected backend's kernel, and runs the Python
-reference itself when the policy declines or the kernel does. The four
-arithmetic operations share `dispatch/arithmetic/_execution.py`, which consults
-no policy: it calls the selected backend and raises if that backend declines.
+operation; for most operations that entry point applies the workload policy,
+calls the selected backend's kernel, and runs the Python reference itself when
+the policy declines or the kernel does. The four arithmetic operations share
+`dispatch/arithmetic/_execution.py`, which consults no policy: it calls the
+selected backend and raises if that backend declines.
+
+**Forward power** sits between the two. It no longer consults the workload
+policy, so `t ** 2`, `t ** t` and `2 ** t` execute on the selected backend at
+every size, one element included. It still answers a declining kernel with the
+Python reference, because power's kernels use a decline for three different
+things: a domain error, which the array kernels see only as a non-finite
+result from finite operands; CUDA's missing integer exponentiation; and an
+exact integer power that leaves the declared dtype. Raising on a decline would
+turn `0 ** -1` and `(-2.0) ** 0.5` into an unsupported-operation error instead
+of the documented `ValueError`, and would stop `2 ** int32_tensor` working on
+CUDA. Closing that means teaching the array kernels to raise their own domain
+errors and giving CUDA a native integer path. Until then **forward power
+guarantees execution location for the cases its provider supports, and power's
+backward pass is unchanged** — its complete execution contract is not
+finished.
 
 Their vector-Jacobian products do the same, through `dispatch/_selected.py`.
 Where a VJP's computation shares an entry point with something outside the

@@ -11,9 +11,11 @@ on it is indistinguishable from having named that backend. There is no
 workload-size threshold and no small-tensor case: where an operation runs is
 decided by the selection alone, never by the shape of its operands.
 
-Only the four contract operations dispatch through here. Power keeps the older
-arrangement, where declining to the reference is still how a kernel reports
-that it cannot produce the required result.
+Only the four contract operations dispatch through here. Forward power no
+longer consults the workload policy either, but keeps its own dispatcher: its
+kernels use a decline to signal a domain error as well as an unsupported
+operand, so it cannot raise on one without losing the other. See
+``dispatch/arithmetic/power.py``.
 """
 
 from __future__ import annotations
