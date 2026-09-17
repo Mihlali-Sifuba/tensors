@@ -150,7 +150,15 @@ Each format also represents signed zeros, signed infinities and NaNs.
 A binary format with precision \(p\) represents every integer in
 \([-2^{p},\, 2^{p}]\) exactly, and \(2^{p}+1\) is the first positive integer it
 cannot. This bound decides integer–floating promotion
-([section 6.3](#63-integer-with-floating)).
+([section 6.3](#63-integer-with-floating)), because promotion must accommodate
+**every** value of the operand dtype.
+
+The bound is sufficient, not necessary, for a *particular* integer. Beyond
+\(2^{p}\) an integer is still exact when it has enough trailing zero bits:
+\(2^{25}\) is exact in `float32` and \(2^{54}\) is exact in `float64`,
+while \(2^{24}+1\) and \(2^{53}+1\) are not. That distinction matters for a
+single scalar literal, where [rule S4](#65-python-scalars) applies the exact
+test rather than the interval.
 
 | Integer dtype | Exact in `float32` (\(2^{24}\)) | Exact in `float64` (\(2^{53}\)) |
 | --- | --- | --- |
@@ -585,18 +593,36 @@ must supply a typed operand or cast the tensor.
 > infinity — raises. Rounding to a subnormal, or underflowing to zero, is
 > ordinary rounding and is permitted.
 >
-> **S4 — Python `int` with a floating tensor.** Converts only when the value
-> is **exactly representable** in the target format, which is the
-> precision-preservation rule of [section 3.3](#33-exact-integer-representation-in-floating-formats)
-> applied to a single value: \(|n| \le 2^{24}\) for `float32`, \(|n| \le
-> 2^{53}\) for `float64`. A larger magnitude raises rather than silently
-> rounding the integer.
+> **S4 — Python `int` with a floating tensor.** Converts **if and only if
+> that particular integer is exactly representable** in the target format. An
+> integer that is not raises, rather than being silently rounded.
+>
+> Writing \(|n| = m \cdot 2^{k}\) with \(m\) odd, a non-zero integer \(n\)
+> is exactly representable when \(m\) needs at most \(p\) bits — \(p = 24\)
+> for `float32`, \(p = 53\) for `float64` — and \(|n|\) does not exceed the
+> format's largest finite value. Equivalently: converting \(n\) to the target
+> format and back yields \(n\).
+>
+> **The interval \([-2^{p},\, 2^{p}]\) is sufficient but not necessary.**
+> Every integer inside it is representable, which is why
+> [section 3.3](#33-exact-integer-representation-in-floating-formats) uses it
+> to decide *dtype* promotion, where every value of the operand dtype must be
+> accommodated. A *single* integer outside it may still be representable if it
+> has enough trailing zero bits: \(2^{25}\) is exactly representable in
+> `float32` because its odd part is \(1\), while \(2^{24}+1\) is not because
+> its odd part needs 25 bits.
 
 Only S3 rounds. S1, S2 and S4 require the value to be representable exactly,
 because in those three cases rounding would discard information the caller
 wrote down literally: an integer target cannot hold a fraction, and an integer
-too large for a floating target is precisely the precision loss
+a floating target cannot represent is precisely the precision loss
 [section 6.3](#63-integer-with-floating) exists to prevent.
+
+Note the asymmetry between S4 and the promotion table. S4 asks whether *this
+integer* is representable; promotion asks whether *every value of a dtype* is.
+A `float32` tensor therefore accepts the scalar \(2^{25}\), while `int32`
+with `float32` still promotes to `float64` — because some `int32` values are
+not representable in `float32`, even though that one is.
 
 The result dtype is the tensor's dtype in every case. Using the scalar's
 *value* here is not a violation of [section 6.4](#64-what-is-not-promoted):
@@ -610,10 +636,14 @@ is a single literal, and its value is the only information it carries.
 | `float32_tensor + 1e-60` | S3 — underflows to `0.0`, ordinary rounding | `float32` |
 | `float32_tensor + float("inf")` | S3 — an infinity is representable | `float32` |
 | `float32_tensor + 1e300` | S3 — finite, but beyond `float32` range | raises `TypeError` |
-| `float32_tensor + 2` | S4 — \(2 \le 2^{24}\) | `float32` |
-| `float32_tensor + 2**24` | S4 — the largest exactly representable | `float32` |
-| `float32_tensor + (2**24 + 1)` | S4 — not exactly representable in `float32` | raises `TypeError` |
-| `float64_tensor + 2` | S4 — \(2 \le 2^{53}\) | `float64` |
+| `float32_tensor + 2` | S4 — exactly representable | `float32` |
+| `float32_tensor + 2**24` | S4 — the largest integer with every predecessor representable | `float32` |
+| `float32_tensor + (2**24 + 1)` | S4 — odd, needs 25 bits | raises `TypeError` |
+| `float32_tensor + 2**25` | S4 — odd part is \(1\); outside the interval, still exact | `float32` |
+| `float32_tensor + (2**25 + 1)` | S4 — odd, needs 26 bits | raises `TypeError` |
+| `float64_tensor + 2` | S4 — exactly representable | `float64` |
+| `float64_tensor + (2**53 + 1)` | S4 — odd, needs 54 bits | raises `TypeError` |
+| `float64_tensor + 2**54` | S4 — odd part is \(1\); outside the interval, still exact | `float64` |
 | `int32_tensor + 2` | S1 — within `int32` range | `int32` |
 | `int64_tensor + 1` | S1 — within `int64` range | `int64` |
 | `uint8_tensor + 255` | S1 — within `uint8` range | `uint8` |
@@ -873,6 +903,7 @@ correct by construction.
 | Mixed-dtype promotion | all 49 cells of [section 6.2](#62-the-promotion-table), including the four `cast` cells raising |
 | Promotion symmetry | `promote(a, b) == promote(b, a)` for all pairs |
 | Scalar conversion | every row of [section 6.5](#65-python-scalars), including the raising cases |
+| Scalar integer representability | integers on both sides of \(2^{p}\) for each floating dtype: \(2^{p}\), \(2^{p}+1\), \(2^{p+1}\), \(2^{p+1}+1\). A test asserting only the interval bound would wrongly reject \(2^{p+1}\) |
 | Floating specials | `inf`, `-inf`, `nan`, `+0.0`, `-0.0`, and their propagation |
 | Division by zero | the eight rows of [section 7.2](#72-division-by-zero); integer division by zero raising |
 | Subnormals | subnormal operands **and** subnormal results, on every backend |
