@@ -53,6 +53,36 @@ def _product_over_denominator_power(
     return result
 
 
+def _denominator_has_zero(denominator: Tensor) -> bool:
+    """Whether an integer denominator contains a zero.
+
+    Integer division has no infinity to deliver, so this test is required and
+    section 7.2 keeps it. It runs only for integer operands: floating division
+    delivers the IEEE result and must never read its denominator, which on a
+    device would mean a host synchronisation on every call.
+
+    The test asks the native buffer rather than materialising the tensor, so
+    a device denominator costs one synchronisation and no transfer. A view is
+    resolved to its logical values first, so elements the denominator does not
+    address cannot make it raise.
+    """
+    storage = denominator._logical_storage_for(denominator._storage.kind)
+    buffer = storage.buffer
+    if getattr(buffer, "any", None) is None:
+        return any(value == 0 for value in buffer)
+    return bool((buffer == 0).any())
+
+
+def _is_integer_division(left: Tensor, right) -> bool:
+    """Whether both operands of a division are integers."""
+    if left.dtype.kind != "integer":
+        return False
+    right_dtype = getattr(right, "dtype", None)
+    if right_dtype is not None:
+        return right_dtype.kind == "integer"
+    return True
+
+
 class Div(Operation):
     """Element-wise division — forward and backward."""
 
@@ -64,16 +94,18 @@ class Div(Operation):
         if not isinstance(b, (int, float, Tensor)):
             raise TypeError(f"Unsupported: {type(b)}")
         dtype, other = resolve_binary(a.dtype, b, division=True)
-        if isinstance(b, (int, float)):
-            if b == 0:
+        if _is_integer_division(a, b):
+            if isinstance(b, Tensor):
+                if _denominator_has_zero(b):
+                    raise ZeroDivisionError("Division by zero")
+            elif other == 0:
                 raise ZeroDivisionError("Division by zero")
-            accelerated = execute_divide(a, other, dtype=dtype, output_shape=a.shape)
-            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
         if isinstance(b, Tensor):
             shape = a.shape.broadcast_with(b.shape)
             accelerated = execute_divide(a, b, dtype=dtype, output_shape=shape)
             return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
-        raise TypeError(f"Unsupported: {type(b)}")
+        accelerated = execute_divide(a, other, dtype=dtype, output_shape=a.shape)
+        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
@@ -231,7 +263,10 @@ divide = Div().forward
 
 def divide_scalar(numerator: Scalar, denominator: Tensor) -> Tensor:
     """Return ``numerator / denominator`` for a scalar left operand."""
-    dtype = resolve_binary(denominator.dtype, numerator, division=True)[0]
+    dtype, converted = resolve_binary(denominator.dtype, numerator, division=True)
+    if denominator.dtype.kind == "integer" and _denominator_has_zero(denominator):
+        raise ZeroDivisionError("Division by zero")
+    numerator = converted
     accelerated = execute_divide(
         numerator, denominator, dtype=dtype, output_shape=denominator.shape
     )
