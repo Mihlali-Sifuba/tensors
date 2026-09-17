@@ -6,13 +6,12 @@ helper consults no workload-size policy and never answers with another
 backend's kernel: it runs where the selection says, or it reports that it
 cannot.
 
-The four arithmetic operations use this through
-:mod:`tensors.backend.dispatch.arithmetic._execution`; their vector-Jacobian
-products use it through the entry points named ``execute_vjp_*``, which exist
-alongside the older entry points rather than replacing them. The older ones
-still serve operations outside the arithmetic contract, which keep the
-workload policy and the reference fallback until that contract is extended to
-them.
+The four arithmetic operations each own their dispatch module and repeat this
+decision inline. Their vector-Jacobian products use this helper instead,
+through the entry points named ``execute_vjp_*``, which exist alongside the
+older entry points rather than replacing them. The older ones still serve
+operations outside the arithmetic contract, which keep the workload policy and
+the reference fallback until that contract is extended to them.
 """
 
 from __future__ import annotations

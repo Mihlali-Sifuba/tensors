@@ -1,11 +1,21 @@
-"""Dedicated arithmetic dispatch for multiply.
+"""Dispatch for multiply: the selection alone decides where it runs.
 
-Explicit selection decides where this runs; see :mod:`_execution`.
+`docs/backends.md`, *Execution requirements*, makes the backend selection an
+execution requirement rather than a preference. Multiplication executes on the
+selected backend's kernel, never on another's, and a backend that cannot
+produce the required result raises instead of handing the work away quietly.
+No workload-size policy applies: a one-element multiply runs where a
+million-element multiply runs.
+
+``"auto"`` is not a third behaviour. It resolves to a concrete backend when it
+is selected — NumPy when NumPy is installed, Python otherwise — so by the time
+a call arrives the selection names one backend.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.dispatch.arithmetic._execution import execute_arithmetic
+from typing import TYPE_CHECKING, Any
+from tensors.backend.config import BackendOperationUnsupportedError, get_backend
+from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
@@ -21,7 +31,21 @@ def execute_multiply(
     dtype: DataType,
     output_shape: tuple[int, ...],
 ) -> Storage:
-    """Run multiply on the selected backend."""
-    return execute_arithmetic(
-        "multiply", left, right, dtype=dtype, output_shape=output_shape
-    )
+    """Run multiply on the selected backend, or report that it cannot run there."""
+    selected = get_backend()
+    if selected == "python":
+        from tensors.backend.python.kernels.arithmetic.multiply import (
+            multiply as reference,
+        )
+
+        return reference(left, right, dtype=dtype, output_shape=output_shape)
+
+    backend: Any = load_backend(selected)
+    result = backend.multiply(left, right, dtype=dtype, output_shape=output_shape)
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute multiply at dtype "
+            f"{dtype.name} conformingly. Arithmetic runs on the selected "
+            f"backend; select another backend to run it elsewhere."
+        )
+    return result

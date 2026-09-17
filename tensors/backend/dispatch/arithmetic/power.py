@@ -10,9 +10,10 @@ power runs where a million-element power runs.
 is selected — NumPy when NumPy is installed, Python otherwise — so by the time
 a call arrives the selection names one backend.
 
-This does not use :func:`execute_arithmetic`, which raises when a provider
-declines. Power's kernels use a decline to mean three different things, and
-two of them are behaviour this dispatcher must preserve:
+This does not raise when a provider declines, which is where it parts company
+with the four contract operations. Power's kernels use a decline to mean three
+different things, and two of them are behaviour this dispatcher must
+preserve:
 
 - **A domain error.** ``0 ** -1`` and ``(-2.0) ** 0.5`` are undefined, and an
   overflowing result is an ``OverflowError``. The array kernels detect these

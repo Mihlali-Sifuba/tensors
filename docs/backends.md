@@ -264,9 +264,10 @@ described under [Execution requirements](#execution-requirements) above.
 `tensors/backend/dispatch` holds one `execute_*` entry point per
 operation; for most operations that entry point applies the workload policy,
 calls the selected backend's kernel, and runs the Python reference itself when
-the policy declines or the kernel does. The four arithmetic operations share
-`dispatch/arithmetic/_execution.py`, which consults no policy: it calls the
-selected backend and raises if that backend declines.
+the policy declines or the kernel does. Each of the four arithmetic
+operations owns its dispatcher — `dispatch/arithmetic/add.py` and its three
+siblings — and each consults no policy: it resolves the selection once, calls
+that backend's own kernel by name, and raises if the kernel declines.
 
 **Forward power** sits between the two. It no longer consults the workload
 policy, so `t ** 2`, `t ** t` and `2 ** t` execute on the selected backend at
