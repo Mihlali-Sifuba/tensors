@@ -78,10 +78,31 @@ class ForwardPowerExecutesOnTheSelectedBackend(unittest.TestCase):
         self._assert_runs_on("auto", expected="numpy")
 
     def test_automatic_selection_without_numpy_executes_on_python(self):
+        """``auto`` falls back to Python when NumPy is not installed.
+
+        Everything happens inside one patched block. The simulated absence is
+        asserted first, so the test fails loudly if the patch ever stops
+        reaching :func:`_resolve_backend`, rather than quietly measuring a
+        machine that has NumPy after all. Resolution and execution are checked
+        in the same context for the same reason: a patch that covered only the
+        resolution check would leave the exponentiation running on NumPy.
+        """
         with patch.object(config, "_numpy_available", return_value=False):
+            self.assertNotIn("numpy", ts.available_backends())
+
             with ts.use_backend("auto"):
                 self.assertEqual(ts.get_backend(), "python")
-            self._assert_runs_on("auto", expected="python")
+
+                for size in SIZES:
+                    with self.subTest(size=size):
+                        base = ts.full((size,), 2.0, dtype=ts.float64)
+                        exponent = ts.full((size,), 3.0, dtype=ts.float64)
+                        for result in (
+                            base**2.0,  # tensor ** scalar
+                            base**exponent,  # tensor ** tensor
+                            2.0**exponent,  # scalar ** tensor
+                        ):
+                            self.assertEqual(storage_name(result), "PythonStorage")
 
 
 @requires_numpy
