@@ -45,6 +45,43 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
     return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
 
 
+def sum_to_shape_on_selected_backend(
+    gradient: Tensor, shape: tuple[int, ...]
+) -> Tensor:
+    """Reduce a broadcast gradient, on the backend that was selected.
+
+    Same reduction as :func:`sum_to_shape`, under the execution contract of
+    `docs/backends.md`: no workload-size policy decides where it runs, and a
+    backend that cannot perform it raises rather than letting Python answer.
+    The addition and subtraction VJPs use this one, because `+` and `-` are
+    inside the arithmetic contract; the operations outside it still use
+    :func:`sum_to_shape`.
+    """
+    if gradient.shape == shape:
+        return gradient
+    if len(shape) > gradient.ndim:
+        raise ValueError(f"Cannot reduce gradient shape {gradient.shape} to {shape}")
+    from tensors.backend import execute_vjp_sum_to_shape
+
+    accelerated = execute_vjp_sum_to_shape(gradient, shape)
+    return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
+
+
+def negate_on_selected_backend(gradient: Tensor) -> Tensor:
+    """Negate a gradient on the backend that was selected.
+
+    The subtraction VJP negates the upstream gradient for its right operand,
+    which puts that negation inside the arithmetic contract. Forward negation
+    is a different operation and keeps its own dispatch.
+    """
+    from tensors.backend import execute_vjp_negate
+    from tensors.dtype import negation_dtype
+
+    dtype = negation_dtype(gradient.dtype)
+    accelerated = execute_vjp_negate(gradient, dtype=dtype)
+    return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=gradient.shape)
+
+
 def sum_products_to_shape(
     gradient: Tensor, factor: Tensor, shape: tuple[int, ...]
 ) -> Tensor:

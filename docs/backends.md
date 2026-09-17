@@ -266,7 +266,15 @@ operation; for every operation other than those four, that entry point applies
 the workload policy, calls the selected backend's kernel, and runs the Python
 reference itself when the policy declines or the kernel does. The four
 arithmetic operations share `dispatch/arithmetic/_execution.py`, which consults
-no policy: it calls the selected backend and raises if that backend declines. Operations therefore receive a result, not a decision: the
+no policy: it calls the selected backend and raises if that backend declines.
+
+Their vector-Jacobian products do the same, through `dispatch/_selected.py`.
+Where a VJP's computation shares an entry point with something outside the
+contract — the broadcast reduction is also used by `power`, `where` and the
+losses, and negation is also a forward operation — a second entry point named
+`execute_vjp_*` carries the strict policy and the original keeps the old one.
+Both call the same kernel; they differ only in what they do when the workload
+is small or the kernel declines. Operations therefore receive a result, not a decision: the
 choice of fallback belongs to dispatch. An array kernel declines for edge cases
 needing stable reference algorithms or exact Python integer intermediates. CuPy
 has no Python object dtype, so exact integer operations use the Python path;

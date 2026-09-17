@@ -50,6 +50,7 @@ from tensors.backend.dispatch.elementwise import (
     execute_minimum as execute_minimum,
     execute_minimum_gradient as execute_minimum_gradient,
     execute_negate as execute_negate,
+    execute_vjp_negate as execute_vjp_negate,
     execute_not_equal as execute_not_equal,
     execute_power_base_gradient as execute_power_base_gradient,
     execute_power_exponent_gradient as execute_power_exponent_gradient,
@@ -111,6 +112,7 @@ from tensors.backend.dispatch.reductions import (
     execute_reduce_variance_gradient as execute_reduce_variance_gradient,
     execute_sum_products_to_shape as execute_sum_products_to_shape,
     execute_sum_to_shape as execute_sum_to_shape,
+    execute_vjp_sum_to_shape as execute_vjp_sum_to_shape,
 )
 from tensors.backend.dispatch.linalg import (
     execute_matmul as execute_matmul,
@@ -257,6 +259,8 @@ __all__ = [
     "execute_subtract",
     "execute_sum_products_to_shape",
     "execute_sum_to_shape",
+    "execute_vjp_negate",
+    "execute_vjp_sum_to_shape",
     "execute_tan",
     "execute_tan_gradient",
     "execute_tanh",

@@ -570,26 +570,45 @@ pass does, so it is governed by the same rules, and
 [Numerical backends](backends.md) is the authoritative source for them. They
 are not restated here.
 
-> **Verified current behaviour.** Native backend VJPs are used for supported
-> reductions and elementwise operations, and numerically delicate inputs
-> return to the stable Python rules. A reverse pass may therefore execute on
-> the Python backend even when NumPy or CUDA was selected.
+> **Verified current behaviour, outside the arithmetic contract.** Native
+> backend VJPs are used for supported reductions and elementwise operations,
+> and numerically delicate inputs return to the stable Python rules. A reverse
+> pass for those operations may therefore execute on the Python backend even
+> when NumPy or CUDA was selected.
 
-> **Approved target contract, partly implemented.** Under **explicit** backend
-> selection, a supported operation's VJP must execute on the selected backend.
-> If it cannot execute conformingly there, it must raise a clear
-> unsupported-operation error. It must not silently run its VJP through the
-> Python backend. Under **automatic** selection, a conforming fallback is
-> permitted according to the documented execution policy.
+> **Approved target contract, implemented for `+`, `-`, `*` and `/`.** Under
+> **explicit** backend selection, a supported operation's VJP must execute on
+> the selected backend. If it cannot execute conformingly there, it must raise
+> a clear unsupported-operation error. It must not silently run its VJP
+> through the Python backend. Under **automatic** selection the resolved
+> backend is treated the same way, because `"auto"` resolves once and then
+> names a backend like any other selection.
 >
-> A VJP that is itself one of `+`, `-`, `*` or `/` now meets this, because
-> those four dispatch through the execution requirement. A VJP implemented by
-> another kernel does not. The `+`, `-` and `*` gradients run through a fused
-> multiply-and-reduce kernel whose dispatch still applies the workload
-> threshold: measured under explicit NumPy selection, a 4-element backward
-> pass returns `PythonStorage` and a 4096-element one returns `NumPyStorage`.
-> Closing this means extending the execution requirement past arithmetic,
-> which is separate work.
+> The four arithmetic VJPs meet this at every size. Their computations are
+> `sum_to_shape` for `+` and `-`, a negation for the right operand of `-`,
+> `sum_products_to_shape` for `*`, and ordinary division for `/`; each
+> dispatches through an entry point that consults no workload policy and
+> raises `BackendOperationUnsupportedError` rather than answering with another
+> backend's kernel.
+>
+> A VJP outside those four still does not. Operations such as `power`,
+> `where`, the losses and the extrema reduce their broadcast gradients through
+> `execute_sum_to_shape`, which keeps the workload threshold and the reference
+> fallback. Closing that means extending the execution requirement past
+> arithmetic, which is separate work, and is why two entry points exist for
+> the same reduction.
+
+> **Consequence worth knowing.** The array `sum_to_shape` and
+> `sum_products_to_shape` kernels decline when a gradient contains an infinity
+> or a NaN, and `sum_to_shape` also declines on subnormals, because their
+> scaled accumulation cannot carry those values. A decline used to mean a
+> quiet trip to the Python reference; for the arithmetic VJPs it now means an
+> error. So a reverse pass through `+`, `-` or `*` whose upstream gradient has
+> already become non-finite raises under NumPy or CUDA, where it previously
+> returned a non-finite gradient computed in Python. Verified on both
+> backends. Diverging training is the obvious way to meet this. Teaching those
+> kernels to handle non-finite operands natively would remove it without
+> weakening the contract, and is not part of this change.
 
 Two kinds of fallback are easy to confuse, and only one of them is a backend
 fallback:

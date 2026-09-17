@@ -5,7 +5,10 @@ from tensors.backend import execute_subtract
 from tensors.dtype import resolve_binary
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
-from tensors.operations._gradient_shaping import sum_to_shape
+from tensors.operations._gradient_shaping import (
+    negate_on_selected_backend,
+    sum_to_shape_on_selected_backend,
+)
 
 Scalar = Union[int, float]
 
@@ -33,11 +36,15 @@ class Sub(Operation):
     ) -> List[Optional[Tensor]]:
         left, right = inputs
         need_left, need_right = needs_input_grad
-        from tensors.operations.arithmetic.negate import negate
-
         return [
-            sum_to_shape(grad, left.shape) if need_left else None,
-            sum_to_shape(negate(grad), right.shape) if need_right else None,
+            sum_to_shape_on_selected_backend(grad, left.shape) if need_left else None,
+            (
+                sum_to_shape_on_selected_backend(
+                    negate_on_selected_backend(grad), right.shape
+                )
+                if need_right
+                else None
+            ),
         ]
 
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):

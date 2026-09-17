@@ -57,3 +57,6 @@ from tensors.backend.dispatch.reductions.sum_products_to_shape import (
 from tensors.backend.dispatch.reductions.sum_to_shape import (
     execute_sum_to_shape as execute_sum_to_shape,
 )
+from tensors.backend.dispatch.reductions.vjp_sum_to_shape import (
+    execute_vjp_sum_to_shape as execute_vjp_sum_to_shape,
+)
