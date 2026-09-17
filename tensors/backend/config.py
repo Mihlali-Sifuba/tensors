@@ -42,14 +42,6 @@ _backend_override: ContextVar[BackendName | None] = ContextVar(
     "tensors_backend_override",
     default=None,
 )
-# "auto" resolves to a concrete backend at selection time, which would
-# otherwise make an automatic selection indistinguishable from an explicit one.
-# Arithmetic dispatch needs the difference: explicit selection forbids the
-# fallbacks and workload policies automatic selection allows.
-_automatic_override: ContextVar[bool | None] = ContextVar(
-    "tensors_backend_automatic",
-    default=None,
-)
 
 
 def _numpy_available() -> bool:
@@ -102,17 +94,12 @@ def _resolve_backend(backend: str) -> BackendName:
     return cast(BackendName, normalized)
 
 
-def _is_automatic(backend: str) -> bool:
-    """Whether a selection leaves the backend choice to the library."""
-    return backend.strip().lower() == "auto"
-
-
-def _environment_default() -> tuple[BackendName, bool]:
+def _environment_default() -> BackendName:
     configured = os.environ.get("TENSORS_BACKEND", "python")
-    return _resolve_backend(configured), _is_automatic(configured)
+    return _resolve_backend(configured)
 
 
-_process_backend, _process_automatic = _environment_default()
+_process_backend = _environment_default()
 
 
 def get_backend() -> BackendName:
@@ -124,18 +111,6 @@ def get_backend() -> BackendName:
         return _process_backend
 
 
-def selection_is_automatic() -> bool:
-    """Whether the active selection was made with ``"auto"``.
-
-    An automatic selection permits workload policy and fallback; an explicit
-    one requires the operation to execute on the backend that was named.
-    """
-    if _backend_override.get() is not None:
-        return bool(_automatic_override.get())
-    with _backend_lock:
-        return _process_automatic
-
-
 def set_backend(backend: BackendSelection) -> None:
     """Set the process-wide default backend.
 
@@ -144,11 +119,9 @@ def set_backend(backend: BackendSelection) -> None:
     exit.
     """
     selected = _resolve_backend(backend)
-    automatic = _is_automatic(backend)
-    global _process_backend, _process_automatic
+    global _process_backend
     with _backend_lock:
         _process_backend = selected
-        _process_automatic = automatic
         loading._clear_backend_kernel_cache()
 
 
@@ -161,10 +134,8 @@ def use_backend(backend: BackendSelection) -> Iterator[None]:
     # instrumentation or tests) is observed on entry to the scoped backend.
     loading._clear_backend_kernel_cache()
     token = _backend_override.set(selected)
-    automatic_token = _automatic_override.set(_is_automatic(backend))
     try:
         yield
     finally:
-        _automatic_override.reset(automatic_token)
         _backend_override.reset(token)
         loading._clear_backend_kernel_cache()

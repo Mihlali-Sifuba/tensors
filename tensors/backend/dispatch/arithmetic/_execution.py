@@ -1,18 +1,15 @@
 """Arithmetic dispatch: where ``+``, ``-``, ``*`` and ``/`` execute.
 
-`docs/backends.md`, *Execution requirements*, makes explicit selection an
-execution requirement rather than a performance preference. Under an explicit
-selection a supported operation executes on that backend's kernel, never on
-another's, and a backend that cannot execute it raises instead of handing the
-work away quietly. Workload-size policy may decide *how* an operation runs, but
-never *where*, so the size thresholds do not apply here.
+The policy is deterministic: arithmetic executes on the selected backend, and
+on no other. `docs/backends.md`, *Execution requirements*, makes that a
+requirement rather than a preference, so a backend that cannot produce the
+required result raises instead of handing the work away quietly.
 
-Automatic selection keeps both freedoms. It may consult the workload policy and
-may run the Python reference instead, because after the arithmetic refactor
-that path satisfies the same numerical contract: integers wrap at their
-declared width and binary32 results are correctly rounded, the double rounding
-through binary64 being harmless for these four operations
-(`docs/arithmetic-semantics.md` section 5.3).
+``"auto"`` is not a third behaviour. It resolves to a concrete backend when it
+is selected — NumPy when NumPy is installed, Python otherwise — and from here
+on it is indistinguishable from having named that backend. There is no
+workload-size threshold and no small-tensor case: where an operation runs is
+decided by the selection alone, never by the shape of its operands.
 
 Only the four contract operations dispatch through here. Power keeps the older
 arrangement, where declining to the reference is still how a kernel reports
@@ -23,13 +20,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable
 
-from tensors.backend.config import (
-    BackendOperationUnsupportedError,
-    get_backend,
-    selection_is_automatic,
-)
+from tensors.backend.config import BackendOperationUnsupportedError, get_backend
 from tensors.backend.loading import load_backend
-from tensors.backend.policy import _shape_size, should_accelerate_elementwise
 from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
@@ -55,14 +47,9 @@ def execute_arithmetic(
     dtype: DataType,
     output_shape: tuple[int, ...],
 ) -> Storage:
-    """Execute one arithmetic operation where the selection requires."""
+    """Execute one arithmetic operation on the selected backend."""
     selected = get_backend()
     if selected == "python":
-        return _reference(name)(left, right, dtype=dtype, output_shape=output_shape)
-
-    if selection_is_automatic() and not should_accelerate_elementwise(
-        selected, _shape_size(output_shape)
-    ):
         return _reference(name)(left, right, dtype=dtype, output_shape=output_shape)
 
     backend: Any = load_backend(selected)

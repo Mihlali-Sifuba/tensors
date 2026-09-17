@@ -99,10 +99,12 @@ the mathematical definitions and reproducibility contract.
 ## Execution requirements
 
 > **Status: implemented for `+`, `-`, `*` and `/`.** Those four execute on the
-> selected backend or raise `BackendOperationUnsupportedError`. Every other
-> operation still follows the workload policy described further down, and may
-> still run the Python reference under an explicit selection. The
-> [observability](#observability) mechanism required below does not exist.
+> selected backend — including the backend `"auto"` resolved to — or raise
+> `BackendOperationUnsupportedError`. No workload-size threshold applies to
+> them under any selection. Every other operation still follows the workload
+> policy described further down, and may still run the Python reference under
+> an explicit selection. The [observability](#observability) mechanism required
+> below does not exist.
 > Numerical semantics are specified in
 > [Arithmetic semantics](arithmetic-semantics.md); this section covers only
 > *where* and *whether* an operation executes.
@@ -118,7 +120,7 @@ Four questions are distinct and are answered separately.
 | --- | --- | --- |
 | **Availability** | Is the backend usable in this environment? | `ts.available_backends()` |
 | **Operation support** | Can this backend execute this operation, at this dtype, conformingly? | per operation and dtype |
-| **Fallback** | May another backend execute it instead? | only under automatic selection |
+| **Fallback** | May another backend execute it instead? | never for `+`, `-`, `*`, `/`; otherwise only under automatic selection |
 | **Execution location** | Where did this operation actually run, and where does its result live? | observable; see below |
 
 A backend being *available* does not imply it *supports* every operation.
@@ -153,13 +155,13 @@ Workload-size policy must not override explicit selection. A small tensor is
 still executed on the selected backend; the policy may decide *how*, never
 *where*.
 
-This costs something, and the cost is the reason the threshold existed. For
-`float64` elementwise addition under explicit NumPy selection, against the
-Python reference it previously fell back to (minimum of seven runs of 2000
-calls): 1.53x slower at 1 element, 1.47x at 8, 1.14x at 16, 0.94x at 32, 0.31x
-at 256, 0.02x at 4096. The old threshold of 32 elements was well placed. A
-caller who wants that trade rather than the guarantee selects `"auto"`, which
-keeps the policy.
+This costs something. For `float64` elementwise addition under explicit NumPy
+selection, against the Python reference it previously fell back to (minimum of
+seven runs of 2000 calls): 1.53x slower at 1 element, 1.47x at 8, 1.14x at 16,
+0.94x at 32, 0.31x at 256, 0.02x at 4096. The cost is accepted. A deterministic
+rule that a caller can state in one sentence is worth more than a threshold
+that makes small-workload behaviour depend on a constant, and any heuristic
+worth reintroducing should be argued from benchmark data rather than inherited.
 
 ### Automatic selection
 
@@ -167,10 +169,21 @@ keeps the policy.
 ts.set_backend("auto")
 ```
 
-Automatic selection may use documented workload policies and may fall back to
-another backend, **provided the executing path satisfies the numerical
-contract**. Fallback is a performance and coverage decision; it is never a
-licence to produce a different result.
+`"auto"` chooses a backend; it does not choose differently per operation.
+It resolves **once, when it is selected**, to NumPy when NumPy is installed
+and to Python otherwise. From that point the selection behaves exactly as if
+that backend had been named.
+
+For `+`, `-`, `*` and `/` this means automatic selection grants no latitude at
+all: no workload-size threshold, no small-tensor case, and no fallback to
+another backend. An operation the resolved backend cannot execute conformingly
+raises `BackendOperationUnsupportedError`, exactly as under explicit selection.
+
+For operations outside the arithmetic contract, automatic selection may still
+use documented workload policies and may fall back to another backend,
+**provided the executing path satisfies the numerical contract**. Fallback is
+a performance and coverage decision; it is never a licence to produce a
+different result.
 
 A fallback taken because a backend's arithmetic differs from Python's is not
 legitimate under the new contract. That is the situation the contract removes.
@@ -251,7 +264,9 @@ described under [Execution requirements](#execution-requirements) above.
 `tensors/backend/dispatch` holds one `execute_*` entry point per
 operation; for every operation other than those four, that entry point applies
 the workload policy, calls the selected backend's kernel, and runs the Python
-reference itself when the policy declines or the kernel does. Operations therefore receive a result, not a decision: the
+reference itself when the policy declines or the kernel does. The four
+arithmetic operations share `dispatch/arithmetic/_execution.py`, which consults
+no policy: it calls the selected backend and raises if that backend declines. Operations therefore receive a result, not a decision: the
 choice of fallback belongs to dispatch. An array kernel declines for edge cases
 needing stable reference algorithms or exact Python integer intermediates. CuPy
 has no Python object dtype, so exact integer operations use the Python path;
