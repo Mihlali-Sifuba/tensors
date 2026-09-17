@@ -661,7 +661,11 @@ class Tensor:
         return subtract(self, other)
 
     def __rsub__(self, other: Scalar | Tensor) -> Tensor:
-        return -self + other
+        from tensors.operations.arithmetic.subtract import subtract, subtract_scalar
+
+        if isinstance(other, Tensor):
+            return subtract(other, self)
+        return subtract_scalar(other, self)
 
     @overload
     def __mul__(self, other: Variable) -> Variable: ...

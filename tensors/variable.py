@@ -22,7 +22,7 @@ from types import NotImplementedType
 from typing import Any
 
 from ._typing import TensorData, TensorIndex, TensorLike, TensorOperand, VariableData
-from .dtype import DataType, from_typecode, result_dtype
+from .dtype import DataType, from_typecode, resolve_binary, result_dtype
 from .shape import Shape
 from .tensor import Tensor
 from .operations.arithmetic import Add, Div, Mul, Neg, Pow, Sub
@@ -249,7 +249,7 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = result_dtype(self.dtype, other)
+        dtype = resolve_binary(self.dtype, other)[0]
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
@@ -271,7 +271,7 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = result_dtype(self.dtype, other)
+        dtype = resolve_binary(self.dtype, other)[0]
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
@@ -286,6 +286,10 @@ class Variable:
         return self._apply_operation(operation, (self, operand))
 
     def __rsub__(self, other: int | float | Tensor) -> Variable:
+        # The scalar is measured against this Variable's declared dtype, so
+        # it is validated before the negation that would widen an unsigned
+        # dtype. See docs/arithmetic-semantics.md section 6.5.
+        resolve_binary(self.dtype, other)
         return (-self) + other
 
     def __mul__(self, other: TensorOperand) -> Variable:
@@ -293,7 +297,7 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = result_dtype(self.dtype, other)
+        dtype = resolve_binary(self.dtype, other)[0]
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
@@ -315,7 +319,7 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = result_dtype(self.dtype, other, division=True)
+        dtype = resolve_binary(self.dtype, other, division=True)[0]
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
@@ -331,7 +335,7 @@ class Variable:
 
     def __rtruediv__(self, other: int | float | Tensor) -> Variable:
         # Operand order carries the semantics: the numerator is input_0.
-        dtype = result_dtype(self.dtype, other, division=True)
+        dtype = resolve_binary(self.dtype, other, division=True)[0]
         if isinstance(other, Variable):
             numerator = other
         elif isinstance(other, Tensor):

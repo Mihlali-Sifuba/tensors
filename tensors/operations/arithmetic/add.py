@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Union
 from tensors.backend import execute_add
-from tensors.dtype import result_dtype
+from tensors.dtype import resolve_binary
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.operations._gradient_shaping import sum_to_shape
@@ -20,11 +20,12 @@ class Add(Operation):
         """Element-wise addition of two tensors or a tensor and a scalar."""
         if not isinstance(b, (int, float, Tensor)):
             raise TypeError(f"Unsupported: {type(b)}")
-        dtype = result_dtype(a.dtype, b)
+        # Promotion for a tensor operand, conversion for a scalar.
+        dtype, other = resolve_binary(a.dtype, b)
         output_shape = (
             a.shape.broadcast_with(b.shape) if isinstance(b, Tensor) else a.shape
         )
-        accelerated = execute_add(a, b, dtype=dtype, output_shape=output_shape)
+        accelerated = execute_add(a, other, dtype=dtype, output_shape=output_shape)
         return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
 
     def backward(

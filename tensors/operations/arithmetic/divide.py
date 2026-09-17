@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Union
 from tensors.backend import execute_divide, execute_division_denominator_gradient
-from tensors.dtype import result_dtype
+from tensors.dtype import resolve_binary
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.utils.broadcasting import broadcast_to, broadcast_tensors
@@ -63,11 +63,11 @@ class Div(Operation):
         """Element-wise division."""
         if not isinstance(b, (int, float, Tensor)):
             raise TypeError(f"Unsupported: {type(b)}")
-        dtype = result_dtype(a.dtype, b, division=True)
+        dtype, other = resolve_binary(a.dtype, b, division=True)
         if isinstance(b, (int, float)):
             if b == 0:
                 raise ZeroDivisionError("Division by zero")
-            accelerated = execute_divide(a, b, dtype=dtype, output_shape=a.shape)
+            accelerated = execute_divide(a, other, dtype=dtype, output_shape=a.shape)
             return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
         if isinstance(b, Tensor):
             shape = a.shape.broadcast_with(b.shape)
@@ -231,7 +231,7 @@ divide = Div().forward
 
 def divide_scalar(numerator: Scalar, denominator: Tensor) -> Tensor:
     """Return ``numerator / denominator`` for a scalar left operand."""
-    dtype = result_dtype(denominator.dtype, numerator, division=True)
+    dtype = resolve_binary(denominator.dtype, numerator, division=True)[0]
     accelerated = execute_divide(
         numerator, denominator, dtype=dtype, output_shape=denominator.shape
     )

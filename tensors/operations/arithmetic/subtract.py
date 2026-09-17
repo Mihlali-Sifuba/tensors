@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Union
 from tensors.backend import execute_subtract
-from tensors.dtype import result_dtype
+from tensors.dtype import resolve_binary
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.operations._gradient_shaping import sum_to_shape
@@ -20,11 +20,12 @@ class Sub(Operation):
         """Element-wise subtraction of two tensors or a tensor and a scalar."""
         if not isinstance(b, (int, float, Tensor)):
             raise TypeError(f"Unsupported: {type(b)}")
-        dtype = result_dtype(a.dtype, b)
+        # Promotion for a tensor operand, conversion for a scalar.
+        dtype, other = resolve_binary(a.dtype, b)
         output_shape = (
             a.shape.broadcast_with(b.shape) if isinstance(b, Tensor) else a.shape
         )
-        accelerated = execute_subtract(a, b, dtype=dtype, output_shape=output_shape)
+        accelerated = execute_subtract(a, other, dtype=dtype, output_shape=output_shape)
         return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
 
     def backward(
@@ -52,3 +53,18 @@ class Sub(Operation):
 
 
 subtract = Sub().forward
+
+
+def subtract_scalar(left: Scalar, right: Tensor) -> Tensor:
+    """Return ``left - right`` for a scalar left operand.
+
+    Reflected subtraction converts the scalar against the tensor's declared
+    dtype and keeps that dtype, exactly as the forward form does. Evaluating
+    it as ``-right + left`` would not: negating an unsigned tensor widens it,
+    and the scalar would then be measured against the wider dtype.
+    """
+    dtype, converted = resolve_binary(right.dtype, left)
+    accelerated = execute_subtract(
+        converted, right, dtype=dtype, output_shape=right.shape
+    )
+    return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=right.shape)
