@@ -97,3 +97,55 @@ def _finite_operands(*operands: Any) -> bool:
 
 def _shape_size(shape: tuple[int, ...]) -> int:
     return Shape.from_iterable(shape).size
+
+
+# ----------------------------------------------------------------------
+#  Elementwise arithmetic
+#
+#  docs/arithmetic-semantics.md governs +, -, * and /. Arithmetic works in
+#  the declared dtype: integers wrap at their width and floating operands
+#  keep their precision, so neither the object-array path nor the float64
+#  working precision used by ``_operand`` applies here. These are separate
+#  from the helpers above so that the operations outside that contract keep
+#  the behaviour they were written against.
+# ----------------------------------------------------------------------
+
+
+def _arithmetic_operand(value: Tensor | Scalar, dtype: DataType) -> Any:
+    """Return an operand already in the declared dtype.
+
+    A scalar becomes a zero-dimensional array of that dtype rather than a
+    Python number, so NumPy cannot widen the result on its account.
+    """
+    from tensors.tensor import Tensor
+
+    native = numpy.dtype(dtype.name)
+    if isinstance(value, Tensor):
+        array = _view(value)
+        if array.dtype != native:
+            array = array.astype(native, copy=False)
+        return array
+    return native.type(value)
+
+
+def _arithmetic_storage(
+    result: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Retain an arithmetic result at its declared dtype.
+
+    Unlike ``_storage`` this never declines: an overflow to infinity and an
+    integer that wrapped are both specified results, not reasons to hand the
+    work to another backend.
+    """
+    native = numpy.dtype(dtype.name)
+    flattened = numpy.asarray(result).reshape(-1)
+    if flattened.dtype != native:
+        with _errstate(over="ignore", under="ignore", invalid="ignore"):
+            flattened = flattened.astype(native, copy=False)
+    storage = NumPyStorage(numpy.ascontiguousarray(flattened), dtype)
+    if storage.size != _shape_size(output_shape):
+        raise RuntimeError("Array kernel returned an unexpected result size")
+    return storage

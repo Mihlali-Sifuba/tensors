@@ -5,6 +5,7 @@ from array import array
 from collections.abc import Iterable
 from tensors._typing import Scalar
 from tensors.dtype import DataType
+from tensors.utils.integers import wrap
 from tensors.backend.storage import Storage
 
 
@@ -20,6 +21,25 @@ class PythonStorage(Storage):
                 f"storage typecode {buffer.typecode!r} does not match dtype {dtype.name!r}"
             )
         self._buffer = array(buffer.typecode, buffer) if copy else buffer
+
+    @classmethod
+    def from_arithmetic(
+        cls, values: Iterable[Scalar], dtype: DataType
+    ) -> PythonStorage:
+        """Store an arithmetic result, reducing integers to the declared width.
+
+        Construction and arithmetic differ here, and deliberately: an
+        out-of-range literal is a caller error and :meth:`from_values` raises
+        for it, while an out-of-range arithmetic result is the defined
+        consequence of a finite width and wraps. See
+        docs/arithmetic-semantics.md sections 4.2 and 4.5.
+        """
+        if dtype.kind != "integer":
+            return cls.from_values(values, dtype)
+        if isinstance(values, array) and values.typecode == dtype.typecode:
+            return cls(values, dtype, copy=True)
+        wrapped = (wrap(int(value), dtype) for value in values)
+        return cls(array(dtype.typecode, wrapped), dtype)
 
     @classmethod
     def from_values(cls, values: Iterable[Scalar], dtype: DataType) -> PythonStorage:

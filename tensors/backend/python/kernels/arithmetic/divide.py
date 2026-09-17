@@ -34,4 +34,4 @@ def divide(
         values = [evaluate(left, y) for y in right._data]
     else:
         values = [evaluate(left, right)]
-    return PythonStorage.from_values(values, dtype)
+    return PythonStorage.from_arithmetic(values, dtype)
