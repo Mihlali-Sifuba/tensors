@@ -558,45 +558,85 @@ of the expression, which graph compilation and replay require.
 ### 6.5 Python scalars
 
 A Python scalar has no declared dtype, so it cannot participate in the table
-above. It is **weakly typed**: it adopts the tensor's dtype when its value is
-exactly representable there, and otherwise the operation raises.
+above. It is **weakly typed**: it is converted to the tensor's dtype, and the
+result has the tensor's dtype. What "converted" permits depends on the kind of
+scalar and the kind of target, so the rule is stated once per combination
+rather than as a single phrase.
 
-> **Rule S.** For `tensor ∘ scalar` (and the reflected form), the scalar is
-> converted to the tensor's dtype if its value is exactly representable in
-> that dtype. If it is not, the operation raises `TypeError` and the caller
-> must supply a typed operand or cast the tensor.
+Throughout, "converts" means the operation proceeds and the result has the
+tensor's dtype; "raises" means the operation raises `TypeError` and the caller
+must supply a typed operand or cast the tensor.
 
-The result dtype is therefore the tensor's dtype. Using the scalar's *value*
-here is not a violation of [section 6.4](#64-what-is-not-promoted): that rule
-constrains **tensor** operands, whose elements vary. A Python scalar is a
-single literal value, and its value is the only information it carries.
+> **S1 — Python `int` with an integer tensor.** Converts when the value lies
+> within the tensor dtype's representable range
+> ([section 3.1](#31-integer-dtypes)). The conversion is exact; no rounding is
+> performed and no wraparound is applied. A value outside the range raises.
+>
+> **S2 — Python `float` with an integer tensor.** Converts only when the value
+> is *integral* — that is, it has no fractional part — **and** lies within the
+> tensor dtype's range. **A non-integral Python float is never implicitly
+> converted to an integer dtype**; it raises.
+>
+> **S3 — Python `float` with a floating tensor.** Converts by **rounding** to
+> the target format under round-to-nearest, ties-to-even
+> ([section 5.2](#52-rounding)). Permitted when the rounded value is finite,
+> and also when the literal is itself an infinity or a NaN. A finite literal
+> whose magnitude exceeds the target's range — one that would round to
+> infinity — raises. Rounding to a subnormal, or underflowing to zero, is
+> ordinary rounding and is permitted.
+>
+> **S4 — Python `int` with a floating tensor.** Converts only when the value
+> is **exactly representable** in the target format, which is the
+> precision-preservation rule of [section 3.3](#33-exact-integer-representation-in-floating-formats)
+> applied to a single value: \(|n| \le 2^{24}\) for `float32`, \(|n| \le
+> 2^{53}\) for `float64`. A larger magnitude raises rather than silently
+> rounding the integer.
 
-| Expression | Scalar exactly representable? | Result |
+Only S3 rounds. S1, S2 and S4 require the value to be representable exactly,
+because in those three cases rounding would discard information the caller
+wrote down literally: an integer target cannot hold a fraction, and an integer
+too large for a floating target is precisely the precision loss
+[section 6.3](#63-integer-with-floating) exists to prevent.
+
+The result dtype is the tensor's dtype in every case. Using the scalar's
+*value* here is not a violation of [section 6.4](#64-what-is-not-promoted):
+that rule constrains **tensor** operands, whose elements vary. A Python scalar
+is a single literal, and its value is the only information it carries.
+
+| Expression | Rule | Result |
 | --- | --- | --- |
-| `float32_tensor + 2.0` | yes, in `float32` | `float32` |
-| `int32_tensor + 2` | yes, in `int32` | `int32` |
-| `uint8_tensor + 255` | yes, in `uint8` | `uint8` |
-| `uint8_tensor + 256` | no | raises `TypeError` |
-| `uint8_tensor + (-1)` | no | raises `TypeError` |
-| `int32_tensor + 3.5` | no — `3.5` is not an `int32` value | raises `TypeError` |
-| `float32_tensor + 1e300` | no — beyond `float32` range | raises `TypeError` |
-| `float32_tensor + 0.1` | yes — `0.1` rounds to the nearest `float32` | `float32` |
-| `int64_tensor + 1` | yes | `int64` |
-| `float64_tensor + 2` | yes | `float64` |
+| `float32_tensor + 2.0` | S3 — rounds to `2.0`, finite | `float32` |
+| `float32_tensor + 0.1` | S3 — rounds to the nearest `float32` | `float32` |
+| `float32_tensor + 1e-60` | S3 — underflows to `0.0`, ordinary rounding | `float32` |
+| `float32_tensor + float("inf")` | S3 — an infinity is representable | `float32` |
+| `float32_tensor + 1e300` | S3 — finite, but beyond `float32` range | raises `TypeError` |
+| `float32_tensor + 2` | S4 — \(2 \le 2^{24}\) | `float32` |
+| `float32_tensor + 2**24` | S4 — the largest exactly representable | `float32` |
+| `float32_tensor + (2**24 + 1)` | S4 — not exactly representable in `float32` | raises `TypeError` |
+| `float64_tensor + 2` | S4 — \(2 \le 2^{53}\) | `float64` |
+| `int32_tensor + 2` | S1 — within `int32` range | `int32` |
+| `int64_tensor + 1` | S1 — within `int64` range | `int64` |
+| `uint8_tensor + 255` | S1 — within `uint8` range | `uint8` |
+| `uint8_tensor + 256` | S1 — outside `uint8` range | raises `TypeError` |
+| `uint8_tensor + (-1)` | S1 — outside `uint8` range | raises `TypeError` |
+| `int32_tensor + 3.0` | S2 — integral and within range | `int32` |
+| `int32_tensor + 3.5` | S2 — not integral | raises `TypeError` |
+| `int32_tensor + True` | rejected — see below | raises `TypeError` |
 
 Two consequences worth stating plainly:
 
-- **`int32_tensor + 3.5` raises.** Under the previous architecture it promoted
-  to `float64`. Refusing is the consistent reading of P-e: the caller asked to
-  combine an integer tensor with a non-integral value, and which dtype they
-  wanted is genuinely ambiguous. `t.astype(ts.float64) + 3.5` says it.
-- **"Exactly representable" for floating targets means the literal's value is
-  finite and within range**, not that the decimal is exact in binary. `0.1` is
-  accepted and rounds to the nearest `float32`, exactly as a `float32` literal
-  would. Only values that overflow the target's range are refused.
+- **`int32_tensor + 3.5` raises** (S2). Under the previous architecture it
+  promoted to `float64`. Refusing is the consistent reading of P-e: the caller
+  asked to combine an integer tensor with a non-integral value, and which dtype
+  they wanted is genuinely ambiguous. `t.astype(ts.float64) + 3.5` says it.
+- **A scalar never widens the result.** No scalar causes promotion to a wider
+  dtype; it either converts to the tensor's dtype or raises. This is what keeps
+  the result dtype of an expression a static property, as
+  [section 6.4](#64-what-is-not-promoted) requires.
 
-Booleans are not a public dtype and Python `bool` is not accepted as a numeric
-scalar.
+Python `bool` is **not** accepted as a numeric scalar, even though `bool` is a
+subclass of `int` in Python, and there is no public boolean dtype. Passing one
+raises.
 
 ### 6.6 Arithmetic after promotion
 

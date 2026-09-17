@@ -563,6 +563,43 @@ reverse propagation needs it even when it is never published. Intermediate
 `.data` and `.grad` values are still published, so fusion changes execution
 cost rather than graph semantics.
 
+### Backend execution during differentiation
+
+Differentiation is execution. A reverse pass runs kernels exactly as a forward
+pass does, so it is governed by the same rules, and
+[Numerical backends](backends.md) is the authoritative source for them. They
+are not restated here.
+
+> **Verified current behaviour.** Native backend VJPs are used for supported
+> reductions and elementwise operations, and numerically delicate inputs
+> return to the stable Python rules. A reverse pass may therefore execute on
+> the Python backend even when NumPy or CUDA was selected.
+
+> **Approved target contract, awaiting implementation.** Under **explicit**
+> backend selection, a supported operation's VJP must execute on the selected
+> backend. If it cannot execute conformingly there, it must raise a clear
+> unsupported-operation error. It must not silently run its VJP through the
+> Python backend. Under **automatic** selection, a conforming fallback is
+> permitted according to the documented execution policy.
+
+Two kinds of fallback are easy to confuse, and only one of them is a backend
+fallback:
+
+| Fallback | Stays on the selected backend? | Permitted under explicit selection? |
+| --- | --- | --- |
+| **Plan-level** — a fused run executes as ordinary unfused operations | yes | yes |
+| **Backend-level** — an operation executes on a different backend | no | no; it must raise instead |
+
+Plan-level fallback is the case described above, where a requested derivative
+is one the compact fused form cannot express and the group reverts to ordinary
+operation VJP execution. That changes the execution plan, not the executor,
+and it remains available under explicit selection — provided it satisfies the
+equivalence requirement below.
+
+Backend-level fallback is what explicit selection forbids. A reverse pass that
+quietly reaches the Python kernel is indistinguishable, from the caller's side,
+from one that ran where they asked.
+
 ### Numerical equivalence under optimisation
 
 > **Status: approved target contract, awaiting implementation.**
@@ -607,8 +644,6 @@ introduced now.
 The arithmetic rules themselves — rounding, overflow, dtype, promotion — are
 specified once, in [Arithmetic semantics](arithmetic-semantics.md), and are
 not restated here.
-Native backend VJPs are also used for supported reductions and elementwise
-operations; numerically delicate inputs return to the stable Python rules.
 
 Call `Computation.release()` when a long-lived Computation object no longer
 needs its output or plan. A released Computation cannot be reused.
