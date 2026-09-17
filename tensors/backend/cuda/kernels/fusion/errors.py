@@ -37,9 +37,11 @@ def _fused_domain_checks(
 
 
 def _raise_fused_kernel_error(code: int) -> None:
-    """Raise the public exception represented by a fused-kernel error code."""
-    if code == 1:
-        raise ZeroDivisionError("Division by zero")
+    """Raise the public exception represented by a fused-kernel error code.
+
+    Code 1 was division by zero. Floating division now delivers the IEEE
+    result rather than raising, so no fused kernel emits it.
+    """
     messages = {
         2: "sqrt is only defined for non-negative values",
         3: "log is only defined for positive values",

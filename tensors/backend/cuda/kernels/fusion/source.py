@@ -3,6 +3,14 @@
 from __future__ import annotations
 from tensors.backend.cuda.kernels.fusion.expressions import _broadcast_offset_expression
 
+#: NVRTC contracts a multiply followed by an add into a fused multiply-add by
+#: default, which rounds once where the unfused sequence rounds twice.
+#: ``docs/autodiff.md`` requires an optimisation to preserve the result of the
+#: sequence it replaces, so the contraction is disabled rather than relied upon
+#: not to happen. Storing every step to memory currently blocks it as a side
+#: effect; that is a property of the present code generation, not a guarantee.
+_FUSION_OPTIONS = ("--fmad=false",)
+
 
 def _fused_value_statements(
     name: str, expression: str, *, dtype_name: str
@@ -27,7 +35,7 @@ def _fused_kernel_source(
     output_shape: tuple[int, ...],
     storage_type: str,
     body: list[str],
-    validate_division: bool,
+    validate_errors: bool,
     include_gradient: bool,
 ) -> str:
     """Build one broadcast-aware CUDA kernel source string."""
@@ -37,7 +45,7 @@ def _fused_kernel_source(
     if include_gradient:
         parameters.append(f"const {storage_type}* gradient")
     parameters.append(f"{storage_type}* output")
-    if validate_division:
+    if validate_errors:
         parameters.append("int* error")
     parameters.append("const unsigned long long size")
     offsets = [

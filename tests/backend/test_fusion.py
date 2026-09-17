@@ -136,15 +136,25 @@ class CudaFusionTests(unittest.TestCase):
         self.assertAlmostEqual(float(result[0, 0]), 64.5)
         self.assertAlmostEqual(float(shifted.data[0, 0]), 64.5)
 
-    def test_fused_tensor_division_preserves_zero_validation(self):
+    def test_fused_tensor_division_by_zero_gives_the_unfused_result(self):
+        """Breaking change B3, inside a fused plan.
+
+        The kernel used to test every denominator and raise. Floating
+        division now delivers an infinity, and docs/autodiff.md requires a
+        fused plan to produce what the sequence it replaces produces — so a
+        replay must not raise where the eager expression returns a value.
+        """
         with ts.use_backend("cuda"):
+            unfused = ts.relu(ts.full((4_096,), 2.0) / ts.zeros((4_096,)))
+
             numerator = ts.Variable(ts.full((4_096,), 2.0), requires_grad=False)
             denominator = ts.Variable(ts.full((4_096,), 1.0), requires_grad=False)
-            output = ts.relu(numerator / denominator)
-            computation = ts.graph.Computation(output)
+            computation = ts.graph.Computation(ts.relu(numerator / denominator))
             denominator.data = ts.zeros((4_096,))
-            with self.assertRaisesRegex(ZeroDivisionError, "Division by zero"):
-                computation.forward()
+            replayed = computation.forward()
+
+        self.assertEqual(replayed.tolist(), unfused.tolist())
+        self.assertEqual(replayed.tolist()[0], float("inf"))
 
     def test_extended_unary_and_power_chains_fuse_in_both_directions(self):
 

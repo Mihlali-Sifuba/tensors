@@ -15,6 +15,7 @@ from tensors.backend.cuda.kernels.fusion.errors import (
 )
 from tensors.backend.cuda.kernels.fusion.expressions import _fused_step_expression
 from tensors.backend.cuda.kernels.fusion.source import (
+    _FUSION_OPTIONS,
     _fused_kernel_source,
     _fused_output_statement,
     _fused_value_statements,
@@ -38,15 +39,12 @@ def _cuda_fused_elementwise_kernel(
     """Compile and cache one typed broadcast-aware forward kernel."""
     storage_type = "float" if dtype_name == "float32" else "double"
     body = ["const double value_0 = (double)input_0[offset_0];"]
-    validate_division = False
+    validate_errors = False
     for index, step in enumerate(steps):
-        expression, denominator = _fused_step_expression(step, f"value_{index}")
-        if denominator is not None:
-            _, scalar, reverse, operand_index = step
-            needs_check = scalar is None or reverse or operand_index is not None
-            if needs_check:
-                validate_division = True
-                body.append(f"if (({denominator}) == 0.0) {{ atomicExch(error, 1); }}")
+        # Division by zero is not checked. Fusion runs only for floating
+        # dtypes, where section 7.2 makes an infinity the specified result,
+        # and a fused plan must produce what the unfused sequence produces.
+        expression, _ = _fused_step_expression(step, f"value_{index}")
         body.extend(
             _fused_value_statements(
                 f"value_{index + 1}",
@@ -56,7 +54,7 @@ def _cuda_fused_elementwise_kernel(
         )
         checks = _fused_domain_checks(step, f"value_{index}", f"value_{index + 1}")
         if checks:
-            validate_division = True
+            validate_errors = True
             for condition, code in checks:
                 body.append(f"if ({condition}) {{ atomicExch(error, {code}); }}")
         body.append(
@@ -77,10 +75,10 @@ def _cuda_fused_elementwise_kernel(
         output_shape=output_shape,
         storage_type=storage_type,
         body=body,
-        validate_division=validate_division,
+        validate_errors=validate_errors,
         include_gradient=False,
     )
-    return (cupy.RawKernel(source, name), validate_division)
+    return (cupy.RawKernel(source, name, options=_FUSION_OPTIONS), validate_errors)
 
 
 def fused_elementwise(
@@ -105,13 +103,13 @@ def fused_elementwise(
         return tuple(CudaStorage(result[index], dtype) for index in range(len(steps)))
     try:
         arrays = _fused_arrays(values, dtype)
-        kernel, validate_division = _cuda_fused_elementwise_kernel(
+        kernel, validate_errors = _cuda_fused_elementwise_kernel(
             steps,
             dtype.name,
             tuple(value.shape for value in values),
             output_shape,
         )
-        error = cupy.zeros((1,), dtype=cupy.int32) if validate_division else None
+        error = cupy.zeros((1,), dtype=cupy.int32) if validate_errors else None
         threads = 256
         blocks = (size + threads - 1) // threads
         arguments = list(arrays)

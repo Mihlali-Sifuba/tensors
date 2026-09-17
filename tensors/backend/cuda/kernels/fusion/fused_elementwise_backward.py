@@ -20,6 +20,7 @@ from tensors.backend.cuda.kernels.fusion.expressions import (
     _fused_vjp_expressions,
 )
 from tensors.backend.cuda.kernels.fusion.source import (
+    _FUSION_OPTIONS,
     _fused_kernel_source,
     _fused_output_statement,
     _fused_value_statements,
@@ -107,10 +108,10 @@ def _cuda_fused_elementwise_backward_kernel(
         output_shape=output_shape,
         storage_type=storage_type,
         body=body,
-        validate_division=validate_errors,
+        validate_errors=validate_errors,
         include_gradient=True,
     )
-    return (cupy.RawKernel(source, name), validate_errors)
+    return (cupy.RawKernel(source, name, options=_FUSION_OPTIONS), validate_errors)
 
 
 def fused_elementwise_backward(
