@@ -98,10 +98,13 @@ the mathematical definitions and reproducibility contract.
 
 ## Execution requirements
 
-> **Status: approved target contract, awaiting implementation.** This section
-> specifies what backend selection **will** mean. The sections that follow it
-> describe current behaviour, which differs. Numerical semantics are specified
-> in [Arithmetic semantics](arithmetic-semantics.md); this section covers only
+> **Status: implemented for `+`, `-`, `*` and `/`.** Those four execute on the
+> selected backend or raise `BackendOperationUnsupportedError`. Every other
+> operation still follows the workload policy described further down, and may
+> still run the Python reference under an explicit selection. The
+> [observability](#observability) mechanism required below does not exist.
+> Numerical semantics are specified in
+> [Arithmetic semantics](arithmetic-semantics.md); this section covers only
 > *where* and *whether* an operation executes.
 
 Selecting a backend explicitly is an **execution requirement**, not a
@@ -149,6 +152,14 @@ and [§8.4](arithmetic-semantics.md#84-when-a-backend-cannot-conform).
 Workload-size policy must not override explicit selection. A small tensor is
 still executed on the selected backend; the policy may decide *how*, never
 *where*.
+
+This costs something, and the cost is the reason the threshold existed. For
+`float64` elementwise addition under explicit NumPy selection, against the
+Python reference it previously fell back to (minimum of seven runs of 2000
+calls): 1.53x slower at 1 element, 1.47x at 8, 1.14x at 16, 0.94x at 32, 0.31x
+at 256, 0.02x at 4096. The old threshold of 32 elements was well placed. A
+caller who wants that trade rather than the guarantee selects `"auto"`, which
+keeps the policy.
 
 ### Automatic selection
 
@@ -233,10 +244,14 @@ accelerated backends; mixed inputs use the public result dtype.
 > [Execution requirements](#execution-requirements) above.
 
 The Python implementation defines shape, dtype, error, and differentiation
-semantics. `tensors/backend/dispatch` holds one `execute_*` entry point per
-operation; that entry point applies the workload policy, calls the selected
-backend's kernel, and runs the Python reference itself when the policy declines
-or the kernel does. Operations therefore receive a result, not a decision: the
+semantics for the operations outside the arithmetic contract; for `+`, `-`,
+`*` and `/` that role has moved to
+[Arithmetic semantics](arithmetic-semantics.md), and their dispatch is
+described under [Execution requirements](#execution-requirements) above.
+`tensors/backend/dispatch` holds one `execute_*` entry point per
+operation; for every operation other than those four, that entry point applies
+the workload policy, calls the selected backend's kernel, and runs the Python
+reference itself when the policy declines or the kernel does. Operations therefore receive a result, not a decision: the
 choice of fallback belongs to dispatch. An array kernel declines for edge cases
 needing stable reference algorithms or exact Python integer intermediates. CuPy
 has no Python object dtype, so exact integer operations use the Python path;

@@ -575,12 +575,21 @@ are not restated here.
 > return to the stable Python rules. A reverse pass may therefore execute on
 > the Python backend even when NumPy or CUDA was selected.
 
-> **Approved target contract, awaiting implementation.** Under **explicit**
-> backend selection, a supported operation's VJP must execute on the selected
-> backend. If it cannot execute conformingly there, it must raise a clear
+> **Approved target contract, partly implemented.** Under **explicit** backend
+> selection, a supported operation's VJP must execute on the selected backend.
+> If it cannot execute conformingly there, it must raise a clear
 > unsupported-operation error. It must not silently run its VJP through the
 > Python backend. Under **automatic** selection, a conforming fallback is
 > permitted according to the documented execution policy.
+>
+> A VJP that is itself one of `+`, `-`, `*` or `/` now meets this, because
+> those four dispatch through the execution requirement. A VJP implemented by
+> another kernel does not. The `+`, `-` and `*` gradients run through a fused
+> multiply-and-reduce kernel whose dispatch still applies the workload
+> threshold: measured under explicit NumPy selection, a 4-element backward
+> pass returns `PythonStorage` and a 4096-element one returns `NumPyStorage`.
+> Closing this means extending the execution requirement past arithmetic,
+> which is separate work.
 
 Two kinds of fallback are easy to confuse, and only one of them is a backend
 fallback:
@@ -602,7 +611,7 @@ from one that ran where they asked.
 
 ### Numerical equivalence under optimisation
 
-> **Status: approved target contract, awaiting implementation.**
+> **Status: implemented for the CUDA fusion kernels.**
 
 An optimisation must preserve the numerical result of the original sequence of
 typed operations. Fusion may remove intermediate allocations and memory
@@ -619,9 +628,21 @@ r = round_d(t + c)
 A fused kernel must preserve **both** rounding boundaries. It must not
 contract the pair into a fused multiply-add that rounds once, because that
 changes the result. On CUDA this is not hypothetical: NVRTC contracts `a*b+c`
-into an FMA by default, and the current fusion kernels are compiled with no
-options, so contraction is possible today. The measured difference on a
-representative float32 triple is one ulp.
+into an FMA by default, and compiling the statement shape the fusion kernels
+emit, without the per-step stores, makes 25.6% of 65536 random `float64`
+triples differ from the two-rounding result.
+
+The fusion kernels are therefore compiled with `--fmad=false`. Measured on
+this toolchain the generated source does not currently contract even without
+it, because every step is written to memory and that makes each intermediate
+observable to the compiler. The option is set so the guarantee follows from
+the compilation rather than from a code-generation detail that no test pins
+down, and it is not claimed to have changed any result.
+
+A second equivalence failure was real. The fused forward kernel tested every
+denominator and raised `ZeroDivisionError`, so an expression returning an
+infinity eagerly raised once compiled. Floating division delivers the IEEE
+result in both forms now.
 
 The same constraint forbids a fused kernel from carrying an intermediate at
 wider precision than the declared dtype, for the reason given in

@@ -2,17 +2,25 @@
 
 ## 1. Status and scope
 
-> **Status: approved target contract, awaiting implementation.**
+> **Status: implemented for `+`, `-`, `*` and `/`; specification elsewhere.**
 >
-> This document specifies what MS-Tensors arithmetic **will** do. It is not a
-> description of what the package does today. Passages marked *Current
-> behaviour* record the present implementation, verified by running it, so the
-> difference is visible. Everywhere else, the specified behaviour is the
-> target. Do not cite this document as evidence that a behaviour is already
-> implemented.
+> Addition, subtraction, multiplication and true division follow this document
+> on the Python, NumPy and CUDA backends, in eager execution, graph replay,
+> differentiation and fusion. Passages marked *Current behaviour* describe what
+> the implementation did **before** that work and are kept because
+> [section 10](#10-migration-and-compatibility) explains the migration away
+> from it.
 >
-> [Section 10](#10-migration-and-compatibility) lists every known difference
-> between the specification and the current implementation.
+> Every other operation — `**`, comparisons, `where`, `clip`, `concat`,
+> reductions, matmul, the elementwise maths functions — still uses the older
+> promotion in `tensors/dtype.py` `result_dtype` and is **not** governed by
+> this document yet. Extending it to them is separate work.
+>
+> Two gaps within the implemented scope are recorded rather than closed:
+> the execution-location observability API of
+> [backends.md](backends.md#observability) does not exist, and the VJP
+> execution-location requirement of [autodiff.md](autodiff.md) is unmet for
+> the kernels named in [section 10.3](#103-implementation-paths-requiring-review).
 
 This document is the **authoritative numerical specification**. Backend
 selection and execution requirements are in [Numerical backends](backends.md);
@@ -1013,6 +1021,7 @@ values, not against each other.
 | B13 | CUDA `float32` subnormals | Flushed to zero | Gradual underflow required |
 | B14 | Fused `a*b+c` on CUDA | May contract to an FMA (one rounding) | Must preserve both roundings |
 | B15 | Explicit backend selection | May silently fall back to Python | Must execute or report unsupported |
+| B16 | `tensor + True` | `bool` accepted as an integer scalar | Raises `TypeError` ([section 6.5](#65-python-scalars)) |
 
 ### 10.2 What may depend on the old behaviour
 
@@ -1030,13 +1039,19 @@ values, not against each other.
   comparable with measurements after it, because the conversions and fallbacks
   being removed are a large part of what the current numbers measure.
 
-*Verified:* no test currently asserts `OverflowError`, and none asserts
-`ZeroDivisionError`.
+*Correction.* An earlier revision of this section claimed that no test
+asserted `OverflowError` or `ZeroDivisionError`. The first half held; the
+second did not. Four tests asserted `ZeroDivisionError` from floating
+division — in `tests/tensor/test_ops.py`, `tests/backend/test_elementwise.py`
+and `tests/backend/test_fusion.py` — and were rewritten against B3 when it was
+implemented. The lesson is the one B16 repeats: the breaking-change list was
+assembled by reading the implementation, and what the tests asserted was a
+second source that should have been consulted too.
 
 ### 10.3 Implementation paths requiring review
 
-**None of these has been modified.** They are listed so the implementation
-agent knows the surface.
+**All of these have now been modified**, except where the last column says
+otherwise. The table is kept as the record of what the refactor touched.
 
 | Path | Why |
 | --- | --- |
@@ -1046,9 +1061,11 @@ agent knows the surface.
 | `tensors/backend/{python,numpy,cuda}/kernels/arithmetic/` | `add`, `subtract`, `multiply`, `divide` for all three backends. |
 | `tensors/operations/arithmetic/divide.py` | Holds the operation-layer `ZeroDivisionError` guard (three sites). |
 | `tensors/backend/policy.py` | Workload thresholds decide which path runs; under P3 the path must not change results, and under P4 it must not override explicit selection. |
-| `tensors/backend/cuda/kernels/fusion/fused_elementwise.py`, `fused_elementwise_backward.py` | `cupy.RawKernel(source, name)` with no options permits FMA contraction (B14). |
-| `tensors/backend/config.py`, `types.py` | Backend selection; strict mode has no representation today. |
-| `tests/backend/_support.py` — `NumPyParityTestCase` | Encodes Python-as-reference ([section 9.5](#95-the-existing-parity-helper)). |
+| `tensors/backend/cuda/kernels/fusion/fused_elementwise.py`, `fused_elementwise_backward.py` | `cupy.RawKernel(source, name)` with no options permits FMA contraction (B14). Now compiled with `--fmad=false`, and the forward kernel no longer rejects a zero denominator. |
+| `tensors/backend/config.py`, `types.py` | Backend selection; strict mode has no representation today. Explicit and automatic selection are now distinguished. |
+| `tests/backend/_support.py` — `NumPyParityTestCase` | Encodes Python-as-reference ([section 9.5](#95-the-existing-parity-helper)). **Not changed.** The conformance tests in `tests/operations/arithmetic/` compare against specified values instead, so the parity helper is no longer the only check; re-casting it is separate work. |
+| `tensors/backend/{python,numpy,cuda}/kernels/elementwise/division_denominator_gradient.py` | The division VJP raised, or declined and let the Python reference raise, where the forward pass returns an infinity. Its zero-denominator and finiteness tests also read device memory back to the host on every backward pass. |
+| `tensors/backend/dispatch/elementwise/`, `tensors/operations/_gradient_shaping.py` | **Not changed.** The `+`, `-` and `*` VJPs run through a fused multiply-and-reduce kernel, which is not one of the four operations, so its dispatch still applies the workload threshold. Measured: under explicit NumPy selection a 4-element backward pass returns `PythonStorage`; a 4096-element one returns `NumPyStorage`. Division is unaffected, its numerator gradient being a division. |
 | `docs/backends.md`, `docs/autodiff.md` | Updated alongside this document. |
 
 ### 10.4 Implementation sequence
