@@ -179,6 +179,66 @@ class IntegerDivisionByZeroTests(ArithmeticTestCase):
             tensor("int32", [1, 2, 3]) / tensor("int32", [1, 0, 3])
 
 
+class DivisionGradientTests(ArithmeticTestCase):
+    """The division VJPs follow the same division rules the forward does."""
+
+    #: -a / b**2 for each pair, by section 7.2.
+    DENOMINATOR_CASES = (
+        ([1.0], [0.0], [float("-inf")]),
+        ([-1.0], [0.0], [float("inf")]),
+        ([0.0], [0.0], [float("nan")]),
+        ([2.0], [4.0], [-0.125]),
+    )
+
+    def test_a_zero_denominator_gradient_is_a_value_not_an_error(self):
+        """The forward returns an infinity, so the backward may not raise."""
+        for dtype_name in _spec.FLOAT_DTYPES:
+            for backend in BACKENDS:
+                for top, bottom, expected in self.DENOMINATOR_CASES:
+                    with self.subTest(
+                        dtype=dtype_name, backend=backend, denominator=bottom
+                    ):
+                        with ts.use_backend(backend):
+                            a = ts.Variable(tensor(dtype_name, top))
+                            b = ts.Variable(tensor(dtype_name, bottom))
+                            ts.backward(ts.sum(a / b))
+                            self.assertFloatBitsEqual(b.grad, expected, dtype_name)
+
+    def test_the_numerator_gradient_is_one_over_the_denominator(self):
+        for dtype_name in _spec.FLOAT_DTYPES:
+            for backend in BACKENDS:
+                with self.subTest(dtype=dtype_name, backend=backend):
+                    with ts.use_backend(backend):
+                        a = ts.Variable(tensor(dtype_name, [1.0, -1.0, 2.0]))
+                        b = ts.Variable(tensor(dtype_name, [0.0, 0.0, 4.0]))
+                        ts.backward(ts.sum(a / b))
+                        reciprocal = (
+                            tensor(dtype_name, [1.0, 1.0, 1.0]) / b.data
+                        ).tolist()
+                        self.assertFloatBitsEqual(a.grad, reciprocal, dtype_name)
+
+    def test_gradients_agree_across_backends(self):
+        if len(BACKENDS) < 2:
+            self.skipTest("needs more than one backend")
+        for dtype_name in _spec.FLOAT_DTYPES:
+            collected = {}
+            for backend in BACKENDS:
+                with ts.use_backend(backend):
+                    a = ts.Variable(tensor(dtype_name, [1.0, -1.0, 0.0, 2.0]))
+                    b = ts.Variable(tensor(dtype_name, [0.0, 0.0, 0.0, 4.0]))
+                    ts.backward(ts.sum(a / b))
+                    collected[backend] = (a.grad, b.grad)
+            reference = BACKENDS[0]
+            for backend in BACKENDS[1:]:
+                with self.subTest(dtype=dtype_name, backend=backend):
+                    for index in (0, 1):
+                        self.assertFloatBitsEqual(
+                            collected[backend][index],
+                            collected[reference][index].tolist(),
+                            dtype_name,
+                        )
+
+
 if __name__ == "__main__":
     import unittest
 

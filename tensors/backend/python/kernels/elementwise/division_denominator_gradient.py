@@ -1,12 +1,16 @@
 """Reference the division-denominator VJP for the Python backend."""
 
 from __future__ import annotations
+import math
 from tensors.backend.python.storage import PythonStorage
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tensors.backend.storage import Storage
     from tensors.tensor import Tensor
+
+_INFINITY = float("inf")
+_NAN = float("nan")
 
 
 def _negative_product_over_square(
@@ -21,15 +25,33 @@ def _negative_product_over_square(
 def _product_over_denominator_power(
     factors: list[float], denominator: float, power: int
 ) -> float:
-    """Evaluate a product divided by a denominator power exactly when finite."""
-    import math
+    """Evaluate a product divided by a denominator power exactly when finite.
 
+    The exact rational path exists to survive an intermediate that would
+    overflow or underflow in floating point. It cannot represent a zero
+    denominator, which is not an error but the specified division in
+    `docs/arithmetic-semantics.md` section 7.2, so that case is answered
+    directly instead.
+    """
     denominator = float(denominator)
-    if denominator == 0.0:
-        raise ZeroDivisionError("Division by zero")
-    if any((value == 0.0 for value in factors)):
+    factors = [float(value) for value in factors]
+
+    if denominator == 0.0 or not all(math.isfinite(value) for value in factors):
+        product = 1.0
+        for factor in factors:
+            product *= factor
+        if denominator != 0.0:
+            return product / denominator**power
+        if product == 0.0 or product != product:
+            return _NAN
+        # An even power of a zero is a positive zero whichever sign the
+        # denominator carried, so only the product decides the sign.
+        sign = 1.0 if power % 2 == 0 else math.copysign(1.0, denominator)
+        return math.copysign(_INFINITY, math.copysign(1.0, product) * sign)
+
+    if any(value == 0.0 for value in factors):
         return 0.0
-    if all((math.isfinite(value) for value in factors + [denominator])):
+    if math.isfinite(denominator):
         numerator = 1
         divisor = 1
         for factor in factors:
@@ -61,4 +83,4 @@ def division_denominator_gradient(
             grad._data, numerator._data, denominator._data
         )
     ]
-    return PythonStorage.from_values(values, grad.dtype)
+    return PythonStorage.from_arithmetic(values, grad.dtype)

@@ -5,9 +5,8 @@ import numpy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _finite_operands
-from tensors.backend.numpy.conversion import _operand
-from tensors.backend.numpy.conversion import _storage
+from tensors.backend.numpy.conversion import _arithmetic_operand
+from tensors.backend.numpy.conversion import _arithmetic_storage
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -16,32 +15,49 @@ if TYPE_CHECKING:
 def division_denominator_gradient(
     grad: Tensor, numerator: Tensor, denominator: Tensor
 ) -> Storage | None:
-    """Calculate ``-grad * numerator / denominator**2`` when range-safe."""
-    try:
-        upstream = _operand(grad, grad.dtype)
-        values = _operand(numerator, grad.dtype)
-        divisors = _operand(denominator, grad.dtype)
-    except (OverflowError, TypeError, ValueError):
-        return None
-    with _errstate(over="ignore", under="ignore", invalid="ignore"):
-        squares = numpy.square(divisors)
-    finite_inputs = _finite_operands(upstream, values, divisors)
-    if not finite_inputs or bool(numpy.any(divisors == 0.0)):
-        return None
+    """Calculate ``-grad * numerator / denominator**2``.
+
+    ``direct`` is the expression evaluated as written, which is the specified
+    result wherever floating point can carry it — including a zero divisor,
+    where it gives the infinity or NaN of section 7.2.
+
+    It loses the value only when ``denominator**2`` overflows or underflows
+    although the true quotient is representable. ``stable`` recovers those in
+    the logarithm, and the selection below picks it only for them. The
+    operands are never read back to the host: the choice is made elementwise
+    on the device.
+    """
+    upstream = _arithmetic_operand(grad, grad.dtype)
+    values = _arithmetic_operand(numerator, grad.dtype)
+    divisors = _arithmetic_operand(denominator, grad.dtype)
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
+        squares = numpy.square(divisors)
         direct = -upstream * values / squares
-        zero = (upstream == 0.0) | (values == 0.0)
+
+        # A zero divisor, a zero factor or a non-finite operand all make
+        # ``direct`` the specified answer, so only the remaining elements can
+        # need rescuing.
+        ordinary = (
+            (divisors != 0.0)
+            & (upstream != 0.0)
+            & (values != 0.0)
+            & numpy.isfinite(divisors)
+            & numpy.isfinite(upstream)
+            & numpy.isfinite(values)
+        )
+        lost = ordinary & (
+            (squares == 0.0)
+            | ~numpy.isfinite(squares)
+            | (direct == 0.0)
+            | ~numpy.isfinite(direct)
+        )
+
         log_magnitude = (
             numpy.log(numpy.abs(upstream))
             + numpy.log(numpy.abs(values))
             - 2.0 * numpy.log(numpy.abs(divisors))
         )
         sign = numpy.where(numpy.signbit(upstream) ^ numpy.signbit(values), 1.0, -1.0)
-        stable = numpy.where(zero, 0.0, sign * numpy.exp(log_magnitude))
-    unsafe = (
-        (squares == 0.0)
-        | ~numpy.isfinite(squares)
-        | ~zero & ((direct == 0.0) | ~numpy.isfinite(direct))
-    )
-    result = numpy.where(unsafe, stable, direct)
-    return _storage(result, dtype=grad.dtype, output_shape=grad.shape)
+        stable = sign * numpy.exp(log_magnitude)
+        result = numpy.where(lost, stable, direct)
+    return _arithmetic_storage(result, dtype=grad.dtype, output_shape=grad.shape)
