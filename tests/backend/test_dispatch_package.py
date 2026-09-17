@@ -202,13 +202,19 @@ class DispatchFallbackTests(BackendTestCase):
 
     @requires_numpy
     def test_work_below_the_threshold_still_declines(self):
+        """Non-arithmetic creation keeps the threshold; arithmetic does not.
+
+        Breaking change B15 removed the threshold from ``+``, ``-``, ``*``
+        and ``/`` alone: under explicit selection those must execute on the
+        backend that was named.
+        """
         tiny = ts.Tensor([1.0, 2.0])
         with ts.use_backend("numpy"):
             self.assertIsInstance(
                 dispatch_package.execute_add(
                     tiny, tiny, dtype=ts.float64, output_shape=tiny.shape
                 ),
-                PythonStorage,
+                NumPyStorage,
             )
             self.assertIsInstance(
                 dispatch_package.execute_full((2,), 1.0, dtype=ts.float64),

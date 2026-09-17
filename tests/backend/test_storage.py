@@ -52,10 +52,13 @@ class CudaResidencyTests(unittest.TestCase):
         self.assertIsInstance(result._storage, CudaStorage)
         self.assertEqual(result.tolist(), [7.0] * 64)
 
-    def test_integer_operations_use_reference_storage(self):
+    def test_integer_operations_stay_device_resident(self):
+        # Breaking change B12: CUDA integer arithmetic executes natively and
+        # keeps its declared dtype instead of falling back to the host.
         with ts.use_backend("cuda"):
             result = ts.full((64,), 2, dtype=ts.int32) + 3
-        self.assertIsInstance(result._storage, PythonStorage)
+        self.assertIsInstance(result._storage, CudaStorage)
+        self.assertIs(result.dtype, ts.int32)
         self.assertEqual(result.tolist(), [5] * 64)
 
     def test_optimizer_updates_remain_device_resident(self):

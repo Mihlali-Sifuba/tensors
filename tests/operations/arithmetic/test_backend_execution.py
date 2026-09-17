@@ -12,6 +12,7 @@ produced relative to an unfused run*, not whether a value is correct.
 import unittest
 
 import tensors as ts
+from tensors.graph import Computation
 
 from . import _spec
 from ._support import BACKENDS, ArithmeticTestCase, tensor
@@ -179,26 +180,48 @@ class FusionEquivalenceTests(ArithmeticTestCase):
 class GraphReplayTests(ArithmeticTestCase):
     """Replay produces what eager execution produced."""
 
+    OPERANDS = ([1.5, 2.5, -0.25, 1e-30], [0.1, -2.0, 4.0, 3.0])
+
     def test_replay_matches_eager_arithmetic(self):
+        """Tensor arithmetic, the first Variable pass and a replay agree."""
         for dtype_name in _spec.FLOAT_DTYPES:
             for backend in BACKENDS:
                 with self.subTest(dtype=dtype_name, backend=backend):
                     with ts.use_backend(backend):
-                        a = tensor(dtype_name, [1.5, 2.5, -0.25, 1e-30])
-                        b = tensor(dtype_name, [0.1, -2.0, 4.0, 3.0])
-                        eager = (a + b) * a
-                        node = ts.graph.node.VariableNode()
-                        output = (node + ts.Variable(b, requires_grad=False)) * node
-                        program = ts.graph.Computation(output, boundaries=(node,))
-                        replayed = program(a)
+                        a = tensor(dtype_name, self.OPERANDS[0])
+                        b = tensor(dtype_name, self.OPERANDS[1])
+                        stepwise = ((a + b) * a).tolist()
+
+                        x = ts.Variable(a, requires_grad=False)
+                        y = ts.Variable(b, requires_grad=False)
+                        output = (x + y) * x
+                        self.assertFloatBitsEqual(output.data, stepwise, dtype_name)
+
+                        program = Computation(output)
                         self.assertFloatBitsEqual(
-                            (
-                                replayed
-                                if not hasattr(replayed, "data")
-                                else replayed.data
-                            ),
-                            eager.tolist(),
-                            dtype_name,
+                            program.forward(), stepwise, dtype_name
+                        )
+
+    def test_replay_after_new_inputs_matches_eager(self):
+        """A second replay over changed inputs still matches eager arithmetic."""
+        for dtype_name in _spec.FLOAT_DTYPES:
+            for backend in BACKENDS:
+                with self.subTest(dtype=dtype_name, backend=backend):
+                    with ts.use_backend(backend):
+                        x = ts.Variable(
+                            tensor(dtype_name, self.OPERANDS[0]), requires_grad=False
+                        )
+                        y = ts.Variable(
+                            tensor(dtype_name, self.OPERANDS[1]), requires_grad=False
+                        )
+                        program = Computation((x + y) * x)
+                        program.forward()
+
+                        replacement = tensor(dtype_name, [2.0, -3.5, 1e-38, 0.125])
+                        x.data = replacement
+                        expected = ((replacement + y.data) * replacement).tolist()
+                        self.assertFloatBitsEqual(
+                            program.forward(), expected, dtype_name
                         )
 
 

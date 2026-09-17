@@ -164,7 +164,13 @@ class NumPyElementwiseTests(NumPyParityTestCase):
         self.assertOperationParity(lambda: 8.0 / value)
         self.assertOperationParity(lambda: 2.0**value)
 
-    def test_numpy_division_validates_tensor_denominators_in_kernel(self):
+    def test_numpy_division_does_not_inspect_floating_denominators(self):
+        """Breaking change B3: a zero denominator is a result, not an error.
+
+        The kernel used to read every denominator to decide whether to
+        decline. Reading them is what the contract removes: on a device that
+        comparison is a host synchronisation on every division.
+        """
         from tensors.backend.loading import load_backend
 
         backend = load_backend("numpy")
@@ -172,9 +178,10 @@ class NumPyElementwiseTests(NumPyParityTestCase):
         denominator = ts.Tensor([2.0] * 511 + [0.0])
         with patch.object(backend, "divide", wraps=backend.divide) as binary:
             with ts.use_backend("numpy"):
-                with self.assertRaisesRegex(ZeroDivisionError, "Division by zero"):
-                    ts.divide(numerator, denominator)
+                result = ts.divide(numerator, denominator)
         binary.assert_called_once()
+        self.assertEqual(result.tolist()[-1], float("inf"))
+        self.assertEqual(result.tolist()[0], 0.5)
 
     def test_integer_arithmetic_and_unsigned_negation_match(self):
         left = ts.Tensor([1, 2, 3], dtype=ts.int32)

@@ -62,25 +62,22 @@ class TensorDtypeTests(unittest.TestCase):
             with self.subTest(dtype=dtype):
                 self.assertEqual(dtype.kind, "integer")
 
-    def test_integer_scalar_operations_promote_to_represent_the_scalar(self):
+    def test_out_of_range_integer_scalars_are_rejected(self):
+        # Breaking change B9. A scalar is weakly typed: it converts to the
+        # tensor's declared dtype or the operation raises. It no longer
+        # widens the result to make itself representable, which had made the
+        # dtype of an expression depend on a value rather than a declaration.
         cases = (
-            (ts.Tensor([0], dtype=ts.uint8), -1, ts.int16, [-1]),
-            (ts.Tensor([0], dtype=ts.int8), 128, ts.int16, [128]),
-            (ts.Tensor([0], dtype=ts.int16), 40_000, ts.int32, [40_000]),
-            (
-                ts.Tensor([0], dtype=ts.int64),
-                2 ** 63,
-                ts.float64,
-                [float(2 ** 63)],
-            ),
+            (ts.Tensor([0], dtype=ts.uint8), -1),
+            (ts.Tensor([0], dtype=ts.int8), 128),
+            (ts.Tensor([0], dtype=ts.int16), 40_000),
+            (ts.Tensor([0], dtype=ts.int64), 2 ** 63),
         )
 
-        for tensor, scalar, expected_dtype, expected_values in cases:
+        for tensor, scalar in cases:
             with self.subTest(dtype=tensor.dtype, scalar=scalar):
-                result = tensor + scalar
-
-                self.assertIs(result.dtype, expected_dtype)
-                self.assertEqual(result.tolist(), expected_values)
+                with self.assertRaises(TypeError):
+                    _ = tensor + scalar
 
     def test_representable_integer_scalar_preserves_dtype(self):
         result = ts.Tensor([1], dtype=ts.uint8) + 2

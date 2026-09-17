@@ -23,18 +23,33 @@ class ArithmeticDispatchTests(unittest.TestCase):
     def test_dispatch_reads_selection_once(self):
         value = ts.Tensor([2.0] * 32)
         with patch(
-            "tensors.backend.dispatch.arithmetic.add.get_backend", return_value="numpy"
+            "tensors.backend.dispatch.arithmetic._execution.get_backend",
+            return_value="numpy",
         ) as selection:
             result = execute_add(value, 3.0, dtype=ts.float64, output_shape=(32,))
         selection.assert_called_once_with()
         self.assertIsInstance(result, NumPyStorage)
         self.assertEqual(result.buffer.tolist(), [5.0] * 32)
 
-    def test_small_numpy_work_does_not_load_provider(self):
+    def test_small_explicit_numpy_work_still_loads_the_provider(self):
+        # Breaking change B15. Explicit selection is an execution
+        # requirement: workload size may decide how an operation runs, never
+        # where. See docs/backends.md, Execution requirements.
+        value = ts.Tensor([2.0])
+        with ts.use_backend("numpy"):
+            result = execute_add(value, 3.0, dtype=ts.float64, output_shape=(1,))
+        self.assertIsInstance(result, NumPyStorage)
+        self.assertEqual(list(result.buffer), [5.0])
+
+    def test_small_automatic_work_does_not_load_provider(self):
+        # Automatic selection keeps the workload policy, because the Python
+        # reference satisfies the same numerical contract.
         value = ts.Tensor([2.0])
         with (
-            ts.use_backend("numpy"),
-            patch("tensors.backend.dispatch.arithmetic.add.load_backend") as loader,
+            ts.use_backend("auto"),
+            patch(
+                "tensors.backend.dispatch.arithmetic._execution.load_backend"
+            ) as loader,
         ):
             result = execute_add(value, 3.0, dtype=ts.float64, output_shape=(1,))
         self.assertEqual(list(result.buffer), [5.0])

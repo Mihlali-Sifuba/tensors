@@ -2,6 +2,7 @@ from .tensor import Tensor
 from .shape import Shape
 from .strides import Strides
 from .backend import (
+    BackendOperationUnsupportedError,
     BackendUnavailableError,
     available_backends,
     get_backend,

@@ -5,7 +5,6 @@ import tensors as ts
 import tensors.backend as backend_state
 import tensors.backend.cuda.kernels as cuda_backend
 from tensors.backend.cuda.storage import CudaStorage
-from tensors.backend.python.storage import PythonStorage
 from tests.backend._support import requires_cuda
 
 
@@ -308,7 +307,14 @@ class CudaFusionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "sqrt"):
                 computation.forward()
 
-    def test_integer_graphs_keep_the_exact_reference_path(self):
+    def test_integer_graphs_execute_on_the_device_unfused(self):
+        """Breaking change B12: integers run natively, not on the host.
+
+        Fusion still declines for integer graphs, which is a performance
+        decision it is free to make. Where the arithmetic *executes* is not:
+        explicit CUDA selection keeps it on the device, so the result stays
+        device-resident rather than arriving in Python storage.
+        """
         integer_dtypes = (ts.int64, ts.int32, ts.int16, ts.int8, ts.uint8)
         for dtype in integer_dtypes:
             with self.subTest(dtype=dtype.name), ts.use_backend("cuda"):
@@ -325,7 +331,8 @@ class CudaFusionTests(unittest.TestCase):
                     backend_state._clear_backend_kernel_cache()
                     result = computation.forward()
                 fused.assert_not_called()
-                self.assertIsInstance(result._storage, PythonStorage)
+                self.assertIsInstance(result._storage, CudaStorage)
+                self.assertIs(result.dtype, dtype)
                 self.assertEqual(result[0], 6)
 
 

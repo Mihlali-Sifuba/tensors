@@ -27,10 +27,27 @@ class BackendUnavailableError(RuntimeError):
     """Raised when an explicitly selected optional backend is unavailable."""
 
 
+class BackendOperationUnsupportedError(RuntimeError):
+    """Raised when an explicitly selected backend cannot execute an operation.
+
+    Explicit selection is an execution requirement (`docs/backends.md`,
+    *Execution requirements*), so a backend that cannot produce the required
+    result says so rather than letting another backend answer in its place.
+    """
+
+
 _VALID_BACKENDS = {"python", "numpy", "cuda", "auto"}
 _backend_lock = threading.RLock()
 _backend_override: ContextVar[BackendName | None] = ContextVar(
     "tensors_backend_override",
+    default=None,
+)
+# "auto" resolves to a concrete backend at selection time, which would
+# otherwise make an automatic selection indistinguishable from an explicit one.
+# Arithmetic dispatch needs the difference: explicit selection forbids the
+# fallbacks and workload policies automatic selection allows.
+_automatic_override: ContextVar[bool | None] = ContextVar(
+    "tensors_backend_automatic",
     default=None,
 )
 
@@ -68,31 +85,34 @@ def _resolve_backend(backend: str) -> BackendName:
     normalized = backend.strip().lower()
     if normalized not in _VALID_BACKENDS:
         choices = ", ".join(sorted(_VALID_BACKENDS))
-        raise ValueError(
-            f"Unknown backend {backend!r}; expected one of: {choices}"
-        )
+        raise ValueError(f"Unknown backend {backend!r}; expected one of: {choices}")
     if normalized == "auto":
         return "numpy" if _numpy_available() else "python"
     if normalized == "numpy" and not _numpy_available():
         raise BackendUnavailableError(
             "The NumPy backend is unavailable. Install it with "
-            "`pip install \"ms-tensors[numpy]\"`."
+            '`pip install "ms-tensors[numpy]"`.'
         )
     if normalized == "cuda" and not _cuda_available():
         raise BackendUnavailableError(
             "The CUDA backend is unavailable. Install the CuPy build matching "
-            "your driver with `pip install \"ms-tensors[cuda12]\"` or "
-            "`pip install \"ms-tensors[cuda13]\"`."
+            'your driver with `pip install "ms-tensors[cuda12]"` or '
+            '`pip install "ms-tensors[cuda13]"`.'
         )
     return cast(BackendName, normalized)
 
 
-def _environment_default() -> BackendName:
+def _is_automatic(backend: str) -> bool:
+    """Whether a selection leaves the backend choice to the library."""
+    return backend.strip().lower() == "auto"
+
+
+def _environment_default() -> tuple[BackendName, bool]:
     configured = os.environ.get("TENSORS_BACKEND", "python")
-    return _resolve_backend(configured)
+    return _resolve_backend(configured), _is_automatic(configured)
 
 
-_process_backend = _environment_default()
+_process_backend, _process_automatic = _environment_default()
 
 
 def get_backend() -> BackendName:
@@ -104,6 +124,18 @@ def get_backend() -> BackendName:
         return _process_backend
 
 
+def selection_is_automatic() -> bool:
+    """Whether the active selection was made with ``"auto"``.
+
+    An automatic selection permits workload policy and fallback; an explicit
+    one requires the operation to execute on the backend that was named.
+    """
+    if _backend_override.get() is not None:
+        return bool(_automatic_override.get())
+    with _backend_lock:
+        return _process_automatic
+
+
 def set_backend(backend: BackendSelection) -> None:
     """Set the process-wide default backend.
 
@@ -112,9 +144,11 @@ def set_backend(backend: BackendSelection) -> None:
     exit.
     """
     selected = _resolve_backend(backend)
-    global _process_backend
+    automatic = _is_automatic(backend)
+    global _process_backend, _process_automatic
     with _backend_lock:
         _process_backend = selected
+        _process_automatic = automatic
         loading._clear_backend_kernel_cache()
 
 
@@ -127,8 +161,10 @@ def use_backend(backend: BackendSelection) -> Iterator[None]:
     # instrumentation or tests) is observed on entry to the scoped backend.
     loading._clear_backend_kernel_cache()
     token = _backend_override.set(selected)
+    automatic_token = _automatic_override.set(_is_automatic(backend))
     try:
         yield
     finally:
+        _automatic_override.reset(automatic_token)
         _backend_override.reset(token)
         loading._clear_backend_kernel_cache()

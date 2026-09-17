@@ -1,10 +1,11 @@
-"""Dedicated arithmetic dispatch; resolve the selection once per call."""
+"""Dedicated arithmetic dispatch for divide.
+
+Explicit selection decides where this runs; see :mod:`_execution`.
+"""
 
 from __future__ import annotations
 from typing import TYPE_CHECKING
-from tensors.backend.config import get_backend
-from tensors.backend.loading import load_backend
-from tensors.backend.policy import _shape_size, should_accelerate_elementwise
+from tensors.backend.dispatch.arithmetic._execution import execute_arithmetic
 from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
@@ -20,14 +21,7 @@ def execute_divide(
     dtype: DataType,
     output_shape: tuple[int, ...],
 ) -> Storage:
-    """Run divide on the selected backend, or as Python reference."""
-    from tensors.backend.python.kernels.arithmetic.divide import divide as reference
-
-    selected = get_backend()
-    if not should_accelerate_elementwise(selected, _shape_size(output_shape)):
-        return reference(left, right, dtype=dtype, output_shape=output_shape)
-    backend = load_backend(selected)
-    result = backend.divide(left, right, dtype=dtype, output_shape=output_shape)
-    if result is not None:
-        return result
-    return reference(left, right, dtype=dtype, output_shape=output_shape)
+    """Run divide on the selected backend."""
+    return execute_arithmetic(
+        "divide", left, right, dtype=dtype, output_shape=output_shape
+    )

@@ -54,10 +54,12 @@ class VariableOperatorTests(unittest.TestCase):
         )
 
         promoted = integers * 3
-        widened = integers * 3.5
 
         self.assertIs(promoted.dtype, ts.int32)
-        self.assertIs(widened.dtype, ts.float64)
+        # Breaking change B8: a fractional scalar cannot convert to int32,
+        # and a Variable applies the same rule a Tensor does.
+        with self.assertRaises(TypeError):
+            _ = integers * 3.5
 
     def test_reverse_operations_produce_expected_values(self):
         variable = ts.Variable([2.0, 4.0])

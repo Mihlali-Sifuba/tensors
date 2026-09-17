@@ -18,7 +18,14 @@ _CUDA_FUSION_MIN_WORK = 8_192
 
 
 def should_accelerate_elementwise(backend: str, size: int) -> bool:
-    """Apply policy to an already-resolved backend selection."""
+    """Apply policy to an already-resolved backend selection.
+
+    This no longer decides where ``+``, ``-``, ``*`` and ``/`` execute under
+    an explicit selection: `docs/backends.md` makes that an execution
+    requirement, and policy may decide how an operation runs but never where.
+    Those four still consult it under automatic selection, and the operations
+    outside the arithmetic contract consult it as before.
+    """
     return backend == "cuda" or (
         backend == "numpy" and size >= _NUMPY_ELEMENTWISE_MIN_SIZE
     )
