@@ -5,6 +5,7 @@ import cupy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
+from tensors.backend.cuda.kernels.arithmetic import _ieee32
 from tensors.backend.cuda.conversion import _arithmetic_operand
 from tensors.backend.cuda.conversion import _arithmetic_storage
 
@@ -25,5 +26,10 @@ def subtract(
     left_array = _arithmetic_operand(left, dtype)
     right_array = _arithmetic_operand(right, dtype)
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        result = cupy.subtract(left_array, right_array)
+        # float32 needs the named IEEE instruction to underflow
+        # gradually; float64 already does on the device.
+        if dtype.typecode == "f":
+            result = _ieee32.apply("subtract", left_array, right_array)
+        else:
+            result = cupy.subtract(left_array, right_array)
     return _arithmetic_storage(result, dtype=dtype, output_shape=output_shape)

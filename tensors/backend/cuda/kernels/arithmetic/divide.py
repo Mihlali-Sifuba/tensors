@@ -5,6 +5,7 @@ import cupy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
+from tensors.backend.cuda.kernels.arithmetic import _ieee32
 from tensors.backend.cuda.conversion import _arithmetic_operand
 from tensors.backend.cuda.conversion import _arithmetic_storage
 
@@ -29,5 +30,10 @@ def divide(
     # synchronisation on every call. Integer operands are
     # rejected by the operation layer before reaching a kernel.
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        result = cupy.true_divide(left_array, right_array)
+        # float32 needs the named IEEE instruction to underflow
+        # gradually; float64 already does on the device.
+        if dtype.typecode == "f":
+            result = _ieee32.apply("divide", left_array, right_array)
+        else:
+            result = cupy.true_divide(left_array, right_array)
     return _arithmetic_storage(result, dtype=dtype, output_shape=output_shape)

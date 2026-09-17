@@ -21,8 +21,16 @@ from ._support import BACKENDS, ArithmeticTestCase, float_bits, tensor
 
 
 def to_float32(value: float) -> float:
-    """Round a binary64 value to binary32, once."""
-    return struct.unpack("<f", struct.pack("<f", value))[0]
+    """Round a binary64 value to binary32, once.
+
+    A magnitude beyond binary32's range rounds to a signed infinity, which is
+    the IEEE result; ``struct`` refuses to pack it, so that case is supplied
+    here rather than allowed to raise.
+    """
+    try:
+        return struct.unpack("<f", struct.pack("<f", value))[0]
+    except OverflowError:
+        return math.copysign(float("inf"), value)
 
 
 def rounded(value: float, dtype_name: str) -> float:
