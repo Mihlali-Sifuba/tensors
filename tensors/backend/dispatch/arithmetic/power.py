@@ -2,40 +2,38 @@
 
 Where forward power executes is decided by the backend selection and by
 nothing else. `docs/backends.md`, *Execution requirements*, makes that a
-requirement rather than a preference, so the workload-size policy that used to
-send small exponentiations to Python no longer has a say here: a one-element
-power runs where a million-element power runs.
+requirement rather than a preference: a one-element power runs where a
+million-element power runs, and a provider that cannot execute the operation
+says so instead of handing the work to another backend.
 
 ``"auto"`` needs no case of its own. It resolves to a concrete backend when it
 is selected — NumPy when NumPy is installed, Python otherwise — so by the time
 a call arrives the selection names one backend.
 
-This does not raise when a provider declines, which is where it parts company
-with the four contract operations. Power's kernels use a decline to mean three
-different things, and two of them are behaviour this dispatcher must
-preserve:
+A decline now raises, as it does for ``+``, ``-``, ``*`` and ``/``. It used to
+fall back to the Python reference, for three reasons that no longer hold:
 
-- **A domain error.** ``0 ** -1`` and ``(-2.0) ** 0.5`` are undefined, and an
-  overflowing result is an ``OverflowError``. The array kernels detect these
-  as a non-finite result from finite operands and decline; the reference is
-  what turns that into the documented ``ValueError`` or ``OverflowError``.
-- **A capability gap.** CuPy integer exponentiation is refused by the CUDA
-  conversion helper, so ``2 ** int32_tensor`` declines on CUDA and the
-  reference answers it correctly.
-- **A narrowing result**, where the exact integer power leaves the declared
-  dtype.
+- **Domain errors.** The array kernels declined on a non-finite result from
+  finite operands so the reference could raise ``ValueError`` or
+  ``OverflowError``. Sections 12.2 and 12.3 replaced those errors with values:
+  a negative base with a non-integral exponent is NaN, a zero base with a
+  negative exponent is a signed infinity, and an overflowing result is an
+  infinity. Nothing declines for them any more.
+- **CUDA integer exponentiation.** The CUDA kernel has had a native
+  fixed-width implementation since section 12.4 was implemented; it runs
+  device-resident for all five integer dtypes and wraps in the declared width.
+- **A narrowing integer result.** Section 12.4.1 makes wraparound the
+  specified result, so there is nothing to narrow and nothing to decline.
 
-Raising on every decline would replace those documented errors with an
-unsupported-operation error and would stop CUDA integer power working, which
-is why the reference still answers a decline. Closing that properly means
-teaching the array kernels to raise their own domain errors and giving CUDA a
-native integer path; until then this dispatcher guarantees execution location
-for the supported cases only, and `docs/backends.md` records the gap.
+The one numerical error that remains, ``ValueError`` for a negative integer
+exponent under section 12.4.2, is raised by :class:`Pow.forward` before this
+dispatcher is reached. It is a numerical-domain error and stays distinct from
+a capability failure.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.config import get_backend
+from typing import TYPE_CHECKING, Any
+from tensors.backend.config import BackendOperationUnsupportedError, get_backend
 from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
 
@@ -52,17 +50,21 @@ def execute_power(
     dtype: DataType,
     output_shape: tuple[int, ...],
 ) -> Storage:
-    """Run forward power on the selected backend, whatever the workload size."""
-    from tensors.backend.python.kernels.arithmetic.power import power as reference
-
+    """Run power on the selected backend, or report that it cannot run there."""
     selected = get_backend()
     if selected == "python":
+        from tensors.backend.python.kernels.arithmetic.power import (
+            power as reference,
+        )
+
         return reference(left, right, dtype=dtype, output_shape=output_shape)
 
-    backend = load_backend(selected)
+    backend: Any = load_backend(selected)
     result = backend.power(left, right, dtype=dtype, output_shape=output_shape)
-    if result is not None:
-        return result
-    # A decline is one of the three cases in the module docstring. Each needs
-    # the reference to produce the documented result or error.
-    return reference(left, right, dtype=dtype, output_shape=output_shape)
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute power at dtype "
+            f"{dtype.name} conformingly. Arithmetic runs on the selected "
+            f"backend; select another backend to run it elsewhere."
+        )
+    return result
