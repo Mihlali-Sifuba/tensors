@@ -89,8 +89,31 @@ def specified_table():
 TABLE = specified_table()
 
 
+def float_bits(value, dtype_name):
+    """The bit pattern of a value in a floating format."""
+    pack, unpack = ("<f", "<I") if dtype_name == "float32" else ("<d", "<Q")
+    return struct.unpack(unpack, struct.pack(pack, value))[0]
+
+
 class SpecifiedComparison(ArithmeticTestCase):
     """Exact comparison, with NaN classified rather than equated."""
+
+    def assertBitsEqual(self, produced, expected, dtype_name, context=""):
+        """Compare bit patterns, which distinguishes +0.0 from -0.0.
+
+        NaN is the exception: the specification leaves its payload and sign
+        unspecified, so it is classified rather than compared.
+        """
+        if expected != expected:
+            self.assertTrue(
+                produced != produced, f"{context}: expected NaN, got {produced!r}"
+            )
+            return
+        self.assertEqual(
+            float_bits(produced, dtype_name),
+            float_bits(expected, dtype_name),
+            f"{context}: expected {expected!r}, got {produced!r}",
+        )
 
     def assertSpecified(self, produced, expected, context=""):
         if expected != expected:
@@ -244,31 +267,221 @@ class OverflowUnderflowAndSubnormals(SpecifiedComparison):
     def test_a_subnormal_is_preserved(self):
         """Gradual underflow: a subnormal operand survives the operation.
 
-        Skipped for `float32` on CUDA. CuPy's generated `float32` code flushes
-        subnormals to zero, which section 5.4 records; the four arithmetic
-        operations work around it with inline PTX (`mul.rn.f32` and friends),
-        but PTX has no `pow` instruction and `powf` flushes internally even
-        under `--ftz=false`. `float64` is unaffected on every backend, and
-        `float32` holds on Python and NumPy. Closing this needs `powf` built
-        from primitives, which belongs with the D5 accuracy work.
+        No backend is exempt. CuPy's generated binary32 code flushes
+        subnormals, so the CUDA kernel converts through inline PTX and takes
+        the power in binary64, which is what keeps them.
         """
         for dtype_name in FLOATS:
             _, smallest, _ = self.LIMITS[dtype_name]
             for backend in BACKENDS:
-                if backend == "cuda" and dtype_name == "float32":
-                    continue
                 with self.subTest(dtype=dtype_name, backend=backend):
                     with ts.use_backend(backend):
                         subnormal = tensor(dtype_name, [smallest]) ** 1.0
-                    self.assertEqual(subnormal.tolist()[0], smallest)
+                    self.assertBitsEqual(subnormal.tolist()[0], smallest, dtype_name)
+
+
+class GradualUnderflow(SpecifiedComparison):
+    """§5.4 and §12.3.4 — subnormal operands and subnormal results.
+
+    Expected values come from the operands rounded to the declared format,
+    widened to binary64, raised there, and rounded once back. Exponents are
+    chosen to be exactly representable in `float32` so that the comparison
+    does not depend on how a Python scalar is rounded on conversion, which is
+    a separate S3 question.
+
+    Results are compared by bit pattern: ordinary equality cannot tell `+0.0`
+    from `-0.0`, and the sign of an underflowed zero is specified.
+    """
+
+    SMALLEST = {"float32": 1.401298464324817e-45, "float64": 5e-324}
+    LARGEST_SUBNORMAL = {
+        "float32": 1.1754942106924411e-38,
+        "float64": 2.225073858507201e-308,
+    }
+    MIN_NORMAL = {
+        "float32": 1.1754943508222875e-38,
+        "float64": 2.2250738585072014e-308,
+    }
+
+    def reference(self, base, exponent, dtype_name):
+        """Binary64 power of the rounded operands, rounded once to the format."""
+        import numpy
+
+        narrow = numpy.float32 if dtype_name == "float32" else numpy.float64
+        with numpy.errstate(all="ignore"):
+            return float(
+                narrow(
+                    numpy.power(
+                        numpy.float64(narrow(base)), numpy.float64(narrow(exponent))
+                    )
+                )
+            )
+
+    def assertMatchesReference(self, base, exponent, dtype_name, backend):
+        with ts.use_backend(backend):
+            produced = (tensor(dtype_name, [base]) ** exponent).tolist()[0]
+        self.assertBitsEqual(
+            produced,
+            self.reference(base, exponent, dtype_name),
+            dtype_name,
+            f"{base!r} ** {exponent!r}",
+        )
+
+    def test_the_smallest_subnormal_operand_of_either_sign(self):
+        for dtype_name in FLOATS:
+            smallest = self.SMALLEST[dtype_name]
+            for base in (smallest, -smallest):
+                for backend in BACKENDS:
+                    with self.subTest(dtype=dtype_name, base=base, backend=backend):
+                        self.assertMatchesReference(base, 1.0, dtype_name, backend)
+
+    def test_subnormal_operands_with_other_exponents(self):
+        for dtype_name in FLOATS:
+            smallest = self.SMALLEST[dtype_name]
+            for exponent in (1.0, 2.0, 3.0, 0.5, 0.25, 0.0):
+                for base in (smallest, -smallest, 4 * smallest):
+                    for backend in BACKENDS:
+                        with self.subTest(
+                            dtype=dtype_name,
+                            base=base,
+                            exponent=exponent,
+                            backend=backend,
+                        ):
+                            self.assertMatchesReference(
+                                base, exponent, dtype_name, backend
+                            )
+
+    def test_the_largest_subnormal_operand(self):
+        for dtype_name in FLOATS:
+            base = self.LARGEST_SUBNORMAL[dtype_name]
+            for backend in BACKENDS:
+                with self.subTest(dtype=dtype_name, backend=backend):
+                    self.assertMatchesReference(base, 1.0, dtype_name, backend)
+
+    def test_normal_operands_producing_subnormal_results(self):
+        cases = {
+            "float32": ((1e-20, 2.0), (1e-22, 2.0), (-1e-20, 3.0), (2e-19, 2.0)),
+            "float64": ((1e-160, 2.0), (1e-170, 2.0), (-1e-160, 3.0)),
+        }
+        for dtype_name in FLOATS:
+            for base, exponent in cases[dtype_name]:
+                for backend in BACKENDS:
+                    with self.subTest(
+                        dtype=dtype_name,
+                        base=base,
+                        exponent=exponent,
+                        backend=backend,
+                    ):
+                        self.assertMatchesReference(base, exponent, dtype_name, backend)
+
+    def test_results_near_the_normal_boundary(self):
+        """An exponent just above 1 pushes the smallest normal below it."""
+        import numpy
+
+        for dtype_name in FLOATS:
+            base = self.MIN_NORMAL[dtype_name]
+            narrow = numpy.float32 if dtype_name == "float32" else numpy.float64
+            exponent = float(narrow(1.0000001))
+            for backend in BACKENDS:
+                with self.subTest(dtype=dtype_name, backend=backend):
+                    self.assertMatchesReference(base, exponent, dtype_name, backend)
+
+    def test_results_near_the_zero_boundary(self):
+        """Just above and just below the point where the result rounds away."""
+        cases = {
+            "float32": ((1e-22, 2.0), (1e-23, 2.0)),
+            "float64": ((1e-170, 2.0), (1e-180, 2.0)),
+        }
+        for dtype_name in FLOATS:
+            for base, exponent in cases[dtype_name]:
+                for backend in BACKENDS:
+                    with self.subTest(dtype=dtype_name, base=base, backend=backend):
+                        self.assertMatchesReference(base, exponent, dtype_name, backend)
+
+    def test_genuine_underflow_reaches_correctly_signed_zero(self):
+        cases = {
+            "float32": ((1e-23, 2.0, 0.0), (-1e-23, 3.0, -0.0)),
+            "float64": ((1e-180, 2.0, 0.0), (-1e-180, 3.0, -0.0)),
+        }
+        for dtype_name in FLOATS:
+            for base, exponent, expected in cases[dtype_name]:
+                for backend in BACKENDS:
+                    with self.subTest(dtype=dtype_name, base=base, backend=backend):
+                        with ts.use_backend(backend):
+                            produced = (
+                                tensor(dtype_name, [base]) ** exponent
+                            ).tolist()[0]
+                        self.assertBitsEqual(
+                            produced,
+                            expected,
+                            dtype_name,
+                            f"{base!r} ** {exponent!r}",
+                        )
+
+    def test_unfused_replay_preserves_subnormals(self):
+        from tensors.graph import Computation
+
+        for dtype_name in FLOATS:
+            smallest = self.SMALLEST[dtype_name]
+            for backend in BACKENDS:
+                with self.subTest(dtype=dtype_name, backend=backend):
+                    with ts.use_backend(backend):
+                        base = ts.Variable(
+                            tensor(dtype_name, [smallest]), requires_grad=False
+                        )
+                        produced = Computation(base**1.0).forward().tolist()[0]
+                    self.assertBitsEqual(produced, smallest, dtype_name)
 
     @unittest.skipUnless("cuda" in BACKENDS, "CUDA backend is not installed")
-    def test_float64_subnormals_survive_on_cuda(self):
-        """The dtype the flush does not affect, asserted so the gap is bounded."""
-        _, smallest, _ = self.LIMITS["float64"]
-        with ts.use_backend("cuda"):
-            result = tensor("float64", [smallest]) ** 1.0
-        self.assertEqual(result.tolist()[0], smallest)
+    def test_fused_replay_preserves_subnormals(self):
+        """`* 1.0` forces fusion and preserves a signed zero."""
+        import tensors.backend.cuda.kernels as cuda_backend
+        from tensors.backend import loading
+        from tensors.graph import Computation
+
+        size = 16_384
+        for dtype_name in FLOATS:
+            smallest = self.SMALLEST[dtype_name]
+            with self.subTest(dtype=dtype_name), ts.use_backend("cuda"):
+                operand = tensor(dtype_name, [smallest] * size)
+                eager = ((operand**1.0) * 1.0).tolist()
+                variable = ts.Variable(operand, requires_grad=False)
+                with patch.object(
+                    cuda_backend,
+                    "fused_elementwise",
+                    wraps=cuda_backend.fused_elementwise,
+                ) as fused:
+                    loading._clear_backend_kernel_cache()
+                    produced = Computation((variable**1.0) * 1.0).forward().tolist()
+                self.assertTrue(fused.called, "the fused kernel was not reached")
+            self.assertBitsEqual(produced[0], smallest, dtype_name, "fused")
+            self.assertBitsEqual(produced[0], eager[0], dtype_name, "fused vs eager")
+
+    @unittest.skipUnless("cuda" in BACKENDS, "CUDA backend is not installed")
+    def test_fused_arithmetic_also_preserves_subnormals(self):
+        """The same conversion fixed `+` and `*` in a fused binary32 plan."""
+        import tensors.backend.cuda.kernels as cuda_backend
+        from tensors.backend import loading
+        from tensors.graph import Computation
+
+        size = 16_384
+        smallest = self.SMALLEST["float32"]
+        for label, build in (
+            ("(x * 1.0) * 1.0", lambda v: (v * 1.0) * 1.0),
+            ("(x + 0.0) * 1.0", lambda v: (v + 0.0) * 1.0),
+        ):
+            with self.subTest(expression=label), ts.use_backend("cuda"):
+                operand = tensor("float32", [smallest] * size)
+                variable = ts.Variable(operand, requires_grad=False)
+                with patch.object(
+                    cuda_backend,
+                    "fused_elementwise",
+                    wraps=cuda_backend.fused_elementwise,
+                ) as fused:
+                    loading._clear_backend_kernel_cache()
+                    produced = Computation(build(variable)).forward().tolist()
+                self.assertTrue(fused.called, "the fused kernel was not reached")
+            self.assertBitsEqual(produced[0], smallest, "float32", label)
 
 
 class RealValuedOnly(SpecifiedComparison):
