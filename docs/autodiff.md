@@ -652,9 +652,25 @@ from one that ran where they asked.
 
 > **Status: implemented for the CUDA fusion kernels.**
 
-An optimisation must preserve the numerical result of the original sequence of
-typed operations. Fusion may remove intermediate allocations and memory
-traffic; it may not change what the function computes.
+An optimisation must preserve the **specified** result of the original
+sequence of typed operations. Fusion may remove intermediate allocations and
+memory traffic; it may not change what the function computes.
+
+What "preserve" requires depends on what the specification determines, and the
+distinction matters now that exponentiation is specified:
+
+| operation | requirement on a fused or relocated execution |
+| --- | --- |
+| `+`, `-`, `*`, `/` | **Bitwise identical.** IEEE 754 requires these to be correctly rounded, so the result is uniquely determined. Unchanged by this section. |
+| integer `**` | **Bitwise identical.** Exact fixed-width arithmetic ([Arithmetic semantics §12.4.1](arithmetic-semantics.md#1241-non-negative-exponents-wrap-d3)). |
+| floating `**` | The accuracy contract in [Arithmetic semantics §12.6](arithmetic-semantics.md#126-accuracy): IEEE special values exactly, and every other result within the stated bound of the correctly rounded value. **Bitwise equality is not required and must not be inferred.** |
+
+Whatever the operation, fusion must preserve **the mathematical operation
+performed, the declared dtype, the exceptional-value semantics including the
+signs of zeros and infinities, and every rounding boundary the unfused form
+has**. A fused kernel must not introduce an additional numerical operation,
+omit one, or reassociate operations that were not authorised to be
+reassociated.
 
 Concretely, for an expression evaluated in dtype `d`, the unfused form rounds
 at every operation:
@@ -687,15 +703,24 @@ The same constraint forbids a fused kernel from carrying an intermediate at
 wider precision than the declared dtype, for the reason given in
 [Arithmetic semantics §5.5](arithmetic-semantics.md#55-why-declared-precision-matters).
 
-Two consequences follow:
+Two consequences follow. Both are stated against the table above, so that
+neither claims bitwise equality where the specification does not provide it:
 
-- **Replay.** A Computation replayed with fusion enabled must produce the same
-  values as the same Computation replayed without it. Fusion is an execution
-  plan, and a plan does not change the function.
+- **Replay.** A Computation replayed with fusion enabled must produce what the
+  same Computation produces without it — bit for bit where the table requires
+  it, and otherwise within the specified accuracy contract, with the same
+  dtype and the same exceptional values. Fusion is an execution plan, and a
+  plan does not change the function.
 - **Backend switching.** The same graph replayed on a different backend must
-  produce the same values, fused or not. A fused CUDA kernel and an unfused
-  Python execution of one expression are two implementations of one specified
-  function.
+  likewise produce what the table requires: identical results for the four
+  arithmetic operations and for integer exponentiation, and for floating
+  exponentiation a result that satisfies
+  [§12.6](arithmetic-semantics.md#126-accuracy) with identical special values,
+  signs and dtype. A fused CUDA kernel and an unfused Python execution of one
+  expression are two implementations of one specified function; where that
+  function is not uniquely determined by the standard, they must both be
+  conforming implementations of it rather than bit-for-bit copies of each
+  other.
 
 If a relaxed numerical mode permitting contraction or reassociation is wanted
 later, it must be an explicit, separately documented execution mode. It is not

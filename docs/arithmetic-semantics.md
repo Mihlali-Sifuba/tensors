@@ -977,10 +977,26 @@ correct by construction.
 ### 9.3 Cross-backend equality: what is achievable
 
 Bitwise cross-backend equality is **required** for all four operations on both
-floating dtypes, and for every integer operation. **It is not required for
-exponentiation**, which is bounded instead; see
-[section 12.6](#126-accuracy) and the amended **P3** in
-[section 2](#2-architectural-principles).
+floating dtypes, and for every integer operation.
+
+**Exponentiation divides by dtype**, and the exclusion must not be read more
+broadly than it is:
+
+- **Integer exponentiation is exact fixed-width arithmetic**
+  ([section 12.4.1](#1241-non-negative-exponents-wrap-d3)) and is therefore
+  **required to be bitwise identical** across conforming backends, exactly as
+  every other integer operation is.
+- **Floating-point exponentiation** requires the IEEE special values of
+  [section 12.3.3](#1233-the-complete-special-value-table) to agree
+  **exactly**, including the prescribed signs of zeros and infinities, with
+  NaN compared by classification. Its **ordinary finite results are bounded,
+  not bitwise**: they must satisfy the accuracy limits of
+  [section 12.6.2](#1262-the-accuracy-bounds) against the correctly rounded
+  value.
+
+This is the distinction the amended **P3** in
+[section 2](#2-architectural-principles) draws between semantic consistency and
+bitwise reproducibility.
 
 It is also **achievable**, which was established rather than assumed. IEEE 754
 requires these four operations to be correctly rounded, so the result is
@@ -1671,19 +1687,44 @@ in [section 2](#2-architectural-principles).
 
 #### 12.6.7 Determinism
 
-> For a fixed backend, a fixed library, driver and toolkit build, a fixed
-> device, and a fixed dtype, `**` is deterministic: identical inputs produce
-> identical results.
+Two requirements are stated here. They are independent, and neither implies
+the other.
 
-**Every supported execution path must satisfy this section's numerical
-contract.** That requirement stands on the contract itself and not on any
-measurement of particular memory layouts or launch configurations; no bitwise
-guarantee attaches to a layout or a launch shape.
+**R1 — Every supported execution path must satisfy this section's numerical
+contract.** Whatever backend runs the operation, whatever the tensor's size or
+memory layout, whether the work is fused or unfused, and whatever launch
+configuration a kernel chooses, the result must satisfy the accuracy bounds of
+[12.6.2](#1262-the-accuracy-bounds), reproduce the special values of
+[12.3.3](#1233-the-complete-special-value-table) exactly, and carry the dtype
+that [12.5](#125-result-dtypes-and-scalar-conversion) determines. This is a
+requirement on every path, unconditionally. It does not promise that two paths
+agree bit for bit.
 
-Determinism is **not** promised across backends, across library or driver
-versions, across devices, or across CPU models. Microsoft documents that the
-UCRT selects implementations at run time and *"may produce different results
-across CPUs"*, so two hosts running the same build may legitimately differ.
+**R2 — Bitwise determinism is promised only within a fixed execution
+environment.** Repeating an operation returns identical bits when **all** of
+the following are held fixed:
+
+| condition | must be identical |
+| --- | --- |
+| backend | the same backend implementation |
+| libraries | the same NumPy, CuPy, math-library, driver and toolkit builds |
+| device | the same CPU model, or the same GPU model and compute capability |
+| dtype | the same declared operand and result dtypes |
+| execution configuration | the same execution path, memory layout, tensor shape and kernel launch configuration |
+
+Change any of them and bitwise determinism is no longer promised, only R1.
+
+**Bitwise determinism must not be inferred from measurement.** Observing that
+two memory layouts, two launch configurations or two execution paths currently
+agree does not establish that they must, and no such observation is promoted
+to a guarantee here. Where the conditions above are not all fixed, R1 is the
+only commitment.
+
+Determinism is in particular **not** promised across backends, across library,
+driver or toolkit versions, across devices, or across CPU models. Microsoft
+documents that the UCRT selects implementations at run time and *"may produce
+different results across CPUs"*, so two hosts running the same build may
+legitimately differ while both conform.
 
 ### 12.7 Differentiation (D7)
 
