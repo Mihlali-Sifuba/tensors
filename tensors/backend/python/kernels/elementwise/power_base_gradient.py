@@ -6,10 +6,17 @@ import math
 from tensors.tensor import Tensor
 from tensors.dtype import resolve_power
 from tensors.backend.python.kernels.arithmetic.power import power, _power
+from tensors.utils.power_gradients import base_derivative
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tensors.backend.storage import Storage
+
+
+#: The smallest normal magnitude of each floating dtype. Below it a value has
+#: lost significand bits to the subnormal range, so the shortcut that divides
+#: the forward result by the base would inherit the loss.
+_SMALLEST_NORMAL = {"f": 1.1754943508222875e-38, "d": 2.2250738585072014e-308}
 
 
 def _power_values(base, exponent):
@@ -21,19 +28,60 @@ def _power_values(base, exponent):
 
 
 def _base_gradient_value(
-    upstream: float, base: float, exponent: float, output: float
+    upstream: float,
+    base: float,
+    exponent: float,
+    output: float,
+    normal_minimum: float = 0.0,
 ) -> float:
-    """Return ``upstream * exponent * base**(exponent - 1)`` stably."""
+    """Return the VJP ``upstream * d(base ** exponent)/d(base)``.
+
+    The derivative follows the region table of section 12.7.2; only the
+    ordinary rows evaluate ``exponent * base ** (exponent - 1)``, and those
+    are evaluated without avoidable range loss.
+
+    The classified rows are multiplied by the upstream gradient as they
+    stand. Nothing here short-circuits a zero upstream against an infinite or
+    undefined derivative: ``0 * inf`` and ``0 * NaN`` are NaN, which is the
+    honest answer where no derivative exists, and section 12.7 approves no
+    convention for that product.
+    """
+    derivative, _ = base_derivative(base, exponent)
+    if derivative is not None:
+        return upstream * derivative
+
+    # The ordinary rows. A zero upstream gives exactly zero here because the
+    # derivative is finite; the short-circuit is a range guard, not a
+    # convention, and it is correct only because of that.
     if upstream == 0.0 or exponent == 0.0:
         return 0.0
-    if base == 0.0:
-        if exponent == 1.0:
-            return upstream
-        if exponent > 1.0:
-            return 0.0
-        raise ValueError("power derivative is undefined at a zero base")
-    if all((math.isfinite(value) for value in (upstream, base, exponent, output))):
-        if output != 0.0:
+    if math.isfinite(base) and base > 0.0 and math.isfinite(exponent):
+        # Two forms are available and they fail in opposite directions.
+        #
+        #   direct:   upstream * exponent * base**(exponent - 1)
+        #   quotient: upstream * exponent * base**exponent / base
+        #
+        # The quotient reuses the forward value, so it survives where
+        # base**(exponent - 1) underflows to nothing — at base 1e308 with
+        # exponent -1 that power is 1e-616 and the direct form has no digits
+        # left. But it inherits whatever the forward value has already lost,
+        # so where *that* is subnormal the quotient is the worse of the two:
+        # at base 1e-10 with exponent 4 in float32 the forward value is a
+        # subnormal and the quotient came out 57 ULP from the correctly
+        # rounded derivative.
+        #
+        # Whichever intermediate is a normal number is therefore preferred,
+        # and the logarithmic form below takes over when neither is.
+        try:
+            shifted = float(_power(base, exponent - 1.0))
+        except OverflowError:
+            shifted = math.inf
+        if math.isfinite(shifted) and abs(shifted) >= normal_minimum:
+            return _product_quotient([upstream, exponent, shifted])
+        # Second choice, and only second: the forward value may be subnormal
+        # and have lost digits, but it still carries more of them than the
+        # logarithmic form below, which is accurate to about a part in 1e14.
+        if math.isfinite(output) and output != 0.0:
             return _product_quotient([upstream, exponent, output], [base])
     return _power_product([upstream, exponent], base, exponent - 1.0)
 
@@ -58,7 +106,9 @@ def _power_product(factors: list[float], base: float, exponent: float) -> float:
         magnitude_base = abs(base)
         if base < 0.0:
             if not exponent.is_integer():
-                raise ValueError("power is not defined for these real-valued inputs")
+                # Section 12.3.3 gives NaN rather than an error, and section
+                # 12.7.2 classifies the derivative here as NaN too.
+                return math.nan
             if int(exponent) % 2:
                 sign = -sign
         logarithm = math.fsum(
@@ -118,10 +168,16 @@ def power_base_gradient(grad: Tensor, base: Tensor, exponent: Tensor) -> Storage
     output = _power_values(base, exponent)
     values = [
         _base_gradient_value(
-            float(upstream), float(base_value), float(power), float(result)
+            float(upstream),
+            float(base_value),
+            float(power),
+            float(result),
+            _SMALLEST_NORMAL[base.dtype.typecode],
         )
         for upstream, base_value, power, result in zip(
             grad._data, base._data, exponent._data, output._data
         )
     ]
-    return PythonStorage.from_values(values, grad.dtype)
+    # Rule G5: the gradient carries the *base's* declared dtype, not the
+    # upstream gradient's.
+    return PythonStorage.from_values(values, base.dtype)

@@ -95,11 +95,39 @@ def _build_power() -> Any:
     )
 
 
+def _build_narrow() -> Any:
+    """Compile the binary64 to binary32 narrowing.
+
+    ``astype`` flushes a binary32 subnormal on this toolchain, so a gradient
+    computed in binary64 and narrowed with it lost every subnormal result:
+    ``d/dy`` of ``1e-10 ** 4`` returned ``-0.0`` where the correctly rounded
+    derivative is the subnormal ``-2.302585610609253e-39``. Section 5.4
+    requires gradual underflow, and the PTX conversion delivers it, exactly as
+    the forward binary32 kernels already do.
+    """
+    return cupy.ElementwiseKernel(
+        "float64 value",
+        "float32 out",
+        _NARROW.replace("computed", "value"),
+        "tensors_ieee32_narrow",
+    )
+
+
+def narrow(values: Any) -> Any:
+    """Round a binary64 array to binary32, subnormals included."""
+    return kernel("narrow")(values)
+
+
 def kernel(name: str) -> Any:
     """Return the binary32 kernel for an operation, compiled on first use."""
     built = _KERNELS.get(name)
     if built is None:
-        built = _build_power() if name == "power" else _build(name)
+        if name == "power":
+            built = _build_power()
+        elif name == "narrow":
+            built = _build_narrow()
+        else:
+            built = _build(name)
         _KERNELS[name] = built
     return built
 
@@ -109,4 +137,4 @@ def apply(name: str, left: Any, right: Any) -> Any:
     return kernel(name)(left, right)
 
 
-__all__ = ["apply", "kernel"]
+__all__ = ["apply", "kernel", "narrow"]

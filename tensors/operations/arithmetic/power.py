@@ -14,12 +14,19 @@ from tensors.operations.base import Operation
 from tensors.shape import Shape
 from tensors.tensor import Tensor
 from tensors.utils.broadcasting import broadcast_to, broadcast_tensors
+from tensors.utils.power_gradients import base_derivative, exponent_derivative
 
 if TYPE_CHECKING:
     from tensors.variable import Variable
 from tensors.operations._gradient_shaping import sum_to_shape, sum_to_shape_graph
 
 Scalar = Union[int, float]
+
+#: The smallest normal binary32 magnitude. The gradient shortcut that
+#: divides the forward value by the base is exact enough only above it;
+#: the narrower dtype's threshold is used so neither dtype is served by a
+#: value that has already lost significand bits.
+_SMALLEST_NORMAL = 1.1754943508222875e-38
 
 
 def _has_negative_exponent(exponent: Tensor) -> bool:
@@ -133,7 +140,8 @@ def _power_product(factors: list[float], base: float, exponent: float) -> float:
         magnitude_base = abs(base)
         if base < 0.0:
             if not exponent.is_integer():
-                raise ValueError("power is not defined for these real-valued inputs")
+                # Section 12.3.3 gives NaN rather than an error here.
+                return math.nan
             if int(exponent) % 2:
                 sign = -sign
         logarithm = math.fsum(
@@ -149,19 +157,45 @@ def _power_product(factors: list[float], base: float, exponent: float) -> float:
 
 
 def _base_gradient_value(
-    upstream: float, base: float, exponent: float, output: float
+    upstream: float,
+    base: float,
+    exponent: float,
+    output: float,
+    normal_minimum: float = 0.0,
 ) -> float:
-    """Return ``upstream * exponent * base**(exponent - 1)`` stably."""
+    """Return the VJP with respect to the base, by the section 12.7.2 table."""
+    derivative, _ = base_derivative(base, exponent)
+    if derivative is not None:
+        return upstream * derivative
     if upstream == 0.0 or exponent == 0.0:
         return 0.0
-    if base == 0.0:
-        if exponent == 1.0:
-            return upstream
-        if exponent > 1.0:
-            return 0.0
-        raise ValueError("power derivative is undefined at a zero base")
-    if all((math.isfinite(value) for value in (upstream, base, exponent, output))):
-        if output != 0.0:
+    if math.isfinite(base) and base > 0.0 and math.isfinite(exponent):
+        # Two forms are available and they fail in opposite directions.
+        #
+        #   direct:   upstream * exponent * base**(exponent - 1)
+        #   quotient: upstream * exponent * base**exponent / base
+        #
+        # The quotient reuses the forward value, so it survives where
+        # base**(exponent - 1) underflows to nothing — at base 1e308 with
+        # exponent -1 that power is 1e-616 and the direct form has no digits
+        # left. But it inherits whatever the forward value has already lost,
+        # so where *that* is subnormal the quotient is the worse of the two:
+        # at base 1e-10 with exponent 4 in float32 the forward value is a
+        # subnormal and the quotient came out 57 ULP from the correctly
+        # rounded derivative.
+        #
+        # Whichever intermediate is a normal number is therefore preferred,
+        # and the logarithmic form below takes over when neither is.
+        try:
+            shifted = float(_power(base, exponent - 1.0))
+        except OverflowError:
+            shifted = math.inf
+        if math.isfinite(shifted) and abs(shifted) >= normal_minimum:
+            return _product_quotient([upstream, exponent, shifted])
+        # Second choice, and only second: the forward value may be subnormal
+        # and have lost digits, but it still carries more of them than the
+        # logarithmic form below, which is accurate to about a part in 1e14.
+        if math.isfinite(output) and output != 0.0:
             return _product_quotient([upstream, exponent, output], [base])
     return _power_product([upstream, exponent], base, exponent - 1.0)
 
@@ -169,8 +203,11 @@ def _base_gradient_value(
 def _exponent_gradient_value(
     upstream: float, output: float, base: float, exponent: float
 ) -> float:
-    """Return ``upstream * output * log(base)`` stably."""
-    if upstream == 0.0 or base == 0.0:
+    """Return the VJP with respect to the exponent, by the same table."""
+    derivative, _ = exponent_derivative(base, exponent)
+    if derivative is not None:
+        return upstream * derivative
+    if upstream == 0.0:
         return 0.0
     logarithm = math.log(base)
     if logarithm == 0.0:
@@ -214,34 +251,26 @@ class Pow(Operation):
         """
         base, exponent = inputs
         need_base, need_exponent = needs_input_grad
-        if need_exponent:
-            expanded_base, expanded_exponent = broadcast_tensors(base, exponent)
-            if any((value < 0 for value in expanded_base._data)):
-                raise ValueError(
-                    "power gradients with respect to a tensor exponent require non-negative bases"
-                )
-            if any(
-                (
-                    value == 0 and (not power > 0)
-                    for value, power in zip(
-                        expanded_base._data, expanded_exponent._data
-                    )
-                )
-            ):
-                raise ValueError(
-                    "power gradients for a zero base require strictly positive exponents"
-                )
+        # No operand is inspected here. The exponent-gradient domain checks
+        # that used to stand in this place read both tensors to the host,
+        # raised for a negative or zero base, and in raising discarded the
+        # *base* gradient as well — the case section 12.7.3 works through.
+        # Rules G1 to G3 replace all three behaviours: each requested gradient
+        # is computed on its own, an absent derivative is NaN rather than an
+        # exception, and no host synchronisation detects any of it.
         base_grad = None
         if need_base:
             storage = execute_power_base_gradient(grad, base, exponent)
+            # Rule G5: each gradient carries its own operand's declared dtype,
+            # not the upstream gradient's.
             base_grad = Tensor._from_owned_storage(
-                storage, dtype=grad.dtype, shape=grad.shape
+                storage, dtype=base.dtype, shape=grad.shape
             )
         exponent_grad = None
         if need_exponent:
             storage = execute_power_exponent_gradient(grad, base, exponent)
             exponent_grad = Tensor._from_owned_storage(
-                storage, dtype=grad.dtype, shape=grad.shape
+                storage, dtype=exponent.dtype, shape=grad.shape
             )
         return [
             sum_to_shape(base_grad, base.shape) if base_grad is not None else None,
@@ -256,25 +285,8 @@ class Pow(Operation):
         """Build the requested differentiable VJPs for exponentiation."""
         base, exponent = inputs
         need_base, need_exponent = needs_input_grad
-        if need_exponent:
-            expanded_base, expanded_exponent = broadcast_tensors(
-                base.data, exponent.data
-            )
-            if any((value < 0 for value in expanded_base._data)):
-                raise ValueError(
-                    "power gradients with respect to a tensor exponent require non-negative bases"
-                )
-            if any(
-                (
-                    value == 0 and (not power > 0)
-                    for value, power in zip(
-                        expanded_base._data, expanded_exponent._data
-                    )
-                )
-            ):
-                raise ValueError(
-                    "power gradients for a zero base require strictly positive exponents"
-                )
+        # The same three corrections as in `backward`; the differentiable path
+        # must implement the same D7 semantics as the eager one.
         return [
             (
                 sum_to_shape_graph(_power_base_vjp(grad, base, exponent), base.shape)
@@ -320,8 +332,9 @@ class PowerBaseGradient(Operation):
     def forward(self, grad: Tensor, base: Tensor, exponent: Tensor) -> Tensor:
         grad, base, exponent = _expanded_power_inputs(grad, base, exponent)
         accelerated = execute_power_base_gradient(grad, base, exponent)
+        # Rule G5: the base's declared dtype, not the upstream gradient's.
         return Tensor._from_owned_storage(
-            accelerated, dtype=grad.dtype, shape=grad.shape
+            accelerated, dtype=base.dtype, shape=grad.shape
         )
 
     def backward(
@@ -351,7 +364,9 @@ class PowerBaseGradient(Operation):
             result = float(result)
             if need_grad:
                 grad_values.append(
-                    _base_gradient_value(outer, base_value, power, result)
+                    _base_gradient_value(
+                        outer, base_value, power, result, _SMALLEST_NORMAL
+                    )
                 )
             if need_base:
                 base_values.append(
@@ -434,8 +449,9 @@ class PowerExponentGradient(Operation):
     def forward(self, grad: Tensor, base: Tensor, exponent: Tensor) -> Tensor:
         grad, base, exponent = _expanded_power_inputs(grad, base, exponent)
         accelerated = execute_power_exponent_gradient(grad, base, exponent)
+        # Rule G5: the exponent's declared dtype.
         return Tensor._from_owned_storage(
-            accelerated, dtype=grad.dtype, shape=grad.shape
+            accelerated, dtype=exponent.dtype, shape=grad.shape
         )
 
     def backward(

@@ -6,6 +6,7 @@ import math
 from tensors.tensor import Tensor
 from tensors.dtype import resolve_power
 from tensors.backend.python.kernels.arithmetic.power import power, _power
+from tensors.utils.power_gradients import exponent_derivative
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -23,8 +24,20 @@ def _power_values(base, exponent):
 def _exponent_gradient_value(
     upstream: float, output: float, base: float, exponent: float
 ) -> float:
-    """Return ``upstream * output * log(base)`` stably."""
-    if upstream == 0.0 or base == 0.0:
+    """Return the VJP ``upstream * d(base ** exponent)/d(exponent)``.
+
+    The derivative follows the region table of section 12.7.2. A zero base is
+    not uniformly zero as the previous form assumed: it is zero only for a
+    strictly positive exponent, and NaN at and below zero. A negative base has
+    no exponent derivative at all, because ``ln x`` is undefined there — the
+    previous form called ``math.log`` on it and raised.
+    """
+    derivative, _ = exponent_derivative(base, exponent)
+    if derivative is not None:
+        return upstream * derivative
+
+    # The ordinary rows, where base > 0 and ln base is real.
+    if upstream == 0.0:
         return 0.0
     logarithm = math.log(base)
     if logarithm == 0.0:
@@ -54,7 +67,7 @@ def _power_product(factors: list[float], base: float, exponent: float) -> float:
         magnitude_base = abs(base)
         if base < 0.0:
             if not exponent.is_integer():
-                raise ValueError("power is not defined for these real-valued inputs")
+                return math.nan
             if int(exponent) % 2:
                 sign = -sign
         logarithm = math.fsum(
@@ -122,4 +135,5 @@ def power_exponent_gradient(
             grad._data, output._data, base._data, exponent._data
         )
     ]
-    return PythonStorage.from_values(values, grad.dtype)
+    # Rule G5: the gradient carries the *exponent's* declared dtype.
+    return PythonStorage.from_values(values, exponent.dtype)
