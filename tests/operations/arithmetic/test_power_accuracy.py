@@ -25,21 +25,23 @@ from unittest.mock import patch
 
 import tensors as ts
 
-from . import _accuracy, _power_cases
+from . import _accuracy, _power_cases, _spec
 from ._reference import (
     OutsideReferenceDomain,
     UnresolvedReference,
     reference_power,
 )
-from ._support import BACKENDS, DTYPE, ArithmeticTestCase
+from ._support import BACKENDS, DTYPE, ArithmeticTestCase, float_bits
 
 FLOATS = ("float32", "float64")
 
 #: Above the CUDA fusion threshold.
 FUSED_SIZE = 16_384
 
-#: (backend, dtype, path) -> (maximum ULP observed, elements compared).
-MEASUREMENTS: dict[tuple[str, str, str], tuple[int, int]] = {}
+#: (backend, dtype, path) -> (maximum ULP observed, elements compared,
+#: reference cases that did not resolve). The last must stay zero: an
+#: unresolved reference fails its case rather than being skipped.
+MEASUREMENTS: dict[tuple[str, str, str], tuple[int, int, int]] = {}
 
 
 @lru_cache(maxsize=None)
@@ -95,8 +97,12 @@ class AccuracyHarness(ArithmeticTestCase):
                 )
 
         key = (backend, dtype_name, path)
-        previous = MEASUREMENTS.get(key, (0, 0))
-        MEASUREMENTS[key] = (max(previous[0], worst), previous[1] + compared)
+        previous = MEASUREMENTS.get(key, (0, 0, 0))
+        MEASUREMENTS[key] = (
+            max(previous[0], worst),
+            previous[1] + compared,
+            previous[2] + len(unresolved),
+        )
 
         # assertFalse rather than assertEqual against []: unittest's sequence
         # diff truncates, and a diagnostic that cannot be read is not one.
@@ -127,20 +133,41 @@ class AccuracyHarness(ArithmeticTestCase):
             return base.tolist(), exponent.tolist(), produced
 
     def run_eager_scalar(self, backend, dtype_name, cases, *, reflected):
-        """One element per call, since a scalar operand carries one value."""
+        """One element per call, since a scalar operand carries one value.
+
+        The *literal* is what reaches the public operation — that is the path
+        under test, and handing the operation an already-rounded value would
+        bypass the scalar conversion instead of exercising it. The *converted*
+        value is what the reference is asked about, because rule S3 rounds a
+        Python float into the target format before the kernel evaluates, so
+        the literal is not the number the kernel saw.
+
+        The conversion target comes from the operand-conversion rules rather
+        than from the result dtype; see :func:`_spec.power_scalar_target`.
+        """
         bases, exponents, produced = [], [], []
         with ts.use_backend(backend):
             for _, base, exponent in cases:
+                scalar = exponent if not reflected else base
+                target = _spec.power_scalar_target(
+                    dtype_name, scalar, reflected=reflected
+                )
+                # Both operands are floating here, so S-p takes the tensor's
+                # dtype and the reference is asked in that same format. The
+                # assertion keeps that from becoming a silent assumption.
+                self.assertEqual(target, dtype_name)
+                converted = _spec.converted_scalar(scalar, target)
+
                 if reflected:
                     operand = ts.Tensor([exponent], dtype=DTYPE[dtype_name])
                     produced.append((base**operand).tolist()[0])
-                    bases.append(base)
+                    bases.append(converted)
                     exponents.append(operand.tolist()[0])
                 else:
                     operand = ts.Tensor([base], dtype=DTYPE[dtype_name])
                     produced.append((operand**exponent).tolist()[0])
                     bases.append(operand.tolist()[0])
-                    exponents.append(exponent)
+                    exponents.append(converted)
         return bases, exponents, produced
 
     def run_replay(self, backend, dtype_name, cases):
@@ -190,6 +217,15 @@ class ConstructedCases(AccuracyHarness):
     def cases(self, dtype_name):
         return _power_cases.constructed(dtype_name)
 
+    def scalar_cases(self, dtype_name):
+        """The constructed cases plus scalars the conversion actually changes.
+
+        Every operand in :mod:`_power_cases` is pre-rounded into its dtype, so
+        on its own it would leave the scalar conversion untested: the literal
+        would already equal its converted value.
+        """
+        return self.cases(dtype_name) + _power_cases.inexact_scalars(dtype_name)
+
     def test_eager_tensor_tensor(self):
         for dtype_name in FLOATS:
             cases = self.cases(dtype_name)
@@ -209,7 +245,7 @@ class ConstructedCases(AccuracyHarness):
 
     def test_eager_tensor_scalar(self):
         for dtype_name in FLOATS:
-            cases = self.cases(dtype_name)
+            cases = self.scalar_cases(dtype_name)
             for backend in BACKENDS:
                 with self.subTest(backend=backend, dtype=dtype_name):
                     bases, exponents, produced = self.run_eager_scalar(
@@ -226,7 +262,7 @@ class ConstructedCases(AccuracyHarness):
 
     def test_eager_reflected_scalar_base(self):
         for dtype_name in FLOATS:
-            cases = self.cases(dtype_name)
+            cases = self.scalar_cases(dtype_name)
             for backend in BACKENDS:
                 with self.subTest(backend=backend, dtype=dtype_name):
                     bases, exponents, produced = self.run_eager_scalar(
@@ -422,6 +458,213 @@ class ShapesLayoutsAndMixedDtypes(AccuracyHarness):
                 )
 
 
+class ScalarOperandsAreRecordedAsConverted(AccuracyHarness):
+    """The reference must be asked about the operands the kernel evaluated.
+
+    Rule S3 rounds a Python float into the target format *before* the kernel
+    evaluates, so the literal written in a test is not, in general, the number
+    the kernel saw. Recording the literal made the harness compare a real
+    result against a reference for a different operand pair. It produced no
+    wrong verdict while every case was pre-rounded into its dtype, but on a
+    genuinely inexact scalar it manufactures errors of tens of ULP.
+
+    Scalars are compared in binary64 throughout. Comparing them as float32
+    bits would round both sides and conceal exactly this defect.
+    """
+
+    #: The case reported against the harness.
+    BASE = 1.1754943508222875e-38
+    LITERAL = 1.0000001
+    CONVERTED = 1.0000001192092896
+
+    def converted_by_the_package(self, value, dtype_name):
+        """What the package's own conversion produces, for cross-checking."""
+        from tensors.dtype import convert_scalar
+
+        return convert_scalar(value, DTYPE[dtype_name])
+
+    def test_the_literal_and_its_conversion_differ(self):
+        """Otherwise the test would pass whatever the harness recorded."""
+        self.assertNotEqual(self.LITERAL, self.CONVERTED)
+        self.assertEqual(
+            _spec.converted_scalar(self.LITERAL, "float32"), self.CONVERTED
+        )
+        # Two independent derivations of the same conversion agree.
+        self.assertEqual(
+            float_bits(
+                self.converted_by_the_package(self.LITERAL, "float32"), "float64"
+            ),
+            float_bits(self.CONVERTED, "float64"),
+        )
+
+    def test_the_exponent_recorded_for_a_tensor_scalar_power(self):
+        """Requirements 1 to 5 for ``tensor ** scalar``."""
+        cases = [("reported", self.BASE, self.LITERAL)]
+        for backend in BACKENDS:
+            with self.subTest(backend=backend):
+                seen = []
+                from tensors import dtype as dtype_module
+
+                original = dtype_module.convert_scalar
+
+                def recording(value, dtype):
+                    seen.append(value)
+                    return original(value, dtype)
+
+                with patch.object(dtype_module, "convert_scalar", recording):
+                    bases, exponents, produced = self.run_eager_scalar(
+                        backend, "float32", cases, reflected=False
+                    )
+
+                # 1. the public operation received the literal, not a value
+                #    the test had already rounded for it
+                self.assertIn(
+                    self.LITERAL,
+                    seen,
+                    "the literal never reached the public scalar conversion",
+                )
+                # 2 and 3. the reference is given the converted value
+                self.assertEqual(
+                    float_bits(exponents[0], "float64"),
+                    float_bits(self.CONVERTED, "float64"),
+                    "the harness recorded the literal, not the converted scalar",
+                )
+                self.assertNotEqual(
+                    float_bits(exponents[0], "float64"),
+                    float_bits(self.LITERAL, "float64"),
+                )
+                # 4. the tensor operand comes from its stored representation
+                with ts.use_backend(backend):
+                    stored = ts.Tensor([self.BASE], dtype=ts.float32).tolist()[0]
+                self.assertEqual(
+                    float_bits(bases[0], "float64"), float_bits(stored, "float64")
+                )
+                # 5. the reference and the kernel evaluate the same pair
+                self.assertEqual(
+                    float_bits(exponents[0], "float64"),
+                    float_bits(
+                        self.converted_by_the_package(self.LITERAL, "float32"),
+                        "float64",
+                    ),
+                )
+
+    def test_the_base_recorded_for_a_reflected_scalar_power(self):
+        """Requirements 1 to 5 for ``scalar ** tensor`` under rule S-p."""
+        exponent = 1.5
+        cases = [("reflected", self.LITERAL, exponent)]
+        for backend in BACKENDS:
+            with self.subTest(backend=backend):
+                from tensors import dtype as dtype_module
+
+                seen = []
+                original = dtype_module.convert_scalar
+
+                def recording(value, dtype):
+                    seen.append(value)
+                    return original(value, dtype)
+
+                with patch.object(dtype_module, "convert_scalar", recording):
+                    bases, exponents, produced = self.run_eager_scalar(
+                        backend, "float32", cases, reflected=True
+                    )
+
+                self.assertIn(
+                    self.LITERAL,
+                    seen,
+                    "the literal never reached the public scalar conversion",
+                )
+                self.assertEqual(
+                    float_bits(bases[0], "float64"),
+                    float_bits(self.CONVERTED, "float64"),
+                    "the harness recorded the literal base, not its conversion",
+                )
+                self.assertNotEqual(
+                    float_bits(bases[0], "float64"),
+                    float_bits(self.LITERAL, "float64"),
+                )
+                with ts.use_backend(backend):
+                    stored = ts.Tensor([exponent], dtype=ts.float32).tolist()[0]
+                self.assertEqual(
+                    float_bits(exponents[0], "float64"),
+                    float_bits(stored, "float64"),
+                )
+                self.assertEqual(
+                    float_bits(bases[0], "float64"),
+                    float_bits(
+                        self.converted_by_the_package(self.LITERAL, "float32"),
+                        "float64",
+                    ),
+                )
+
+    def test_recording_the_literal_would_be_caught(self):
+        """The regression this class exists for, stated as a measurement.
+
+        Building the reference from the literal instead of its conversion
+        manufactures an error far outside the bound, on a result that is in
+        fact correct. If either scalar path is restored to recording its
+        literal, this is what the conformance tests would then report.
+        """
+        with ts.use_backend("python"):
+            base = ts.Tensor([self.BASE], dtype=ts.float32)
+            produced = (base**self.LITERAL).tolist()[0]
+            stored = base.tolist()[0]
+
+        from ._reference import reference_power
+
+        against_literal = reference_power(stored, self.LITERAL, "float32").value
+        against_converted = reference_power(stored, self.CONVERTED, "float32").value
+
+        wrong = _accuracy.compare(produced, against_literal, "float32")
+        right = _accuracy.compare(produced, against_converted, "float32")
+
+        self.assertTrue(right.conforms, "the kernel result is correct")
+        self.assertEqual(right.distance, 0)
+        self.assertFalse(wrong.conforms, "the literal must give a false failure")
+        self.assertGreater(
+            wrong.distance,
+            _accuracy.BOUNDS["float32"],
+            "recording the literal no longer produces a detectable error",
+        )
+
+    def test_the_conversion_target_comes_from_the_rules(self):
+        """Section 12.5.3: the target is not simply the result dtype.
+
+        A Python float base over an integer exponent tensor converts to the
+        promotion of float64 against that integer dtype — neither operand's
+        declared dtype. The harness derives the target rather than assuming
+        it, which is what keeps it right if a case of that shape is added.
+        """
+        self.assertEqual(
+            _spec.power_scalar_target("float32", 1.5, reflected=False), "float32"
+        )
+        self.assertEqual(
+            _spec.power_scalar_target("float32", 1.5, reflected=True), "float32"
+        )
+        self.assertEqual(
+            _spec.power_scalar_target("int32", 2.5, reflected=True), "float64"
+        )
+        self.assertEqual(_spec.power_scalar_target("int32", 3, reflected=True), "int32")
+
+    def test_the_scalar_cases_actually_exercise_a_conversion(self):
+        """Pre-rounded operands would leave the corrected path untested."""
+        for dtype_name in FLOATS:
+            with self.subTest(dtype=dtype_name):
+                cases = _power_cases.inexact_scalars(dtype_name)
+                self.assertTrue(cases)
+                if dtype_name == "float64":
+                    continue  # binary64 is the literal's own format
+                changed = [
+                    (base, exponent)
+                    for _, base, exponent in cases
+                    if _spec.converted_scalar(exponent, "float32") != exponent
+                    or _spec.converted_scalar(base, "float32") != base
+                ]
+                self.assertTrue(
+                    changed,
+                    "no case in the scalar set has a scalar S3 changes",
+                )
+
+
 class ThereIsNoUnmeasuredPath(ArithmeticTestCase):
     """Every path that can evaluate a power has been measured."""
 
@@ -481,9 +724,14 @@ class ThereIsNoUnmeasuredPath(ArithmeticTestCase):
             set(),
             "no accuracy measurement was recorded for: " + repr(sorted(missing)),
         )
-        for key, (worst, compared) in sorted(MEASUREMENTS.items()):
+        for key, (worst, compared, unresolved) in sorted(MEASUREMENTS.items()):
             with self.subTest(configuration=key):
                 self.assertGreater(compared, 0, f"{key} compared no elements")
+                self.assertEqual(
+                    unresolved,
+                    0,
+                    f"{key}: {unresolved} reference cases did not resolve",
+                )
                 self.assertLessEqual(
                     worst,
                     _accuracy.BOUNDS[key[1]],
