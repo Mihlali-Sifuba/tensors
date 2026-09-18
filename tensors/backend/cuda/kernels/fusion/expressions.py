@@ -335,7 +335,15 @@ def _zero_base_base_derivative(exponent: float, upstream: str) -> str:
 
     The exponent is known while the kernel is built, so the row is chosen
     here rather than tested on the device.
+
+    No public execution path reaches this: the fusion planner writes ``None``
+    into every step's scalar field, so a fused power step always carries its
+    exponent as a tensor operand. The NaN guard is here regardless, because
+    the comparisons below are all false for NaN and would otherwise select
+    the ``0 < y < 1`` convention for it.
     """
+    if exponent != exponent:
+        return f"({upstream}) * {_NAN}"
     if exponent < 0.0:
         return f"({upstream}) * {_NAN}"
     if exponent > 1.0:
@@ -413,12 +421,17 @@ def _fused_vjp_expressions(
         # The previous expression returned zero for every zero base, which is
         # right only for y = 0 and y > 1; it lost the +inf convention of
         # 0 < y < 1 and the NaN of y < 0.
+        # A NaN exponent is tested first. Every ordered comparison below is
+        # false for NaN, so it would otherwise fall through the whole chain
+        # and reach the last branch, which assumes 0 < y < 1 and returns the
+        # +inf convention. Section 12.7.2 requires a NaN operand to propagate.
         zero_base = (
-            f"(({exponent}) == 0.0 ? ({upstream}) * 0.0"
+            f"(isnan({exponent}) ? ({upstream}) * {_NAN}"
+            f" : (({exponent}) == 0.0 ? ({upstream}) * 0.0"
             f" : (({exponent}) < 0.0 ? ({upstream}) * {_NAN}"
             f" : (({exponent}) == 1.0 ? ({upstream})"
             f" : (({exponent}) > 1.0 ? ({upstream}) * 0.0"
-            f" : ({upstream}) * {_INFINITY}))))"
+            f" : ({upstream}) * {_INFINITY})))))"
         )
         # A negative base with a non-integral exponent has no real forward
         # value, so no derivative either. The magnitude form below takes

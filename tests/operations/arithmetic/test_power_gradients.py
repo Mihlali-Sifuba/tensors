@@ -587,6 +587,303 @@ class CudaExecutesAndStaysResident(GradientTestCase):
         self.assertLess(value, 0.0)
 
 
+class ANanExponentPropagates(GradientTestCase):
+    """Section 12.7.2: a NaN operand propagates to a NaN gradient.
+
+    The fused CUDA base gradient classified a zero base by comparing its
+    exponent against zero and one. Every ordered comparison is false for NaN,
+    so a NaN exponent fell through the whole chain to the last branch, which
+    assumes ``0 < y < 1`` and returns the ``+inf`` convention. The convention
+    is approved for that region and for no other, least of all for an operand
+    that is not a number at all.
+
+    Eager and unfused execution were already correct, so a test that only
+    reads the result proves nothing: it has to establish that the *fused*
+    power VJP produced the value.
+    """
+
+    BASE = 0.0
+    EXPONENT = NAN
+
+    def _power_gradient_calls(self):
+        """Count unfused power-gradient kernel calls, to exclude a fallback."""
+        import contextlib
+        import importlib
+
+        module = importlib.import_module("tensors.operations.arithmetic.power")
+
+        @contextlib.contextmanager
+        def counting():
+            calls = []
+            original = module.execute_power_base_gradient
+
+            def spy(*arguments, **keywords):
+                calls.append(1)
+                return original(*arguments, **keywords)
+
+            with patch.object(module, "execute_power_base_gradient", spy):
+                yield calls
+
+        return counting()
+
+    def test_eager_gives_a_nan_base_gradient(self):
+        for dtype_name in FLOATS:
+            for backend in BACKENDS:
+                with self.subTest(dtype=dtype_name, backend=backend):
+                    with ts.use_backend(backend):
+                        base = ts.Variable(
+                            ts.Tensor([self.BASE], dtype=DTYPE[dtype_name]),
+                            requires_grad=True,
+                        )
+                        exponent = ts.Variable(
+                            ts.Tensor([self.EXPONENT], dtype=DTYPE[dtype_name]),
+                            requires_grad=False,
+                        )
+                        output = base**exponent
+                        forward = output.data.tolist()[0]
+                        (produced,) = ts.grad(output, [base])
+                        value = produced.tolist()[0]
+                        self.assertIs(produced.dtype, DTYPE[dtype_name])
+                        self.assertEqual(produced.shape, (1,))
+                    self.assertTrue(math.isnan(forward), "forward must be NaN")
+                    self.assertTrue(math.isnan(value), f"got {value!r}")
+
+    def test_unfused_graph_replay_gives_a_nan_base_gradient(self):
+        from tensors.graph import Computation
+
+        for dtype_name in FLOATS:
+            for backend in BACKENDS:
+                with self.subTest(dtype=dtype_name, backend=backend):
+                    with ts.use_backend(backend):
+                        base = ts.Variable(
+                            ts.Tensor([self.BASE], dtype=DTYPE[dtype_name]),
+                            requires_grad=True,
+                        )
+                        exponent = ts.Variable(
+                            ts.Tensor([self.EXPONENT], dtype=DTYPE[dtype_name]),
+                            requires_grad=False,
+                        )
+                        forward = Computation(base**exponent).forward().tolist()[0]
+                        (produced,) = ts.grad(base**exponent, [base])
+                        value = produced.tolist()[0]
+                    self.assertTrue(math.isnan(forward), "forward must be NaN")
+                    self.assertTrue(math.isnan(value), f"got {value!r}")
+
+    @unittest.skipUnless("cuda" in BACKENDS, "CUDA backend is not installed")
+    def test_fused_cuda_backward_gives_a_nan_base_gradient(self):
+        """The case the correction is for, with the fused path established."""
+        import tensors.backend.cuda.kernels as cuda_backend
+        from tensors.backend import loading
+
+        for dtype_name in FLOATS:
+            with self.subTest(dtype=dtype_name):
+                with self._power_gradient_calls() as unfused_calls:
+                    with ts.use_backend("cuda"):
+                        base = ts.Variable(
+                            ts.Tensor(
+                                [self.BASE] * FUSED_SIZE, dtype=DTYPE[dtype_name]
+                            ),
+                            requires_grad=True,
+                        )
+                        exponent = ts.Variable(
+                            ts.Tensor(
+                                [self.EXPONENT] * FUSED_SIZE,
+                                dtype=DTYPE[dtype_name],
+                            ),
+                            requires_grad=False,
+                        )
+                        with patch.object(
+                            cuda_backend,
+                            "fused_elementwise_backward",
+                            wraps=cuda_backend.fused_elementwise_backward,
+                        ) as fused:
+                            loading._clear_backend_kernel_cache()
+                            # A second step forces fusion; only the base
+                            # gradient is requested, so the chain is not sent
+                            # back to ordinary execution for an external one.
+                            (produced,) = ts.grad((base**exponent) * 1.0, [base])
+                            reached = fused.called
+                        value = produced.tolist()[0]
+                        residency = type(produced._storage).__name__
+                        dtype = produced.dtype
+                        shape = produced.shape
+
+                self.assertTrue(reached, "the fused backward kernel was not reached")
+                self.assertEqual(
+                    unfused_calls,
+                    [],
+                    "the power step fell back to the unfused gradient kernel, "
+                    "so the fused VJP was not what produced this value",
+                )
+                self.assertTrue(math.isnan(value), f"got {value!r}")
+                self.assertIs(dtype, DTYPE[dtype_name])
+                self.assertEqual(shape, (FUSED_SIZE,))
+                self.assertEqual(residency, "CudaStorage")
+
+    @unittest.skipUnless("cuda" in BACKENDS, "CUDA backend is not installed")
+    def test_the_fused_case_reads_nothing_back_to_the_host(self):
+        """Rule G3 holds for the corrected classification too."""
+        import contextlib
+
+        import tensors.backend.cuda.kernels as cuda_backend
+        import tensors.tensor as tensor_module
+        from tensors.backend import loading
+
+        @contextlib.contextmanager
+        def counting():
+            reads = []
+            original = tensor_module.Tensor._data.fget
+
+            def counted(self):
+                reads.append(1)
+                return original(self)
+
+            tensor_module.Tensor._data = property(counted)
+            try:
+                yield reads
+            finally:
+                tensor_module.Tensor._data = property(original)
+
+        for dtype_name in FLOATS:
+            with self.subTest(dtype=dtype_name):
+                with ts.use_backend("cuda"):
+                    base = ts.Variable(
+                        ts.Tensor([self.BASE] * FUSED_SIZE, dtype=DTYPE[dtype_name]),
+                        requires_grad=True,
+                    )
+                    exponent = ts.Variable(
+                        ts.Tensor(
+                            [self.EXPONENT] * FUSED_SIZE, dtype=DTYPE[dtype_name]
+                        ),
+                        requires_grad=False,
+                    )
+                    with patch.object(
+                        cuda_backend,
+                        "fused_elementwise_backward",
+                        wraps=cuda_backend.fused_elementwise_backward,
+                    ) as fused:
+                        loading._clear_backend_kernel_cache()
+                        program = (base**exponent) * 1.0
+                        with counting() as reads:
+                            (produced,) = ts.grad(program, [base])
+                            self.assertEqual(
+                                type(produced._storage).__name__, "CudaStorage"
+                            )
+                        self.assertTrue(fused.called)
+                self.assertEqual(reads, [], "a tensor was materialised on the host")
+
+    @unittest.skipUnless("cuda" in BACKENDS, "CUDA backend is not installed")
+    def test_the_other_zero_base_rows_are_unchanged(self):
+        """The correction must not swallow the +inf convention it sits above."""
+        import tensors.backend.cuda.kernels as cuda_backend
+        from tensors.backend import loading
+
+        rows = (
+            ("y < 0", -1.0, NAN),
+            ("y = 0", 0.0, 0.0),
+            ("0 < y < 1", 0.5, INF),
+            ("y = 1", 1.0, 1.0),
+            ("y > 1", 2.0, 0.0),
+            ("y is NaN", NAN, NAN),
+        )
+        for label, y, expected in rows:
+            with self.subTest(row=label):
+                with ts.use_backend("cuda"):
+                    base = ts.Variable(
+                        ts.Tensor([0.0] * FUSED_SIZE, dtype=ts.float64),
+                        requires_grad=True,
+                    )
+                    exponent = ts.Variable(
+                        ts.Tensor([y] * FUSED_SIZE, dtype=ts.float64),
+                        requires_grad=False,
+                    )
+                    with patch.object(
+                        cuda_backend,
+                        "fused_elementwise_backward",
+                        wraps=cuda_backend.fused_elementwise_backward,
+                    ) as fused:
+                        loading._clear_backend_kernel_cache()
+                        (produced,) = ts.grad((base**exponent) * 1.0, [base])
+                        reached = fused.called
+                    value = produced.tolist()[0]
+                self.assertTrue(reached, f"{label}: fused backward not reached")
+                self.assertClassified(value, expected, label)
+
+    def test_the_literal_exponent_generator_cannot_misclassify_nan(self):
+        """That path is unreachable publicly; the guard is there regardless.
+
+        The fusion planner writes ``None`` into every step's scalar field, at
+        each of its construction sites, and it is the only producer of fused
+        steps — so a fused power step always carries its exponent as a tensor
+        operand and this generator never sees a literal. It is still made
+        NaN-safe, because its comparisons are all false for NaN and would
+        otherwise select the ``0 < y < 1`` convention.
+        """
+        from tensors.backend.cuda.kernels.fusion.expressions import (
+            _NAN,
+            _zero_base_base_derivative,
+        )
+
+        self.assertEqual(_zero_base_base_derivative(NAN, "g"), f"(g) * {_NAN}")
+        # The rows it does serve are untouched.
+        self.assertEqual(_zero_base_base_derivative(-1.0, "g"), f"(g) * {_NAN}")
+        self.assertEqual(_zero_base_base_derivative(2.0, "g"), "(g) * 0.0")
+        self.assertIn("7ff0000000000000", _zero_base_base_derivative(0.5, "g"))
+
+    @unittest.skipUnless("cuda" in BACKENDS, "CUDA backend is not installed")
+    def test_no_fused_step_carries_a_literal_scalar(self):
+        """The evidence that the literal generator is unreachable."""
+        import tensors.backend as backend_module
+        from tensors.backend import loading
+
+        observed = []
+        original_forward = backend_module.execute_fused_elementwise
+        original_backward = backend_module.execute_fused_elementwise_backward
+
+        def forward_spy(values, steps, **keywords):
+            observed.extend(steps)
+            return original_forward(values, steps, **keywords)
+
+        def backward_spy(values, upstream, steps, **keywords):
+            observed.extend(steps)
+            return original_backward(values, upstream, steps, **keywords)
+
+        expressions = (
+            lambda v, e: (v**0.5) * 1.0,
+            lambda v, e: (v**NAN) * 1.0,
+            lambda v, e: (v**e) * 1.0,
+            lambda v, e: (v + 2.0) ** 0.5,
+            lambda v, e: v * 3.0 + 1.0,
+            lambda v, e: (2.0**v) * 1.0,
+        )
+        with (
+            patch.object(backend_module, "execute_fused_elementwise", forward_spy),
+            patch.object(
+                backend_module, "execute_fused_elementwise_backward", backward_spy
+            ),
+        ):
+            for build in expressions:
+                with ts.use_backend("cuda"):
+                    variable = ts.Variable(
+                        ts.Tensor([2.0] * FUSED_SIZE, dtype=ts.float64),
+                        requires_grad=True,
+                    )
+                    other = ts.Variable(
+                        ts.Tensor([3.0] * FUSED_SIZE, dtype=ts.float64),
+                        requires_grad=False,
+                    )
+                    loading._clear_backend_kernel_cache()
+                    ts.grad(build(variable, other), [variable])
+
+        self.assertTrue(observed, "no fused step was observed")
+        self.assertEqual(
+            [step for step in observed if step[1] is not None],
+            [],
+            "a fused step carried a literal scalar; the literal-exponent "
+            "generator is reachable after all and needs its own coverage",
+        )
+
+
 class HigherOrderDifferentiation(GradientTestCase):
     """Section 12.7 does not weaken the existing contract on smooth inputs."""
 
