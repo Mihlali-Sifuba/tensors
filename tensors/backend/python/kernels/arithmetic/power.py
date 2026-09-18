@@ -3,7 +3,8 @@
 from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from tensors.dtype import DataType
+from tensors.dtype import DataType, integer_limits
+from tensors.utils.integers import wrap
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -24,6 +25,23 @@ def _power(base: int | float, exponent: int | float) -> int | float:
     return value
 
 
+def _integer_power(base: int, exponent: int, dtype: DataType) -> int:
+    """Raise one integer pair in the declared width (section 12.4.1).
+
+    ``pow(x, n, m)`` is modular exponentiation by squaring, implemented in C.
+    It performs O(log n) multiplications and never materialises ``x ** n``, so
+    ``int64: 3 ** 1000000`` costs a few dozen multiplications of 64-bit
+    residues rather than building a 1.5-million-bit integer to discard it.
+
+    The residue it returns lies in ``[0, m)``; :func:`wrap` moves it into the
+    declared range, which is the identity for an unsigned dtype and the
+    two's-complement reading for a signed one.
+    """
+    lower, upper = integer_limits(dtype)
+    modulus = upper - lower + 1
+    return wrap(pow(int(base), int(exponent), modulus), dtype)
+
+
 def power(
     left: Tensor | int | float,
     right: Tensor | int | float,
@@ -35,8 +53,15 @@ def power(
     from tensors.tensor import Tensor
     from tensors.utils.broadcasting import broadcast_binary_values
 
-    def evaluate(x, y):
-        return _power(x, y)
+    if dtype.kind == "integer":
+
+        def evaluate(x, y):
+            return _integer_power(x, y, dtype)
+
+    else:
+
+        def evaluate(x, y):
+            return _power(x, y)
 
     if isinstance(left, Tensor) and isinstance(right, Tensor):
         values = broadcast_binary_values(left, right, output_shape, evaluate)
@@ -46,4 +71,4 @@ def power(
         values = [evaluate(left, y) for y in right._data]
     else:
         values = [evaluate(left, right)]
-    return PythonStorage.from_values(values, dtype)
+    return PythonStorage.from_arithmetic(values, dtype)
