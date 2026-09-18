@@ -44,17 +44,23 @@ between two promotion authorities that silently corrupts integer values.
 
 ### Two demonstrated defects
 
-**D-1. Eager CUDA binary32 elementwise kernels flush subnormals to zero.**
-`ts.abs` of the smallest binary32 subnormal returns `0.0` on CUDA and the
-correct value on Python and NumPy. `ts.sign` of a positive subnormal returns
-`0.0` instead of `1.0` — a misclassification, not a rounding error. Twelve
-operations are affected. The *fused* path is correct, so the same expression
-gives different answers depending on whether it was fused.
+**D-1 — a numerical implementation defect. Eager CUDA binary32 elementwise
+kernels flush subnormals to zero.** `ts.abs` of the smallest binary32
+subnormal returns `0.0` on CUDA and the correct value on Python and NumPy.
+`abs` and `sign` are **exact** operations (class E): on ordinary finite inputs
+their results are determined, not approximated, so `ts.sign` of a positive
+subnormal returning `0.0` instead of `1.0` is an **incorrect result**, not an
+accuracy shortfall, and no tolerance would excuse it. Twelve operations are
+affected. The *fused* path is correct, so the same expression gives different
+answers depending on whether it was fused.
 
-**D-2. Two promotion authorities disagree on four of forty-nine dtype cells.**
-`int64 + float32` raises `DtypePromotionError`, because no floating dtype
-holds every `int64` value. `ts.maximum` on the same operands silently promotes
-to `float64` and loses the value.
+**D-2 — a semantic-authority conflict. Two promotion authorities disagree on
+four of forty-nine dtype cells.** `int64 + float32` raises
+`DtypePromotionError`, because no floating dtype holds every `int64` value.
+`ts.maximum` on the same operands silently promotes to `float64` and loses the
+value. This is equally demonstrated, and equally a defect; it differs from D-1
+in kind, because no single component is wrong — two components disagree, and
+which one should yield is a policy question that has not been decided.
 
 ### What "numerically complete" would require
 
@@ -77,6 +83,24 @@ The class determines what a conformance test may assert.
 | **A** Approximate | a stated error bound against a validated reference | per-element ULP bound; **not** cross-backend equality |
 | **C** Classified | NaN, ±inf, ±0, domain and overflow behaviour | exact classification, across backends |
 | **N** Nondeterministic | intentionally unreproducible, or reproducible only under stated conditions | the stated reproducibility conditions only |
+
+### Kinds of finding
+
+The report distinguishes five kinds of finding, and uses these terms
+consistently:
+
+| Term | Meaning | Example |
+| --- | --- | --- |
+| **Implementation defect** | a component computes a result its own contract forbids | D-1 |
+| **Semantic-authority conflict** | two components define conflicting behaviour and no policy says which governs | D-2 |
+| **Missing specification** | no contract exists, so no result can be called conforming or not | S-1 to S-6 |
+| **Missing test evidence** | a contract exists but nothing establishes that it holds | T-1 to T-5 |
+| **Hypothesis** | stated but not established by this audit; listed as work | the FTZ cause of D-1 |
+
+A missing specification is not a defect, and an operation is never called
+nonconforming merely for being unspecified. Conversely, a demonstrated defect
+is not downgraded because the specification that would name it is absent:
+D-1's `sign` result is wrong on the operation's own terms.
 
 Two rules follow from the principles in the task, and this audit applies them
 throughout:
@@ -119,6 +143,23 @@ Discovered from `tensors.__all__` and the submodules, not assumed.
 | Convolution | `conv1d` `conv2d` `conv3d` | `operations/convolution/` |
 | Manipulation | `concat` `stack` `reshape` | `operations/manipulation/` |
 
+The elementary family does not share one numerical class, and the distinction
+matters for what a conformance test may assert:
+
+| Operation | Class | What that requires |
+| --- | --- | --- |
+| `abs` | **E**, **C** | exact on ordinary finite inputs; no tolerance applies |
+| `sign` | **E**, **C** | exact on ordinary finite inputs; no tolerance applies |
+| `sqrt` | **R**, **C** | correctly rounded — IEEE 754 determines it uniquely |
+| `exp` | **A**, **C** | a stated error bound against a validated reference |
+| `log` | **A**, **C** | a stated error bound against a validated reference |
+
+The **C** component of each is a separate question. The exceptional-value,
+NaN and signed-zero rules for these operations are **not decided here**; they
+belong to the specification work in §9, Phase 4.1. What is settled is that
+`abs` and `sign` are exact on ordinary finite inputs, so an approximation
+tolerance is never the right instrument for them.
+
 ### 3.3 Adjacent numerical surface, also ungoverned
 
 | Surface | Entries | Numerical question |
@@ -151,7 +192,9 @@ tests; **Fus** is a fused-vs-eager requirement.
 | `+ - * /` | §§1–11 | R | yes | §5.4 | yes | yes | **Verified** |
 | `**` | §12 | 2/4 ULP | §12.3.3 | §5.4 | yes | yes | **Verified** |
 | `**` gradients | §12.7 | detection only | §12.7.2 | yes | yes | yes | **Verified** |
-| Elementary | — | — | traps | — | no | no | **Spec missing** |
+| Elementary `abs` `sign` | — | n/a (class E) | — | — | no | no | **Spec missing**; class-E results **nonconforming** on CUDA, see D-1 |
+| Elementary `sqrt` | — | n/a (class R) | traps | — | no | no | **Spec missing** |
+| Elementary `exp` `log` | — | — | traps | — | no | no | **Spec missing** |
 | Trigonometric | — | — | traps | — | no | no | **Spec missing** |
 | Hyperbolic | — | — | traps | — | no | no | **Spec missing** |
 | Activations | — | — | — | — | no | no | **Spec missing** |
@@ -168,10 +211,13 @@ tests; **Fus** is a fused-vs-eager requirement.
 | Optimizers | — | — | — | — | no | n/a | **Spec missing** |
 
 No ungoverned operation is classified *nonconforming* on the strength of
-having no specification. D-1 is classified nonconforming because it violates
-§5.4, which the arithmetic specification states for the package's floating
-behaviour generally, and because two execution paths of the same package
-disagree.
+having no specification. D-1 is classified nonconforming for three
+independent reasons, none of which depends on the missing specification: it
+violates §5.4, which the arithmetic specification states for the package's
+floating behaviour generally; two execution paths of the same package
+disagree, which `docs/autodiff.md` forbids; and `abs` and `sign` are exact
+operations whose results on ordinary finite inputs are determined, so CUDA
+returns values that are simply wrong rather than insufficiently accurate.
 
 ---
 
@@ -198,7 +244,13 @@ cuda    0.0                   0.0
 ```
 
 `abs(x)` of a positive subnormal is `x`; `sign(x)` is `1.0`. CUDA returns zero
-for both. `sign` is not an accuracy failure — it is the wrong classification.
+for both.
+
+Both are **class E** operations: on ordinary finite inputs their results are
+exact, so these are **incorrect results**, not accuracy shortfalls. `sign`
+additionally returns the wrong classification — the sign of a positive value
+is reported as neither positive nor negative. No error bound, however
+generous, would make either of these conforming.
 
 Affected, measured at the smallest binary32 subnormal: `sqrt`, `abs`, `sign`,
 `sin`, `tan`, `arcsin`, `arctan`, `arcsinh`, `arctanh`, `sinh`, `tanh`,
@@ -283,9 +335,16 @@ are not defects. The finding is that nothing says so: there is no bound they
 are permitted *within*, and no validated reference establishing that any of
 the three is correct. A backend could drift to 50 ULP and no test would fail.
 
-`sqrt` deserves separate note: IEEE 754 requires it to be **correctly
-rounded** (class R), so it is the one entry here where cross-backend bitwise
-equality is required rather than merely observed.
+Three entries in the last row are not class A and are listed there only
+because they were measured alongside the rest:
+
+- `sqrt` is **correctly rounded** (class R) under IEEE 754, so cross-backend
+  bitwise equality is *required* there rather than merely observed.
+- `abs` and `sign` are **exact** (class E) on ordinary finite inputs. Neither
+  needs an accuracy bound; both need an exactness test and a classification
+  rule. Their 0 ULP measurement is therefore the required result, not a
+  favourable observation — and it holds only for the operands measured here,
+  which did not include subnormals. D-1 shows CUDA failing both.
 
 ### S-2 — No accumulation-order contract for reductions
 
@@ -423,7 +482,8 @@ is how the D-1 split (eager wrong, fused right) went unnoticed.
 ### T-5 — Specific gaps worth naming
 
 - No subnormal test for any operation outside `+ - * / **`.
-- No test that `sqrt` is correctly rounded (class R).
+- No test that `sqrt` is correctly rounded (class R), and none that `abs` or
+  `sign` are exact (class E).
 - No reduction test at sizes where accumulation order matters (the audit used
   4,096 elements; the suite's reduction tests are much smaller).
 - No reproducibility test for `random` under fixed seed across backends.
@@ -508,15 +568,26 @@ precision loss makes this urgent as well as blocking.
 what §5.4 requires of every floating operation, so it need not be restated per
 operation.
 
-### Phase 2 — The demonstrated defect
+### Phase 2 — The CUDA implementation defect
 
 **P2.1 Fix D-1.** Confirm the FTZ hypothesis per kernel, then apply the
 established inline-PTX remedy to the twelve eager CUDA binary32 elementwise
 kernels. Depends on P1.3 for the requirement, not for the technique — the
 technique already exists in `_ieee32.py`.
 
-*This is the only demonstrated numerical defect in the audit and it produces
-wrong classifications, not merely inaccurate values.*
+*D-1 is the audit's demonstrated **implementation** defect: one backend
+computes results its own package says are wrong. It produces incorrect
+class-E results and a wrong `sign` classification, not merely inaccurate
+values, so it is remediable without any new policy decision — the correct
+answers are already fixed by the operations' exactness.*
+
+*The audit's other demonstrated defect, D-2, is deliberately **not** in this
+phase.* It is a semantic-authority conflict rather than an implementation
+error: no single component computes a wrong answer on its own terms, and
+until P1.2 decides which authority governs, there is no correct behaviour to
+implement. **The fourteen modules using the legacy promotion rule must not be
+changed before that policy is agreed**, and D-2's remediation is a separate
+milestone from P2.1 — the two share no code and no decision.
 
 ### Phase 3 — Reference infrastructure
 
@@ -536,8 +607,12 @@ something to measure against.*
 
 In this order, because each depends on the primitives of the previous:
 
-**P4.1** Elementary (`abs`, `sign`, `sqrt`, `exp`, `log`) — `sqrt` as class R,
-the rest class A. Smallest family, and `exp`/`log` underpin the rest.
+**P4.1** Elementary (`abs`, `sign`, `sqrt`, `exp`, `log`) — **not one class**:
+`abs` and `sign` as class E, `sqrt` as class R, `exp` and `log` as class A,
+each with its own class-C rules. Smallest family, and `exp`/`log` underpin the
+rest. The class-E and class-R members need exactness and correct-rounding
+tests rather than a tolerance; only `exp` and `log` need the reference
+infrastructure of Phase 3, so the exact members can be specified first.
 **P4.2** Trigonometric and hyperbolic, and their inverses.
 **P4.3** Comparison and selection — mostly class C and dtype rules; depends
 on P1.2.
@@ -576,9 +651,11 @@ single one is sufficient, and a passing test suite is not among them.
    or N, and the classification is recorded in a specification document.
 2. **Every class-A operation has a stated error bound** and a validated
    independent reference that the bound is measured against — not another
-   backend, and not a fixed-precision calculation without an enclosure.
-3. **Every class-R operation is tested for correct rounding**, bitwise, on
-   every backend.
+   backend, and not a fixed-precision calculation without an enclosure. An
+   error bound is stated for class-A operations *only*; attaching one to a
+   class-E or class-R operation would weaken a requirement, not record it.
+3. **Every class-E operation is tested for exactness and every class-R
+   operation for correct rounding**, bitwise, on every backend.
 4. **Every floating operation has an exceptional-value table** covering NaN,
    ±inf, ±0, domain violations and overflow, compared exactly with NaN by
    classification.
@@ -603,7 +680,7 @@ single one is sufficient, and a passing test suite is not among them.
 | --- | --- | --- | --- |
 | 1 Classified | met | met | not met |
 | 2 Error bound + reference | n/a (class R) | met | not met |
-| 3 Correct rounding tested | met | n/a | not met (`sqrt`) |
+| 3 Exactness / correct rounding tested | met | n/a | not met (`abs`, `sign`, `sqrt`) |
 | 4 Exceptional-value table | met | met | not met |
 | 5 Subnormals | met | met | **violated** (D-1) |
 | 6 One promotion authority | — | — | **violated** (D-2) |
