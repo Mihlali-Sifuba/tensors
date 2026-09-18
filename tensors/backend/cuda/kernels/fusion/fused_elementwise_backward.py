@@ -53,7 +53,9 @@ def _cuda_fused_elementwise_backward_kernel(
         + ";"
     ]
     for index, step in enumerate(steps):
-        expression, _ = _fused_step_expression(step, f"value_{index}")
+        expression, _ = _fused_step_expression(
+            step, f"value_{index}", storage_type=storage_type
+        )
         body.extend(
             _fused_value_statements(
                 f"value_{index + 1}",
@@ -84,8 +86,11 @@ def _cuda_fused_elementwise_backward_kernel(
             f"value_{index}",
             f"value_{index + 1}",
             upstream,
+            storage_type=storage_type,
         )
-        checks = _fused_backward_checks(steps[index], f"value_{index}")
+        checks = _fused_backward_checks(
+            steps[index], f"value_{index}", storage_type=storage_type
+        )
         if checks:
             validate_errors = True
             for condition, code in checks:

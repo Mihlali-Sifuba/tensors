@@ -9,11 +9,11 @@ if TYPE_CHECKING:
 
 
 def _fused_domain_checks(
-    step: FusedElementwiseStep, value: str, result: str
+    step: FusedElementwiseStep, value: str, result: str, *, storage_type: str
 ) -> tuple[tuple[str, int], ...]:
     """Return CUDA predicates that preserve public math-domain errors."""
     operation, _, reverse, _ = step
-    operand = _fused_operand_expression(step, value)
+    operand = _fused_operand_expression(step, value, storage_type=storage_type)
     if operation == "sqrt":
         return ((f"({value}) < 0.0", 2),)
     if operation == "log":
@@ -58,7 +58,7 @@ def _raise_fused_kernel_error(code: int) -> None:
 
 
 def _fused_backward_checks(
-    step: FusedElementwiseStep, value: str
+    step: FusedElementwiseStep, value: str, *, storage_type: str
 ) -> tuple[tuple[str, int], ...]:
     """Return derivative-domain checks for one fused operation."""
     operation, scalar, reverse, _ = step
@@ -75,7 +75,7 @@ def _fused_backward_checks(
             if scalar != 0 and scalar < 1:
                 return ((f"({value}) == 0.0", 14),)
             return ()
-        operand = _fused_operand_expression(step, value)
+        operand = _fused_operand_expression(step, value, storage_type=storage_type)
         if operand is not None:
             return (
                 (f"({value}) == 0.0 && ({operand}) != 0.0 && ({operand}) < 1.0", 14),

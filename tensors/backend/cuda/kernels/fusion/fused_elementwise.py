@@ -51,7 +51,9 @@ def _cuda_fused_elementwise_kernel(
         # Division by zero is not checked. Fusion runs only for floating
         # dtypes, where section 7.2 makes an infinity the specified result,
         # and a fused plan must produce what the unfused sequence produces.
-        expression, _ = _fused_step_expression(step, f"value_{index}")
+        expression, _ = _fused_step_expression(
+            step, f"value_{index}", storage_type=storage_type
+        )
         body.extend(
             _fused_value_statements(
                 f"value_{index + 1}",
@@ -59,7 +61,12 @@ def _cuda_fused_elementwise_kernel(
                 dtype_name=dtype_name,
             )
         )
-        checks = _fused_domain_checks(step, f"value_{index}", f"value_{index + 1}")
+        checks = _fused_domain_checks(
+            step,
+            f"value_{index}",
+            f"value_{index + 1}",
+            storage_type=storage_type,
+        )
         if checks:
             validate_errors = True
             for condition, code in checks:
