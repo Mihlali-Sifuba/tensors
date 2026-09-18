@@ -26,13 +26,12 @@ def _fused_domain_checks(
         return ((f"!isnan({value}) && (({value}) <= -1.0 || ({value}) >= 1.0)", 6),)
     if operation in {"sin", "cos", "tan"}:
         return ((f"isinf({value})", 7),)
-    if operation == "power" and operand is not None:
-        left, right = (operand, value) if reverse else (value, operand)
-        return (
-            (f"({left}) < 0.0 && trunc({right}) != ({right})", 8),
-            (f"({left}) == 0.0 && ({right}) < 0.0", 8),
-            (f"isfinite({left}) && isfinite({right}) && isinf({result})", 9),
-        )
+    # Power has no forward domain check. Sections 12.2 and 12.3 make every
+    # exceptional value a result: a negative base with a non-integral exponent
+    # is NaN, a zero base with a negative exponent is an infinity, and an
+    # overflowing result is an infinity. Codes 8 and 9 raised for exactly
+    # those, so a fused plan disagreed with the same expression evaluated
+    # eagerly, which docs/autodiff.md forbids.
     return ()
 
 
@@ -49,15 +48,12 @@ def _raise_fused_kernel_error(code: int) -> None:
         5: "arccosh is only defined for values greater than or equal to 1",
         6: "arctanh is only defined for values strictly between -1 and 1",
         7: "trigonometric functions are undefined for infinite values",
-        8: "power is not defined for these real-valued inputs",
         10: "sqrt derivative is undefined at zero",
         11: "inverse trigonometric derivative is undefined at -1 and 1",
         12: "arccosh derivative is undefined at 1",
         13: "sign derivative is undefined at zero",
         14: "power derivative is undefined at a zero base",
     }
-    if code == 9:
-        raise OverflowError("power result is too large to represent")
     raise ValueError(messages.get(code, "invalid value in fused CUDA operation"))
 
 
