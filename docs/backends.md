@@ -98,13 +98,18 @@ the mathematical definitions and reproducibility contract.
 
 ## Execution requirements
 
-> **Status: implemented for `+`, `-`, `*` and `/`.** Those four execute on the
-> selected backend — including the backend `"auto"` resolved to — or raise
-> `BackendOperationUnsupportedError`. No workload-size threshold applies to
-> them under any selection. Every other operation still follows the workload
-> policy described further down, and may still run the Python reference under
-> an explicit selection. The [observability](#observability) mechanism required
-> below does not exist.
+> **Status: implemented for `+`, `-`, `*`, `/` and `**`, and for `**`'s two
+> gradients.** Those execute on the selected backend — including the backend
+> `"auto"` resolved to — or raise `BackendOperationUnsupportedError`. No
+> workload-size threshold applies to them under any selection, and none of
+> them declines by reading operand values.
+>
+> **Every other operation still follows the workload policy** described
+> further down, and may still run the Python reference under an explicit
+> selection. That includes every other operation's vector-Jacobian products.
+>
+> The [observability](#observability) mechanism required below **does not
+> exist**; it is outstanding independently of the dispatch work above.
 > Numerical semantics are specified in
 > [Arithmetic semantics](arithmetic-semantics.md); this section covers only
 > *where* and *whether* an operation executes.
@@ -269,37 +274,35 @@ operations owns its dispatcher — `dispatch/arithmetic/add.py` and its three
 siblings — and each consults no policy: it resolves the selection once, calls
 that backend's own kernel by name, and raises if the kernel declines.
 
-**Forward power** sits between the two. It no longer consults the workload
-policy, so `t ** 2`, `t ** t` and `2 ** t` execute on the selected backend at
-every size, one element included. It still answers a declining kernel with the
-Python reference, because power's kernels currently use a decline for three
-different things: a domain error, which the array kernels see only as a
-non-finite result from finite operands; CUDA's missing integer exponentiation;
-and an exact integer power that leaves the declared dtype. Raising on a decline
-today would turn `0 ** -1` and `(-2.0) ** 0.5` into an unsupported-operation
-error instead of the `ValueError` the package currently produces, and would
-stop `2 ** int32_tensor` working on CUDA. So **forward power currently
-guarantees execution location only for the cases its provider supports, and
-power's backward pass is unchanged.**
+**Forward power** now follows the same rule. `t ** 2`, `t ** t` and `2 ** t`
+execute on the selected backend at every size, one element included, and a
+declining kernel raises `BackendOperationUnsupportedError` naming the backend,
+the operation and the result dtype.
 
-> **Target contract.** [Arithmetic semantics section 12](arithmetic-semantics.md#12-exponentiation)
-> removes every semantic reason for a power kernel to decline: domain
-> violations become NaN, overflow becomes an infinity, and integer
-> exponentiation wraps in the declared width. Once that is implemented, a
-> decline can only mean *this backend cannot execute this operation*, and
-> forward power joins the four arithmetic operations under the strict rule —
-> execute on the selected backend or raise
-> `BackendOperationUnsupportedError`. The remaining capability gap is CUDA
-> integer exponentiation, which the same work closes. **None of this is
-> implemented yet.**
+The three reasons it used to fall back to the Python reference are gone, each
+closed by [arithmetic semantics section 12](arithmetic-semantics.md#12-exponentiation):
 
-**Power's gradients** are covered by the same target contract. They must
-execute on the selected backend at every size
-([arithmetic semantics G6](arithmetic-semantics.md#1271-rules)); today they
-apply the workload threshold, fall back to the Python reference, and the
-exponent gradient declines by reading its operand values back to the host.
+- **Domain errors.** Sections 12.2 and 12.3 make every exceptional value a
+  result. `(-2.0) ** 0.5` is NaN, `0.0 ** -1.0` is a signed infinity, and an
+  overflowing result is an infinity. No kernel declines for them.
+- **CUDA integer exponentiation.** Section 12.4 gave the CUDA kernel a native
+  fixed-width implementation. It runs device-resident for all five integer
+  dtypes and wraps in the declared width.
+- **A narrowing integer result.** Section 12.4.1 makes wraparound the
+  specified result, so nothing is narrowed and nothing declines.
 
-Their vector-Jacobian products do the same, through `dispatch/_selected.py`.
+The one numerical error that remains — `ValueError` for a negative integer
+exponent, section 12.4.2 — is raised by the operation before dispatch is
+reached, so a numerical-domain error stays distinct from a capability failure.
+
+**Power's gradients** follow the rule too. Each has its own strict dispatcher:
+they execute on the selected backend at every size
+([arithmetic semantics G6](arithmetic-semantics.md#1271-rules)), the workload
+threshold is gone, and no kernel reads operand values back to the host to
+decide whether to decline.
+
+Other operations' vector-Jacobian products still use the older arrangement,
+through `dispatch/_selected.py`.
 Where a VJP's computation shares an entry point with something outside the
 contract — the broadcast reduction is also used by `power`, `where` and the
 losses, and negation is also a forward operation — a second entry point named
