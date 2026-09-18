@@ -292,6 +292,20 @@ def _rounds_to_finite(value: float, dtype: DataType) -> bool:
     return 2 * numerator < threshold * denominator
 
 
+def _round_to_dtype(value: float, dtype: DataType) -> float:
+    """Round a Python float to a floating dtype (section 6.5, S3).
+
+    ``array`` applies the same C conversion the storage layer applies to
+    every element, which is round-to-nearest, ties-to-even. Reading the
+    element back widens exactly, so the literal rounds once and only once.
+
+    Overflow is not this function's decision: ``array`` would quietly return
+    an infinity, so :func:`_rounds_to_finite` gates the call and S3 raises
+    instead. A literal infinity or NaN passes through unchanged.
+    """
+    return array(dtype.typecode, (value,))[0]
+
+
 def _domain_fits(integer_dtype: DataType, float_dtype: DataType) -> bool:
     """Whether *every* value of an integer dtype is exact (section 3.3).
 
@@ -429,7 +443,11 @@ def convert_scalar(value, dtype: DataType):
         )
     if isinstance(value, float):  # S3
         if _rounds_to_finite(value, dtype):
-            return value
+            # The *converted* value, not the literal. Returning the literal
+            # left the Python backend evaluating a binary64 operand where the
+            # array backends had already rounded it to the tensor's dtype, so
+            # the same expression gave different results per backend.
+            return _round_to_dtype(value, dtype)
         raise TypeError(
             repr(value)
             + " exceeds the range of "
