@@ -32,6 +32,41 @@ def _view(tensor: Tensor) -> Any:
     return storage.buffer.reshape(tensor.shape)
 
 
+def _widen(values: Any) -> Any:
+    """Return a binary64 array, keeping binary32 subnormals.
+
+    ``astype`` flushes a binary32 subnormal on the way *up*: the smallest
+    binary32 subnormal widens to zero, so a kernel that reads its operands
+    into a binary64 working precision has lost them before any arithmetic
+    runs. The PTX conversion does not. Section 5.4 requires gradual underflow
+    and does not exempt a format crossing.
+    """
+    if values.dtype != cupy.float32:
+        return cupy.asarray(values, dtype=cupy.float64)
+    from tensors.backend.cuda.kernels.arithmetic import _ieee32
+
+    return _ieee32.widen(values)
+
+
+def _narrow(values: Any, target: Any) -> Any:
+    """Round a binary64 array to ``target``, keeping binary32 subnormals."""
+    if target != cupy.float32:
+        return cupy.asarray(values, dtype=target)
+    from tensors.backend.cuda.kernels.arithmetic import _ieee32
+
+    return _ieee32.narrow(values)
+
+
+def _working_values(tensor: Tensor) -> Any:
+    """A tensor's values in binary64 working precision, subnormals kept.
+
+    The unary elementwise kernels evaluate in binary64 and narrow once, so
+    this is the first of the two format crossings; :func:`_storage` performs
+    the second.
+    """
+    return _widen(_view(tensor))
+
+
 def _errstate(**settings: str) -> Any:
     """Suppress the CuPy warnings a kernel handles through its own checks."""
     factory = getattr(cupy, "errstate", None)
@@ -67,7 +102,9 @@ def _storage(
         return None
     flattened = cupy.asarray(result).reshape(-1)
     try:
-        flattened = cupy.asarray(flattened, dtype=cupy.float64)
+        # Both crossings go through PTX; see _widen and _narrow. A result
+        # already in binary64 is unchanged by the first.
+        flattened = _widen(flattened)
     except (OverflowError, TypeError, ValueError):
         return None
     target_dtype = cupy.dtype(dtype.name)
@@ -79,7 +116,7 @@ def _storage(
         if bool(cupy.any(finite & outside_range)):
             return None
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
-        contiguous = cupy.asarray(flattened, dtype=target_dtype)
+        contiguous = _narrow(flattened, target_dtype)
     storage = CudaStorage(contiguous, dtype)
     if storage.size != _shape_size(output_shape):
         raise RuntimeError("Array kernel returned an unexpected result size")

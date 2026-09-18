@@ -17,6 +17,11 @@ an add into a fused multiply-add.
 Only float32 needs this. Double precision already underflows gradually on the
 device, so it uses CuPy's own operations.
 
+The two conversions :func:`widen` and :func:`narrow` are used beyond
+arithmetic: every CUDA kernel that computes a binary32 result in a binary64
+working precision crosses the format boundary twice, and ``astype`` flushes at
+both crossings.
+
 The same applies to exponentiation, which has no PTX instruction: see
 :func:`_build_power`.
 """
@@ -113,6 +118,29 @@ def _build_narrow() -> Any:
     )
 
 
+def _build_widen() -> Any:
+    """Compile the binary32 to binary64 widening.
+
+    ``astype`` flushes a binary32 subnormal on this toolchain, and it does so
+    on the way *up* as well as on the way down: widening the smallest binary32
+    subnormal to binary64 yields zero, so a kernel that widens its operands to
+    a working precision has already lost them before any arithmetic runs.
+    ``cvt.f64.f32`` does not, for the same reason the narrowing conversion
+    below does not.
+    """
+    return cupy.ElementwiseKernel(
+        "float32 value",
+        "float64 out",
+        _WIDEN.format(operand="value").replace("widened", "out"),
+        "tensors_ieee32_widen",
+    )
+
+
+def widen(values: Any) -> Any:
+    """Widen a binary32 array to binary64, subnormals included."""
+    return kernel("widen")(values)
+
+
 def narrow(values: Any) -> Any:
     """Round a binary64 array to binary32, subnormals included."""
     return kernel("narrow")(values)
@@ -126,6 +154,8 @@ def kernel(name: str) -> Any:
             built = _build_power()
         elif name == "narrow":
             built = _build_narrow()
+        elif name == "widen":
+            built = _build_widen()
         else:
             built = _build(name)
         _KERNELS[name] = built
@@ -137,4 +167,4 @@ def apply(name: str, left: Any, right: Any) -> Any:
     return kernel(name)(left, right)
 
 
-__all__ = ["apply", "kernel", "narrow"]
+__all__ = ["apply", "kernel", "narrow", "widen"]
