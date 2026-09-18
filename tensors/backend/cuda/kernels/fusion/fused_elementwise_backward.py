@@ -20,6 +20,7 @@ from tensors.backend.cuda.kernels.fusion.expressions import (
     _fused_vjp_expressions,
 )
 from tensors.backend.cuda.kernels.fusion.source import (
+    _widen,
     _FUSION_OPTIONS,
     _fused_kernel_source,
     _fused_output_statement,
@@ -44,7 +45,13 @@ def _cuda_fused_elementwise_backward_kernel(
 ) -> tuple[Any, bool]:
     """Compile and cache one typed VJP kernel for a fused chain."""
     storage_type = "float" if dtype_name == "float32" else "double"
-    body = ["const double value_0 = (double)input_0[offset_0];"]
+    # Read through the PTX conversion so a binary32 subnormal operand
+    # survives; see CONVERSIONS in source.py.
+    body = [
+        "const double value_0 = "
+        + _widen("input_0[offset_0]", storage_type=storage_type)
+        + ";"
+    ]
     for index, step in enumerate(steps):
         expression, _ = _fused_step_expression(step, f"value_{index}")
         body.extend(
@@ -63,7 +70,11 @@ def _cuda_fused_elementwise_backward_kernel(
         external_rows[index] = next_row
         next_row += 1
 
-    body.append(f"const double upstream_{len(steps)} = (double)gradient[index];")
+    body.append(
+        f"const double upstream_{len(steps)} = "
+        + _widen("gradient[index]", storage_type=storage_type)
+        + ";"
+    )
     validate_errors = False
     for index in range(len(steps) - 1, -1, -1):
         upstream = f"upstream_{index + 1}"

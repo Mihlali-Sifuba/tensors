@@ -12,20 +12,62 @@ from tensors.backend.cuda.kernels.fusion.expressions import _broadcast_offset_ex
 _FUSION_OPTIONS = ("--fmad=false",)
 
 
+#: Conversions between binary32 and binary64, written in PTX.
+#:
+#: The compiler flushes a subnormal in ``cvt.f64.f32`` and ``cvt.rn.f32.f64``
+#: just as it does in an arithmetic instruction, and ``--ftz=false`` does not
+#: reach it. A fused binary32 expression therefore lost every subnormal at its
+#: first conversion, disagreeing with the same expression evaluated eagerly,
+#: which section 8.5 forbids and section 5.4 requires gradual underflow for.
+#: Naming the conversions in PTX keeps them, exactly as the eager kernels do.
+CONVERSIONS = """
+__device__ __forceinline__ double _tensors_widen(float value) {
+    double widened;
+    asm("cvt.f64.f32 %0, %1;" : "=d"(widened) : "f"(value));
+    return widened;
+}
+__device__ __forceinline__ float _tensors_narrow(double value) {
+    float narrowed;
+    asm("cvt.rn.f32.f64 %0, %1;" : "=f"(narrowed) : "d"(value));
+    return narrowed;
+}
+"""
+
+
+def _widen(expression: str, *, storage_type: str) -> str:
+    """Read a stored value into the binary64 working precision."""
+    if storage_type == "float":
+        return f"_tensors_widen({expression})"
+    return f"(double)({expression})"
+
+
+def _narrow(expression: str, *, storage_type: str) -> str:
+    """Round a working value back to the storage format."""
+    if storage_type == "float":
+        return f"_tensors_narrow({expression})"
+    return f"(double)({expression})"
+
+
 def _fused_value_statements(
     name: str, expression: str, *, dtype_name: str
 ) -> list[str]:
     """Assign a working value with the same rounding as a graph boundary."""
     if dtype_name == "float32":
+        narrowed = _narrow(expression, storage_type="float")
         return [
-            f"const float {name}_stored = (float)({expression});",
-            f"const double {name} = (double){name}_stored;",
+            f"const float {name}_stored = {narrowed};",
+            f"const double {name} = _tensors_widen({name}_stored);",
         ]
     return [f"const double {name} = (double)({expression});"]
 
 
 def _fused_output_statement(row: int, expression: str, *, storage_type: str) -> str:
-    return f"output[index + {row}ULL * size] = ({storage_type})({expression});"
+    stored = (
+        f"_tensors_narrow({expression})"
+        if storage_type == "float"
+        else f"({storage_type})({expression})"
+    )
+    return f"output[index + {row}ULL * size] = {stored};"
 
 
 def _fused_kernel_source(
@@ -54,4 +96,5 @@ def _fused_kernel_source(
     ]
     joined_parameters = ",\n    ".join(parameters)
     joined_body = "\n    ".join(offsets + body)
-    return f'\nextern "C" __global__\nvoid {name}(\n    {joined_parameters}\n) {{\n    const unsigned long long index =\n        (unsigned long long)blockDim.x * blockIdx.x + threadIdx.x;\n    if (index >= size) {{\n        return;\n    }}\n    {joined_body}\n}}\n'
+    preamble = CONVERSIONS if storage_type == "float" else ""
+    return f'{preamble}\nextern "C" __global__\nvoid {name}(\n    {joined_parameters}\n) {{\n    const unsigned long long index =\n        (unsigned long long)blockDim.x * blockIdx.x + threadIdx.x;\n    if (index >= size) {{\n        return;\n    }}\n    {joined_body}\n}}\n'

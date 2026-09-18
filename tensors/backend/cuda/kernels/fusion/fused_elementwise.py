@@ -15,6 +15,7 @@ from tensors.backend.cuda.kernels.fusion.errors import (
 )
 from tensors.backend.cuda.kernels.fusion.expressions import _fused_step_expression
 from tensors.backend.cuda.kernels.fusion.source import (
+    _widen,
     _FUSION_OPTIONS,
     _fused_kernel_source,
     _fused_output_statement,
@@ -38,7 +39,13 @@ def _cuda_fused_elementwise_kernel(
 ) -> tuple[Any, bool]:
     """Compile and cache one typed broadcast-aware forward kernel."""
     storage_type = "float" if dtype_name == "float32" else "double"
-    body = ["const double value_0 = (double)input_0[offset_0];"]
+    # Read through the PTX conversion so a binary32 subnormal operand
+    # survives; see CONVERSIONS in source.py.
+    body = [
+        "const double value_0 = "
+        + _widen("input_0[offset_0]", storage_type=storage_type)
+        + ";"
+    ]
     validate_errors = False
     for index, step in enumerate(steps):
         # Division by zero is not checked. Fusion runs only for floating
