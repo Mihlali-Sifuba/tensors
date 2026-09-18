@@ -1,5 +1,6 @@
 """Reverse gradient demand belongs to Computation, not to Operation."""
 
+import math
 import unittest
 
 import tensors as ts
@@ -314,19 +315,32 @@ class DemandScopedDomainTests(unittest.TestCase):
     def tearDown(self):
         reset_graph_state()
 
-    def test_power_domain_check_only_guards_a_requested_derivative(self):
+    def test_an_undefined_power_derivative_is_nan_not_an_exception(self):
+        """Section 12.7, rules G1 and G2.
+
+        This test previously required ``ValueError`` from a requested
+        exponent derivative at a negative base, and required ``ts.backward``
+        to raise as well. Section 12.7.2 classifies that derivative as NaN —
+        ``ln x`` is undefined for ``x < 0`` — and rule G2 states that
+        differentiation does not raise on a numerical condition. Rule G1
+        adds that the condition must not suppress the base derivative, which
+        the old behaviour did: ``ts.backward`` raised and both gradients were
+        lost, including the valid one.
+        """
         base = ts.Variable([-2.0])
         exponent = ts.Variable([2.0])
         output = base**exponent
 
-        # The base derivative is defined at a negative base.
+        # The base derivative exists at a negative base with an integral
+        # exponent, and is returned whether or not the other is requested.
         self.assertEqual(ts.grad(output, base).tolist(), [-4.0])
 
-        # The exponent derivative is not, and only its request raises.
-        with self.assertRaisesRegex(ValueError, "non-negative bases"):
-            ts.grad(output, exponent)
-        with self.assertRaisesRegex(ValueError, "non-negative bases"):
-            ts.backward(output)
+        undefined = ts.grad(output, exponent).tolist()
+        self.assertTrue(math.isnan(undefined[0]), undefined)
+
+        ts.backward(output)
+        self.assertEqual(base.grad.tolist(), [-4.0])
+        self.assertTrue(math.isnan(exponent.grad.tolist()[0]))
 
     def test_binary_cross_entropy_higher_order_domain_follows_demand(self):
         prediction = ts.Variable([0.0])
