@@ -125,6 +125,59 @@ def constructed(dtype: str) -> list[tuple[str, float, float]]:
     ]
 
 
+#: Literals that binary32 cannot hold exactly. Deliberately *not* passed
+#: through :func:`_round`: the point of these is that rule S3 changes them,
+#: so the scalar path is measured against the converted value rather than the
+#: literal. The first is the case reported against the accuracy harness.
+INEXACT_SCALARS: tuple[float, ...] = (
+    1.0000001,
+    0.9999999,
+    1.1,
+    0.1,
+    3.3,
+    2.718281828459045,
+    1.0000000596046448,
+    -1.0000001,
+)
+
+
+def inexact_scalars(dtype: str) -> list[tuple[str, float, float]]:
+    """Pairs whose *scalar* operand the conversion actually changes.
+
+    The tensor operand is rounded into the dtype as usual; the scalar is left
+    as written, so the public operation performs a real conversion. For
+    ``float64`` the conversion is the identity — binary64 is the literal's own
+    format — and these pairs then simply add ordinary coverage.
+
+    A negative base is paired only with an integral exponent, since section
+    12.3.3 gives NaN otherwise and the ULP metric does not apply there.
+    """
+    bases = (1.1754943508222875e-38, 1.5, 0.75, 97.0, 2.0, 1e-20, -2.0, -1.5)
+    cases: list[tuple[str, float, float]] = []
+    for base in bases:
+        for scalar in INEXACT_SCALARS:
+            if base < 0.0:
+                continue
+            cases.append(("inexact scalar", _round(base, dtype), scalar))
+    # The reflected form takes the scalar as the *base*, so it is listed with
+    # the scalar first; the harness reads whichever operand is the scalar.
+    #
+    # Large exponents are included deliberately. exp amplifies a change in
+    # y ln x by |y|, so a one-ULP difference in a base near one moves the
+    # result by one ULP at an exponent of 1.5 but by thousands at 10**4. With
+    # small exponents alone, recording the literal instead of its conversion
+    # would stay inside the bound and the measurement would not see it.
+    for scalar in INEXACT_SCALARS:
+        exponents = (1.5, 2.0, -0.5, 3.0, 0.25)
+        if abs(abs(scalar) - 1.0) < 0.01:
+            exponents += (100.0, 1e4, -1e4)
+        for exponent in exponents:
+            if scalar < 0.0 and not float(exponent).is_integer():
+                continue
+            cases.append(("inexact scalar", scalar, _round(exponent, dtype)))
+    return cases
+
+
 def sampled(
     dtype: str, count: int = 400, seed: int = 20260918
 ) -> list[tuple[str, float, float]]:
@@ -150,4 +203,13 @@ def all_cases(dtype: str) -> list[tuple[str, float, float]]:
     return constructed(dtype) + sampled(dtype)
 
 
-__all__ = ["MAX", "MIN_NORMAL", "SMALLEST", "all_cases", "constructed", "sampled"]
+__all__ = [
+    "INEXACT_SCALARS",
+    "MAX",
+    "MIN_NORMAL",
+    "SMALLEST",
+    "all_cases",
+    "constructed",
+    "inexact_scalars",
+    "sampled",
+]

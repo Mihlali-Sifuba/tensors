@@ -224,6 +224,46 @@ def round_to_format(value: float, dtype: str) -> float:
     return sign * magnitude
 
 
+def power_scalar_target(tensor_dtype: str, scalar: object, *, reflected: bool) -> str:
+    """The dtype a Python scalar converts to in a power (sections 12.5.1-3).
+
+    The conversion target is *not* read off the result dtype. It follows from
+    which operand is the scalar and from the scalar's own Python type:
+
+    * ``tensor ** scalar`` — section 12.5.1. The exponent converts to the
+      base's dtype under S1 to S4, and the base's dtype is also the result's,
+      so the two coincide here but for a reason, not by definition.
+    * ``scalar ** tensor`` — section 12.5.3, rule S-p. A floating exponent
+      tensor supplies the target. So does an integer exponent tensor when the
+      base is a Python ``int``. But a Python ``float`` base over an integer
+      exponent tensor converts to the promotion of ``float64`` against that
+      integer dtype, which is neither operand's declared dtype.
+
+    The last branch is why the target is derived rather than assumed.
+    """
+    if not reflected:
+        return tensor_dtype
+    if tensor_dtype in FLOAT_DTYPES:
+        return tensor_dtype
+    if isinstance(scalar, int) and not isinstance(scalar, bool):
+        return tensor_dtype
+    return promote("float64", tensor_dtype)
+
+
+def converted_scalar(value: object, target: str) -> float:
+    """The value a Python scalar takes once converted to ``target``.
+
+    S3 rounds a Python ``float`` into the target format. S4 admits a Python
+    ``int`` only when it is exactly representable, so its converted value is
+    exact and no rounding applies.
+    """
+    if isinstance(value, bool):
+        raise TypeError("bool is not a supported numeric scalar")
+    if isinstance(value, int):
+        return float(value)
+    return round_to_format(float(value), target)
+
+
 def rounds_to_finite(value: float, dtype: str) -> bool:
     """Whether a finite literal survives conversion (section 6.5, S3)."""
     if math.isnan(value) or math.isinf(value):
@@ -247,6 +287,8 @@ __all__ = [
     "exactly_representable",
     "integer_range",
     "overflow_threshold",
+    "converted_scalar",
+    "power_scalar_target",
     "promote",
     "round_to_format",
     "rounds_to_finite",
