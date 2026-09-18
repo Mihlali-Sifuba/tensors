@@ -178,21 +178,33 @@ class ResultsAndErrorsAreUnchanged(unittest.TestCase):
                         for got, want in zip(produced, expected):
                             self.assertAlmostEqual(got, want, places=6)
 
-    def test_domain_errors_are_still_raised_on_every_backend(self):
+    def test_exceptional_values_are_delivered_not_raised(self):
+        """Breaking changes B17, B18 and B19.
+
+        These three cases raised `ValueError` or `OverflowError`. §12.3 makes
+        each of them a value, identical on every backend. The exhaustive table
+        lives in `tests/operations/arithmetic/test_power_ieee.py`; this checks
+        that the execution paths here deliver it rather than raising.
+        """
+        import math
+
+        expected = {
+            "negative base, fractional exponent": math.isnan,
+            "zero base, negative exponent": lambda v: v == math.inf,
+            "float64 overflow": lambda v: v == math.inf,
+        }
         for label, values, exponent, dtype in self.DOMAIN_ERRORS:
             for size in self._each_size():
                 data = (values * (size // len(values) + 1))[:size]
-                with ts.use_backend("python"):
-                    with self.assertRaises((ValueError, OverflowError)) as reference:
-                        _ = ts.Tensor(data, dtype=dtype) ** exponent
                 for backend in ts.available_backends():
                     with self.subTest(case=label, size=size, backend=backend):
                         with ts.use_backend(backend):
-                            with self.assertRaises(
-                                (ValueError, OverflowError)
-                            ) as raised:
-                                _ = ts.Tensor(data, dtype=dtype) ** exponent
-                        self.assertIs(type(raised.exception), type(reference.exception))
+                            result = ts.Tensor(data, dtype=dtype) ** exponent
+                        self.assertIs(result.dtype, dtype)
+                        self.assertTrue(
+                            all(expected[label](v) for v in result.tolist()),
+                            f"{label} did not deliver its specified value",
+                        )
 
     def test_a_scalar_base_over_an_integer_exponent_still_works(self):
         for backend in ts.available_backends():
@@ -213,24 +225,40 @@ def expected_dtype(dtype, exponent):
 
 
 @requires_numpy
-class ADecliningProviderStillAnswersThroughTheReference(unittest.TestCase):
-    """The one part of the execution contract forward power does not meet.
+class TheProviderNoLongerDeclines(unittest.TestCase):
+    """What used to be power's decline path.
 
-    Power's kernels return ``None`` for three different reasons, and the
-    reference is what turns each into the documented result:
+    Power's kernels returned ``None`` for three different things: a domain
+    error, CUDA's missing integer exponentiation, and an integer result that
+    left the declared dtype. D1 to D4 removed all three — domain violations
+    are values (§12.3), integer exponentiation is native and wraps (§12.4.1),
+    and CUDA computes integers itself. The kernel is therefore expected to
+    answer every supported call.
 
-    - a domain error, which the array kernels see only as a non-finite result
-      from finite operands;
-    - CUDA's missing integer exponentiation;
-    - an exact integer power that leaves the declared dtype.
-
-    Raising on a decline would replace ``ValueError`` and ``OverflowError``
-    with an unsupported-operation error and would stop ``2 ** int32_tensor``
-    working on CUDA. These tests record that, so the gap is visible and a
-    later change that closes it has to update them deliberately.
+    The dispatcher still routes a ``None`` to the Python reference. Making
+    that a hard error belongs to the strict-dispatch milestone, so this class
+    records the behaviour rather than asserting it is unreachable.
     """
 
-    def test_a_declining_provider_is_answered_by_the_reference(self):
+    def test_the_kernel_answers_instead_of_declining(self):
+        for label, values, exponent, dtype in (
+            ("negative base, fractional exponent", [-2.0], 0.5, ts.float64),
+            ("zero base, negative exponent", [0.0], -1.0, ts.float64),
+            ("float64 overflow", [1e200], 2.0, ts.float64),
+            ("integer overflow", [2], 31, ts.int32),
+        ):
+            with self.subTest(case=label):
+                with ts.use_backend("numpy"):
+                    base = ts.Tensor(values * 64, dtype=dtype)
+                    storage = numpy_kernels.power(
+                        base, exponent, dtype=dtype, output_shape=(64,)
+                    )
+                self.assertIsNotNone(
+                    storage, f"{label} still declines to the reference"
+                )
+
+    def test_a_patched_decline_is_still_answered_by_the_reference(self):
+        """The dispatcher's fallback, exercised by forcing a decline."""
         with patch.object(numpy_kernels, "power", return_value=None) as declining:
             backend_state._clear_backend_kernel_cache()
             with ts.use_backend("numpy"):
@@ -239,11 +267,6 @@ class ADecliningProviderStillAnswersThroughTheReference(unittest.TestCase):
         declining.assert_called_once()
         self.assertEqual(storage_name(result), "PythonStorage")
         self.assertEqual(result.tolist(), [8.0] * 64)
-
-    def test_a_domain_error_survives_the_decline_path(self):
-        with ts.use_backend("numpy"):
-            with self.assertRaises(ValueError):
-                _ = ts.Tensor([0.0] * 64, dtype=ts.float64) ** -1.0
 
 
 if __name__ == "__main__":

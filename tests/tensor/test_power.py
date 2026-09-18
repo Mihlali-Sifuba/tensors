@@ -41,9 +41,16 @@ class TensorPowerTests(unittest.TestCase):
 
         self.assertEqual(result.tolist(), [4.0, 9.0])
 
-    def test_fractional_power_of_negative_values_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "real-valued"):
-            _ = ts.Tensor([-1.0]) ** 0.5
+    def test_fractional_power_of_negative_values_is_nan(self):
+        """Breaking change B17. IEEE `pow` signals *invalid* and delivers NaN.
+
+        This previously raised. §12.3.1 makes a negative finite base with a
+        non-integral exponent the one invalid case, whose result is NaN.
+        """
+        import math
+
+        result = ts.Tensor([-1.0, -2.0]) ** 0.5
+        self.assertTrue(all(math.isnan(value) for value in result.tolist()))
 
 
 class ScalarBasePowerTests(unittest.TestCase):
