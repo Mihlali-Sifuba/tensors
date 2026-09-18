@@ -703,24 +703,50 @@ The same constraint forbids a fused kernel from carrying an intermediate at
 wider precision than the declared dtype, for the reason given in
 [Arithmetic semantics §5.5](arithmetic-semantics.md#55-why-declared-precision-matters).
 
-Two consequences follow. Both are stated against the table above, so that
-neither claims bitwise equality where the specification does not provide it:
+Two consequences follow. Both are stated **per operation**, against the table
+above, so that neither claims bitwise equality where the specification does not
+provide it:
 
 - **Replay.** A Computation replayed with fusion enabled must produce what the
-  same Computation produces without it — bit for bit where the table requires
-  it, and otherwise within the specified accuracy contract, with the same
-  dtype and the same exceptional values. Fusion is an execution plan, and a
-  plan does not change the function.
+  same Computation produces without it: every operation in the replayed graph
+  performs the same mathematical operation, in the same declared dtype, at the
+  same rounding boundaries, and satisfies its own numerical specification on
+  the inputs it actually receives — bit for bit where the table requires it,
+  and with the same exceptional values. Fusion is an execution plan, and a plan
+  does not change the function.
 - **Backend switching.** The same graph replayed on a different backend must
-  likewise produce what the table requires: identical results for the four
-  arithmetic operations and for integer exponentiation, and for floating
-  exponentiation a result that satisfies
+  likewise satisfy every operation's own specification: identical results for
+  the four arithmetic operations and for integer exponentiation, and for
+  floating exponentiation a result satisfying
   [§12.6](arithmetic-semantics.md#126-accuracy) with identical special values,
   signs and dtype. A fused CUDA kernel and an unfused Python execution of one
   expression are two implementations of one specified function; where that
   function is not uniquely determined by the standard, they must both be
   conforming implementations of it rather than bit-for-bit copies of each
   other.
+
+**Conformance is per operation and does not compose into a graph-level bound.**
+The limits in
+[§12.6.2](arithmetic-semantics.md#1262-the-accuracy-bounds) apply to each
+individual power, evaluated on the inputs that power actually receives. They
+say nothing about the final value of a computation that contains one. In
+
+```python
+t = x ** y
+r = t - c
+```
+
+two conforming backends may compute different `t`, each within the bound. The
+subtraction then meets its own specification exactly, on the inputs it was
+given, and `r` still differs. **That difference is permitted, and later
+operations may amplify it. A graph containing floating-point power has no
+universal graph-level ULP bound under this specification.**
+
+This concerns accuracy alone. It does not license a fused kernel to reassociate
+operations, to contract them, or to omit one: the requirements above on the
+operation sequence, the declared dtypes and the rounding boundaries are
+unchanged, as are the bitwise requirements for the correctly rounded arithmetic
+operations and for integer exponentiation.
 
 If a relaxed numerical mode permitting contraction or reassociation is wanted
 later, it must be an explicit, separately documented execution mode. It is not
