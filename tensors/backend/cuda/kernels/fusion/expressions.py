@@ -322,6 +322,30 @@ def _fused_external_gradient_available(step: FusedElementwiseStep) -> bool:
     return operation != "power"
 
 
+#: Device constants for the classified rows of section 12.7.2, written as bit
+#: patterns through an intrinsic. NVRTC compiles the generated source without
+#: <math.h>, so INFINITY and HUGE_VAL are not declared; __longlong_as_double
+#: is a CUDA builtin and needs no header.
+_NAN = "__longlong_as_double(0x7ff8000000000000ULL)"
+_INFINITY = "__longlong_as_double(0x7ff0000000000000ULL)"
+
+
+def _zero_base_base_derivative(exponent: float, upstream: str) -> str:
+    """The ``x = 0`` column of section 12.7.2 for a literal exponent.
+
+    The exponent is known while the kernel is built, so the row is chosen
+    here rather than tested on the device.
+    """
+    if exponent < 0.0:
+        return f"({upstream}) * {_NAN}"
+    if exponent > 1.0:
+        return f"({upstream}) * 0.0"
+    # 0 < exponent < 1: an approved convention for a one-sided infinite
+    # slope, not a finite derivative. The exponents 0 and 1 are handled by
+    # the caller before this is reached.
+    return f"({upstream}) * {_INFINITY}"
+
+
 def _fused_vjp_expressions(
     step: FusedElementwiseStep,
     value: str,
@@ -335,22 +359,46 @@ def _fused_vjp_expressions(
     operand = _fused_operand_expression(step, value, storage_type=storage_type)
     if operation == "power" and operand is not None:
         if reverse:
+            # The chain value is the exponent and the operand is the base, so
+            # this is d/dy of x**y. Section 12.7.2 gives it only for x > 0:
+            # it is zero where x is zero and y is strictly positive, because
+            # f(0, y) is constant there, and NaN everywhere else, because
+            # ln x does not exist for x < 0 and f(0, y) is discontinuous at
+            # y = 0. Evaluating the formula gave NaN for the zero row, where
+            # the derivative genuinely exists and is zero.
             logarithm = f"log({operand})"
-            contribution = f"(({upstream}) == 0.0 || ({logarithm}) == 0.0 ? 0.0 : copysign(exp(log(fabs({upstream})) + ({value}) * ({logarithm}) + log(fabs({logarithm}))), ({upstream}) * ({logarithm})))"
+            ordinary = f"(({upstream}) == 0.0 || ({logarithm}) == 0.0 ? 0.0 : copysign(exp(log(fabs({upstream})) + ({value}) * ({logarithm}) + log(fabs({logarithm}))), ({upstream}) * ({logarithm})))"
+            contribution = (
+                f"(({operand}) == 0.0"
+                f" ? (({value}) > 0.0 ? ({upstream}) * 0.0 : ({upstream}) * {_NAN})"
+                f" : (({operand}) < 0.0 ? ({upstream}) * {_NAN} : {ordinary}))"
+            )
             return (contribution, None)
         exponent = operand
         magnitude = f"copysign(exp(log(fabs({upstream})) + log(fabs({exponent})) + (({exponent}) - 1.0) * log(fabs({value}))), {{sign}})"
         if scalar is not None:
+            # A literal exponent settles its own region at build time.
+            if scalar == 0:
+                return (f"({upstream}) * 0.0", None)
+            if scalar == 1:
+                return (upstream, None)
             sign = f"({upstream}) * ({exponent})"
             if float(scalar).is_integer() and (int(scalar) - 1) % 2:
                 sign = f"({sign}) * (({value}) < 0.0 ? -1.0 : 1.0)"
-            if scalar == 0:
-                return ("0.0", None)
-            if scalar == 1:
-                return (upstream, None)
+            ordinary = (
+                f"(({upstream}) == 0.0 ? 0.0 : " + magnitude.format(sign=sign) + ")"
+            )
+            zero_base = _zero_base_base_derivative(float(scalar), upstream)
+            negative_base = (
+                ""
+                if float(scalar).is_integer()
+                else f"(({value}) < 0.0 ? ({upstream}) * {_NAN} : "
+            )
             contribution = (
-                f"(({upstream}) == 0.0 || ({value}) == 0.0 ? 0.0 : "
-                + magnitude.format(sign=sign)
+                f"(({value}) == 0.0 ? {zero_base} : "
+                + negative_base
+                + ordinary
+                + (")" if negative_base else "")
                 + ")"
             )
             return (contribution, None)
@@ -358,10 +406,28 @@ def _fused_vjp_expressions(
             f"(({exponent}) == floor({exponent}) && fmod({exponent}, 2.0) == 0.0)"
         )
         sign = f"(({upstream}) * ({exponent}) * ({even_integer} ? (({value}) < 0.0 ? -1.0 : 1.0) : 1.0))"
+        ordinary = (
+            f"((({upstream}) == 0.0) ? 0.0 : " + magnitude.format(sign=sign) + ")"
+        )
+        # Section 12.7.2 for a zero base, in the order the table states it.
+        # The previous expression returned zero for every zero base, which is
+        # right only for y = 0 and y > 1; it lost the +inf convention of
+        # 0 < y < 1 and the NaN of y < 0.
+        zero_base = (
+            f"(({exponent}) == 0.0 ? ({upstream}) * 0.0"
+            f" : (({exponent}) < 0.0 ? ({upstream}) * {_NAN}"
+            f" : (({exponent}) == 1.0 ? ({upstream})"
+            f" : (({exponent}) > 1.0 ? ({upstream}) * 0.0"
+            f" : ({upstream}) * {_INFINITY}))))"
+        )
+        # A negative base with a non-integral exponent has no real forward
+        # value, so no derivative either. The magnitude form below takes
+        # log(fabs(x)) and would have returned a plausible finite number.
+        integral = f"(({exponent}) == floor({exponent}))"
         contribution = (
-            f"(({exponent}) == 0.0 ? 0.0 : (({exponent}) == 1.0 ? ({upstream}) : ((({upstream}) == 0.0 || ({value}) == 0.0) ? 0.0 : "
-            + magnitude.format(sign=sign)
-            + ")))"
+            f"(({value}) == 0.0 ? {zero_base}"
+            f" : ((({value}) < 0.0 && !{integral}) ? ({upstream}) * {_NAN}"
+            f" : {ordinary}))"
         )
         return (contribution, None)
     if operation == "divide" and operand is not None:

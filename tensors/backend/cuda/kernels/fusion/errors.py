@@ -39,7 +39,9 @@ def _raise_fused_kernel_error(code: int) -> None:
     """Raise the public exception represented by a fused-kernel error code.
 
     Code 1 was division by zero. Floating division now delivers the IEEE
-    result rather than raising, so no fused kernel emits it.
+    result rather than raising, so no fused kernel emits it. Code 14 was the
+    power derivative at a zero base, which section 12.7.2 now classifies as a
+    value rather than an error.
     """
     messages = {
         2: "sqrt is only defined for non-negative values",
@@ -52,7 +54,6 @@ def _raise_fused_kernel_error(code: int) -> None:
         11: "inverse trigonometric derivative is undefined at -1 and 1",
         12: "arccosh derivative is undefined at 1",
         13: "sign derivative is undefined at zero",
-        14: "power derivative is undefined at a zero base",
     }
     raise ValueError(messages.get(code, "invalid value in fused CUDA operation"))
 
@@ -61,7 +62,7 @@ def _fused_backward_checks(
     step: FusedElementwiseStep, value: str, *, storage_type: str
 ) -> tuple[tuple[str, int], ...]:
     """Return derivative-domain checks for one fused operation."""
-    operation, scalar, reverse, _ = step
+    operation, _, _, _ = step
     if operation == "sqrt":
         return ((f"({value}) == 0.0", 10),)
     if operation in {"arcsin", "arccos"}:
@@ -70,14 +71,10 @@ def _fused_backward_checks(
         return ((f"({value}) == 1.0", 12),)
     if operation == "sign":
         return ((f"({value}) == 0.0", 13),)
-    if operation == "power" and (not reverse):
-        if scalar is not None:
-            if scalar != 0 and scalar < 1:
-                return ((f"({value}) == 0.0", 14),)
-            return ()
-        operand = _fused_operand_expression(step, value, storage_type=storage_type)
-        if operand is not None:
-            return (
-                (f"({value}) == 0.0 && ({operand}) != 0.0 && ({operand}) < 1.0", 14),
-            )
+    # Power has no backward domain check either. Code 14 raised here for a
+    # zero base with an exponent below one, which section 12.7.2 classifies
+    # rather than rejects: the base derivative is +inf by convention for
+    # 0 < y < 1 and NaN for y < 0, and rule G2 states that differentiation
+    # does not raise on a numerical condition. The VJP expression now carries
+    # the whole region table, so there is nothing left for a guard to catch.
     return ()
