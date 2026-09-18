@@ -58,11 +58,20 @@ class ResultDtypeIgnoresValues(ArithmeticTestCase):
     """§6.4 — promotion never inspects an element."""
 
     def test_exponent_values_do_not_change_the_result_dtype(self):
-        base = tensor("int32", [2, 2, 2, 2])
+        """Asserted at the resolver: §12.4.2 refuses to evaluate a negative
+        exponent, so the invariance is observed where it is decided."""
+        from tensors.dtype import resolve_power
+
         for values in ([1, 2, 3, 4], [1, -2, 3, 0], [-9, -9, -9, -9], [0, 0, 0, 0]):
             with self.subTest(exponent=values):
                 exponent = tensor("int32", values)
-                self.assertIs((base**exponent).dtype, ts.int32)
+                self.assertIs(resolve_power(ts.int32, exponent)[0], ts.int32)
+
+    def test_evaluable_exponent_values_agree_with_the_resolver(self):
+        base = tensor("int32", [2, 2, 2, 2])
+        for values in ([1, 2, 3, 4], [0, 0, 0, 0]):
+            with self.subTest(exponent=values):
+                self.assertIs((base ** tensor("int32", values)).dtype, ts.int32)
 
     def test_base_values_do_not_change_the_result_dtype(self):
         exponent = tensor("int32", [2, 2])
@@ -71,9 +80,13 @@ class ResultDtypeIgnoresValues(ArithmeticTestCase):
                 self.assertIs((tensor("int32", values) ** exponent).dtype, ts.int32)
 
     def test_reflected_exponent_values_do_not_change_the_result_dtype(self):
+        """Rule S-p takes the exponent's *dtype*, never its elements."""
+        from tensors.dtype import resolve_power_scalar_base
+
         for values in ([1, 2], [1, -2], [0, 0]):
             with self.subTest(exponent=values):
-                self.assertIs((2 ** tensor("int32", values)).dtype, ts.int32)
+                exponent = tensor("int32", values)
+                self.assertIs(resolve_power_scalar_base(2, exponent.dtype)[0], ts.int32)
 
     @unittest.skipUnless("cuda" in BACKENDS, "CUDA backend is not installed")
     def test_resolving_a_dtype_reads_no_device_memory(self):
@@ -265,31 +278,149 @@ class VariableOperands(ArithmeticTestCase):
             _ = 2.5 ** ts.Variable(tensor("int64", [3]), requires_grad=False)
 
 
-class DeferredToLaterMilestones(ArithmeticTestCase):
-    """Cases whose dtype is settled by D6 but whose value needs a later rule."""
+class NegativeIntegerExponents(ArithmeticTestCase):
+    """§12.4.2 — integer exponentiation requires a non-negative exponent.
 
-    @unittest.expectedFailure
+    D6 settles the result dtype first, from declarations alone. Only then is
+    the exponent's domain examined, so a negative exponent refuses the
+    operation rather than promoting the result to a floating dtype.
+    """
+
+    #: Signed dtypes only: S1 rejects a negative scalar for `uint8` first, and
+    #: an unsigned tensor cannot hold a negative element at all.
+    SIGNED = ("int8", "int16", "int32", "int64")
+
     def test_negative_integer_exponent_raises(self):
-        """Deferred to D4 (§12.4.2).
-
-        D6 fixes the result dtype at the integer dtype, so the reciprocal has
-        nowhere to go. D4 makes this raise ``ValueError``; until then the
-        evaluation truncates toward zero, which this asserts against so the
-        milestone is visible.
-        """
         with self.assertRaises(ValueError):
             _ = tensor("int32", [2]) ** -1
 
-    @unittest.expectedFailure
     def test_reflected_negative_integer_exponent_raises(self):
-        """Deferred to D4 (§12.4.2), reflected form."""
         with self.assertRaises(ValueError):
             _ = 2 ** tensor("int32", [-2])
 
-    def test_the_dtype_half_is_already_correct(self):
-        """What D6 does settle for those cases: the dtype, from declarations."""
-        self.assertIs((tensor("int32", [2]) ** -1).dtype, ts.int32)
-        self.assertIs((2 ** tensor("int32", [-2])).dtype, ts.int32)
+    def test_every_operand_form_raises(self):
+        for backend in BACKENDS:
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                base = tensor("int32", [2])
+                negative = tensor("int32", [-1])
+                forms = (
+                    ("tensor ** scalar", lambda: base**-1),
+                    ("tensor ** tensor", lambda: base**negative),
+                    ("scalar ** tensor", lambda: 2**negative),
+                )
+                for label, call in forms:
+                    with self.subTest(form=label):
+                        with self.assertRaises(ValueError):
+                            call()
+
+    def test_the_rule_is_uniform_across_bases(self):
+        """Including the bases whose reciprocals would be representable."""
+        for backend in BACKENDS:
+            for base_value in (1, -1, 2, 0, 7):
+                with self.subTest(backend=backend, base=base_value):
+                    with ts.use_backend(backend):
+                        with self.assertRaises(ValueError):
+                            _ = tensor("int32", [base_value]) ** -1
+
+    def test_every_signed_integer_dtype(self):
+        for backend in BACKENDS:
+            for name in self.SIGNED:
+                with self.subTest(backend=backend, dtype=name):
+                    with ts.use_backend(backend):
+                        with self.assertRaises(ValueError):
+                            _ = tensor(name, [2]) ** tensor(name, [-1])
+
+    def test_one_negative_anywhere_is_enough(self):
+        """A single negative element refuses the whole operation."""
+        size = 64
+        for backend in BACKENDS:
+            for position in (0, 1, size // 2, size - 1):
+                with self.subTest(backend=backend, position=position):
+                    values = [1] * size
+                    values[position] = -3
+                    with ts.use_backend(backend):
+                        with self.assertRaises(ValueError):
+                            _ = tensor("int32", [2] * size) ** tensor("int32", values)
+
+    def test_integer_variable_operands_raise(self):
+        for backend in BACKENDS:
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                base = ts.Variable(tensor("int32", [2]), requires_grad=False)
+                exponent = ts.Variable(tensor("int32", [-1]), requires_grad=False)
+                with self.assertRaises(ValueError):
+                    _ = base**exponent
+                with self.assertRaises(ValueError):
+                    _ = 2**exponent
+                with self.assertRaises(ValueError):
+                    _ = base**-1
+
+    def test_a_view_is_judged_by_the_elements_it_addresses(self):
+        """A negative outside the view must not make the operation raise."""
+        for backend in BACKENDS:
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                grid = ts.Tensor([[-1, -1], [2, 3]], dtype=ts.int32)
+                view = grid[1]
+                result = tensor("int32", [2, 2]) ** view
+                self.assertIs(result.dtype, ts.int32)
+                self.assertEqual(result.tolist(), [4, 8])
+
+    # -- what the rule must leave alone ---------------------------------
+
+    def test_non_negative_exponents_are_unaffected(self):
+        for backend in BACKENDS:
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                base = tensor("int32", [2, 3])
+                self.assertEqual((base ** tensor("int32", [3, 2])).tolist(), [8, 9])
+                self.assertEqual((base**0).tolist(), [1, 1])
+                self.assertEqual((base**1).tolist(), [2, 3])
+                self.assertEqual((2 ** tensor("int32", [0, 3])).tolist(), [1, 8])
+
+    def test_floating_results_are_not_touched(self):
+        """D4 is an integer rule; a floating result follows D2 instead."""
+        for backend in BACKENDS:
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                self.assertEqual((tensor("float64", [2.0]) ** -1).tolist(), [0.5])
+                self.assertEqual(
+                    (tensor("float64", [2.0]) ** tensor("float64", [-1.0])).tolist(),
+                    [0.5],
+                )
+                self.assertEqual((2.5 ** tensor("int32", [-2])).tolist(), [0.16])
+
+    def test_scalar_conversion_errors_still_come_first(self):
+        """S1 and S2 reject before the exponent domain is considered."""
+        self.assertRaisesConversion(lambda: tensor("uint8", [2]) ** -1)
+        self.assertRaisesConversion(lambda: tensor("int32", [4]) ** 0.5)
+        self.assertRaisesConversion(lambda: (-2) ** tensor("uint8", [3]))
+
+    def test_the_dtype_is_settled_before_the_domain(self):
+        """A negative exponent refuses; it never promotes to a floating dtype."""
+        from tensors.dtype import resolve_power
+
+        for values in ([1, 2], [1, -2]):
+            with self.subTest(exponent=values):
+                exponent = tensor("int32", values)
+                self.assertIs(resolve_power(ts.int32, exponent)[0], ts.int32)
+
+    @unittest.skipUnless("cuda" in BACKENDS, "CUDA backend is not installed")
+    def test_the_cuda_check_materialises_nothing(self):
+        """A device exponent is reduced on the device, not copied to the host."""
+        from tensors.operations.arithmetic.power import _has_negative_exponent
+
+        counting = ResultDtypeIgnoresValues._counting_device_reads
+        with ts.use_backend("cuda"):
+            # Arithmetic is bound to the selection, so this is device-resident.
+            exponent = ts.full((4096,), 2, dtype=ts.int32) + 0
+            self.assertEqual(type(exponent._storage).__name__, "CudaStorage")
+            with counting() as reads:
+                self.assertFalse(_has_negative_exponent(exponent))
+            self.assertEqual(reads.count, 0)
+
+            negative = ts.full((4096,), 2, dtype=ts.int32) - 3
+            self.assertEqual(type(negative._storage).__name__, "CudaStorage")
+            with counting() as reads:
+                with self.assertRaises(ValueError):
+                    _ = (ts.full((4096,), 2, dtype=ts.int32) + 0) ** negative
+            self.assertEqual(reads.count, 0)
 
 
 if __name__ == "__main__":
