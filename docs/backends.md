@@ -272,17 +272,32 @@ that backend's own kernel by name, and raises if the kernel declines.
 **Forward power** sits between the two. It no longer consults the workload
 policy, so `t ** 2`, `t ** t` and `2 ** t` execute on the selected backend at
 every size, one element included. It still answers a declining kernel with the
-Python reference, because power's kernels use a decline for three different
-things: a domain error, which the array kernels see only as a non-finite
-result from finite operands; CUDA's missing integer exponentiation; and an
-exact integer power that leaves the declared dtype. Raising on a decline would
-turn `0 ** -1` and `(-2.0) ** 0.5` into an unsupported-operation error instead
-of the documented `ValueError`, and would stop `2 ** int32_tensor` working on
-CUDA. Closing that means teaching the array kernels to raise their own domain
-errors and giving CUDA a native integer path. Until then **forward power
-guarantees execution location for the cases its provider supports, and power's
-backward pass is unchanged** — its complete execution contract is not
-finished.
+Python reference, because power's kernels currently use a decline for three
+different things: a domain error, which the array kernels see only as a
+non-finite result from finite operands; CUDA's missing integer exponentiation;
+and an exact integer power that leaves the declared dtype. Raising on a decline
+today would turn `0 ** -1` and `(-2.0) ** 0.5` into an unsupported-operation
+error instead of the `ValueError` the package currently produces, and would
+stop `2 ** int32_tensor` working on CUDA. So **forward power currently
+guarantees execution location only for the cases its provider supports, and
+power's backward pass is unchanged.**
+
+> **Target contract.** [Arithmetic semantics section 12](arithmetic-semantics.md#12-exponentiation)
+> removes every semantic reason for a power kernel to decline: domain
+> violations become NaN, overflow becomes an infinity, and integer
+> exponentiation wraps in the declared width. Once that is implemented, a
+> decline can only mean *this backend cannot execute this operation*, and
+> forward power joins the four arithmetic operations under the strict rule —
+> execute on the selected backend or raise
+> `BackendOperationUnsupportedError`. The remaining capability gap is CUDA
+> integer exponentiation, which the same work closes. **None of this is
+> implemented yet.**
+
+**Power's gradients** are covered by the same target contract. They must
+execute on the selected backend at every size
+([arithmetic semantics G6](arithmetic-semantics.md#1271-rules)); today they
+apply the workload threshold, fall back to the Python reference, and the
+exponent gradient declines by reading its operand values back to the host.
 
 Their vector-Jacobian products do the same, through `dispatch/_selected.py`.
 Where a VJP's computation shares an entry point with something outside the

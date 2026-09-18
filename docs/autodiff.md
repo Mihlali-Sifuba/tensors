@@ -610,6 +610,26 @@ are not restated here.
 > kernels to handle non-finite operands natively would remove it without
 > weakening the contract, and is not part of this change.
 
+> **Exponentiation.** The derivatives of `**` are specified in
+> [arithmetic semantics section 12.7](arithmetic-semantics.md#127-differentiation-d7).
+> Three requirements bear on this document. **They are not implemented.**
+>
+> - **The two gradients are independent.** A base gradient that exists is
+>   returned even when the exponent gradient does not. `(-2.0) ** 3.0` yields a
+>   base gradient of `12.0` and an exponent gradient of `NaN`. Today the whole
+>   backward pass raises and both are lost.
+> - **Differentiation does not raise on a numerical condition**, and no backend
+>   may synchronise with the host to detect one. An undefined derivative is
+>   `NaN`; an approved one-sided infinite slope is `±inf`, and that convention
+>   is confined to the single region that names it.
+> - **Gradients execute on the selected backend** at every size, carrying each
+>   operand's own declared dtype and reduced to that operand's shape.
+>
+> The fused CUDA backward currently raises `"power derivative is undefined at a
+> zero base"` (error code 14). It must be removed when section 12.7 is
+> implemented, or the fused and unfused passes will disagree — the same failure
+> already corrected for division by zero.
+
 Two kinds of fallback are easy to confuse, and only one of them is a backend
 fallback:
 

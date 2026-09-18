@@ -11,10 +11,14 @@
 > [section 10](#10-migration-and-compatibility) explains the migration away
 > from it.
 >
-> Every other operation — `**`, comparisons, `where`, `clip`, `concat`,
-> reductions, matmul, the elementwise maths functions — still uses the older
-> promotion in `tensors/dtype.py` `result_dtype` and is **not** governed by
-> this document yet. Extending it to them is separate work.
+> **Exponentiation (`**`) is specified in [section 12](#12-exponentiation)
+> but is not implemented.** That section is the approved target contract; the
+> package still behaves as its *Current behaviour* passages record.
+>
+> Every other operation — comparisons, `where`, `clip`, `concat`, reductions,
+> matmul, the elementwise maths functions — still uses the older promotion in
+> `tensors/dtype.py` `result_dtype` and is **not** governed by this document
+> yet. Extending it to them is separate work.
 >
 > Two gaps within the implemented scope are recorded rather than closed:
 > the execution-location observability API of
@@ -34,6 +38,12 @@ Elementwise **addition**, **subtraction**, **multiplication** and **division**
 over the seven public scalar dtypes, for tensor operands and for Python scalar
 operands, including mixed-dtype combinations and the promotion rules that
 govern them.
+
+Elementwise **exponentiation** (`**`), specified in
+[section 12](#12-exponentiation), including its result dtypes, integer and
+floating-point semantics, accuracy, and differentiation. Sections 1–11 are
+written for the four operations above; section 12 states where exponentiation
+follows them and where it differs.
 
 | dtype | Kind | Typecode | Width |
 | --- | --- | --- | --- |
@@ -59,7 +69,12 @@ rather than assumed.
 - Broadcasting, which decides *which* element pairs combine, not what a pair
   produces.
 - Automatic differentiation, beyond the requirement that graph optimisation
-  preserve these semantics ([section 8.5](#85-graph-optimisation)).
+  preserve these semantics ([section 8.5](#85-graph-optimisation)) and the
+  derivatives of exponentiation
+  ([section 12.7](#127-differentiation-d7)).
+- Transcendental operations other than `**`. The accuracy rules in
+  [section 12.6](#126-accuracy) apply to exponentiation alone and are not
+  extended to `exp`, `log` or the trigonometric functions by implication.
 
 ---
 
@@ -76,9 +91,23 @@ chosen for it.
 authority.** Where a backend and this document disagree, the backend is wrong
 — including the Python backend.
 
-**P3. A supported operation behaves identically regardless of backend, tensor
-size or execution path.** An operation must not change its results because a
-tensor was small enough to take one path or large enough to take another.
+**P3. A supported operation is semantically identical regardless of backend,
+tensor size or execution path.** An operation must not change its behaviour
+because a tensor was small enough to take one path or large enough to take
+another. Semantic identity covers the result dtype, the shape, every
+exceptional value and its sign, NaN classification, and which conditions raise.
+
+**P3 requires semantic consistency. It does not by itself require bitwise
+reproducibility.** For an operation that IEEE 754 requires to be *correctly
+rounded* — `+`, `-`, `*`, `/` — the result is uniquely determined, so semantic
+identity and bitwise identity coincide, and
+[section 9.3](#93-cross-backend-equality-what-is-achievable) requires the
+latter. For an operation that IEEE 754 only *recommends*, and that no
+mainstream implementation rounds correctly, bitwise identity is not achievable
+and is not required; such an operation must instead state an accuracy bound
+against the correctly rounded result. Exponentiation is the first such
+operation, and states its bound in [section 12.6](#126-accuracy). **A bound
+approved for one operation is never extended to another by implication.**
 
 **P4. Selecting a backend explicitly is an execution requirement, not a
 preference.** `ts.set_backend("cuda")` means the operation runs on CUDA or
@@ -536,6 +565,13 @@ mechanically: `promote(a, b) == promote(b, a)` for every pair. Symmetry is
 required because `+` and `*` are commutative, and it would be incoherent for
 `-` and `/` to promote differently from `+`.
 
+**Exponentiation uses this table unchanged**, with the base and the exponent as
+the two operands, and adds a rule for the reflected form where the scalar is
+the base. See [section 12.5](#125-result-dtypes-and-scalar-conversion). The
+exponent is not exempted from promotion on the grounds that it plays a
+different mathematical role: its value affects the result, so converting it to
+a dtype that cannot represent it exactly would change the computation.
+
 Worked justifications for the non-obvious cells:
 
 - **`uint8` with `int8` → `int16`.** The union of \([0, 255]\) and
@@ -941,7 +977,10 @@ correct by construction.
 ### 9.3 Cross-backend equality: what is achievable
 
 Bitwise cross-backend equality is **required** for all four operations on both
-floating dtypes, and for every integer operation.
+floating dtypes, and for every integer operation. **It is not required for
+exponentiation**, which is bounded instead; see
+[section 12.6](#126-accuracy) and the amended **P3** in
+[section 2](#2-architectural-principles).
 
 It is also **achievable**, which was established rather than assumed. IEEE 754
 requires these four operations to be correctly rounded, so the result is
@@ -1023,6 +1062,25 @@ values, not against each other.
 | B15 | Explicit backend selection | May silently fall back to Python | Must execute or report unsupported |
 | B16 | `tensor + True` | `bool` accepted as an integer scalar | Raises `TypeError` ([section 6.5](#65-python-scalars)) |
 
+Exponentiation adds the following. All are specified in
+[section 12](#12-exponentiation) and **none is implemented**.
+
+| # | Area | Current behaviour (verified) | Specified behaviour |
+| --- | --- | --- | --- |
+| B17 | `(-2.0) ** 0.5` | Raises `ValueError` | `nan` ([12.3.1](#1231-the-invalid-class)) |
+| B18 | `0.0 ** -1.0` | Raises `ValueError` | `+inf`; `-0.0 ** -1.0` is `-inf` ([12.3.2](#1232-the-divide-by-zero-class)) |
+| B19 | `float64` power overflow | Raises `OverflowError` | `+inf` ([12.3.4](#1234-overflow-and-underflow)) |
+| B20 | Integer power overflow | Raises `OverflowError` | Wraps at the promoted width ([12.4.1](#1241-non-negative-exponents-wrap-d3)) |
+| B21 | `int32 ** -1` | `float64` `[0.5]` | Raises `ValueError` ([12.4.2](#1242-negative-exponents-raise-d4)) |
+| B22 | Power result dtype | Depends on exponent **values** | Static, from declared dtypes ([12.5](#125-result-dtypes-and-scalar-conversion)) |
+| B23 | `int32 ** 2.0` | `float64` | `int32` by S2 ([12.5.2](#1252-tensor-base-with-a-python-scalar-exponent)) |
+| B24 | `int32 ** 0.5` | `float64` | Raises `TypeError` by S2 ([12.5.2](#1252-tensor-base-with-a-python-scalar-exponent)) |
+| B25 | `int64` with a floating operand in `**` | `float64`, losing precision above \(2^{53}\) | Raises; explicit cast required ([12.5.1](#1251-tensor-base-with-tensor-exponent)) |
+| B26 | `-2 ** uint8_tensor` | `int16` — a scalar widened the result | Raises `TypeError` by S1 ([12.5.3](#1253-python-scalar-base-with-tensor-exponent)) |
+| B27 | Negative base, tensor exponent, backward | Raises, discarding a valid base gradient | Base gradient returned; exponent gradient `nan` ([12.7.2](#1272-the-region-table)) |
+| B28 | Zero-base gradients | Raise | Specified per region, `nan` or `+inf` ([12.7.2](#1272-the-region-table)) |
+| B29 | Cross-backend `**` results | Believed identical (an artefact of the Python fallback) | Bounded, not bitwise ([12.6](#126-accuracy)) |
+
 ### 10.2 What may depend on the old behaviour
 
 - **Code relying on `OverflowError`** to signal that an integer computation
@@ -1048,6 +1106,16 @@ implemented. The lesson is the one B16 repeats: the breaking-change list was
 assembled by reading the implementation, and what the tests asserted was a
 second source that should have been consulted too.
 
+Applying that lesson to exponentiation, the tests were read before B17–B29 were
+written. `tests/backend/test_power_execution.py` asserts `ValueError` and
+`OverflowError` from power's domain and overflow cases, and
+`tests/tensor/test_power.py` asserts the current dtype and zero-base behaviour;
+both must be rewritten when [section 12](#12-exponentiation) is implemented.
+The `OverflowError` assertions in `tests/operations/arithmetic/` are a
+different matter: they cover **construction and casting**, which
+[section 4.5](#45-arithmetic-is-not-construction-or-casting) keeps raising, and
+are unaffected.
+
 ### 10.3 Implementation paths requiring review
 
 **All of these have now been modified**, except where the last column says
@@ -1066,6 +1134,13 @@ otherwise. The table is kept as the record of what the refactor touched.
 | `tests/backend/_support.py` — `NumPyParityTestCase` | Encodes Python-as-reference ([section 9.5](#95-the-existing-parity-helper)). **Not changed.** The conformance tests in `tests/operations/arithmetic/` compare against specified values instead, so the parity helper is no longer the only check; re-casting it is separate work. |
 | `tensors/backend/{python,numpy,cuda}/kernels/elementwise/division_denominator_gradient.py` | The division VJP raised, or declined and let the Python reference raise, where the forward pass returns an infinity. Its zero-denominator and finiteness tests also read device memory back to the host on every backward pass. |
 | `tensors/backend/dispatch/reductions/`, `tensors/backend/dispatch/elementwise/`, `tensors/operations/_gradient_shaping.py` | The `+`, `-` and `*` VJPs reduced and negated through entry points that applied the workload threshold, so a small backward pass under explicit NumPy returned `PythonStorage`. They now dispatch through `execute_vjp_sum_to_shape`, `execute_vjp_negate` and `execute_sum_products_to_shape`, which honour the selection at every size. The entry points serving operations outside this contract are unchanged. |
+| `tensors/operations/arithmetic/power.py` — `_power_dtype`, `_scalar_base_power_dtype` | Value-dependent result dtype, contradicting [section 6.4](#64-what-is-not-promoted); reads `exponent._data`, a host transfer. Must move to the resolution in [section 12.5](#125-result-dtypes-and-scalar-conversion). |
+| `tensors/backend/python/kernels/elementwise/power_base_gradient.py` | Contains a **second copy** of `_power_dtype` with the same defect. Both copies must change together. |
+| `tensors/operations/arithmetic/power.py` — `Pow.backward`, `Pow.backward_graph` | Value-reading domain checks that raise and discard valid gradients (B27, B28). |
+| `tensors/backend/{python,numpy,cuda}/kernels/arithmetic/power.py` | Domain and overflow handling (B17–B20); the array kernels decline where the reference raises. |
+| `tensors/backend/dispatch/elementwise/power_base_gradient.py`, `power_exponent_gradient.py` | Workload threshold and reference fallback; the exponent kernel also declines through `bool(numpy.any(bases <= 0.0))`, a host synchronisation. |
+| `tensors/backend/cuda/kernels/fusion/errors.py` | Power domain codes 8, 9 and 14 replicate the raising behaviour; they must go when [12.3](#123-exceptional-values-d2) and [12.7](#127-differentiation-d7) land, or fused and eager execution diverge. |
+| `tensors/variable.py` — `__pow__` | Calls `_power_dtype` with a `Variable` exponent, which crashes for integer dtypes. See [section 12](#12-exponentiation) and the implementation plan. |
 | `docs/backends.md`, `docs/autodiff.md` | Updated alongside this document. |
 
 ### 10.4 Implementation sequence
@@ -1118,6 +1193,12 @@ resolved ([section 7.3](#73-integer-true-division)), promotion is resolved
 resolved as a requirement with an achievable implementation
 ([section 5.4](#54-subnormals-gradual-underflow-is-required)).
 
+Exponentiation's seven numerical decisions — the choice of IEEE `pow`,
+non-trapping exceptional values, integer wraparound, negative integer
+exponents, accuracy, promotion and scalar conversion, and differentiation —
+were each resolved individually and are recorded in
+[section 12](#12-exponentiation). None of them is open.
+
 ### O1. Floor division
 
 What operation provides integer-valued division, what is its result dtype, how
@@ -1152,6 +1233,606 @@ would have no common public integer dtype — which P-e would turn into a
 required cast.
 
 ---
+
+---
+
+## 12. Exponentiation
+
+> **Status: approved target contract, awaiting implementation.** Sections 1–11
+> describe `+`, `-`, `*` and `/`, which are implemented. **Nothing in this
+> section is implemented yet.** Passages marked *Current behaviour* record what
+> the package does today, verified by running it, so the difference is visible.
+> Do not cite this section as evidence that a behaviour exists.
+
+This section is placed after section 11 so that no existing section is
+renumbered and no cross-reference in this document breaks. It is not an
+appendix: it carries the same authority as the sections before it, and it
+extends them rather than competing with them. Where a rule already exists —
+the promotion table, the scalar rules, wraparound, rounding — exponentiation
+uses that rule and says so, rather than restating it.
+
+Seven decisions were resolved individually before this section was written.
+They are referenced below as **D1** to **D7**.
+
+### 12.1 Scope
+
+`**` on tensors, in all three forms: `tensor ** tensor`, `tensor ** scalar`
+and `scalar ** tensor` (reflected). Covers `Tensor.__pow__`, `Tensor.__rpow__`,
+`Variable.__pow__`, `Variable.__rpow__` and the `pow` function, in eager
+execution, graph replay and fusion, together with differentiation of the
+result.
+
+Out of scope: floor division ([section 7.4](#74-floor-division-is-a-separate-operation)),
+broadcasting, and every other transcendental operation. **The accuracy rules in
+[section 12.6](#126-accuracy) apply to `**` alone** and are not extended to
+`exp`, `log`, the trigonometric functions or any other operation by implication.
+
+### 12.2 The function (D1)
+
+**Floating-point exponentiation is IEEE 754-2019 clause 9.2 `pow`.**
+
+IEEE 754 describes three distinct power functions. The choice among them is a
+semantic decision, not a detail:
+
+| function | behaviour | chosen |
+| --- | --- | --- |
+| `pow(x, y)` | C99-style; `pow(1, NaN) = 1`, `pow(NaN, 0) = 1`; negative bases permitted with integral exponents | **yes** |
+| `powr(x, y)` | defined as \(e^{y \ln x}\); NaN for every \(x < 0\); `powr(±0, ±0)` is NaN | no |
+| `pown(x, n)` | integer exponents only | no |
+
+Consequences of choosing `pow`:
+
+- **Results are strictly real.** `(-8.0) ** (1/3)` is NaN, not a complex cube
+  root. Complex numbers are not part of this package and are not introduced by
+  exponentiation.
+- **A negative base with an integral exponent is well defined**:
+  `(-2.0) ** 3.0` is `-8.0`, and `(-2.0) ** -3.0` is `-0.125`.
+- Integer exponentiation is specified separately in
+  [section 12.4](#124-integer-exponentiation); D1 governs floating-point
+  operands only.
+- Choosing `pow` does **not** imply bitwise-identical results across backends.
+  Reproducibility is settled in [section 12.6](#126-accuracy).
+
+*Current behaviour (verified):* the Python reference calls `math.pow`, which
+implements `pow` semantics but converts IEEE signals into Python exceptions.
+NumPy and CuPy already deliver the IEEE results.
+
+### 12.3 Exceptional values (D2)
+
+**Floating-point exponentiation does not raise on a numerical condition. It
+delivers the IEEE result.** This is the same decision already taken for
+division in [section 7.2](#72-division-by-zero), and for the same reason: where
+the declared dtype holds a value that expresses the outcome, that value is the
+result.
+
+**This section governs floating-point operands only.** Integer exponentiation
+has no infinity and no NaN to deliver, and
+[section 12.4.2](#1242-negative-exponents-raise-d4) requires it to raise on a
+negative exponent — the same division of responsibility as
+[section 7.2](#72-division-by-zero), where floating division delivers an
+infinity and integer division raises.
+
+**A backend must not introduce a host synchronisation to detect any condition
+in this section.** The IEEE result is produced by the hardware; there is
+nothing to check.
+
+#### 12.3.1 The invalid class
+
+IEEE `pow` has exactly one invalid case:
+
+> finite \(x < 0\) with finite non-integral \(y\) → **NaN**
+
+`(-2.0) ** 0.5` is NaN. `(-8.0) ** (1/3)` is NaN. Neither raises.
+
+#### 12.3.2 The divide-by-zero class
+
+> \(\pm 0\) raised to a negative exponent → an infinity, with the sign the
+> standard prescribes
+
+| expression | result |
+| --- | --- |
+| `0.0 ** -1.0` | `+inf` |
+| `-0.0 ** -1.0` | `-inf` |
+| `-0.0 ** -2.0` | `+inf` |
+| `-0.0 ** -2.5` | `+inf` |
+
+The sign is negative only when the base is `-0.0` **and** the exponent is an
+odd integer.
+
+#### 12.3.3 The complete special-value table
+
+Every row is **exact** on every backend. These are not approximations and are
+not covered by the accuracy bounds of [section 12.6](#126-accuracy).
+
+| expression | result | note |
+| --- | --- | --- |
+| `x ** ±0.0` | `1.0` | for every `x`, including NaN and infinities |
+| `1.0 ** y` | `1.0` | for every `y`, including NaN |
+| `-1.0 ** ±inf` | `1.0` | |
+| `±0.0 ** y`, `y > 0` odd integer | `±0.0` | sign preserved |
+| `±0.0 ** y`, `y > 0` otherwise | `+0.0` | |
+| `±0.0 ** y`, `y < 0` odd integer | `±inf` | divide-by-zero |
+| `±0.0 ** y`, `y < 0` otherwise | `+inf` | divide-by-zero |
+| `x ** +inf`, \(\lvert x \rvert < 1\) | `+0.0` | |
+| `x ** +inf`, \(\lvert x \rvert > 1\) | `+inf` | |
+| `x ** -inf`, \(\lvert x \rvert < 1\) | `+inf` | |
+| `x ** -inf`, \(\lvert x \rvert > 1\) | `+0.0` | |
+| `-inf ** y`, `y > 0` odd integer | `-inf` | |
+| `-inf ** y`, `y > 0` otherwise | `+inf` | |
+| `-inf ** y`, `y < 0` odd integer | `-0.0` | |
+| `-inf ** y`, `y < 0` otherwise | `+0.0` | |
+| `+inf ** y`, `y > 0` | `+inf` | |
+| `+inf ** y`, `y < 0` | `+0.0` | |
+| finite `x < 0`, finite non-integral `y` | `NaN` | invalid |
+| `NaN ** y`, `y ≠ 0` | `NaN` | |
+| `x ** NaN`, `x ≠ 1` | `NaN` | |
+
+#### 12.3.4 Overflow and underflow
+
+Overflow produces `±inf`; underflow is gradual and then `±0.0`. Neither
+raises, at either precision. `1e200 ** 2.0` is `+inf`.
+
+*Current behaviour (verified):* `(-2.0) ** 0.5` raises `ValueError`,
+`0.0 ** -1.0` raises `ValueError`, and `1e200 ** 2.0` raises `OverflowError`.
+The exceptions come from CPython's `math.pow`, not from a considered position;
+the array kernels decline in these cases and the Python reference then raises.
+A further inconsistency: `float32` overflow already returns `inf` today, while
+`float64` overflow raises, because the reference computes in binary64 and
+narrows afterwards.
+
+#### 12.3.5 IEEE exception flags
+
+As in [section 7.2](#72-division-by-zero), the sticky flags — *invalid*,
+*divideByZero*, *overflow*, *underflow*, *inexact* — are **not** public API.
+There is no accessor and no trapping mode. A caller who needs to know whether a
+result is NaN tests the result.
+
+### 12.4 Integer exponentiation
+
+Integer exponentiation is not IEEE `pow`. It is exact integer arithmetic in
+the declared width, and it follows [section 4](#4-integer-arithmetic).
+
+#### 12.4.1 Non-negative exponents wrap (D3)
+
+For a declared integer dtype of width \(w\) and an exponent \(n \geq 0\):
+
+$$\operatorname{pow}_w(x, n) = \operatorname{wrap}_w\!\left(x^{n}\right)$$
+
+where \(\operatorname{wrap}_w\) is the rule in
+[section 4.2](#42-the-wraparound-rule). The result keeps the integer dtype.
+**Overflow neither raises nor promotes.**
+
+| expression | result |
+| --- | --- |
+| `int32: 2 ** 31` | `-2147483648` |
+| `uint8: 16 ** 2` | `0` |
+| `int8: (-2) ** 7` | `-128` |
+| `int32: 2 ** 3` | `8` |
+| `int32: 0 ** 0` | `1` |
+
+The width is the **promoted result width** from
+[section 12.5](#125-result-dtypes-and-scalar-conversion), not the base's width.
+`uint8 ** int8` promotes to `int16`, so wraparound is at 16 bits.
+
+**Implementation requirement.** The result must be computed by modular
+exponentiation in the declared width. Materialising \(x^{n}\) as an
+arbitrary-precision Python integer and truncating afterwards is not acceptable:
+`int64: 3 ** 1000000` would build a 1.5-million-bit integer to return one
+64-bit value.
+
+#### 12.4.2 Negative exponents raise (D4)
+
+> **Integer exponentiation requires a non-negative exponent. If any exponent
+> element is negative, the operation raises `ValueError`.**
+
+The rule is uniform. It applies whatever the base, including the bases whose
+reciprocals happen to be representable:
+
+| expression | result |
+| --- | --- |
+| `int32([2]) ** -1` | `ValueError` |
+| `int32([1]) ** -1` | `ValueError` |
+| `int32([-1]) ** -1` | `ValueError` |
+| `int32([2]) ** int32([-1])` | `ValueError` |
+
+`ValueError`, not `DtypePromotionError`: the operand dtypes are compatible and
+the promotion table is satisfied. It is the exponent's **value** that leaves
+the integer exponentiation domain.
+
+The rationale is the one already given for integer division by zero in
+[section 7.2](#72-division-by-zero): there is no integer value to deliver.
+`2 ** -1` is \(1/2\), which no integer dtype represents, and truncating it to
+`0` would discard the result rather than report it.
+
+A caller who wants a fractional result casts first:
+`t.astype(ts.float64) ** -1`.
+
+**This does not weaken [section 6.4](#64-what-is-not-promoted).** The result
+*dtype* never depends on values; it is fixed by
+[section 12.5](#125-result-dtypes-and-scalar-conversion) before any element is
+examined. D4 is a domain condition on the operation, evaluated after the dtype
+is settled — exactly as a zero denominator is for integer division.
+
+**Detection.** An accelerated backend may use a device-side reduction to
+detect a negative exponent. It must not transfer the exponent tensor to the
+host, and it must not fall back to another backend.
+
+*Current behaviour (verified):* `int32([2]) ** -1` returns `float64([0.5])`,
+and the result dtype is chosen by inspecting exponent values — `int32 ** int32`
+yields `int32` for exponents `[1, 2]` and `float64` for `[1, -2]`.
+
+### 12.5 Result dtypes and scalar conversion
+
+**Exponentiation introduces no new promotion table.**
+[Section 6.2](#62-the-promotion-table) and the scalar rules S1–S4 in
+[section 6.5](#65-python-scalars) govern it, with one addition: a rule for the
+reflected form, where the scalar is the *base* and the tensor is the
+*exponent*.
+
+The result dtype is a static property of the declared operand dtypes and the
+Python type of any scalar. **It never depends on element values**, as
+[section 6.4](#64-what-is-not-promoted) requires.
+
+#### 12.5.1 Tensor base with tensor exponent
+
+The result dtype is [section 6.2](#62-the-promotion-table) applied to the two
+declared dtypes, unchanged. `cast` cells raise and require an explicit cast.
+
+The exponent participates in promotion exactly as any other operand. It is not
+exempted on the grounds that it plays a different mathematical role: **the
+exponent's numerical value affects the result**, and converting an integer
+exponent to a floating dtype that cannot represent it exactly would change the
+computation.
+
+| expression | result dtype |
+| --- | --- |
+| `int32 ** int32` | `int32` |
+| `uint8 ** int8` | `int16` |
+| `int32 ** float32` | `float64` |
+| `float32 ** float32` | `float32` |
+| `float32 ** float64` | `float64` |
+| `float32 ** int64` | **`cast` — raises** |
+| `float64 ** int64` | **`cast` — raises** |
+| `int64 ** float32` | **`cast` — raises** |
+| `int64 ** float64` | **`cast` — raises** |
+
+#### 12.5.2 Tensor base with a Python scalar exponent
+
+S1–S4 apply with the tensor's dtype as the conversion target. The result has
+the tensor's dtype. **A scalar never widens it.**
+
+| expression | result | rule |
+| --- | --- | --- |
+| `int32_t ** 2` | `int32` | S1 |
+| `int32_t ** 2.0` | `int32` | S2 — integral and in range |
+| `int32_t ** 0.5` | **`TypeError`** | S2 — a non-integral float never converts to an integer dtype |
+| `int32_t ** -1` | **`ValueError`** | dtype `int32` by S1; the value is rejected by [12.4.2](#1242-negative-exponents-raise-d4) |
+| `uint8_t ** 300` | **`TypeError`** | S1 — 300 is outside `uint8` |
+| `float32_t ** 2` | `float32` | S4 — 2 is exactly representable |
+| `float32_t ** 0.5` | `float32` | S3 |
+
+#### 12.5.3 Python scalar base with tensor exponent
+
+The scalar base is weakly typed, but S1–S4 cannot be applied literally here:
+they assume both operands play the same role. Forcing a *base* into the
+*exponent's* dtype would make `2.5 ** int32_t` raise, refusing an ordinary real
+result because the exponent happens to be an integer tensor.
+
+> **S-p — a Python scalar base with a tensor exponent.**
+>
+> - Exponent tensor is **floating**: the target is that floating dtype; S3
+>   governs a Python `float` base and S4 a Python `int` base.
+> - Exponent tensor is **integer** and the base is a Python `int`: the target
+>   is the exponent's integer dtype under S1, and the result has that dtype.
+> - Exponent tensor is **integer** and the base is a Python `float`: the base
+>   is taken as `float64`, the default floating dtype, and the promotion
+>   restrictions of [section 6.2](#62-the-promotion-table) then apply between
+>   `float64` and the exponent's dtype.
+
+| expression | result | rule |
+| --- | --- | --- |
+| `2 ** int32_t` | `int32` | S-p, S1 |
+| `-2 ** uint8_t` | **`TypeError`** | S-p, S1 — −2 is outside `uint8` |
+| `2.5 ** int32_t` | `float64` | S-p — `float64` with `int32` promotes to `float64` |
+| `2.5 ** int64_t` | **`cast` — raises** | S-p — `float64` with `int64` is a `cast` cell |
+| `2 ** float32_t` | `float32` | S-p, S4 |
+| `2.5 ** float32_t` | `float32` | S-p, S3 |
+
+**Reflected exponentiation does not bypass the precision protections that
+apply to the tensor–tensor form.** `2.5 ** int64_t` raises for the same reason
+`float64 ** int64` raises.
+
+*Current behaviour (verified):* `int32 ** 2.0` gives `float64`;
+`int32 ** 0.5` gives `float64`; `-2 ** uint8_t` gives `int16`, a scalar
+widening the result; and the four `int64` `cast` cells silently give `float64`,
+losing precision above \(2^{53}\).
+
+#### 12.5.4 Dtype resolution is not numerical evaluation
+
+The result dtype is settled first, from declarations alone. Wraparound
+([12.4.1](#1241-non-negative-exponents-wrap-d3)), the negative-exponent
+rejection ([12.4.2](#1242-negative-exponents-raise-d4)) and the IEEE special
+cases ([12.3](#123-exceptional-values-d2)) are then evaluated in that dtype.
+The two stages never interact.
+
+### 12.6 Accuracy
+
+IEEE 754 requires correct rounding for `+`, `-`, `*`, `/` and `sqrt`, which is
+why [section 9.3](#93-cross-backend-equality-what-is-achievable) can require
+bitwise cross-backend equality for them: the result is uniquely determined.
+**`pow` is in clause 9.2, among the recommended operations, and no mainstream
+implementation rounds it correctly.** That justification does not transfer, and
+this section states what does apply instead.
+
+#### 12.6.1 Special values are exact
+
+Every row of [section 12.3.3](#1233-the-complete-special-value-table) must be
+reproduced **exactly** on every backend, including the prescribed signs of
+zeros and infinities. NaN is compared **by classification**; its payload and
+sign are unspecified and must not be tested.
+
+#### 12.6.2 The accuracy bounds
+
+> **Every other result must be within 2 ULP (`float64`) or 4 ULP (`float32`)
+> of the correctly rounded result, per element, in the declared result dtype,
+> on every backend.**
+
+Per element, not on average: a single element outside the bound is a
+conformance failure.
+
+**Integer exponentiation is exact** and is not bounded: it is integer
+arithmetic in the declared width under
+[section 12.4.1](#1241-non-negative-exponents-wrap-d3), and every backend must
+produce the identical integer. Bitwise cross-backend equality **is** required
+there, as [section 9.3](#93-cross-backend-equality-what-is-achievable) requires
+of every integer operation.
+
+#### 12.6.3 These bounds are inherited, not proven
+
+The figures are the loosest published by the implementations this package
+depends on — NVIDIA documents a maximum of 2 ULP for `pow` and 4 ULP for
+`powf`. **They are not mathematical guarantees, and this package does not
+present them as such:**
+
+- NVIDIA states its bounds are *"derived from extensive, though not
+  exhaustive, testing. Therefore, they are not guaranteed."*
+- glibc lists *"the maximum error … exposed by one of the existing tests"* and
+  states that it *"does not aim for correctly rounded results"*.
+- Microsoft's UCRT documents no per-function figure, saying only that results
+  are *"in most cases … within ±1 ULP"*.
+
+A future library, driver or toolkit update **can** violate these bounds while
+remaining within its own vendor's documented behaviour. The bounds are
+therefore **MS-Tensors conformance requirements that are tested**, not
+properties inherited from a dependency.
+
+#### 12.6.4 The ULP metric
+
+Map a finite value to a monotone integer: interpret its bit pattern as a signed
+integer \(i\); if \(i < 0\), replace it with \(\mathrm{INT\_MIN} - i\). Adjacent
+representable values then differ by exactly 1, including across the
+subnormal-to-normal boundary. **The ULP distance is the absolute difference of
+these integers.**
+
+The metric applies **only** to finite, non-zero results of the same sign.
+Everything else is governed by [12.6.1](#1261-special-values-are-exact):
+
+- **±0** — compared exactly, sign included. The integer mapping cannot express
+  signed zero, which is why zero is an exact case rather than a bounded one.
+- **±inf** — compared exactly. A finite result where the reference is infinite,
+  or the reverse, is a failure, not a large distance.
+- **NaN** — compared by classification only.
+- **Opposite signs** between two non-zero finite values is a failure, not a
+  distance.
+
+#### 12.6.5 Measurement
+
+Accuracy is measured against a **validated high-precision reference**, never
+against another backend. The reference must establish a **valid error
+enclosure** before a result may be called correctly rounded: it is not enough
+to compute at some fixed precision and assume the answer.
+
+A conforming procedure:
+
+1. For an integral exponent, evaluate \(x^{n}\) exactly in rational arithmetic.
+2. Otherwise evaluate \(e^{y \ln x}\) at working precision \(p\), carrying a
+   rigorous bound on the accumulated relative error, including the
+   amplification \(\lvert y \ln x \rvert\) introduced by the exponential.
+3. Round **both** ends of the resulting enclosure into the target format,
+   directly from the rational value, so that `float32` is rounded once rather
+   than through `float64`.
+4. Accept the result only when both ends round to the same value. Otherwise
+   increase \(p\) and repeat.
+5. If the enclosure has not resolved at the largest supported precision,
+   **fail**. Never return an unvalidated reference.
+
+**No fixed precision is provably sufficient.** A true value arbitrarily close
+to a rounding boundary needs arbitrarily more precision to resolve — the
+table-maker's dilemma — and the worst cases of `pow` are not catalogued for any
+of the libraries involved. Step 4 is what makes the procedure sound; a fixed
+60-digit evaluation is not.
+
+Python's `decimal.ln()` and `decimal.exp()` are documented as correctly
+rounded and are suitable for step 2. `decimal`'s own power operator is
+documented as only *"almost always correctly rounded"* and **must not** be used
+as the reference.
+
+#### 12.6.6 Reproducibility
+
+**Bitwise equality across backends is not required for `**`.** Two conforming
+backends may differ by up to twice the bound in
+[12.6.2](#1262-the-accuracy-bounds). Code that requires bit-identical results
+across devices must not use `**`.
+
+Semantic consistency is still required in full: the special-value table, the
+signs of zeros and infinities, NaN classification, the result dtype, and every
+rule in this section hold identically on every backend. See the amended **P3**
+in [section 2](#2-architectural-principles).
+
+#### 12.6.7 Determinism
+
+> For a fixed backend, a fixed library, driver and toolkit build, a fixed
+> device, and a fixed dtype, `**` is deterministic: identical inputs produce
+> identical results.
+
+**Every supported execution path must satisfy this section's numerical
+contract.** That requirement stands on the contract itself and not on any
+measurement of particular memory layouts or launch configurations; no bitwise
+guarantee attaches to a layout or a launch shape.
+
+Determinism is **not** promised across backends, across library or driver
+versions, across devices, or across CPU models. Microsoft documents that the
+UCRT selects implementations at run time and *"may produce different results
+across CPUs"*, so two hosts running the same build may legitimately differ.
+
+### 12.7 Differentiation (D7)
+
+This section governs the derivatives of `**`.
+[autodiff.md](autodiff.md) governs where they execute and how graph
+optimisation must preserve them.
+
+For \(f(x, y) = x^{y}\), the partial derivatives are
+
+$$\frac{\partial f}{\partial x} = y\,x^{y-1}, \qquad
+  \frac{\partial f}{\partial y} = x^{y}\ln x$$
+
+#### 12.7.1 Rules
+
+> **G1 — The two gradients are independent.** Each is computed and returned on
+> its own. A condition affecting one never suppresses the other. Only a
+> requested gradient is computed.
+>
+> **G2 — Differentiation does not raise on a numerical condition.** Where a
+> derivative does not exist, the gradient is **NaN**. This does not prohibit
+> exceptions for unsupported backend operations or other non-numerical
+> failures.
+>
+> **G3 — No host synchronisation** may be introduced to detect any condition in
+> this section.
+>
+> **G4 — Only floating dtypes are differentiable.** Integer tensors cannot
+> require gradients, so [12.4](#124-integer-exponentiation) never interacts
+> with differentiation.
+>
+> **G5 — Each gradient carries its own operand's declared dtype**, not the
+> upstream gradient's, and is reduced to that operand's shape.
+>
+> **G6 — Gradients execute on the selected backend** at every tensor size, or
+> report that they cannot. No workload threshold, no silent fallback to another
+> backend, and no decline that reads operand values.
+
+#### 12.7.2 The region table
+
+Each derivative is classified. The three classes are distinct and a convention
+approved for one region is **not** extended to any other.
+
+- **exists** — the partial derivative exists mathematically at that point and
+  the stated value is it.
+- **NaN** — no derivative exists; NaN records that fact.
+- **convention** — no finite derivative exists; an approved representation of a
+  one-sided infinite limiting slope.
+
+| region | `f` | ∂f/∂x | class | ∂f/∂y | class |
+| --- | --- | --- | --- | --- | --- |
+| \(x > 0\) | \(x^{y}\) | \(y\,x^{y-1}\) | exists | \(x^{y}\ln x\) | exists |
+| \(x < 0\), \(y\) integral | \(x^{y}\) | \(y\,x^{y-1}\) | exists | `NaN` | NaN |
+| \(x < 0\), \(y\) non-integral | `NaN` | `NaN` | NaN | `NaN` | NaN |
+| \(x = 0\), \(y > 1\) | `0` | `0` | exists | `0` | exists |
+| \(x = 0\), \(y = 1\) | `0` | `1` | exists | `0` | exists |
+| \(x = 0\), \(0 < y < 1\) | `0` | `+inf` | **convention** | `0` | exists |
+| \(x = 0\), \(y = 0\) | `1` | `0` | exists | `NaN` | NaN |
+| \(x = 0\), \(y < 0\) | `±inf` | `NaN` | NaN | `NaN` | NaN |
+| \(x\) NaN or \(\pm\infty\) | IEEE | IEEE propagation | — | IEEE propagation | — |
+
+Justifications for the rows that the formulas alone do not give:
+
+- **\(x < 0\), \(y\) integral.** \(\partial f/\partial x = y\,x^{y-1}\) exists
+  because \(y - 1\) is integral, so the power is real. This is the derivative
+  **with respect to the base, holding the exponent fixed**. It is not a claim
+  that \(f\) is differentiable as a function of two real variables at that
+  point: \(\partial f/\partial y\) does not exist, because \(\ln x\) is
+  undefined for \(x < 0\).
+- **\(x = 0\), \(y > 0\): \(\partial f/\partial y = 0\).** \(f(0, y) = 0\) for
+  every \(y > 0\), so \(f\) is constant in \(y\) there and the derivative is
+  exactly zero. The formula's \(0 \cdot (-\infty)\) is a degenerate encoding of
+  a derivative that genuinely exists.
+- **\(x = 0\), \(y = 0\): \(\partial f/\partial x = 0\).** \(f(x, 0) = 1\) for
+  every \(x\), so \(f\) is constant in \(x\) there. The formula's
+  \(0 \cdot (+\infty)\) is again degenerate. \(\partial f/\partial y\) is NaN:
+  \(f(0, y)\) is \(1\) at \(y = 0\) and \(0\) for \(y > 0\), so it is
+  discontinuous and no derivative exists.
+- **\(x = 0\), \(0 < y < 1\): \(\partial f/\partial x = +\infty\).** The
+  right-hand difference quotient diverges to \(+\infty\). **No finite classical
+  derivative exists at this point.** `+inf` is an approved numerical convention
+  representing that one-sided infinite slope, and nothing more.
+- **\(x = 0\), \(y < 0\): both NaN.** The forward result is an infinity, which
+  does **not** establish that any derivative exists at the evaluation point.
+  Neither partial derivative exists, and both are NaN. The signed-zero
+  behaviour of the forward result is specified in
+  [12.3.2](#1232-the-divide-by-zero-class) and is a separate matter.
+
+#### 12.7.3 Worked example
+
+```text
+(-2.0) ** 3.0, upstream gradient 1.0
+
+  forward          = -8.0
+  base gradient    = 3 * (-2)^2 = 12.0      exists
+  exponent gradient = NaN                    ln(-2) is undefined
+```
+
+Both are returned. The valid base gradient is **not** discarded because the
+exponent gradient does not exist.
+
+#### 12.7.4 Gradient accuracy
+
+The bounds in [12.6.2](#1262-the-accuracy-bounds) apply to `**` itself. **They
+are not imposed on a complete gradient expression**, which composes a power, a
+logarithm and two multiplications, so error necessarily accumulates. Each
+constituent operation meets whatever accuracy requirement its own
+specification states; `pow`'s bounds are not transferred to `log` or to any
+other operation by implication.
+
+Ordinary differentiable cases are validated against a high-precision reference.
+Finite-difference gradient checking is supplementary evidence only: it is
+itself inaccurate near singularities and at non-differentiable points, and must
+not be used to validate the NaN and convention rows of
+[12.7.2](#1272-the-region-table).
+
+*Current behaviour (verified):* a negative base with a **tensor** exponent
+raises `ValueError` and discards both gradients, including the valid base
+gradient, while the same expression with a **scalar** exponent returns
+`12.0` correctly. Zero-base cases raise. The checks read both operands to the
+host, measured at 190 ms for a one-million-element backward pass on CUDA, and
+the exponent-gradient kernel declines through `bool(numpy.any(bases <= 0.0))`,
+a further synchronisation.
+
+### 12.8 Conformance requirements
+
+In addition to [section 9](#9-conformance-testing-requirements):
+
+1. **The special-value table** ([12.3.3](#1233-the-complete-special-value-table))
+   — every row, both floating dtypes, every backend, compared exactly, with
+   signed zeros distinguished and NaN compared by classification.
+2. **Accuracy** ([12.6.2](#1262-the-accuracy-bounds)) — per element, against a
+   validated reference built to [12.6.5](#1265-measurement), covering ordinary
+   values, values near 1 with extreme exponents, subnormal results, and the
+   overflow and underflow boundaries, at both precisions.
+3. **Integer exponentiation** — wraparound at the promoted width for all five
+   integer dtypes, and `ValueError` for every negative exponent including
+   bases `1` and `-1`.
+4. **Result dtypes** — all 49 cells of [12.5.1](#1251-tensor-base-with-tensor-exponent),
+   both scalar directions, and every `cast` cell raising. Tests must assert
+   that the result dtype does not change when only element **values** change.
+5. **Differentiation** — every region of [12.7.2](#1272-the-region-table),
+   asserting that a valid base gradient survives an undefined exponent
+   gradient, and that gradient dtypes follow G5.
+6. **Execution** — every rule above holds at every tensor size on every
+   explicitly selected backend, and fused execution produces what unfused
+   execution produces.
+
+A conformance test must derive its expectations from this document, never from
+the behaviour of a backend.
 
 ## Related documents
 
