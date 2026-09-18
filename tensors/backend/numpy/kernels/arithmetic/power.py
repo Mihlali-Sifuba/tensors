@@ -5,11 +5,8 @@ import numpy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _operand
 from tensors.backend.numpy.conversion import _arithmetic_operand
 from tensors.backend.numpy.conversion import _arithmetic_storage
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _finite_operands
 
 if TYPE_CHECKING:
     from tensors._typing import Scalar
@@ -55,14 +52,38 @@ def _integer_power(left, right, native):
     return result.view(native)
 
 
+def _ieee_pow(left, right):
+    """IEEE 754 clause 9.2 ``pow`` over arrays (sections 12.2 and 12.3).
+
+    NumPy follows the standard for almost every row of the table in section
+    12.3.3. Two rows need correcting, and the correction is applied
+    unconditionally because deciding whether it is needed would mean reading
+    the operands back to the host:
+
+    - ``(-0.0) ** y`` for a positive non-integral ``y`` must be ``+0.0``.
+    - ``(-inf) ** y`` for a positive non-integral ``y`` must be ``+inf``.
+
+    For a base of ``-0.0`` or ``-inf`` the standard's result depends only on
+    the magnitude of the base and the parity of the exponent, so recomputing
+    those elements from ``abs(base)`` gives the specified value. The mask is
+    elementwise, so nothing is transferred and nothing synchronises.
+    """
+    result = numpy.power(left, right)
+    signed_pole = numpy.signbit(left) & ((left == 0) | numpy.isinf(left))
+    non_integral = right != numpy.trunc(right)
+    return numpy.where(
+        signed_pole & non_integral, numpy.power(numpy.abs(left), right), result
+    )
+
+
 def power(
     left: Tensor | Scalar,
     right: Tensor | Scalar,
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
-) -> Storage | None:
-    """Return native storage, or decline when reference semantics require it."""
+) -> Storage:
+    """Return native storage in the declared dtype. Never declines."""
     if dtype.kind == "integer":
         # Native fixed-width exponentiation; see _integer_power. This is what
         # closes the gap where integer operands were declined and the Python
@@ -76,17 +97,13 @@ def power(
             )
         return _arithmetic_storage(result, dtype=dtype, output_shape=output_shape)
 
-    try:
-        left_array = _operand(left, dtype)
-        right_array = _operand(right, dtype)
-    except (OverflowError, TypeError, ValueError):
-        return None
+    # Floating exponentiation is non-trapping: every exceptional value in
+    # section 12.3.3 is a result. Nothing here declines, so an infinity or a
+    # NaN never sends the work to another backend, and the declared dtype is
+    # preserved rather than widened to float64.
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        result = numpy.power(left_array, right_array)
-    if (
-        dtype.kind == "floating"
-        and _finite_operands(left_array, right_array)
-        and (not bool(numpy.all(numpy.isfinite(result))))
-    ):
-        return None
-    return _storage(result, dtype=dtype, output_shape=output_shape)
+        result = _ieee_pow(
+            _arithmetic_operand(left, dtype),
+            _arithmetic_operand(right, dtype),
+        )
+    return _arithmetic_storage(result, dtype=dtype, output_shape=output_shape)
