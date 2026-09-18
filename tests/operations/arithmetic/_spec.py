@@ -184,6 +184,46 @@ def overflow_threshold(dtype: str) -> int | float:
     return FLOAT_MAX[dtype] + 2 ** (MAX_EXPONENT[dtype] + 1)
 
 
+#: Exponent of the smallest normal value in each format, which fixes the
+#: quantum subnormal results are rounded to.
+MIN_EXPONENT: dict[str, int] = {"float32": -126, "float64": -1022}
+
+
+def round_to_format(value: float, dtype: str) -> float:
+    """Round a binary64 value to a floating dtype (section 6.5, S3).
+
+    Round-to-nearest, ties-to-even, derived from the format's precision and
+    exponent range with exact integer arithmetic. Nothing here consults a
+    conversion performed by the package, by ``array`` or by ``struct``, so it
+    is an independent statement of what S3 requires.
+
+    NaN, the infinities and the signed zeros are returned unchanged. A value
+    that rounds past the largest finite value returns an infinity; S3 refuses
+    such a literal separately, which :func:`rounds_to_finite` decides.
+    """
+    if math.isnan(value) or math.isinf(value) or value == 0.0:
+        return value
+    precision = FLOAT_PRECISION[dtype]
+    sign = -1.0 if value < 0.0 else 1.0
+    numerator, denominator = abs(value).as_integer_ratio()
+    # frexp is exact: 2**leading <= |value| < 2**(leading + 1).
+    leading = math.frexp(abs(value))[1] - 1
+    # The quantum of the result, floored at the subnormal quantum so that
+    # gradual underflow rounds to the same grid the format actually has.
+    quantum = max(leading - precision + 1, MIN_EXPONENT[dtype] - precision + 1)
+    if quantum >= 0:
+        denominator <<= quantum
+    else:
+        numerator <<= -quantum
+    units, remainder = divmod(numerator, denominator)
+    if 2 * remainder > denominator or (2 * remainder == denominator and units % 2):
+        units += 1  # ties to even leaves an even unit count alone
+    magnitude = math.ldexp(float(units), quantum)
+    if magnitude > FLOAT_MAX[dtype]:
+        return sign * math.inf
+    return sign * magnitude
+
+
 def rounds_to_finite(value: float, dtype: str) -> bool:
     """Whether a finite literal survives conversion (section 6.5, S3)."""
     if math.isnan(value) or math.isinf(value):
@@ -200,6 +240,7 @@ __all__ = [
     "FLOAT_MAX",
     "FLOAT_PRECISION",
     "MAX_EXPONENT",
+    "MIN_EXPONENT",
     "INTEGER_DTYPES",
     "divide_result",
     "dtype_fits_in_float",
@@ -207,6 +248,7 @@ __all__ = [
     "integer_range",
     "overflow_threshold",
     "promote",
+    "round_to_format",
     "rounds_to_finite",
     "scalar_rule",
     "wrap",
