@@ -4,32 +4,18 @@ from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
 import math
 from tensors.tensor import Tensor
-from tensors.dtype import float64, result_dtype
+from tensors.dtype import resolve_power
 from tensors.backend.python.kernels.arithmetic.power import power, _power
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tensors._typing import Scalar
     from tensors.backend.storage import Storage
 
 
-def _power_dtype(base: Tensor, exponent: Tensor | Scalar):
-    """Choose a dtype that can represent the requested power operation."""
-    if isinstance(exponent, Tensor):
-        if base.dtype.typecode in {"f", "d"} or exponent.dtype.typecode in {"f", "d"}:
-            return result_dtype(base.dtype, exponent)
-        if any((value < 0 for value in exponent._data)):
-            return float64
-        return result_dtype(base.dtype, exponent)
-    if base.dtype.typecode in {"f", "d"}:
-        return result_dtype(base.dtype, exponent)
-    if isinstance(exponent, float) or exponent < 0:
-        return float64
-    return base.dtype
-
-
 def _power_values(base, exponent):
-    dtype = _power_dtype(base, exponent)
+    # The same resolution the forward operation uses, so a gradient never
+    # disagrees with the value it differentiates (section 12.5).
+    dtype, exponent = resolve_power(base.dtype, exponent)
     storage = power(base, exponent, dtype=dtype, output_shape=base.shape)
     return Tensor._from_owned_storage(storage, dtype=dtype, shape=base.shape)
 

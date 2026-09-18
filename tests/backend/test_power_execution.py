@@ -206,10 +206,10 @@ class ResultsAndErrorsAreUnchanged(unittest.TestCase):
 
 
 def expected_dtype(dtype, exponent):
-    """The dtype the existing promotion rules give, which this change kept."""
-    from tensors.operations.arithmetic.power import _power_dtype
+    """The dtype §12.5 gives for this base dtype and exponent."""
+    from tensors.dtype import resolve_power
 
-    return _power_dtype(ts.Tensor([1], dtype=dtype), exponent)
+    return resolve_power(dtype, exponent)[0]
 
 
 @requires_numpy

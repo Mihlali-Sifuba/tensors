@@ -455,3 +455,50 @@ def resolve_binary(left_dtype: DataType, right, *, division: bool = False):
     if division:
         return division_result_dtype(left_dtype, left_dtype), converted
     return left_dtype, converted
+
+
+def resolve_power(base_dtype: DataType, exponent):
+    """Return ``(result_dtype, exponent_operand)`` for ``base ** exponent``.
+
+    Implements sections 12.5.1 and 12.5.2. ``exponent`` is either a typed
+    operand — a Tensor or a Variable, whose declared dtype takes part in the
+    section 6.2 promotion table — or a Python scalar, which converts to
+    ``base_dtype`` under S1 to S4 and leaves the result dtype to the base.
+
+    The exponent is not exempted from promotion on the grounds that it plays a
+    different mathematical role: its value affects the result, so converting it
+    to a dtype that cannot represent it exactly would change the computation.
+
+    **No element value is ever inspected.** The result dtype follows from the
+    declared dtypes and, for a scalar, from the scalar's Python type and its
+    own value — never from the contents of a tensor, as section 6.4 requires.
+    """
+    exponent_dtype = getattr(exponent, "dtype", None)
+    if isinstance(exponent_dtype, DataType):
+        return arithmetic_result_dtype(base_dtype, exponent_dtype), exponent
+    return base_dtype, convert_scalar(exponent, base_dtype)
+
+
+def resolve_power_scalar_base(base, exponent_dtype: DataType):
+    """Return ``(result_dtype, base_operand)`` for a Python scalar base.
+
+    Implements rule S-p, section 12.5.3. S1 to S4 cannot be applied literally
+    to the reflected form: they assume both operands play the same role, and
+    forcing a *base* into the *exponent's* dtype would make ``2.5 ** int32_t``
+    raise, refusing an ordinary real result because the exponent happens to be
+    an integer tensor.
+
+    Reflected exponentiation does not thereby bypass the promotion policy:
+    a Python float base over an ``int64`` exponent still reaches the section
+    6.2 ``cast`` cell and raises.
+    """
+    if exponent_dtype.kind == "floating":
+        # The exponent supplies the target; S3 for a float, S4 for an int.
+        return exponent_dtype, convert_scalar(base, exponent_dtype)
+    if isinstance(base, int):
+        # Including bool, which convert_scalar rejects on its own terms.
+        return exponent_dtype, convert_scalar(base, exponent_dtype)
+    # A Python float base is taken as float64, the default floating dtype, and
+    # the ordinary promotion restrictions then apply against the exponent.
+    result = arithmetic_result_dtype(float64, exponent_dtype)
+    return result, convert_scalar(base, result)

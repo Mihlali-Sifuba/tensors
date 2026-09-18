@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 import math
-from typing import TYPE_CHECKING, Any, List, Optional, Union, overload
+from typing import TYPE_CHECKING, List, Optional, Union, overload
 from tensors.backend import (
     execute_power,
     execute_power_base_gradient,
     execute_power_exponent_gradient,
 )
 from tensors._typing import TensorData, TensorLike, TensorResult
-from tensors.dtype import float64, result_dtype
+from tensors.dtype import resolve_power, resolve_power_scalar_base
 from tensors.operations.base import Operation
 from tensors.shape import Shape
 from tensors.tensor import Tensor
@@ -20,21 +20,6 @@ if TYPE_CHECKING:
 from tensors.operations._gradient_shaping import sum_to_shape, sum_to_shape_graph
 
 Scalar = Union[int, float]
-
-
-def _power_dtype(base: Tensor, exponent: Tensor | Scalar):
-    """Choose a dtype that can represent the requested power operation."""
-    if isinstance(exponent, Tensor):
-        if base.dtype.typecode in {"f", "d"} or exponent.dtype.typecode in {"f", "d"}:
-            return result_dtype(base.dtype, exponent)
-        if any((value < 0 for value in exponent._data)):
-            return float64
-        return result_dtype(base.dtype, exponent)
-    if base.dtype.typecode in {"f", "d"}:
-        return result_dtype(base.dtype, exponent)
-    if isinstance(exponent, float) or exponent < 0:
-        return float64
-    return base.dtype
 
 
 def _power(base: int | float, exponent: int | float) -> int | float:
@@ -161,7 +146,9 @@ class Pow(Operation):
         """Raise every element in ``base`` to ``exponent``."""
         if not isinstance(exponent, (int, float, Tensor)):
             raise TypeError(f"Unsupported exponent type: {type(exponent)}")
-        dtype = _power_dtype(base, exponent)
+        # Promotion for a typed exponent, conversion for a scalar; section
+        # 12.5. No element value is read.
+        dtype, exponent = resolve_power(base.dtype, exponent)
         output_shape = (
             base.shape.broadcast_with(exponent.shape)
             if isinstance(exponent, Tensor)
@@ -538,21 +525,13 @@ _power_values = Pow().forward
 power = _power_values
 
 
-def _scalar_base_power_dtype(base: Scalar, exponent: Tensor) -> Any:
-    """Choose a dtype that can represent a scalar base raised to ``exponent``.
-
-    An integer raised to a negative integer is a fraction, so a negative
-    exponent anywhere promotes the whole result to floating point.
-    """
-    dtype = result_dtype(exponent.dtype, base)
-    if dtype.kind == "integer" and any(value < 0 for value in exponent._data):
-        return float64
-    return dtype
-
-
 def power_scalar_base(base: Scalar, exponent: Tensor) -> Tensor:
-    """Return ``base`` raised element-wise to ``exponent`` for a scalar base."""
-    dtype = _scalar_base_power_dtype(base, exponent)
+    """Return ``base`` raised element-wise to ``exponent`` for a scalar base.
+
+    The scalar base converts under rule S-p (section 12.5.3), which reads no
+    element of ``exponent``.
+    """
+    dtype, base = resolve_power_scalar_base(base, exponent.dtype)
     accelerated = execute_power(
         base, exponent, dtype=dtype, output_shape=exponent.shape
     )

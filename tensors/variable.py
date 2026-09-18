@@ -22,13 +22,18 @@ from types import NotImplementedType
 from typing import Any
 
 from ._typing import TensorData, TensorIndex, TensorLike, TensorOperand, VariableData
-from .dtype import DataType, from_typecode, resolve_binary, result_dtype
+from .dtype import (
+    DataType,
+    from_typecode,
+    resolve_binary,
+    resolve_power,
+    resolve_power_scalar_base,
+)
 from .shape import Shape
 from .tensor import Tensor
 from .operations.arithmetic import Add, Div, Mul, Neg, Pow, Sub
 from .operations.base import Operation
 from .operations.manipulation import Cast, Slice
-from .operations.arithmetic.power import _power_dtype
 from .graph.node import VariableNode
 from .graph.state import get_graph_state
 
@@ -354,7 +359,11 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = _power_dtype(self.data, other)
+        # A Variable exponent carries a declared dtype, so it promotes like
+        # any other typed operand. The previous resolution needed element
+        # values, so it compared the operand against an integer and raised
+        # TypeError whenever the exponent was a Variable.
+        dtype, other = resolve_power(self.dtype, other)
         if isinstance(other, Variable):
             exponent = other
         elif isinstance(other, Tensor):
@@ -374,8 +383,13 @@ class Variable:
     ) -> Variable | NotImplementedType:
         if not isinstance(other, (int, float, Tensor)) or isinstance(other, bool):
             return NotImplemented
-        # Operand order carries the semantics: the base is input_0.
-        dtype = result_dtype(self.dtype, other)
+        # Operand order carries the semantics: the base is input_0. A tensor
+        # base promotes against this Variable's dtype; a scalar base converts
+        # under rule S-p.
+        if isinstance(other, Tensor):
+            dtype, _ = resolve_power(other.dtype, self)
+        else:
+            dtype, other = resolve_power_scalar_base(other, self.dtype)
         if isinstance(other, Tensor):
             base = Variable(other, requires_grad=False)
         else:

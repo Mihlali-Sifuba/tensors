@@ -47,12 +47,19 @@ class TensorPowerTests(unittest.TestCase):
 
 
 class ScalarBasePowerTests(unittest.TestCase):
-    """A scalar base raised to an integer tensor exponent.
+    """A scalar base raised to a tensor exponent, under rule S-p.
 
-    An integer raised to a negative integer is a fraction, so a negative
-    exponent anywhere has to promote the whole result to floating point.
-    Truncating it instead returns zeros, which is why both the values and the
-    dtype are asserted.
+    The result dtype comes from the declared dtypes alone
+    (`docs/arithmetic-semantics.md` §12.5.3). An integer scalar base converts
+    into the exponent tensor's integer dtype, so the result is that integer
+    dtype whatever the exponent's values happen to be.
+
+    These tests previously asserted that a negative exponent anywhere promoted
+    the whole result to `float64`. That rule inspected element values, which
+    §6.4 forbids and D6 removed: the same declared dtypes now always give the
+    same result dtype. What a negative integer exponent should *do* is settled
+    by D4 (§12.4.2) and is covered, deferred, in
+    `tests/operations/arithmetic/test_power_dtype.py`.
     """
 
     def setUp(self):
@@ -68,19 +75,31 @@ class ScalarBasePowerTests(unittest.TestCase):
     def _backends(self):
         return ts.available_backends()
 
-    def test_negative_integer_exponent_promotes_to_float(self):
+    def test_integer_exponent_dtype_does_not_depend_on_its_values(self):
+        """Replaces a test asserting value-dependent promotion to float64."""
+        for backend in self._backends():
+            for dtype in (ts.int32, ts.int64):
+                for values in ([1, 2, 3, 0], [1, -2, 3, 0], [-5, -5, -5, -5]):
+                    with self.subTest(
+                        backend=backend, dtype=dtype.name, exponent=values
+                    ):
+                        with ts.use_backend(backend):
+                            exponent = ts.Tensor(values, dtype=dtype)
+                            self.assertIs((2**exponent).dtype, dtype)
+
+    def test_non_negative_exponent_values_are_unchanged(self):
         for backend in self._backends():
             for dtype in (ts.int32, ts.int64):
                 with self.subTest(backend=backend, dtype=dtype.name):
                     with ts.use_backend(backend):
-                        exponent = ts.Tensor([1, -2, 3, 0], dtype=dtype)
+                        exponent = ts.Tensor([1, 2, 3, 0], dtype=dtype)
                         result = 2**exponent
 
-                    self.assertIs(result.dtype, ts.float64)
-                    self.assertEqual(result.tolist(), [2.0, 0.25, 8.0, 1.0])
+                    self.assertIs(result.dtype, dtype)
+                    self.assertEqual(result.tolist(), [2, 4, 8, 1])
 
-    def test_negative_integer_exponent_promotes_when_accelerated(self):
-        pattern = [1, -2, 3, 0]
+    def test_non_negative_exponent_values_are_unchanged_when_accelerated(self):
+        pattern = [1, 2, 3, 0]
         repeats = self.ACCELERATED_SIZE // len(pattern)
         for backend in self._backends():
             for dtype in (ts.int32, ts.int64):
@@ -93,8 +112,8 @@ class ScalarBasePowerTests(unittest.TestCase):
                         )
                         result = 2**exponent
 
-                    self.assertIs(result.dtype, ts.float64)
-                    self.assertEqual(result.tolist(), [2.0, 0.25, 8.0, 1.0] * repeats)
+                    self.assertIs(result.dtype, dtype)
+                    self.assertEqual(result.tolist(), [2, 4, 8, 1] * repeats)
 
     def test_non_negative_integer_exponent_keeps_the_integer_dtype(self):
         for backend in self._backends():
