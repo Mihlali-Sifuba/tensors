@@ -76,16 +76,20 @@ class ScalarBasePowerTests(unittest.TestCase):
         return ts.available_backends()
 
     def test_integer_exponent_dtype_does_not_depend_on_its_values(self):
-        """Replaces a test asserting value-dependent promotion to float64."""
-        for backend in self._backends():
-            for dtype in (ts.int32, ts.int64):
-                for values in ([1, 2, 3, 0], [1, -2, 3, 0], [-5, -5, -5, -5]):
-                    with self.subTest(
-                        backend=backend, dtype=dtype.name, exponent=values
-                    ):
-                        with ts.use_backend(backend):
-                            exponent = ts.Tensor(values, dtype=dtype)
-                            self.assertIs((2**exponent).dtype, dtype)
+        """Replaces a test asserting value-dependent promotion to float64.
+
+        Asserted at the resolver, because §12.4.2 refuses to evaluate a
+        negative exponent at all: the dtype is settled from declarations
+        before the exponent's domain is examined.
+        """
+        from tensors.dtype import resolve_power_scalar_base
+
+        for dtype in (ts.int32, ts.int64):
+            for values in ([1, 2, 3, 0], [1, -2, 3, 0], [-5, -5, -5, -5]):
+                with self.subTest(dtype=dtype.name, exponent=values):
+                    exponent = ts.Tensor(values, dtype=dtype)
+                    resolved = resolve_power_scalar_base(2, exponent.dtype)[0]
+                    self.assertIs(resolved, dtype)
 
     def test_non_negative_exponent_values_are_unchanged(self):
         for backend in self._backends():
@@ -135,13 +139,24 @@ class ScalarBasePowerTests(unittest.TestCase):
                 self.assertIs(result.dtype, ts.float64)
                 self.assertEqual(result.tolist(), [2.0, 0.25, 8.0] * 16)
 
-    def test_every_backend_agrees_on_a_negative_integer_exponent(self):
-        """The promoted dtype is exact; the values agree within tolerance.
+    def test_every_backend_agrees_on_rejecting_a_negative_exponent(self):
+        """Superseded by D4 (§12.4.2).
 
-        A device ``pow`` can land one unit in the last place away from the
-        host result, so only the dtype is compared exactly.
+        This previously asserted that a negative integer exponent produced a
+        `float64` result on every backend, which was the value-dependent
+        promotion D6 removed. Integer exponentiation now has no fractional
+        value to deliver, so every backend refuses it identically.
         """
         exponent_values = [3, -1, 0, -4, 2, -3] * 16
+
+        for backend in self._backends():
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                exponent = ts.Tensor(exponent_values, dtype=ts.int64)
+                with self.assertRaises(ValueError):
+                    _ = 2**exponent
+
+    def test_every_backend_agrees_on_a_non_negative_exponent(self):
+        exponent_values = [3, 1, 0, 4, 2, 3] * 16
 
         def evaluate(backend):
             with ts.use_backend(backend):
@@ -154,8 +169,7 @@ class ScalarBasePowerTests(unittest.TestCase):
             with self.subTest(backend=backend):
                 dtype, values = evaluate(backend)
                 self.assertIs(dtype, expected_dtype)
-                for actual, expected_value in zip(values, expected):
-                    self.assertAlmostEqual(actual, expected_value)
+                self.assertEqual(values, expected)
 
     def test_zero_base_rejects_a_negative_integer_exponent(self):
         for backend in self._backends():

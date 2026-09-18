@@ -22,6 +22,50 @@ from tensors.operations._gradient_shaping import sum_to_shape, sum_to_shape_grap
 Scalar = Union[int, float]
 
 
+def _has_negative_exponent(exponent: Tensor) -> bool:
+    """Whether an integer exponent tensor holds a negative element.
+
+    Integer exponentiation has no fractional value to deliver, so section
+    12.4.2 requires this test, and it runs only when the result dtype is an
+    integer dtype: a floating power delivers the IEEE result and must never
+    read its exponent.
+
+    The test asks the native buffer rather than materialising the tensor, so a
+    device exponent costs one reduction and one scalar transfer, not a copy of
+    the tensor. A view is resolved to its logical values first, so elements the
+    exponent does not address cannot make it raise.
+    """
+    storage = exponent._logical_storage_for(exponent._storage.kind)
+    buffer = storage.buffer
+    if getattr(buffer, "any", None) is None:
+        return any(value < 0 for value in buffer)
+    return bool((buffer < 0).any())
+
+
+def _reject_negative_exponent(dtype, exponent) -> None:
+    """Apply section 12.4.2 once the result dtype is settled.
+
+    The dtype is decided first, from declarations alone (section 12.5), and
+    only then is the exponent's domain examined. The two stages never
+    interact: a negative exponent never promotes the result to a floating
+    dtype, it refuses the operation.
+    """
+    if dtype.kind != "integer":
+        return
+    negative = (
+        _has_negative_exponent(exponent)
+        if isinstance(exponent, Tensor)
+        else exponent < 0
+    )
+    if negative:
+        raise ValueError(
+            "integer exponentiation requires a non-negative exponent; "
+            + dtype.name
+            + " cannot represent a reciprocal. Cast the base to a floating "
+            "dtype, for example base.astype(ts.float64) ** exponent"
+        )
+
+
 def _power(base: int | float, exponent: int | float) -> int | float:
     """Calculate a real-valued power with a clear domain error."""
     if isinstance(base, int) and isinstance(exponent, int) and (exponent >= 0):
@@ -149,6 +193,7 @@ class Pow(Operation):
         # Promotion for a typed exponent, conversion for a scalar; section
         # 12.5. No element value is read.
         dtype, exponent = resolve_power(base.dtype, exponent)
+        _reject_negative_exponent(dtype, exponent)
         output_shape = (
             base.shape.broadcast_with(exponent.shape)
             if isinstance(exponent, Tensor)
@@ -532,6 +577,7 @@ def power_scalar_base(base: Scalar, exponent: Tensor) -> Tensor:
     element of ``exponent``.
     """
     dtype, base = resolve_power_scalar_base(base, exponent.dtype)
+    _reject_negative_exponent(dtype, exponent)
     accelerated = execute_power(
         base, exponent, dtype=dtype, output_shape=exponent.shape
     )
