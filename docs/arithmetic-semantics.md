@@ -2,29 +2,62 @@
 
 ## 1. Status and scope
 
-> **Status: implemented for `+`, `-`, `*` and `/`; specification elsewhere.**
+> **Status: implemented for `+`, `-`, `*`, `/` and `**`; specification
+> elsewhere.**
 >
-> Addition, subtraction, multiplication and true division follow this document
-> on the Python, NumPy and CUDA backends, in eager execution, graph replay,
-> differentiation and fusion. Passages marked *Current behaviour* describe what
-> the implementation did **before** that work and are kept because
+> Addition, subtraction, multiplication, true division and **exponentiation**
+> follow this document on the Python, NumPy and CUDA backends, in eager
+> execution, graph replay, differentiation and fusion.
+>
+> Exponentiation's milestones D1–D7 and S3 are implemented and reviewed:
+> the IEEE `pow` function and its special-value table
+> ([12.2](#122-the-function-d1), [12.3](#123-exceptional-values-d2)),
+> fixed-width integer exponentiation and the rejection of negative integer
+> exponents ([12.4](#124-integer-exponentiation)), result dtypes and scalar
+> conversion including rule S3
+> ([12.5](#125-result-dtypes-and-scalar-conversion),
+> [6.5](#65-python-scalars)), the accuracy bounds and their validated
+> reference ([12.6](#126-accuracy)), and the differentiation region table
+> ([12.7](#127-differentiation-d7)). Forward power and **both** power
+> gradients execute on the selected backend or raise
+> `BackendOperationUnsupportedError`.
+>
+> **This document does not govern the rest of the package.** The other
+> fifty-five public numerical operations — comparisons, `where`, `clip`,
+> `concat`, reductions, matmul, the elementwise maths functions — have no
+> numerical specification, and most still use the older promotion in
+> `tensors/dtype.py` `result_dtype`. Extending a contract to them is separate
+> work, surveyed in
+> [the numerical-completeness audit](numerical-completeness-audit.md).
+>
+> Two promotion authorities therefore coexist, and they disagree on four of
+> the forty-nine dtype cells: `int64` against either floating dtype, and its
+> transposes. This document's [section 6.2](#62-the-promotion-table) requires
+> a cast; `result_dtype` promotes silently to `float64` and loses `int64`
+> values above \(2^{53}\). That conflict is **finding D-2 of the audit and is
+> not resolved here.** Nothing in this document should be read as deciding
+> which authority governs the operations outside its scope.
+>
+> **Reading the *Current behaviour* and *Historical behaviour* passages.**
+> Both record what the package did *before* the work that this document
+> specifies, kept because
 > [section 10](#10-migration-and-compatibility) explains the migration away
-> from it.
+> from it. **Neither describes current behaviour**, despite the older label,
+> and neither may be cited as evidence that a behaviour exists today.
 >
-> **Exponentiation (`**`) is specified in [section 12](#12-exponentiation)
-> but is not implemented.** That section is the approved target contract; the
-> package still behaves as its *Current behaviour* passages record.
+> Two gaps within the implemented scope are recorded rather than closed. The
+> execution-location observability API of
+> [backends.md](backends.md#observability) does not exist.
 >
-> Every other operation — comparisons, `where`, `clip`, `concat`, reductions,
-> matmul, the elementwise maths functions — still uses the older promotion in
-> `tensors/dtype.py` `result_dtype` and is **not** governed by this document
-> yet. Extending it to them is separate work.
->
-> Two gaps within the implemented scope are recorded rather than closed:
-> the execution-location observability API of
-> [backends.md](backends.md#observability) does not exist, and the VJP
-> execution-location requirement of [autodiff.md](autodiff.md) is unmet for
-> the kernels named in [section 10.3](#103-implementation-paths-requiring-review).
+> The VJP execution-location requirement of [autodiff.md](autodiff.md) is
+> **partly** met for power. Its two gradient *kernels* dispatch strictly, but
+> the broadcast reduction that shapes their results still goes through
+> `execute_sum_to_shape`, which applies the workload threshold, so a small
+> power backward pass **with broadcasting** returns `PythonStorage` under
+> explicit NumPy selection even though the gradient itself was computed by
+> NumPy. Twenty-five of the twenty-seven gradient dispatchers remain on the
+> legacy policy besides. See
+> [section 10.3](#103-implementation-paths-requiring-review).
 
 This document is the **authoritative numerical specification**. Backend
 selection and execution requirements are in [Numerical backends](backends.md);
@@ -1134,8 +1167,13 @@ are unaffected.
 
 ### 10.3 Implementation paths requiring review
 
-**All of these have now been modified**, except where the last column says
+**All of these have now been modified**, except where the entry says
 otherwise. The table is kept as the record of what the refactor touched.
+
+The *Why* column states the **reason each path was listed** — that is, what it
+did *before* it was changed. It is not a description of current behaviour.
+Entries re-audited against the source at the Phase 0 reconciliation say so
+explicitly and give the outcome.
 
 | Path | Why |
 | --- | --- |
@@ -1144,19 +1182,19 @@ otherwise. The table is kept as the record of what the refactor touched.
 | `tensors/backend/cuda/conversion.py` — `_operand`, `_storage` | Refuses integer dtypes; widens floats to `float64`; `bool(cupy.any(...))` forces a host synchronisation. |
 | `tensors/backend/{python,numpy,cuda}/kernels/arithmetic/` | `add`, `subtract`, `multiply`, `divide` for all three backends. |
 | `tensors/operations/arithmetic/divide.py` | Holds the operation-layer `ZeroDivisionError` guard (three sites). |
-| `tensors/backend/policy.py` | Workload thresholds decide which path runs; under P3 the path must not change results, and under P4 it must not override explicit selection. The four arithmetic operations no longer consult it under any selection, automatic included; the operations outside this contract still do. |
+| `tensors/backend/policy.py` | Workload thresholds decide which path runs; under P3 the path must not change results, and under P4 it must not override explicit selection. **Re-audited at Phase 0:** the five arithmetic operations and power's two gradients no longer consult it under any selection, automatic included. The operations outside this contract still do — 108 of the 121 dispatch modules. |
 | `tensors/backend/cuda/kernels/fusion/fused_elementwise.py`, `fused_elementwise_backward.py` | `cupy.RawKernel(source, name)` with no options permits FMA contraction (B14). Now compiled with `--fmad=false`, and the forward kernel no longer rejects a zero denominator. |
 | `tensors/backend/config.py`, `types.py` | Backend selection; strict mode has no representation today. `"auto"` resolves once, to NumPy when available and Python otherwise, and is then indistinguishable from naming that backend. |
 | `tests/backend/_support.py` — `NumPyParityTestCase` | Encodes Python-as-reference ([section 9.5](#95-the-existing-parity-helper)). **Not changed.** The conformance tests in `tests/operations/arithmetic/` compare against specified values instead, so the parity helper is no longer the only check; re-casting it is separate work. |
-| `tensors/backend/{python,numpy,cuda}/kernels/elementwise/division_denominator_gradient.py` | The division VJP raised, or declined and let the Python reference raise, where the forward pass returns an infinity. Its zero-denominator and finiteness tests also read device memory back to the host on every backward pass. |
-| `tensors/backend/dispatch/reductions/`, `tensors/backend/dispatch/elementwise/`, `tensors/operations/_gradient_shaping.py` | The `+`, `-` and `*` VJPs reduced and negated through entry points that applied the workload threshold, so a small backward pass under explicit NumPy returned `PythonStorage`. They now dispatch through `execute_vjp_sum_to_shape`, `execute_vjp_negate` and `execute_sum_products_to_shape`, which honour the selection at every size. The entry points serving operations outside this contract are unchanged. |
-| `tensors/operations/arithmetic/power.py` — `_power_dtype`, `_scalar_base_power_dtype` | Value-dependent result dtype, contradicting [section 6.4](#64-what-is-not-promoted); reads `exponent._data`, a host transfer. Must move to the resolution in [section 12.5](#125-result-dtypes-and-scalar-conversion). |
-| `tensors/backend/python/kernels/elementwise/power_base_gradient.py` | Contains a **second copy** of `_power_dtype` with the same defect. Both copies must change together. |
-| `tensors/operations/arithmetic/power.py` — `Pow.backward`, `Pow.backward_graph` | Value-reading domain checks that raise and discard valid gradients (B27, B28). |
-| `tensors/backend/{python,numpy,cuda}/kernels/arithmetic/power.py` | Domain and overflow handling (B17–B20); the array kernels decline where the reference raises. |
-| `tensors/backend/dispatch/elementwise/power_base_gradient.py`, `power_exponent_gradient.py` | Workload threshold and reference fallback; the exponent kernel also declines through `bool(numpy.any(bases <= 0.0))`, a host synchronisation. |
-| `tensors/backend/cuda/kernels/fusion/errors.py` | Power domain codes 8, 9 and 14 replicate the raising behaviour; they must go when [12.3](#123-exceptional-values-d2) and [12.7](#127-differentiation-d7) land, or fused and eager execution diverge. |
-| `tensors/variable.py` — `__pow__` | Calls `_power_dtype` with a `Variable` exponent, which crashes for integer dtypes. See [section 12](#12-exponentiation) and the implementation plan. |
+| `tensors/backend/{python,numpy,cuda}/kernels/elementwise/division_denominator_gradient.py` | The division VJP raised, or declined and let the Python reference raise, where the forward pass returns an infinity. Its zero-denominator and finiteness tests also read device memory back to the host on every backward pass. **Re-audited at Phase 0:** the numerical behaviour was corrected with the division work and the finiteness read is gone, but its *dispatcher* still applies the workload threshold and falls back to the Python reference, so its execution location is not yet guaranteed. Numerical correctness and execution location are separate requirements and only the first is met here. |
+| `tensors/backend/dispatch/reductions/`, `tensors/backend/dispatch/elementwise/`, `tensors/operations/_gradient_shaping.py` | The `+`, `-` and `*` VJPs reduced and negated through entry points that applied the workload threshold, so a small backward pass under explicit NumPy returned `PythonStorage`. They now dispatch through `execute_vjp_sum_to_shape`, `execute_vjp_negate` and `execute_sum_products_to_shape`, which honour the selection at every size. **Re-audited at Phase 0:** power's two gradient dispatchers are strict as well, so **2 of the 27 gradient dispatchers** meet the execution-location requirement. The other 25 — including the division VJP, which this table lists separately — still apply the workload threshold and fall back to the Python reference. Power is not fully closed either: `sum_to_shape` in `_gradient_shaping.py` still uses `execute_sum_to_shape`, so a broadcast power backward pass under explicit NumPy returns `PythonStorage` below the threshold while the same pass without broadcasting returns `NumPyStorage`. Extending strict dispatch past the arithmetic four is separate work. |
+| `tensors/operations/arithmetic/power.py` — `_power_dtype`, `_scalar_base_power_dtype` | Value-dependent result dtype, contradicting [section 6.4](#64-what-is-not-promoted); read `exponent._data`, a host transfer. **Done (D6).** Both functions are gone; `resolve_power` and `resolve_power_scalar_base` in `tensors/dtype.py` resolve from declared dtypes alone. |
+| `tensors/backend/python/kernels/elementwise/power_base_gradient.py` | Contained a **second copy** of `_power_dtype` with the same defect. **Done (D6).** No copy remains anywhere in `tensors/`. |
+| `tensors/operations/arithmetic/power.py` — `Pow.backward`, `Pow.backward_graph` | Value-reading domain checks that raised and discarded valid gradients (B27, B28). **Done (D7).** Both now apply the region table of [12.7.2](#1272-the-region-table); neither reads an operand. |
+| `tensors/backend/{python,numpy,cuda}/kernels/arithmetic/power.py` | Domain and overflow handling (B17–B20); the array kernels declined where the reference raised. **Done (D1, D2).** No kernel declines for a numerical condition, on any dtype or operand form. |
+| `tensors/backend/dispatch/elementwise/power_base_gradient.py`, `power_exponent_gradient.py` | Workload threshold and reference fallback; the exponent kernel also declined through `bool(numpy.any(bases <= 0.0))`, a host synchronisation. **Done (D7, G6).** Both are strict: no threshold, no fallback, no host read, and a decline raises `BackendOperationUnsupportedError`. |
+| `tensors/backend/cuda/kernels/fusion/errors.py` | Power domain codes 8, 9 and 14 replicated the raising behaviour; they had to go when [12.3](#123-exceptional-values-d2) and [12.7](#127-differentiation-d7) landed, or fused and eager execution would diverge. **Done.** All three codes are removed and power has neither a forward nor a backward domain check. |
+| `tensors/variable.py` — `__pow__` | Called `_power_dtype` with a `Variable` exponent, which crashed for integer dtypes. **Done (D6).** `__pow__` and `__rpow__` use `resolve_power` and `resolve_power_scalar_base`. |
 | `docs/backends.md`, `docs/autodiff.md` | Updated alongside this document. |
 
 ### 10.4 Implementation sequence
@@ -1254,11 +1292,16 @@ required cast.
 
 ## 12. Exponentiation
 
-> **Status: approved target contract, awaiting implementation.** Sections 1–11
-> describe `+`, `-`, `*` and `/`, which are implemented. **Nothing in this
-> section is implemented yet.** Passages marked *Current behaviour* record what
-> the package does today, verified by running it, so the difference is visible.
-> Do not cite this section as evidence that a behaviour exists.
+> **Status: implemented and reviewed.** Milestones D1–D7 and S3 are complete
+> on the Python, NumPy and CUDA backends, in eager execution, graph replay,
+> differentiation and fusion, and forward power and both power gradients
+> execute on the selected backend or raise.
+>
+> Passages below marked *Historical behaviour* record what the package did
+> **before** that work. They are retained because
+> [section 10](#10-migration-and-compatibility) explains the migration, and
+> each states the behaviour that replaced it. **None of them describes the
+> package as it is now.**
 
 This section is placed after section 11 so that no existing section is
 renumbered and no cross-reference in this document breaks. It is not an
@@ -1309,9 +1352,12 @@ Consequences of choosing `pow`:
 - Choosing `pow` does **not** imply bitwise-identical results across backends.
   Reproducibility is settled in [section 12.6](#126-accuracy).
 
-*Current behaviour (verified):* the Python reference calls `math.pow`, which
-implements `pow` semantics but converts IEEE signals into Python exceptions.
-NumPy and CuPy already deliver the IEEE results.
+*Historical behaviour (before D1, verified at the time):* the Python
+reference called `math.pow`, which implements `pow` semantics but converts
+IEEE signals into Python exceptions; NumPy and CuPy already delivered the IEEE
+results. **Superseded.** The Python kernel now implements the non-trapping
+clause 9.2 function directly, in the order the standard states its rows, and
+`(-2.0) ** 0.5` returns NaN on all three backends.
 
 ### 12.3 Exceptional values (D2)
 
@@ -1388,13 +1434,15 @@ not covered by the accuracy bounds of [section 12.6](#126-accuracy).
 Overflow produces `±inf`; underflow is gradual and then `±0.0`. Neither
 raises, at either precision. `1e200 ** 2.0` is `+inf`.
 
-*Current behaviour (verified):* `(-2.0) ** 0.5` raises `ValueError`,
-`0.0 ** -1.0` raises `ValueError`, and `1e200 ** 2.0` raises `OverflowError`.
-The exceptions come from CPython's `math.pow`, not from a considered position;
-the array kernels decline in these cases and the Python reference then raises.
-A further inconsistency: `float32` overflow already returns `inf` today, while
-`float64` overflow raises, because the reference computes in binary64 and
-narrows afterwards.
+*Historical behaviour (before D2, verified at the time):* `(-2.0) ** 0.5`
+raised `ValueError`, `0.0 ** -1.0` raised `ValueError`, and `1e200 ** 2.0`
+raised `OverflowError`. The exceptions came from CPython's `math.pow`, not
+from a considered position; the array kernels declined in these cases and the
+Python reference then raised. `float32` overflow returned `inf` while
+`float64` overflow raised, because the reference computed in binary64 and
+narrowed afterwards. **Superseded.** All three are now values on every
+backend and at both precisions — `nan`, `inf` and `inf` respectively — and no
+kernel declines for them.
 
 #### 12.3.5 IEEE exception flags
 
@@ -1473,9 +1521,13 @@ is settled — exactly as a zero denominator is for integer division.
 detect a negative exponent. It must not transfer the exponent tensor to the
 host, and it must not fall back to another backend.
 
-*Current behaviour (verified):* `int32([2]) ** -1` returns `float64([0.5])`,
-and the result dtype is chosen by inspecting exponent values — `int32 ** int32`
-yields `int32` for exponents `[1, 2]` and `float64` for `[1, -2]`.
+*Historical behaviour (before D4 and D6, verified at the time):*
+`int32([2]) ** -1` returned `float64([0.5])`, and the result dtype was chosen
+by inspecting exponent values — `int32 ** int32` yielded `int32` for exponents
+`[1, 2]` and `float64` for `[1, -2]`. **Superseded.** A negative integer
+exponent now raises `ValueError`, and the result dtype follows the declared
+dtypes alone: `int32 ** int32` is `int32` whatever the exponent values, so
+`[1, 2]` gives `int32` and `[1, -2]` raises rather than changing the dtype.
 
 ### 12.5 Result dtypes and scalar conversion
 
@@ -1558,10 +1610,21 @@ result because the exponent happens to be an integer tensor.
 apply to the tensor–tensor form.** `2.5 ** int64_t` raises for the same reason
 `float64 ** int64` raises.
 
-*Current behaviour (verified):* `int32 ** 2.0` gives `float64`;
-`int32 ** 0.5` gives `float64`; `-2 ** uint8_t` gives `int16`, a scalar
-widening the result; and the four `int64` `cast` cells silently give `float64`,
-losing precision above \(2^{53}\).
+*Historical behaviour (before D6 and S3, verified at the time):*
+`int32 ** 2.0` gave `float64`; `int32 ** 0.5` gave `float64`;
+`(-2) ** uint8_t` gave `int16`, a scalar widening the result; and the four
+`int64` `cast` cells silently gave `float64`, losing precision above
+\(2^{53}\). **Superseded.** `int32 ** 2.0` is now `int32`, because rule S3
+converts the scalar to the base's dtype rather than widening the result;
+`int32 ** 0.5` raises `TypeError`, because `0.5` has no `int32` value;
+`(-2) ** uint8_t` raises `TypeError` under S1, because `-2` is outside
+`uint8`; and the four `int64` `cast` cells raise `DtypePromotionError` rather
+than losing precision.
+
+Note that `-2 ** uint8_t` still evaluates to `int16`: Python parses it as
+`-(2 ** uint8_t)`, so `2 ** uint8_t` is `uint8` under S1 and the widening
+comes from the negation that follows, in `tensors/dtype.py` `negation_dtype`.
+Unary negation is not specified by this document.
 
 #### 12.5.4 Dtype resolution is not numerical evaluation
 
@@ -1840,13 +1903,19 @@ itself inaccurate near singularities and at non-differentiable points, and must
 not be used to validate the NaN and convention rows of
 [12.7.2](#1272-the-region-table).
 
-*Current behaviour (verified):* a negative base with a **tensor** exponent
-raises `ValueError` and discards both gradients, including the valid base
-gradient, while the same expression with a **scalar** exponent returns
-`12.0` correctly. Zero-base cases raise. The checks read both operands to the
-host, measured at 190 ms for a one-million-element backward pass on CUDA, and
-the exponent-gradient kernel declines through `bool(numpy.any(bases <= 0.0))`,
-a further synchronisation.
+*Historical behaviour (before D7, verified at the time):* a negative base
+with a **tensor** exponent raised `ValueError` and discarded both gradients,
+including the valid base gradient, while the same expression with a **scalar**
+exponent returned `12.0` correctly. Zero-base cases raised. The checks read
+both operands to the host, measured at 190 ms for a one-million-element
+backward pass on CUDA, and the exponent-gradient kernel declined through
+`bool(numpy.any(bases <= 0.0))`, a further synchronisation.
+
+**Superseded.** `(-2.0) ** 3.0` now returns `12.0` for the base gradient and
+`NaN` for the exponent gradient, together or separately, on all three
+backends; every region of [12.7.2](#1272-the-region-table) is reachable; no
+gradient reads an operand back to the host to classify it; and both power
+gradients execute on the selected backend or raise.
 
 ### 12.8 Conformance requirements
 

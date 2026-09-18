@@ -597,6 +597,16 @@ are not restated here.
 > fallback. Closing that means extending the execution requirement past
 > arithmetic, which is separate work, and is why two entry points exist for
 > the same reduction.
+>
+> **Power is a partial case, and the distinction matters.** Its two gradient
+> *kernels* now dispatch strictly — no threshold, no fallback, no
+> operand-reading decline — under
+> [arithmetic semantics G6](arithmetic-semantics.md#1271-rules). The broadcast
+> reduction that shapes their results does not, because it is the shared
+> `sum_to_shape` above. So a four-element power backward pass under explicit
+> NumPy returns `NumPyStorage` without broadcasting and `PythonStorage` with
+> it. The gradient's *numerical* contract is met in both cases; only its
+> execution location differs, and the two requirements are separate.
 
 > **Consequence worth knowing.** The array `sum_to_shape` and
 > `sum_products_to_shape` kernels decline when a gradient contains an infinity
@@ -612,12 +622,13 @@ are not restated here.
 
 > **Exponentiation.** The derivatives of `**` are specified in
 > [arithmetic semantics section 12.7](arithmetic-semantics.md#127-differentiation-d7).
-> Three requirements bear on this document. **They are not implemented.**
+> Three requirements bear on this document. **All three are implemented (D7);
+> the descriptions below of what happens "today" are historical.**
 >
 > - **The two gradients are independent.** A base gradient that exists is
 >   returned even when the exponent gradient does not. `(-2.0) ** 3.0` yields a
->   base gradient of `12.0` and an exponent gradient of `NaN`. Today the whole
->   backward pass raises and both are lost.
+>   base gradient of `12.0` and an exponent gradient of `NaN`. Before D7 the
+>   whole backward pass raised and both were lost.
 > - **Differentiation does not raise on a numerical condition**, and no backend
 >   may synchronise with the host to detect one. An undefined derivative is
 >   `NaN`; an approved one-sided infinite slope is `±inf`, and that convention
@@ -625,10 +636,11 @@ are not restated here.
 > - **Gradients execute on the selected backend** at every size, carrying each
 >   operand's own declared dtype and reduced to that operand's shape.
 >
-> The fused CUDA backward currently raises `"power derivative is undefined at a
-> zero base"` (error code 14). It must be removed when section 12.7 is
-> implemented, or the fused and unfused passes will disagree — the same failure
-> already corrected for division by zero.
+> The fused CUDA backward used to raise `"power derivative is undefined at a
+> zero base"` (error code 14), which would have made the fused and unfused
+> passes disagree — the same failure already corrected for division by zero.
+> **Code 14 was removed with D7**, together with power's forward codes 8 and 9,
+> and the generated kernel now carries the whole region table instead.
 
 Two kinds of fallback are easy to confuse, and only one of them is a backend
 fallback:
