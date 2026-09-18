@@ -18,9 +18,11 @@
 > ([12.5](#125-result-dtypes-and-scalar-conversion),
 > [6.5](#65-python-scalars)), the accuracy bounds and their validated
 > reference ([12.6](#126-accuracy)), and the differentiation region table
-> ([12.7](#127-differentiation-d7)). Forward power and **both** power
-> gradients execute on the selected backend or raise
-> `BackendOperationUnsupportedError`.
+> ([12.7](#127-differentiation-d7)). Forward power and both power-gradient
+> **kernels** dispatch strictly: each executes on the selected backend or
+> raises `BackendOperationUnsupportedError`. Subsequent gradient-shaping
+> reductions are **not** yet guaranteed to execute on that backend; see the
+> execution-location note below.
 >
 > **This document does not govern the rest of the package.** The other
 > fifty-five public numerical operations — comparisons, `where`, `clip`,
