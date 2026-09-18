@@ -254,14 +254,14 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = resolve_binary(self.dtype, other)[0]
+        dtype, converted = resolve_binary(self.dtype, other)
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
             operand = Variable(other, requires_grad=False)
         else:
             operand = Variable(
-                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -276,14 +276,14 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = resolve_binary(self.dtype, other)[0]
+        dtype, converted = resolve_binary(self.dtype, other)
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
             operand = Variable(other, requires_grad=False)
         else:
             operand = Variable(
-                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -302,14 +302,14 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = resolve_binary(self.dtype, other)[0]
+        dtype, converted = resolve_binary(self.dtype, other)
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
             operand = Variable(other, requires_grad=False)
         else:
             operand = Variable(
-                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -324,14 +324,14 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = resolve_binary(self.dtype, other, division=True)[0]
+        dtype, converted = resolve_binary(self.dtype, other, division=True)
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
             operand = Variable(other, requires_grad=False)
         else:
             operand = Variable(
-                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -340,14 +340,14 @@ class Variable:
 
     def __rtruediv__(self, other: int | float | Tensor) -> Variable:
         # Operand order carries the semantics: the numerator is input_0.
-        dtype = resolve_binary(self.dtype, other, division=True)[0]
+        dtype, converted = resolve_binary(self.dtype, other, division=True)
         if isinstance(other, Variable):
             numerator = other
         elif isinstance(other, Tensor):
             numerator = Variable(other, requires_grad=False)
         else:
             numerator = Variable(
-                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
