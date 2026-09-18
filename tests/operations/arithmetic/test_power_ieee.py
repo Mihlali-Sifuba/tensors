@@ -484,6 +484,119 @@ class GradualUnderflow(SpecifiedComparison):
             self.assertBitsEqual(produced[0], smallest, "float32", label)
 
 
+@unittest.skipUnless("cuda" in BACKENDS, "CUDA backend is not installed")
+class SubnormalExternalTensorOperands(SpecifiedComparison):
+    """§5.4 — a fused step's *external* operand must widen like every other.
+
+    The initial input and each rounding boundary cross into the binary64
+    working precision through PTX, but the second tensor of a binary step was
+    read with a plain ``(double)`` cast, which flushes a binary32 subnormal.
+
+    ``0.0 ** smallest_subnormal`` shows it. The exponent is strictly positive,
+    so §12.3.3 gives ``+0.0``; flushed to zero the expression becomes
+    ``0.0 ** 0.0``, which the same table gives as ``1.0``. The defect does not
+    lose precision, it selects a different row.
+    """
+
+    SMALLEST = 1.401298464324817e-45
+    #: Above the CUDA fusion threshold.
+    FUSED_SIZE = 16_384
+
+    def operands(self, *values):
+        """A tensor and its variable for each value, at the fused size."""
+        built = [tensor("float32", [value] * self.FUSED_SIZE) for value in values]
+        return built, [ts.Variable(t, requires_grad=False) for t in built]
+
+    def fused(self, build):
+        """Replay a plan, and report whether the fused kernel was reached."""
+        import tensors.backend.cuda.kernels as cuda_backend
+        from tensors.backend import loading
+        from tensors.graph import Computation
+
+        with patch.object(
+            cuda_backend, "fused_elementwise", wraps=cuda_backend.fused_elementwise
+        ) as fused:
+            loading._clear_backend_kernel_cache()
+            produced = Computation(build()).forward()
+        self.assertTrue(fused.called, "the fused kernel was not reached")
+        return produced
+
+    def test_zero_raised_to_a_subnormal_tensor_exponent(self):
+        """Eager, unfused and fused replay must all give +0.0, not 1.0."""
+        from tensors.graph import Computation
+
+        with ts.use_backend("cuda"):
+            base = tensor("float32", [0.0] * self.FUSED_SIZE)
+            exponent = tensor("float32", [self.SMALLEST] * self.FUSED_SIZE)
+            self.assertIsInstance(exponent, ts.Tensor)  # an operand, not a scalar
+
+            eager = base**exponent
+            left, right = (
+                ts.Variable(base, requires_grad=False),
+                ts.Variable(exponent, requires_grad=False),
+            )
+            unfused = Computation(left**right).forward()
+            fused = self.fused(lambda: (left**right) * 1.0)
+
+        for label, result in (
+            ("eager", eager),
+            ("unfused replay", unfused),
+            ("fused replay", fused),
+        ):
+            self.assertIs(result.dtype, DTYPE["float32"], label)
+            self.assertEqual(type(result._storage).__name__, "CudaStorage", label)
+            self.assertBitsEqual(result.tolist()[0], 0.0, "float32", label)
+
+    def test_a_flushed_exponent_would_have_given_one(self):
+        """Why this case was chosen: the two table rows differ visibly."""
+        with ts.use_backend("cuda"):
+            flushed = tensor("float32", [0.0]) ** tensor("float32", [0.0])
+        self.assertBitsEqual(flushed.tolist()[0], 1.0, "float32", "0.0 ** 0.0")
+
+    def test_a_negative_subnormal_external_operand(self):
+        """The operand's sign survives the conversion as well as its value."""
+        with ts.use_backend("cuda"):
+            (a, b), (left, right) = self.operands(2.0, -self.SMALLEST)
+            eager = (a * b).tolist()[0]
+            fused = self.fused(lambda: (left * right) * 1.0)
+        self.assertBitsEqual(eager, -2 * self.SMALLEST, "float32", "eager")
+        self.assertBitsEqual(fused.tolist()[0], eager, "float32", "fused vs eager")
+
+    def test_an_external_operand_used_in_a_later_step(self):
+        """The correction is not limited to a plan's first operation."""
+        with ts.use_backend("cuda"):
+            (a, b), (left, right) = self.operands(2.0, self.SMALLEST)
+            eager = ((a * 1.0) * b).tolist()[0]
+            fused = self.fused(lambda: (left * 1.0) * right)
+        self.assertBitsEqual(eager, 2 * self.SMALLEST, "float32", "eager")
+        self.assertBitsEqual(fused.tolist()[0], eager, "float32", "fused vs eager")
+
+    def test_a_subnormal_exponent_supplied_to_a_later_step(self):
+        """The reported case, with the power second rather than first."""
+        with ts.use_backend("cuda"):
+            (a, b), (base, exponent) = self.operands(0.0, self.SMALLEST)
+            eager = ((a + 0.0) ** b).tolist()[0]
+            fused = self.fused(lambda: (base + 0.0) ** exponent)
+        self.assertBitsEqual(eager, 0.0, "float32", "eager")
+        self.assertBitsEqual(fused.tolist()[0], 0.0, "float32", "fused")
+
+    def test_binary64_reads_an_operand_with_an_ordinary_cast(self):
+        """Only binary32 is flushed, so only binary32 gains the helper."""
+        from tensors.backend.cuda.kernels.fusion.expressions import (
+            _fused_operand_expression,
+        )
+
+        step = ("power", None, False, 1)
+        self.assertEqual(
+            _fused_operand_expression(step, "value_0", storage_type="double"),
+            "(double)(input_1[offset_1])",
+        )
+        self.assertEqual(
+            _fused_operand_expression(step, "value_0", storage_type="float"),
+            "_tensors_widen(input_1[offset_1])",
+        )
+
+
 class RealValuedOnly(SpecifiedComparison):
     """§12.2 — `pow`, not `powr`; strictly real, never complex."""
 
@@ -675,6 +788,35 @@ class CudaDoesNotTransferOrSynchronise(ArithmeticTestCase):
                 self.assertEqual(
                     reads.count, 0, f"{label} materialised the tensor on the host"
                 )
+
+    def test_a_fused_subnormal_operand_stays_on_the_device(self):
+        """The widened operand must not be read back to reach §5.4."""
+        import tensors.backend.cuda.kernels as cuda_backend
+        from tensors.backend import loading
+        from tensors.graph import Computation
+
+        size = 16_384
+        smallest = 1.401298464324817e-45
+        with ts.use_backend("cuda"):
+            base = ts.Variable(
+                ts.full((size,), 0.0, dtype=ts.float32) + 0.0, requires_grad=False
+            )
+            exponent = ts.Variable(
+                ts.full((size,), smallest, dtype=ts.float32) + 0.0,
+                requires_grad=False,
+            )
+            program = Computation((base**exponent) * 1.0)
+            with patch.object(
+                cuda_backend,
+                "fused_elementwise",
+                wraps=cuda_backend.fused_elementwise,
+            ) as fused:
+                loading._clear_backend_kernel_cache()
+                with self._counting_device_reads() as reads:
+                    result = program.forward()
+            self.assertTrue(fused.called, "the fused kernel was not reached")
+            self.assertEqual(type(result._storage).__name__, "CudaStorage")
+        self.assertEqual(reads.count, 0, "the fused plan materialised on the host")
 
     def test_the_kernel_answers_every_exceptional_case(self):
         from tensors.backend.loading import _backend_kernel
