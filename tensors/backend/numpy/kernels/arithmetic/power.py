@@ -76,6 +76,36 @@ def _ieee_pow(left, right):
     )
 
 
+def _binary32_pow(left, right):
+    """Binary32 exponentiation, evaluated in binary64 and rounded once.
+
+    NumPy evaluates a binary32 power in binary32, and its ``exp(y log x)``
+    loses the bottom of the subnormal range: the smallest binary32 subnormal
+    raised to 1.0000001192092896 returns zero where the correctly rounded
+    result is the subnormal itself. That is a section 5.4 gradual-underflow
+    failure and a section 12.6.2 conformance failure at once — the result is
+    not a few ULP out, it is the wrong class of value.
+
+    Widening is the same strategy the CUDA binary32 kernel already uses, and
+    for the same reason. It is sound rather than merely better: a binary64
+    ``pow`` carries a relative error of order 2**-52, which is about 2**-28 of
+    a binary32 ULP, so narrowing the binary64 result reproduces the correctly
+    rounded binary32 value except where the true value lies within that
+    distance of a binary32 rounding boundary, and there it is one ULP out.
+    Both are far inside the 4 ULP of section 12.6.2.
+
+    The special values of section 12.3.3 are unaffected: widening and
+    narrowing carry a signed zero, a signed infinity and a NaN across
+    unchanged, and :func:`_ieee_pow` still applies the two rows NumPy gets
+    wrong.
+    """
+    wide = _ieee_pow(
+        numpy.asarray(left, dtype=numpy.float64),
+        numpy.asarray(right, dtype=numpy.float64),
+    )
+    return wide.astype(numpy.float32, copy=False)
+
+
 def power(
     left: Tensor | Scalar,
     right: Tensor | Scalar,
@@ -101,9 +131,11 @@ def power(
     # section 12.3.3 is a result. Nothing here declines, so an infinity or a
     # NaN never sends the work to another backend, and the declared dtype is
     # preserved rather than widened to float64.
+    left_array = _arithmetic_operand(left, dtype)
+    right_array = _arithmetic_operand(right, dtype)
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        result = _ieee_pow(
-            _arithmetic_operand(left, dtype),
-            _arithmetic_operand(right, dtype),
-        )
+        if dtype.typecode == "f":
+            result = _binary32_pow(left_array, right_array)
+        else:
+            result = _ieee_pow(left_array, right_array)
     return _arithmetic_storage(result, dtype=dtype, output_shape=output_shape)
