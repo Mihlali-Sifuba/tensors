@@ -1,17 +1,17 @@
-"""Where forward power executes, and what a provider decline still means.
+"""Where forward power executes, and what a provider decline means.
 
 `docs/backends.md`, *Execution requirements*: the backend selection decides
-where an operation runs. Forward power used to consult a workload-size
-threshold, so a small exponentiation ran in Python whatever was selected.
-These tests ask where it ran, by storage kind and by provider call count,
-rather than by the numbers coming out.
+where an operation runs, and a provider that cannot execute an operation says
+so rather than handing it to another backend. These tests ask where the work
+ran — by provider call count, by the Python reference *not* being called, and
+by storage residency — rather than by the numbers coming out, because a
+correct answer computed in the wrong place is the defect being tested for.
 
-The decline path is deliberately still here, and the last class pins down why:
-power's kernels use ``None`` for a domain error, for CUDA's missing integer
-exponentiation, and for a narrowing result, and the reference is what turns
-each of those into the documented answer. Execution location is therefore
-guaranteed for the supported cases only. Power's backward pass is untouched
-and is not covered here.
+Power's kernels used ``None`` for three different things: a domain error,
+CUDA's missing integer exponentiation, and a narrowing integer result. D1 to
+D4 removed all three, so a decline now means a capability gap and the
+dispatcher raises. Power's backward pass has its own strict dispatchers and
+is covered by the D7 tests, not here.
 """
 
 import unittest
@@ -35,6 +35,17 @@ SIZES = (1, 4, 31, 32, 64, 1000)
 
 def storage_name(tensor) -> str:
     return type(tensor._storage).__name__
+
+
+def python_reference():
+    """The Python power kernel's module, for instrumenting fallbacks.
+
+    Imported by name: the package re-exports the function under the same
+    name as its module, so a plain ``import ... as`` binds the function.
+    """
+    import importlib
+
+    return importlib.import_module("tensors.backend.python.kernels.arithmetic.power")
 
 
 def power_storages(selection, size):
@@ -224,6 +235,316 @@ def expected_dtype(dtype, exponent):
     return resolve_power(dtype, exponent)[0]
 
 
+#: Every public dtype. Integer and floating operands are exercised
+#: separately, since section 12.5 gives them different rules.
+INTEGER_DTYPES = ("int8", "uint8", "int16", "int32", "int64")
+FLOAT_DTYPES = ("float32", "float64")
+
+
+class ExecutionLocationHarness(unittest.TestCase):
+    """Runs a case while watching both the provider and the Python kernel."""
+
+    def provider(self, selection):
+        import importlib
+
+        return importlib.import_module(f"tensors.backend.{selection}.kernels")
+
+    def assertRunsOnProvider(self, selection, build, *, calls=1, context=""):
+        """The provider's power kernel ran, and the Python one did not.
+
+        Storage residency is checked too, but it is not the evidence: a
+        result computed in Python and then moved to the device would still
+        be device-resident. The call counts are what establish the location.
+        """
+        provider = self.provider(selection)
+        reference = python_reference()
+        with (
+            patch.object(provider, "power", wraps=provider.power) as accelerated,
+            patch.object(reference, "power", wraps=reference.power) as fallback,
+        ):
+            backend_state._clear_backend_kernel_cache()
+            with ts.use_backend(selection):
+                result = build()
+            backend_state._clear_backend_kernel_cache()
+
+        self.assertEqual(
+            fallback.call_count,
+            0,
+            f"{context}: the Python power kernel ran under {selection} selection",
+        )
+        self.assertEqual(
+            accelerated.call_count,
+            calls,
+            f"{context}: expected {calls} {selection} power calls, "
+            f"got {accelerated.call_count}",
+        )
+        if result is not None and hasattr(result, "_storage"):
+            self.assertEqual(storage_name(result), STORAGE_FOR[selection], context)
+        return result
+
+
+class EveryDtypeRunsOnTheSelectedBackend(ExecutionLocationHarness):
+    """All seven public dtypes, all three operand forms, several sizes."""
+
+    def selections(self):
+        return [name for name in ("numpy", "cuda") if name in ts.available_backends()]
+
+    def test_integer_dtypes(self):
+        for dtype_name in INTEGER_DTYPES:
+            dtype = getattr(ts, dtype_name)
+            for size in (1, 4, 64, 1000):
+                for selection in self.selections():
+                    context = f"{selection}/{dtype_name}/size {size}"
+                    with self.subTest(dtype=dtype_name, size=size, backend=selection):
+                        self.assertRunsOnProvider(
+                            selection,
+                            lambda d=dtype, n=size: ts.Tensor([2] * n, dtype=d)
+                            ** ts.Tensor([3] * n, dtype=d),
+                            context=context + " tensor ** tensor",
+                        )
+                        self.assertRunsOnProvider(
+                            selection,
+                            lambda d=dtype, n=size: ts.Tensor([2] * n, dtype=d) ** 3,
+                            context=context + " tensor ** scalar",
+                        )
+                        self.assertRunsOnProvider(
+                            selection,
+                            lambda d=dtype, n=size: 2 ** ts.Tensor([3] * n, dtype=d),
+                            context=context + " scalar ** tensor",
+                        )
+
+    def test_floating_dtypes(self):
+        for dtype_name in FLOAT_DTYPES:
+            dtype = getattr(ts, dtype_name)
+            for size in (1, 4, 64, 1000):
+                for selection in self.selections():
+                    context = f"{selection}/{dtype_name}/size {size}"
+                    with self.subTest(dtype=dtype_name, size=size, backend=selection):
+                        self.assertRunsOnProvider(
+                            selection,
+                            lambda d=dtype, n=size: ts.Tensor([2.0] * n, dtype=d)
+                            ** ts.Tensor([3.0] * n, dtype=d),
+                            context=context + " tensor ** tensor",
+                        )
+                        self.assertRunsOnProvider(
+                            selection,
+                            lambda d=dtype, n=size: ts.Tensor([2.0] * n, dtype=d)
+                            ** 3.0,
+                            context=context + " tensor ** scalar",
+                        )
+                        self.assertRunsOnProvider(
+                            selection,
+                            lambda d=dtype, n=size: 2.0
+                            ** ts.Tensor([3.0] * n, dtype=d),
+                            context=context + " scalar ** tensor",
+                        )
+
+    def test_integer_wraparound_runs_on_the_provider(self):
+        """Section 12.4.1's wraparound is a result, not a reason to decline."""
+        for dtype_name in INTEGER_DTYPES:
+            dtype = getattr(ts, dtype_name)
+            for selection in self.selections():
+                with self.subTest(dtype=dtype_name, backend=selection):
+                    produced = self.assertRunsOnProvider(
+                        selection,
+                        lambda d=dtype: ts.Tensor([7] * 64, dtype=d) ** 40,
+                        context=f"{selection}/{dtype_name} wraparound",
+                    )
+                    with ts.use_backend("python"):
+                        expected = (ts.Tensor([7] * 64, dtype=dtype) ** 40).tolist()
+                    self.assertEqual(produced.tolist(), expected)
+
+    def test_floating_special_values_run_on_the_provider(self):
+        """Section 12.3.3's exceptional rows are values, not declines."""
+        import math
+
+        cases = (
+            ("negative base, fractional exponent", -2.0, 0.5),
+            ("zero base, negative exponent", 0.0, -1.0),
+            ("negative zero base", -0.0, 3.0),
+            ("overflow", 1e200, 2.0),
+            ("infinite base", math.inf, 2.0),
+            ("nan base", math.nan, 2.0),
+            ("zero exponent", 5.0, 0.0),
+        )
+        for label, base, exponent in cases:
+            for dtype_name in FLOAT_DTYPES:
+                dtype = getattr(ts, dtype_name)
+                for selection in self.selections():
+                    with self.subTest(case=label, dtype=dtype_name, backend=selection):
+                        self.assertRunsOnProvider(
+                            selection,
+                            lambda b=base, e=exponent, d=dtype: ts.Tensor(
+                                [b] * 64, dtype=d
+                            )
+                            ** e,
+                            context=f"{selection}/{dtype_name} {label}",
+                        )
+
+    def test_subnormal_operands_run_on_the_provider(self):
+        smallest = {"float32": 1.401298464324817e-45, "float64": 5e-324}
+        for dtype_name in FLOAT_DTYPES:
+            dtype = getattr(ts, dtype_name)
+            for selection in self.selections():
+                with self.subTest(dtype=dtype_name, backend=selection):
+                    self.assertRunsOnProvider(
+                        selection,
+                        lambda d=dtype, v=smallest[dtype_name]: ts.Tensor(
+                            [v] * 64, dtype=d
+                        )
+                        ** 1.0,
+                        context=f"{selection}/{dtype_name} subnormal",
+                    )
+
+    def test_mixed_dtype_promotion_runs_on_the_provider(self):
+        for selection in self.selections():
+            with self.subTest(backend=selection):
+                produced = self.assertRunsOnProvider(
+                    selection,
+                    lambda: ts.Tensor([2.0] * 64, dtype=ts.float32)
+                    ** ts.Tensor([3.0] * 64, dtype=ts.float64),
+                    context=f"{selection} float32 ** float64",
+                )
+                self.assertIs(produced.dtype, ts.float64)
+
+    def test_broadcasting_runs_on_the_provider(self):
+        for selection in self.selections():
+            with self.subTest(backend=selection):
+                produced = self.assertRunsOnProvider(
+                    selection,
+                    lambda: ts.Tensor([[2.0], [3.0], [4.0]], dtype=ts.float64)
+                    ** ts.Tensor([[2.0, 3.0]], dtype=ts.float64),
+                    context=f"{selection} broadcast",
+                )
+                self.assertEqual(produced.shape, (3, 2))
+
+    def test_a_non_contiguous_operand_runs_on_the_provider(self):
+        for selection in self.selections():
+            with self.subTest(backend=selection):
+                self.assertRunsOnProvider(
+                    selection,
+                    lambda: ts.Tensor([2.0] * 128, dtype=ts.float64)[::2] ** 3.0,
+                    context=f"{selection} strided view",
+                )
+
+    def test_graph_replay_runs_on_the_provider(self):
+        from tensors.graph import Computation
+
+        for selection in self.selections():
+            with self.subTest(backend=selection):
+                self.assertRunsOnProvider(
+                    selection,
+                    lambda: Computation(
+                        ts.Variable(
+                            ts.Tensor([2.0] * 64, dtype=ts.float64),
+                            requires_grad=False,
+                        )
+                        ** ts.Variable(
+                            ts.Tensor([3.0] * 64, dtype=ts.float64),
+                            requires_grad=False,
+                        )
+                    ).forward(),
+                    # Building the expression evaluates it once; the replay
+                    # evaluates it again.
+                    calls=2,
+                    context=f"{selection} graph replay",
+                )
+
+    @requires_numpy
+    def test_automatic_selection_uses_its_resolved_backend(self):
+        """``auto`` resolves to NumPy here, and follows the same rule."""
+        provider = self.provider("numpy")
+        reference = python_reference()
+        with (
+            patch.object(provider, "power", wraps=provider.power) as accelerated,
+            patch.object(reference, "power", wraps=reference.power) as fallback,
+        ):
+            backend_state._clear_backend_kernel_cache()
+            with ts.use_backend("auto"):
+                ts.full((4,), 2.0, dtype=ts.float64) ** 3.0
+            backend_state._clear_backend_kernel_cache()
+        self.assertEqual(accelerated.call_count, 1)
+        self.assertEqual(fallback.call_count, 0)
+
+
+@requires_cuda
+class CudaStaysOnTheDevice(ExecutionLocationHarness):
+    """Residency, and no operand-dependent host read in the dispatcher."""
+
+    def _counting_device_reads(self):
+        import contextlib
+
+        import tensors.tensor as tensor_module
+
+        class Counter:
+            count = 0
+
+        @contextlib.contextmanager
+        def counting():
+            counter = Counter()
+            original = tensor_module.Tensor._data.fget
+
+            def counted(self):
+                counter.count += 1
+                return original(self)
+
+            tensor_module.Tensor._data = property(counted)
+            try:
+                yield counter
+            finally:
+                tensor_module.Tensor._data = property(original)
+
+        return counting()
+
+    def test_results_stay_in_cuda_storage(self):
+        import math
+
+        cases = (
+            ("ordinary", 2.0, 3.0, ts.float64),
+            ("float32", 2.0, 3.0, ts.float32),
+            ("negative base", -2.0, 0.5, ts.float64),
+            ("zero base", 0.0, -1.0, ts.float64),
+            ("infinite base", math.inf, 2.0, ts.float64),
+            ("integer", 2, 10, ts.int32),
+            ("integer wraparound", 7, 40, ts.int64),
+        )
+        for label, base, exponent, dtype in cases:
+            for size in (1, 64, 100_000):
+                with self.subTest(case=label, size=size):
+                    with ts.use_backend("cuda"):
+                        produced = ts.Tensor([base] * size, dtype=dtype) ** exponent
+                    self.assertEqual(storage_name(produced), "CudaStorage", label)
+                    self.assertIs(produced.dtype, dtype)
+
+    def test_no_operand_is_read_back_to_the_host(self):
+        import math
+
+        mixed = [-2.0, 0.0, 2.0, math.inf, math.nan, -0.0]
+        for size in (1, 64, 100_000):
+            with self.subTest(size=size):
+                with ts.use_backend("cuda"):
+                    values = (mixed * (size // len(mixed) + 1))[:size]
+                    base = ts.Tensor(values, dtype=ts.float64) + 0.0
+                    exponent = ts.full((size,), 0.5, dtype=ts.float64) + 0.0
+                    with self._counting_device_reads() as reads:
+                        produced = base**exponent
+                        self.assertEqual(storage_name(produced), "CudaStorage")
+                self.assertEqual(reads.count, 0, f"size {size} materialised an operand")
+
+    def test_integer_power_is_native_on_cuda(self):
+        """The dispatcher used to document CUDA as unable to do this."""
+        for dtype_name in INTEGER_DTYPES:
+            dtype = getattr(ts, dtype_name)
+            with self.subTest(dtype=dtype_name):
+                produced = self.assertRunsOnProvider(
+                    "cuda",
+                    lambda d=dtype: ts.Tensor([2] * 64, dtype=d) ** 3,
+                    context=f"cuda/{dtype_name} integer power",
+                )
+                self.assertEqual(produced.tolist(), [8] * 64)
+                self.assertEqual(storage_name(produced), "CudaStorage")
+
+
 @requires_numpy
 class TheProviderNoLongerDeclines(unittest.TestCase):
     """What used to be power's decline path.
@@ -235,9 +556,8 @@ class TheProviderNoLongerDeclines(unittest.TestCase):
     and CUDA computes integers itself. The kernel is therefore expected to
     answer every supported call.
 
-    The dispatcher still routes a ``None`` to the Python reference. Making
-    that a hard error belongs to the strict-dispatch milestone, so this class
-    records the behaviour rather than asserting it is unreachable.
+    The dispatcher no longer routes a ``None`` anywhere: it raises, as the
+    four contract operations do.
     """
 
     def test_the_kernel_answers_instead_of_declining(self):
@@ -257,16 +577,44 @@ class TheProviderNoLongerDeclines(unittest.TestCase):
                     storage, f"{label} still declines to the reference"
                 )
 
-    def test_a_patched_decline_is_still_answered_by_the_reference(self):
-        """The dispatcher's fallback, exercised by forcing a decline."""
-        with patch.object(numpy_kernels, "power", return_value=None) as declining:
-            backend_state._clear_backend_kernel_cache()
-            with ts.use_backend("numpy"):
-                result = ts.full((64,), 2.0, dtype=ts.float64) ** 3.0
-            backend_state._clear_backend_kernel_cache()
+    def test_a_forced_numpy_decline_raises_rather_than_falling_back(self):
+        self.assertDeclineRaises("numpy", numpy_kernels)
+
+    @requires_cuda
+    def test_a_forced_cuda_decline_raises_rather_than_falling_back(self):
+        import tensors.backend.cuda.kernels as cuda_kernels
+
+        self.assertDeclineRaises("cuda", cuda_kernels)
+
+    def assertDeclineRaises(self, selection, provider):
+        """A provider that returns ``None`` is a capability failure.
+
+        The decline is forced by patching the provider, not by finding an
+        input that makes it decline — no such input exists any more, and
+        inventing a production switch to simulate one would be worse than
+        the gap it tested.
+        """
+        reference = python_reference()
+        with patch.object(provider, "power", return_value=None) as declining:
+            with patch.object(reference, "power", wraps=reference.power) as fallback:
+                backend_state._clear_backend_kernel_cache()
+                with ts.use_backend(selection):
+                    with self.assertRaises(
+                        config.BackendOperationUnsupportedError
+                    ) as raised:
+                        ts.full((64,), 2.0, dtype=ts.float64) ** 3.0
+                backend_state._clear_backend_kernel_cache()
+
         declining.assert_called_once()
-        self.assertEqual(storage_name(result), "PythonStorage")
-        self.assertEqual(result.tolist(), [8.0] * 64)
+        message = str(raised.exception)
+        self.assertIn(selection, message)
+        self.assertIn("power", message)
+        self.assertIn("float64", message)
+        self.assertEqual(
+            fallback.call_count,
+            0,
+            "the Python power kernel answered a declined call",
+        )
 
 
 if __name__ == "__main__":
