@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -18,7 +18,7 @@ def cosh(value: Tensor, *, dtype: DataType) -> Storage | None:
     if dtype.kind == "integer":
         return None
     try:
-        values = _view(value).astype(cupy.float64, copy=False)
+        values = _working_values(value)
     except (TypeError, ValueError):
         return None
     functions = {
