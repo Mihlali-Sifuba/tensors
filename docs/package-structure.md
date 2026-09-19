@@ -324,6 +324,35 @@ The folders have deliberately narrow responsibilities:
   Tensor broadcasting. Pure broadcast-shape inference lives on `Shape`, while
   stride construction lives on `Strides`. The `utils` package is not
   re-exported from the root.
+- **Broadcasting is one responsibility, and it is not computation.**
+  `Shape.broadcast_with` agrees a common shape between two operands;
+  `broadcast_to(tensor, shape)` expands one operand to it; `broadcast_tensors`
+  does both for a pair. None of them performs arithmetic, comparison or
+  selection, resolves a result dtype, or selects a backend. An operation
+  broadcasts its operands and then computes for itself, so the broadcasting
+  utility never needs to know which operation consumes its result.
+
+  `broadcast_binary_values`, which took two tensors *and an operation* and
+  applied it while walking broadcast offsets, is gone. It mixed the two
+  responsibilities: every consumer had to hand its arithmetic to the
+  broadcasting layer, and the broadcasting layer could not be reused or
+  reasoned about without one. The Python reference kernels — the only callers
+  it had, since NumPy and CuPy broadcast natively — now read
+
+  ```python
+  left = broadcast_to(left, output_shape)._data
+  right = broadcast_to(right, output_shape)._data
+  values = [evaluate(x, y) for x, y in zip(left, right)]
+  ```
+
+  **This costs performance on the Python backend**, by roughly four times on a
+  broadcasting binary operation. The single-pass helper allocated only its
+  output; two `broadcast_to` calls materialize two full intermediate tensors
+  first. Equal-shape operations are unaffected, because `broadcast_to` returns
+  its argument unchanged when the shape already matches. Recovering the
+  difference means broadcasting without materializing — zero-stride views —
+  which needs the storage-ownership design recorded in
+  [the memory model](memory-model.md), and is deliberately not attempted here.
 - `matmul` is one operation with two public names. `ts.matmul` and `ts.dot`
   both contract the final axes with matrix-product semantics and broadcast any
   leading batch axes; `dot` is an entry point to the same `MatMul` class, not

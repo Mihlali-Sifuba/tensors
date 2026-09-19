@@ -228,7 +228,9 @@ The metadata model prepares the package for deliberate follow-up work on:
 
 - zero-copy transpose;
 - zero-copy slicing;
-- zero-stride broadcasting;
+- zero-stride broadcasting — now the single remaining cost of separating
+  broadcasting from computation, since `broadcast_to` materializes its
+  expansion and the reference kernels call it twice per binary operation;
 - negative-stride reversal;
 - shared-storage lifetime and ownership;
 - mutation propagation and Tensor versioning across aliases;
