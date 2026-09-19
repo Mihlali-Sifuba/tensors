@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _storage
 from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _widen
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -24,5 +25,7 @@ def cast_tensor(value: Tensor, *, dtype: DataType) -> Storage | None:
         converter = cupy.frompyfunc(int, 1, 1)
         result = converter(source)
     else:
-        result = source.astype(cupy.float64, copy=True)
+        # A cast reads the source's value; widening with astype would
+        # flush a binary32 subnormal before the new dtype ever sees it.
+        result = _widen(source)
     return _storage(result, dtype=dtype, output_shape=value.shape)

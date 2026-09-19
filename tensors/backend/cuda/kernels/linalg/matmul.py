@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -22,8 +22,8 @@ def matmul(
     if dtype.kind != "floating":
         return None
     try:
-        left_array = _view(left).astype(cupy.float64, copy=False)
-        right_array = _view(right).astype(cupy.float64, copy=False)
+        left_array = _working_values(left)
+        right_array = _working_values(right)
     except ValueError:
         return None
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
