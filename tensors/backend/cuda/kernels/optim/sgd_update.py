@@ -7,7 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _finite_operands
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -17,8 +17,8 @@ def sgd_update(
     parameter: Tensor, gradient: Tensor, learning_rate: float
 ) -> Storage | None:
     """Apply one fused SGD update."""
-    values = _view(parameter).astype(cupy.float64, copy=False)
-    gradients = _view(gradient).astype(cupy.float64, copy=False)
+    values = _working_values(parameter)
+    gradients = _working_values(gradient)
     if not _finite_operands(values, gradients):
         return None
     with _errstate(over="ignore", under="ignore", invalid="ignore"):

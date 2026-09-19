@@ -7,7 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _finite_operands
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 from tensors.backend.cuda.kernels.reductions.logsumexp_ops import _normalization_terms
 
 if TYPE_CHECKING:
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 def log_softmax(value: Tensor, axis: int, *, dtype: DataType) -> Storage | None:
     """Run fused softmax or log-softmax on finite values."""
-    values = _view(value).astype(cupy.float64, copy=False)
+    values = _working_values(value)
     maximum, correction, probabilities = _normalization_terms(values, axis)
     with _errstate(over="ignore", invalid="ignore"):
         result = values - maximum - correction

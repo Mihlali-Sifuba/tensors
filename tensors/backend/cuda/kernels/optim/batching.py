@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -38,12 +38,7 @@ def _optimizer_batch_values(tensors: Sequence[Tensor], *, slot: str) -> Any | No
     dtype = tensors[0].dtype
     if any((tensor.dtype != dtype for tensor in tensors)):
         return None
-    arrays = tuple(
-        (
-            _view(tensor).astype(cupy.float64, copy=False).reshape(-1)
-            for tensor in tensors
-        )
-    )
+    arrays = tuple((_working_values(tensor).reshape(-1) for tensor in tensors))
     buffer = _optimizer_workspace_buffer(
         slot=slot, size=sum((tensor.size for tensor in tensors)), dtype=cupy.float64
     )

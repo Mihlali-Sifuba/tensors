@@ -3,7 +3,7 @@
 from __future__ import annotations
 import cupy
 from typing import TYPE_CHECKING
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 def distributions_valid(targets: Tensor, axis: int) -> bool:
     """Return whether dense targets are finite normalized probabilities."""
-    values = _view(targets).astype(cupy.float64, copy=False)
+    values = _working_values(targets)
     valid_values = cupy.all(cupy.isfinite(values) & (values >= 0.0) & (values <= 1.0))
     totals = cupy.sum(values, axis=axis)
     class_count = targets.shape[axis]

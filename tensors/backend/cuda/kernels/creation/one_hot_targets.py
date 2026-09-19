@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 def one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Storage | None:
     """Expand validated class indices directly into native dense storage."""
-    values = _view(targets).astype(cupy.float64, copy=False)
+    values = _working_values(targets)
     class_count = logits.shape[axis]
     with _errstate(invalid="ignore"):
         integral = values == cupy.floor(values)

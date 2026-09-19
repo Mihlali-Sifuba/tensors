@@ -7,7 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _finite_operands
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -26,8 +26,8 @@ def binary_cross_entropy(
     output_shape: tuple[int, ...],
 ) -> Storage | None:
     """Run fused binary cross-entropy."""
-    values = _view(prediction).astype(cupy.float64, copy=False)
-    targets = _view(target).astype(cupy.float64, copy=False)
+    values = _working_values(prediction)
+    targets = _working_values(target)
     if values.shape != targets.shape:
         return None
     if from_logits:

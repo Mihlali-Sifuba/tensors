@@ -7,7 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _shape_size
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 from tensors.backend.cuda.kernels.reductions.logsumexp_ops import _normalization_terms
 
 if TYPE_CHECKING:
@@ -26,9 +26,9 @@ def cross_entropy_gradient(
 ) -> tuple[Storage | None, Storage | None] | None:
     """Run the requested dense multiclass cross-entropy VJPs."""
     need_logits, need_targets = needs_input_grad
-    values = _view(logits).astype(cupy.float64, copy=False)
-    weights = _view(targets).astype(cupy.float64, copy=False)
-    upstream = _view(grad).astype(cupy.float64, copy=False)
+    values = _working_values(logits)
+    weights = _working_values(targets)
+    upstream = _working_values(grad)
     if values.shape != weights.shape:
         return None
     maximum, correction, probabilities = _normalization_terms(values, axis)

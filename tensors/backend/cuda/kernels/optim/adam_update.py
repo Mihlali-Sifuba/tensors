@@ -8,7 +8,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _finite_operands
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -30,7 +30,7 @@ def adam_update(
 ) -> tuple[Storage, Storage, Storage, Storage, Storage] | None:
     """Apply one fused Adam update on finite optimizer state."""
     tensors = (parameter, gradient, moment, scale, scaled)
-    values = [_view(item).astype(cupy.float64, copy=False) for item in tensors]
+    values = [_working_values(item) for item in tensors]
     parameter_values, gradients, moments, scales, scaled_values = values
     if not _finite_operands(*values):
         return None

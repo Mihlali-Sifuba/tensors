@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 from tensors.backend.cuda.kernels.reductions.logsumexp_ops import _normalization_terms
 
 if TYPE_CHECKING:
@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 
 def softmax_gradient(grad: Tensor, value: Tensor, axis: int) -> Storage | None:
     """Run a softmax-family VJP away from dominant cancellation."""
-    upstream = _view(grad).astype(cupy.float64, copy=False)
-    values = _view(value).astype(cupy.float64, copy=False)
+    upstream = _working_values(grad)
+    values = _working_values(value)
     if upstream.shape != values.shape:
         return None
     _, _, probabilities = _normalization_terms(values, axis)

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 from tensors.backend.cuda.kernels.reductions.logsumexp_ops import _normalization_terms
 
 if TYPE_CHECKING:
@@ -26,8 +26,8 @@ def cross_entropy(
     output_shape: tuple[int, ...],
 ) -> Storage | None:
     """Run fused dense multiclass cross-entropy."""
-    values = _view(logits).astype(cupy.float64, copy=False)
-    weights = _view(targets).astype(cupy.float64, copy=False)
+    values = _working_values(logits)
+    weights = _working_values(targets)
     if values.shape != weights.shape:
         return None
     maximum, correction, probabilities = _normalization_terms(values, axis)
