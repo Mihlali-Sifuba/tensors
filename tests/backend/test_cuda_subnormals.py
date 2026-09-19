@@ -769,5 +769,375 @@ class TheOtherFiveConversions(unittest.TestCase):
                 self.assertFalse(math.isnan(produced), name)
 
 
+#: The two gradient kernels whose input conversion was corrected last.
+GRADIENTS = {"abs": ts.abs, "relu": ts.relu}
+
+
+def vector_jacobian_product(function, operand, upstream, *, dtype, backend="cuda"):
+    """One VJP, with the upstream gradient supplied explicitly."""
+    with ts.use_backend(backend):
+        variable = ts.Variable(ts.Tensor([operand], dtype=dtype), requires_grad=True)
+        (produced,) = ts.grad(
+            function(variable),
+            [variable],
+            grad_outputs=ts.Tensor([upstream], dtype=dtype),
+        )
+        return produced
+
+
+@requires_cuda
+class GradientOperandClassification(unittest.TestCase):
+    """The local derivative, from the operand's sign alone.
+
+    ``abs`` and ``relu`` are piecewise linear, so away from zero their
+    derivatives are exact integers determined by the sign of the operand:
+    ``abs'(x)`` is ``1`` for ``x > 0`` and ``-1`` for ``x < 0``, and
+    ``relu'(x)`` is ``1`` for ``x > 0`` and ``0`` for ``x < 0``. A subnormal
+    operand is strictly signed like any other, so these follow from the
+    definitions and not from any backend.
+
+    The defect flushed the operand to zero, which put every subnormal into
+    the ``x == 0`` branch — a misclassification, not a rounding error.
+    """
+
+    def setUp(self):
+        self.previous = ts.get_backend()
+
+    def tearDown(self):
+        ts.set_backend(self.previous)
+
+    #: (operand label, operand, abs derivative, relu derivative)
+    SIGNED = (
+        ("smallest positive subnormal", SMALLEST, 1.0, 1.0),
+        ("smallest negative subnormal", -SMALLEST, -1.0, 0.0),
+        ("largest positive subnormal", LARGEST_SUBNORMAL, 1.0, 1.0),
+        ("largest negative subnormal", -LARGEST_SUBNORMAL, -1.0, 0.0),
+        ("smallest positive normal", MIN_NORMAL, 1.0, 1.0),
+        ("smallest negative normal", -MIN_NORMAL, -1.0, 0.0),
+        ("ordinary positive", 2.5, 1.0, 1.0),
+        ("ordinary negative", -2.5, -1.0, 0.0),
+    )
+
+    def test_the_derivative_follows_the_operand_sign(self):
+        for label, operand, abs_derivative, relu_derivative in self.SIGNED:
+            for name, expected in (("abs", abs_derivative), ("relu", relu_derivative)):
+                with self.subTest(operand=label, operation=name):
+                    produced = vector_jacobian_product(
+                        GRADIENTS[name], operand, 1.0, dtype=ts.float32
+                    ).tolist()[0]
+                    self.assertEqual(
+                        produced, expected, f"{name}'({operand!r}) = {produced!r}"
+                    )
+
+    def test_float64_classifies_the_same_way(self):
+        smallest64 = 5e-324
+        for name, positive, negative in (("abs", 1.0, -1.0), ("relu", 1.0, 0.0)):
+            for operand, expected in ((smallest64, positive), (-smallest64, negative)):
+                with self.subTest(operation=name, operand=operand):
+                    produced = vector_jacobian_product(
+                        GRADIENTS[name], operand, 1.0, dtype=ts.float64
+                    ).tolist()[0]
+                    self.assertEqual(produced, expected)
+
+
+@requires_cuda
+class UpstreamGradientIsPreserved(unittest.TestCase):
+    """The second operand the conversion must not lose.
+
+    The operand decides the derivative; the upstream gradient is what that
+    derivative scales. They are distinct inputs and were converted by the same
+    defective call, so an operand-only correction would leave this half
+    broken. These cases use an **ordinary** operand precisely so that a fix
+    confined to the operand cannot hide the failure.
+    """
+
+    def setUp(self):
+        self.previous = ts.get_backend()
+
+    def tearDown(self):
+        ts.set_backend(self.previous)
+
+    #: Subnormal upstream gradients, with a local derivative of exactly one,
+    #: so the VJP is the upstream gradient itself and is representable.
+    UPSTREAM = (
+        ("smallest positive subnormal", SMALLEST),
+        ("smallest negative subnormal", -SMALLEST),
+        ("two quanta", 2 * SMALLEST),
+        ("largest subnormal", LARGEST_SUBNORMAL),
+        ("largest negative subnormal", -LARGEST_SUBNORMAL),
+    )
+
+    def test_a_subnormal_upstream_gradient_survives_a_unit_derivative(self):
+        """``f'(2.0) == 1`` for both, so the VJP is exactly the upstream."""
+        for name, function in GRADIENTS.items():
+            for label, upstream in self.UPSTREAM:
+                with self.subTest(operation=name, upstream=label):
+                    produced = vector_jacobian_product(
+                        function, 2.0, upstream, dtype=ts.float32
+                    ).tolist()[0]
+                    self.assertEqual(
+                        bits32(produced),
+                        bits32(upstream),
+                        f"{name}: upstream {upstream!r} became {produced!r}",
+                    )
+
+    def test_abs_negates_a_subnormal_upstream_at_a_negative_operand(self):
+        """``abs'(-2.0) == -1``, so the VJP is the upstream gradient negated."""
+        for label, upstream in self.UPSTREAM:
+            with self.subTest(upstream=label):
+                produced = vector_jacobian_product(
+                    ts.abs, -2.0, upstream, dtype=ts.float32
+                ).tolist()[0]
+                self.assertEqual(
+                    bits32(produced),
+                    bits32(-upstream),
+                    f"upstream {upstream!r} became {produced!r}",
+                )
+
+    def test_relu_zeroes_a_subnormal_upstream_at_a_negative_operand(self):
+        """``relu'(-2.0) == 0``, so the product is zero however small the upstream."""
+        for label, upstream in self.UPSTREAM:
+            with self.subTest(upstream=label):
+                produced = vector_jacobian_product(
+                    ts.relu, -2.0, upstream, dtype=ts.float32
+                ).tolist()[0]
+                self.assertEqual(produced, 0.0)
+
+    def test_both_operand_and_upstream_subnormal(self):
+        """The two conversions together, neither able to mask the other."""
+        for name, expected_sign in (("abs", 1.0), ("relu", 1.0)):
+            with self.subTest(operation=name):
+                produced = vector_jacobian_product(
+                    GRADIENTS[name], SMALLEST, SMALLEST, dtype=ts.float32
+                ).tolist()[0]
+                self.assertEqual(bits32(produced), bits32(SMALLEST), name)
+
+
+@requires_cuda
+class GradientBoundariesAndExistingConventions(unittest.TestCase):
+    """Zero and NaN keep the behaviour the package already had."""
+
+    def setUp(self):
+        self.previous = ts.get_backend()
+
+    def tearDown(self):
+        ts.set_backend(self.previous)
+
+    def test_zero_and_nan_are_unchanged_across_backends(self):
+        """No new derivative convention is introduced at the kink.
+
+        Section 12.7's region-table discipline covers ``**`` only; ``abs``
+        and ``relu`` at zero are unspecified (audit finding S-6). What is
+        asserted here is that this change did not alter them.
+        """
+        for name, function in GRADIENTS.items():
+            for label, operand in (
+                ("positive zero", 0.0),
+                ("negative zero", -0.0),
+                ("nan", math.nan),
+            ):
+                with self.subTest(operation=name, operand=label):
+                    produced = {}
+                    for backend in ts.available_backends():
+                        produced[backend] = vector_jacobian_product(
+                            function, operand, 1.0, dtype=ts.float32, backend=backend
+                        ).tolist()[0]
+                    reference = produced["python"]
+                    for backend, got in produced.items():
+                        if reference != reference:
+                            self.assertTrue(got != got, f"{name} {label} {backend}")
+                        else:
+                            self.assertEqual(got, reference, f"{name} {label}")
+
+    def test_the_largest_finite_upstream_is_unaffected(self):
+        largest = 3.4028234663852886e38
+        for name, function in GRADIENTS.items():
+            with self.subTest(operation=name):
+                produced = vector_jacobian_product(
+                    function, 2.0, largest, dtype=ts.float32
+                ).tolist()[0]
+                self.assertEqual(bits32(produced), bits32(largest))
+
+    def test_ordinary_values_have_not_regressed(self):
+        """Compared by value, because one zero's *sign* is unspecified.
+
+        See :meth:`test_a_zero_gradients_sign_differs_across_backends`: where
+        the result is zero, the backends disagree on its sign, and that
+        disagreement predates this change. Comparing by value here keeps this
+        test about regressions rather than about an open policy question;
+        the sign is examined on its own below.
+        """
+        for name, function in GRADIENTS.items():
+            for operand in (-3.0, -0.5, 0.5, 3.0):
+                for upstream in (1.0, -2.0, 0.25):
+                    with self.subTest(
+                        operation=name, operand=operand, upstream=upstream
+                    ):
+                        produced = {}
+                        for backend in ts.available_backends():
+                            produced[backend] = vector_jacobian_product(
+                                function,
+                                operand,
+                                upstream,
+                                dtype=ts.float32,
+                                backend=backend,
+                            ).tolist()[0]
+                        for backend, got in produced.items():
+                            reference = produced["python"]
+                            if reference == 0.0:
+                                self.assertEqual(got, 0.0, backend)
+                            else:
+                                self.assertEqual(
+                                    bits32(got), bits32(reference), backend
+                                )
+
+    def test_a_zero_gradients_sign_differs_across_backends(self):
+        """An open question, recorded rather than decided.
+
+        ``relu'(x)`` is zero for ``x < 0``, and CUDA forms the VJP as
+        ``upstream * derivative``. With a negative upstream gradient that
+        product is ``-2.0 * 0.0``, which IEEE gives as ``-0.0``. The Python
+        reference returns ``+0.0``.
+
+        This predates the conversion fix — it is identical before and after,
+        and neither operand is subnormal — and which sign is correct is
+        audit finding **S-4**, signed zero being unspecified outside
+        arithmetic. The test asserts the magnitude, which is agreed, and
+        records the divergence so it is not mistaken for a regression.
+        """
+        produced = {}
+        for backend in ts.available_backends():
+            produced[backend] = vector_jacobian_product(
+                ts.relu, -0.5, -2.0, dtype=ts.float32, backend=backend
+            ).tolist()[0]
+
+        for backend, got in produced.items():
+            with self.subTest(backend=backend):
+                self.assertEqual(got, 0.0, f"{backend} gave {got!r}")
+
+        signs = {backend: math.copysign(1.0, got) for backend, got in produced.items()}
+        self.assertEqual(signs["python"], 1.0, "the reference returns +0.0")
+        if "cuda" in signs:
+            self.assertEqual(
+                signs["cuda"], -1.0, "CUDA returns -0.0; S-4 has not decided which"
+            )
+
+
+@requires_cuda
+class GradientExecution(unittest.TestCase):
+    """The CUDA kernels run, stay resident, and read nothing back."""
+
+    def setUp(self):
+        self.previous = ts.get_backend()
+
+    def tearDown(self):
+        ts.set_backend(self.previous)
+
+    def test_the_cuda_gradient_kernels_execute_and_do_not_decline(self):
+        import tensors.backend.cuda.kernels as cuda_backend
+
+        for name, function in (
+            ("abs_gradient", ts.abs),
+            ("relu_gradient", ts.relu),
+        ):
+            with self.subTest(kernel=name):
+                calls = []
+                original = getattr(cuda_backend, name)
+
+                def spy(*arguments, _original=original, **keywords):
+                    produced = _original(*arguments, **keywords)
+                    calls.append(produced is not None)
+                    return produced
+
+                with patch.object(cuda_backend, name, spy):
+                    with ts.use_backend("cuda"):
+                        variable = ts.Variable(
+                            ts.Tensor([SMALLEST] * 64, dtype=ts.float32),
+                            requires_grad=True,
+                        )
+                        (produced,) = ts.grad(function(variable), [variable])
+                        residency = type(produced._storage).__name__
+                self.assertTrue(calls, f"{name} never ran")
+                self.assertTrue(all(calls), f"{name} declined to the reference")
+                self.assertEqual(residency, "CudaStorage")
+
+    def test_results_stay_in_cuda_storage(self):
+        for name, function in GRADIENTS.items():
+            for size in (1, 64, 100_000):
+                with self.subTest(operation=name, size=size):
+                    with ts.use_backend("cuda"):
+                        variable = ts.Variable(
+                            ts.Tensor([SMALLEST] * size, dtype=ts.float32),
+                            requires_grad=True,
+                        )
+                        (produced,) = ts.grad(function(variable), [variable])
+                    self.assertEqual(type(produced._storage).__name__, "CudaStorage")
+                    self.assertIs(produced.dtype, ts.float32)
+
+    def test_no_operand_is_read_back_to_the_host(self):
+        import contextlib
+
+        import tensors.tensor as tensor_module
+
+        @contextlib.contextmanager
+        def counting():
+            reads = []
+            original = tensor_module.Tensor._data.fget
+
+            def counted(self):
+                reads.append(1)
+                return original(self)
+
+            tensor_module.Tensor._data = property(counted)
+            try:
+                yield reads
+            finally:
+                tensor_module.Tensor._data = property(original)
+
+        for name, function in GRADIENTS.items():
+            with self.subTest(operation=name):
+                with ts.use_backend("cuda"):
+                    variable = ts.Variable(
+                        ts.Tensor([SMALLEST] * 4096, dtype=ts.float32) + 0.0,
+                        requires_grad=True,
+                    )
+                    output = function(variable)
+                    with counting() as reads:
+                        (produced,) = ts.grad(output, [variable])
+                        self.assertEqual(
+                            type(produced._storage).__name__, "CudaStorage"
+                        )
+                self.assertEqual(
+                    len(reads), 0, f"{name} materialised a tensor on the host"
+                )
+
+    def test_eager_and_graph_differentiation_agree(self):
+        from tensors.graph import Computation
+
+        for name, function in GRADIENTS.items():
+            for operand in (SMALLEST, -SMALLEST, 2.0):
+                with self.subTest(operation=name, operand=operand):
+                    with ts.use_backend("cuda"):
+                        variable = ts.Variable(
+                            ts.Tensor([operand] * 64, dtype=ts.float32),
+                            requires_grad=True,
+                        )
+                        (eager,) = ts.grad(function(variable), [variable])
+                        eager_value = eager.tolist()[0]
+
+                        replayed = ts.Variable(
+                            ts.Tensor([operand] * 64, dtype=ts.float32),
+                            requires_grad=True,
+                        )
+                        program = Computation(function(replayed))
+                        program.forward()
+                        (graph,) = ts.grad(function(replayed), [replayed])
+                        graph_value = graph.tolist()[0]
+                    if eager_value != eager_value:
+                        self.assertTrue(graph_value != graph_value)
+                    else:
+                        self.assertEqual(bits32(graph_value), bits32(eager_value))
+
+
 if __name__ == "__main__":
     unittest.main()
