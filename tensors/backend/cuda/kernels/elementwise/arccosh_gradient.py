@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 def arccosh_gradient(grad: Tensor, value: Tensor) -> Storage | None:
     """Run the vector-Jacobian product for an elementwise unary operation."""
     try:
-        upstream = _view(grad).astype(cupy.float64, copy=False)
-        values = _view(value).astype(cupy.float64, copy=False)
+        upstream = _working_values(grad)
+        values = _working_values(value)
     except (TypeError, ValueError):
         return None
     if upstream.shape != values.shape:

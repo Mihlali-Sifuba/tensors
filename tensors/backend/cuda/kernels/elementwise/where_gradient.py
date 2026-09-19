@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _storage
 from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -23,7 +24,7 @@ def where_gradient(
         selected = cupy.broadcast_to(_view(condition), grad.shape) != 0
     except ValueError:
         return None
-    upstream = _view(grad).astype(cupy.float64, copy=False)
+    upstream = _working_values(grad)
     left = None
     if need_left:
         left = _storage(

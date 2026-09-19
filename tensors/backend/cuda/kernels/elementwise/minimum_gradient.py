@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _storage
 from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -24,7 +25,7 @@ def minimum_gradient(
         left_values, right_values = cupy.broadcast_arrays(_view(left), _view(right))
     except ValueError:
         return None
-    upstream = _view(grad).astype(cupy.float64, copy=False)
+    upstream = _working_values(grad)
     has_nan = cupy.isnan(left_values) | cupy.isnan(right_values)
     ties = left_values == right_values
     left_selected = left_values < right_values
