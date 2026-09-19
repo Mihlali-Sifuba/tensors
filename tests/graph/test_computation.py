@@ -7,7 +7,7 @@ from tensors.graph.computation.instruction import Instruction
 from tensors.graph.edge import Edge
 from tensors.graph.node import OperationNode, VariableNode
 from tensors.graph.state import reset_graph_state
-from tensors.math.sin import Sin
+from tensors.operations.trigonometric.sin import Sin
 from tensors.ops import Add, Mul
 
 

@@ -1,0 +1,51 @@
+"""Dispatch for add: the selection alone decides where it runs.
+
+`docs/backends.md`, *Execution requirements*, makes the backend selection an
+execution requirement rather than a preference. Addition executes on the
+selected backend's kernel, never on another's, and a backend that cannot
+produce the required result raises instead of handing the work away quietly.
+No workload-size policy applies: a one-element add runs where a
+million-element add runs.
+
+``"auto"`` is not a third behaviour. It resolves to a concrete backend when it
+is selected — NumPy when NumPy is installed, Python otherwise — so by the time
+a call arrives the selection names one backend.
+"""
+
+from __future__ import annotations
+from typing import TYPE_CHECKING, Any
+from tensors.backend.config import BackendOperationUnsupportedError, get_backend
+from tensors.backend.loading import load_backend
+from tensors.backend.storage import Storage
+
+if TYPE_CHECKING:
+    from tensors._typing import Scalar
+    from tensors.dtype import DataType
+    from tensors.tensor import Tensor
+
+
+def execute_add(
+    left: Tensor | Scalar,
+    right: Tensor | Scalar,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Run add on the selected backend, or report that it cannot run there."""
+    selected = get_backend()
+    if selected == "python":
+        from tensors.backend.python.kernels.arithmetic.add import (
+            add as reference,
+        )
+
+        return reference(left, right, dtype=dtype, output_shape=output_shape)
+
+    backend: Any = load_backend(selected)
+    result = backend.add(left, right, dtype=dtype, output_shape=output_shape)
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute add at dtype "
+            f"{dtype.name} conformingly. Arithmetic runs on the selected "
+            f"backend; select another backend to run it elsewhere."
+        )
+    return result

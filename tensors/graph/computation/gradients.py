@@ -18,7 +18,7 @@ from ..._typing import TensorLike
 from ...tensor import Tensor
 
 if TYPE_CHECKING:
-    from ...ops.operation import Operation
+    from ...operations.base import Operation
     from ...variable import Variable
 
 
@@ -34,11 +34,7 @@ def gradient_seed(
     if grad is None:
         from ...creation import ones
 
-        typecode = (
-            output.dtype.typecode
-            if output.dtype.typecode in {"f", "d"}
-            else "d"
-        )
+        typecode = output.dtype.typecode if output.dtype.typecode in {"f", "d"} else "d"
         seed = ones(
             output.data.shape,
             dtype=typecode,
@@ -57,11 +53,7 @@ def gradient_seed(
             f"{output.data.shape}"
         )
 
-    output_dtype = (
-        output.dtype
-        if output.dtype.typecode in {"f", "d"}
-        else None
-    )
+    output_dtype = output.dtype if output.dtype.typecode in {"f", "d"} else None
     if output_dtype is not None and seed.dtype != output_dtype:
         if isinstance(seed, Variable):
             if create_graph and seed.requires_grad:
@@ -77,7 +69,9 @@ def gradient_seed(
             seed = seed.astype(output_dtype)
 
     if create_graph:
-        return seed if isinstance(seed, Variable) else Variable(seed, requires_grad=False)
+        return (
+            seed if isinstance(seed, Variable) else Variable(seed, requires_grad=False)
+        )
     return seed.data if isinstance(seed, Variable) else seed
 
 
@@ -90,17 +84,15 @@ def sum_gradient_values(gradients: list[Tensor]) -> Tensor:
 
     first = gradients[0]
     if get_backend() != "python" and first.size >= 32:
-        from ...math import stack
-        from ...math import sum as tensor_sum
+        from ...operations.manipulation.stack import stack
+        from ...operations.reductions.sum import sum as tensor_sum
 
         return tensor_sum(stack(gradients, axis=0), axis=0)
 
-    from ...math.sum import _stable_float_sum
+    from ...utils.summation import stable_float_sum
 
     values = [
-        _stable_float_sum([
-            float(gradient._data[index]) for gradient in gradients
-        ])
+        stable_float_sum([float(gradient._data[index]) for gradient in gradients])
         for index in range(first.size)
     ]
     return Tensor(values, dtype=first.dtype, shape=first.shape)
@@ -111,7 +103,8 @@ def sum_gradient_graph(gradients: list[Variable]) -> Variable:
     if len(gradients) == 1:
         return gradients[0]
 
-    from ...math import stack, sum
+    from ...operations.manipulation.stack import stack
+    from ...operations.reductions.sum import sum
 
     return sum(stack(gradients, axis=0), axis=0)
 
@@ -140,9 +133,7 @@ def validate_gradients(
     try:
         results = tuple(gradients)
     except TypeError as exc:
-        raise TypeError(
-            f"{label} backward must return one gradient per input"
-        ) from exc
+        raise TypeError(f"{label} backward must return one gradient per input") from exc
 
     if len(results) != len(inputs):
         raise RuntimeError(
@@ -178,9 +169,6 @@ def validate_gradients(
                 f"{label} backward gradient {index} has shape "
                 f"{gradient.shape}; expected {input_variable.shape}"
             )
-        if (
-            input_variable.requires_grad
-            and gradient.dtype != input_variable.dtype
-        ):
+        if input_variable.requires_grad and gradient.dtype != input_variable.dtype:
             validated[index] = gradient.astype(input_variable.dtype)
     return tuple(validated)

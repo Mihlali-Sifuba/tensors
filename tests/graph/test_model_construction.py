@@ -41,7 +41,7 @@ class ModelConstructionTests(unittest.TestCase):
         self.assertFalse(structure.inputs[0].is_bound)
         self.assertEqual(
             [node.label for node in model.nodes],
-            ["var", "var", "dot", "var", "var", "add", "var"],
+            ["var", "var", "matmul", "var", "var", "add", "var"],
         )
 
     def test_parameters_take_part_as_their_own_vertices(self):
@@ -85,7 +85,7 @@ class ModelConstructionTests(unittest.TestCase):
                 instruction.operation.name
                 for instruction in compilations[0].instructions
             ],
-            ["dot", "add"],
+            ["matmul", "add"],
         )
         self.assertIs(
             model._structure.computations[0]._instructions,
@@ -210,7 +210,7 @@ class ModelExecutionTests(unittest.TestCase):
                 instruction.operation.name
                 for instruction in program._instructions
             ],
-            ["dot", "add"],
+            ["matmul", "add"],
         )
         result = model(ts.Tensor([[2.0]]))
         self.assertEqual(result.data.tolist(), [7.0])
@@ -356,7 +356,7 @@ class StructuralBuildFallbackTests(unittest.TestCase):
                 instruction.operation.name
                 for instruction in program._instructions
             ],
-            ["dot", "add"],
+            ["matmul", "add"],
         )
         self.assertEqual(model(ts.Tensor([[3.0]])).data.tolist(), [7.0])
 
@@ -388,7 +388,7 @@ class SigmoidModelConstructionTests(unittest.TestCase):
                 instruction.operation.name
                 for instruction in program._instructions
             ],
-            ["dot", "sigmoid"],
+            ["matmul", "sigmoid"],
         )
         self.assertEqual(model(ts.Tensor([[1.0]])).data.tolist(), [0.5])
 
@@ -421,7 +421,7 @@ class SigmoidModelConstructionTests(unittest.TestCase):
                 instruction.operation.name
                 for instruction in program._instructions
             ],
-            ["dot", "add", "relu", "dot", "add", "sigmoid"],
+            ["matmul", "add", "relu", "matmul", "add", "sigmoid"],
         )
 
         predictions = model(ts.Tensor([[-1.0, 1.0], [1.0, 1.0]]))
@@ -486,7 +486,7 @@ class LinalgModelConstructionTests(unittest.TestCase):
                 instruction.operation.name
                 for instruction in program._instructions
             ],
-            ["dot", "norm"],
+            ["matmul", "norm"],
         )
 
     def test_the_built_programs_replay_and_differentiate(self):
@@ -577,7 +577,7 @@ class UnaryModelConstructionTests(unittest.TestCase):
                 instruction.operation.name
                 for instruction in program._instructions
             ],
-            ["dot", "tanh", "exp", "abs", "softplus", "add", "sqrt"],
+            ["matmul", "tanh", "exp", "abs", "softplus", "add", "sqrt"],
         )
 
     def test_the_built_program_replays_and_differentiates(self):
@@ -628,7 +628,7 @@ class UnaryModelConstructionTests(unittest.TestCase):
                         instruction.operation.name
                         for instruction in program._instructions
                     ],
-                    ["dot", name],
+                    ["matmul", name],
                 )
 
     def test_a_later_migration_group_still_keeps_tracing(self):
@@ -710,9 +710,9 @@ class ReductionModelConstructionTests(unittest.TestCase):
 
     def test_the_models_build_during_construction(self):
         expected = {
-            "Classifier": ["dot", "log_softmax"],
-            "Pooled": ["dot", "mean", "softmax"],
-            "Scored": ["dot", "std", "sum"],
+            "Classifier": ["matmul", "log_softmax"],
+            "Pooled": ["matmul", "mean", "softmax"],
+            "Scored": ["matmul", "std", "sum"],
         }
         for model in (self.Classifier(), self.Pooled(), self.Scored()):
             with self.subTest(model=type(model).__name__):
@@ -785,7 +785,7 @@ class ReductionModelConstructionTests(unittest.TestCase):
                         instruction.operation.name
                         for instruction in program._instructions
                     ],
-                    ["dot", name],
+                    ["matmul", name],
                 )
 
 
@@ -835,9 +835,9 @@ class ShapeModelConstructionTests(unittest.TestCase):
 
     def test_the_models_build_during_construction(self):
         expected = {
-            "Reshaped": ["dot", "reshape", "transpose"],
-            "Branched": ["dot", "dot", "concat"],
-            "Stacked": ["dot", "dot", "stack"],
+            "Reshaped": ["matmul", "reshape", "transpose"],
+            "Branched": ["matmul", "matmul", "concat"],
+            "Stacked": ["matmul", "matmul", "stack"],
         }
         for model in (self.Reshaped(), self.Branched(), self.Stacked()):
             with self.subTest(model=type(model).__name__):
@@ -1003,8 +1003,8 @@ class SelectionModelConstructionTests(unittest.TestCase):
 
     def test_the_models_build_during_construction(self):
         expected = {
-            "Rectified": ["dot", "maximum"],
-            "Bounded": ["dot", "minimum", "clip"],
+            "Rectified": ["matmul", "maximum"],
+            "Bounded": ["matmul", "minimum", "clip"],
             "Selected": ["where"],
         }
         for model in (self.Rectified(), self.Bounded(), self.Selected()):
@@ -1314,9 +1314,9 @@ class LossModelConstructionTests(unittest.TestCase):
 
     def test_the_models_build_during_construction(self):
         expected = {
-            "Classifier": ["dot", "sigmoid", "binary_cross_entropy"],
-            "Logits": ["dot", "binary_cross_entropy"],
-            "Trainable": ["dot", "sigmoid", "binary_cross_entropy"],
+            "Classifier": ["matmul", "sigmoid", "binary_cross_entropy"],
+            "Logits": ["matmul", "binary_cross_entropy"],
+            "Trainable": ["matmul", "sigmoid", "binary_cross_entropy"],
         }
         for model in (self.Classifier(), self.Logits(), self.Trainable()):
             with self.subTest(model=type(model).__name__):
@@ -1423,7 +1423,7 @@ class LossModelConstructionTests(unittest.TestCase):
                 instruction.operation.name
                 for instruction in program._instructions
             ],
-            ["dot", "cross_entropy"],
+            ["matmul", "cross_entropy"],
         )
         loss = model(ts.Tensor([[1.0, 2.0]]))
         self.assertIsInstance(loss, ts.Variable)
@@ -1513,7 +1513,7 @@ class CrossEntropyModelConstructionTests(unittest.TestCase):
                         instruction.operation.name
                         for instruction in program._instructions
                     ],
-                    ["dot", "cross_entropy"],
+                    ["matmul", "cross_entropy"],
                 )
 
     def test_the_built_programs_replay_what_eager_calculates(self):

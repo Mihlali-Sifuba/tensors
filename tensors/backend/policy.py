@@ -17,6 +17,19 @@ _NUMPY_MATMUL_MIN_WORK = 32
 _CUDA_FUSION_MIN_WORK = 8_192
 
 
+def should_accelerate_elementwise(backend: str, size: int) -> bool:
+    """Apply policy to an already-resolved backend selection.
+
+    This has no say over ``+``, ``-``, ``*`` and ``/``, under any selection.
+    `docs/backends.md` makes where arithmetic runs a property of the
+    selection alone, so those four never consult it. Every operation outside
+    the arithmetic contract consults it as before.
+    """
+    return backend == "cuda" or (
+        backend == "numpy" and size >= _NUMPY_ELEMENTWISE_MIN_SIZE
+    )
+
+
 def _shape_size(shape: tuple[int, ...]) -> int:
     return Shape.from_iterable(shape).size
 

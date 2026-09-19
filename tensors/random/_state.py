@@ -1,17 +1,17 @@
 """MS-Tensors-owned random state and backend-native sampling."""
 
 from __future__ import annotations
-
 import importlib
 import random as _stdlib_random
 import threading
 from array import array
 from typing import Any
-
-from ..backend import BackendName, get_backend
-from ..dtype import DataType
-from ..backend.storage import CudaStorage, NumPyStorage, PythonStorage, Storage
-
+from tensors.backend import BackendName, get_backend
+from tensors.dtype import DataType
+from tensors.backend.cuda.storage import CudaStorage
+from tensors.backend.numpy.storage import NumPyStorage
+from tensors.backend.python.storage import PythonStorage
+from tensors.backend.storage import Storage
 
 _lock = threading.RLock()
 _seed_value: int | None = None
@@ -50,10 +50,7 @@ def _storage(values: Any, dtype: DataType, backend: BackendName) -> Storage:
     if backend == "python":
         return PythonStorage(array(dtype.typecode, values), dtype)
     module = _array_module(backend)
-    contiguous = module.asarray(
-        values,
-        dtype=module.dtype(dtype.name),
-    ).reshape(-1)
+    contiguous = module.asarray(values, dtype=module.dtype(dtype.name)).reshape(-1)
     if backend == "cuda":
         return CudaStorage(contiguous, dtype)
     return NumPyStorage(contiguous, dtype)
@@ -99,12 +96,7 @@ def randint(count: int, low: int, high: int, dtype: DataType) -> Storage:
 
 
 def truncated_normal(
-    count: int,
-    mean: float,
-    stddev: float,
-    lower: float,
-    upper: float,
-    dtype: DataType,
+    count: int, mean: float, stddev: float, lower: float, upper: float, dtype: DataType
 ) -> Storage:
     """Draw a flat bounded normal sample by backend-native rejection."""
     backend = get_backend()
@@ -119,7 +111,6 @@ def truncated_normal(
                 if lower <= candidate <= upper:
                     values.append(candidate)
             return _storage(values, dtype, backend)
-
         module = _array_module(backend)
         values = generator.normal(mean, stddev, size=count)
         mask = (values < lower) | (values > upper)

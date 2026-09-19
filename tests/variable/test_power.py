@@ -14,7 +14,7 @@ class VariablePowerTests(unittest.TestCase):
 
     def test_scalar_exponent_backpropagates_to_the_base(self):
         base = ts.Variable([2.0, 3.0])
-        loss = ts.sum(base ** 3.0)
+        loss = ts.sum(base**3.0)
 
         ts.backward(loss)
 
@@ -24,7 +24,7 @@ class VariablePowerTests(unittest.TestCase):
     def test_tensor_exponent_backpropagates_to_both_inputs(self):
         base = ts.Variable([2.0, 3.0])
         exponent = ts.Variable([2.0, 2.0])
-        loss = ts.sum(base ** exponent)
+        loss = ts.sum(base**exponent)
 
         ts.backward(loss)
 
@@ -35,7 +35,7 @@ class VariablePowerTests(unittest.TestCase):
     def test_broadcast_power_reduces_the_base_gradient_to_its_shape(self):
         base = ts.Variable([[2.0], [3.0]])
         exponent = ts.Variable([[1.0, 2.0, 3.0], [2.0, 1.0, 2.0]])
-        loss = ts.sum(base ** exponent)
+        loss = ts.sum(base**exponent)
 
         ts.backward(loss)
 
@@ -45,7 +45,7 @@ class VariablePowerTests(unittest.TestCase):
 
     def test_reverse_power_backpropagates_to_the_exponent(self):
         exponent = ts.Variable([2.0, 3.0])
-        loss = ts.sum(2.0 ** exponent)
+        loss = ts.sum(2.0**exponent)
 
         ts.backward(loss)
 
@@ -55,7 +55,7 @@ class VariablePowerTests(unittest.TestCase):
     def test_zero_base_has_zero_gradient_for_positive_exponents(self):
         exponent = ts.Variable([0.5, 1.0, 2.0])
 
-        result = 0.0 ** exponent
+        result = 0.0**exponent
         gradient = ts.grad(result, exponent)
 
         self.assertEqual(result.data.tolist(), [0.0, 0.0, 0.0])
@@ -64,7 +64,7 @@ class VariablePowerTests(unittest.TestCase):
     def test_zero_base_exponent_gradient_can_be_differentiated(self):
         exponent = ts.Variable([0.5, 1.0, 2.0])
 
-        first = ts.grad(0.0 ** exponent, exponent, create_graph=True)
+        first = ts.grad(0.0**exponent, exponent, create_graph=True)
         second = ts.grad(
             first,
             exponent,
@@ -78,20 +78,28 @@ class VariablePowerTests(unittest.TestCase):
         base = ts.Tensor([0.0, 0.0])
         exponent = ts.Variable([0.5, 2.0])
 
-        gradient = ts.grad(base ** exponent, exponent)
+        gradient = ts.grad(base**exponent, exponent)
 
         self.assertEqual(gradient.tolist(), [0.0, 0.0])
 
-    def test_zero_base_rejects_a_trainable_zero_exponent(self):
+    def test_a_zero_base_with_a_zero_exponent_gives_a_nan_exponent_gradient(self):
+        """Section 12.7.2, the ``x = 0, y = 0`` row.
+
+        This test previously required ``ValueError``. The derivative does not
+        exist — ``f(0, y)`` is 1 at ``y = 0`` and 0 for every ``y > 0``, so it
+        is discontinuous there — and rule G2 records a non-existent derivative
+        as NaN rather than raising.
+        """
         exponent = ts.Variable([0.0])
 
-        with self.assertRaisesRegex(ValueError, "strictly positive"):
-            ts.grad(0.0 ** exponent, exponent)
+        gradient = ts.grad(0.0**exponent, exponent)
+
+        self.assertTrue(math.isnan(gradient.tolist()[0]), gradient.tolist())
 
     def test_zero_scalar_exponent_has_zero_gradient_at_zero(self):
         base = ts.Variable([0.0])
 
-        gradient = ts.grad(base ** 0.0, base)
+        gradient = ts.grad(base**0.0, base)
 
         self.assertEqual(gradient.tolist(), [0.0])
 
@@ -99,7 +107,7 @@ class VariablePowerTests(unittest.TestCase):
         base = ts.Variable([-2.0])
         exponent = ts.Tensor([2.0])
 
-        gradient = ts.grad(base ** exponent, base)
+        gradient = ts.grad(base**exponent, base)
 
         self.assertEqual(gradient.tolist(), [-4.0])
 
@@ -107,7 +115,7 @@ class VariablePowerTests(unittest.TestCase):
         base = ts.Variable([-2.0])
         exponent = ts.Tensor([2.0])
 
-        first = ts.grad(base ** exponent, base, create_graph=True)
+        first = ts.grad(base**exponent, base, create_graph=True)
         second = ts.grad(first, base)
 
         self.assertEqual(first.data.tolist(), [-4.0])
@@ -117,7 +125,7 @@ class VariablePowerTests(unittest.TestCase):
         base = ts.Variable([0.0])
         exponent = ts.Tensor([0.0])
 
-        gradient = ts.grad(base ** exponent, base)
+        gradient = ts.grad(base**exponent, base)
 
         self.assertEqual(gradient.tolist(), [0.0])
 
@@ -125,7 +133,7 @@ class VariablePowerTests(unittest.TestCase):
         base = ts.Variable([0.0])
         exponent = ts.Tensor([0.0])
 
-        first = ts.grad(base ** exponent, base, create_graph=True)
+        first = ts.grad(base**exponent, base, create_graph=True)
         second = ts.grad(first, base)
 
         self.assertEqual(first.data.tolist(), [0.0])

@@ -344,7 +344,7 @@ def execute_fused_backward(
         variable = variables[slot]
         gradient = Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
         if gradient.shape != variable.shape:
-            from ...ops._utils import sum_to_shape
+            from ...operations._gradient_shaping import sum_to_shape
 
             gradient = sum_to_shape(gradient, variable.shape)
         if gradient.dtype != variable.dtype:

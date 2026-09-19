@@ -331,26 +331,34 @@ python -m mypy
 
 ## Run the benchmarks
 
-A dependency-free benchmark suite tracks operations from raw provider kernels
-through storage, the public API, graph tracing, automatic differentiation, and
-complete training phases. The compact `core` suite compares all available
-numerical backends by default. Run its short development configuration with:
+A dependency-free benchmark suite measures each operation at several depths of
+the execution stack — the raw provider call, the guarded kernel, dispatch, the
+public operation, an eager `Variable`, and a replayed graph — so that overhead
+can be attributed to a layer rather than merely observed. One workload
+definition runs on every installed backend.
 
 ```powershell
-python -m benchmarks --quick
+python -m benchmarks --profile quick
 ```
 
-The core cases are intentionally small regression baselines. They are useful
-for tracking latency and framework overhead, but they should not be used alone
-to rank NumPy and CUDA: small operations usually favour NumPy because CUDA must
-launch and complete device work. Use the scaling, convolution, graph, and optimizer suites
-to find the crossover for a particular machine and workload.
+A profile says how much of the matrix to run: `quick` for a fast check after
+changing something, `standard` for the full matrix, `comprehensive` for a
+figure worth quoting. Narrow an investigation with `--suite` and `--match`, and
+write a machine-readable report with `--output`:
 
-Use `python -m benchmarks` for a longer core run, or target an attribution suite
-such as `python -m benchmarks --backend accelerated --suite scaling`. Write a
-machine-readable report with `--output benchmark-results.json`. See the
-[`benchmarks` guide](benchmarks/README.md) for the full case matrix, backend
-eligibility, and measurement methodology.
+```powershell
+python -m benchmarks --suite arithmetic --match "add/float64" --backend cuda
+python -m benchmarks --profile standard --output benchmark-results.json
+```
+
+Quick numbers are not comparable with standard ones: three short rounds cannot
+separate a small regression from scheduling noise. Small operations also tend
+to favour NumPy over CUDA, which must launch and complete device work, so read
+a size curve rather than a single point before concluding anything about a
+crossover.
+
+See the [`benchmarks` guide](benchmarks/README.md) for the suite layout,
+profiles, measurement methodology, and result schema.
 
 ## Project structure
 
@@ -360,9 +368,10 @@ tensors/
 │   ├── backend/           # backend selection and optional kernels
 │   │   └── storage/       # Python, NumPy, and CUDA native storage
 │   ├── graph/             # computation graphs and automatic differentiation
-│   ├── linalg/            # linear-algebra operations
-│   ├── math/              # reductions, activations, losses, and shape operations
-│   ├── ops/               # primitive differentiable operations
+│   ├── operations/        # every operation, grouped by semantic domain
+│   ├── linalg/            # facade over operations.linalg
+│   ├── math/              # facade over the mathematical domains
+│   ├── ops/               # facade over the Operation contract and primitives
 │   ├── optim/             # SGD, Adam, and RMSprop
 │   ├── init/              # functional parameter initializers
 │   ├── random/            # backend-native RNG state and generation

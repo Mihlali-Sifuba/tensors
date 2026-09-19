@@ -1,72 +1,47 @@
-"""Operations — the Operation contract and the concrete operations.
+"""The operation contract and the primitive arithmetic operations.
 
-:class:`Operation` is defined here because it is the contract every concrete
-mathematical operation in this package implements. The graph package
-references an operation; it does not define what one is.
-
-
-Individual op classes:
-    Add, Sub, Mul, Div, Neg, Slice
-
-The ``Ops`` namespace provides the old interface for direct use::
-
-    from tensors import Ops
-    result = Ops.add(a, b)          # evaluates Add().forward(a, b)
+A convenience namespace over :mod:`tensors.operations`, kept because
+:class:`Operation` is the documented extension point for a custom operation.
+The operations themselves are defined in :mod:`tensors.operations`.
 """
 
-from __future__ import annotations
-
-from typing import Tuple, Union
-
-from .operation import Operation
-from .add import Add, add
-from .sub import Sub, subtract
-from .mul import Mul, multiply
-from .div import Div, divide, divide_scalar
-from .neg import Neg, negate
-from .slice import Slice
-from .pow import Pow, pow, power, power_scalar_base
-from .cast import Cast
-
-
-from ..tensor import Tensor
-
-
-class Ops:
-    """Operation namespace — mirrors the old static-method interface.
-
-    Each arithmetic/delegate method forwards to the corresponding op class's
-    forward method. Reshape remains here temporarily as a tensor-structure
-    compatibility helper.
-    """
-
-    # -- Arithmetic (delegates to a configuration-free invocation) -----
-
-    add = staticmethod(add)
-    subtract = staticmethod(subtract)
-    multiply = staticmethod(multiply)
-    divide = staticmethod(divide)
-    pow = staticmethod(power)
-    neg = staticmethod(negate)
+from tensors.operations.arithmetic import (
+    Add,
+    Div,
+    Mul,
+    Neg,
+    Pow,
+    Sub,
+    add,
+    divide,
+    divide_scalar,
+    multiply,
+    negate,
+    pow,
+    power,
+    power_scalar_base,
+    subtract,
+)
+from tensors.operations.base import Operation
+from tensors.operations.manipulation import Cast, Slice
 
 __all__ = [
+    "Add",
+    "Cast",
+    "Div",
+    "Mul",
+    "Neg",
     "Operation",
+    "Pow",
+    "Slice",
+    "Sub",
     "add",
-    "subtract",
-    "multiply",
     "divide",
     "divide_scalar",
+    "multiply",
     "negate",
+    "pow",
     "power",
     "power_scalar_base",
-    "Add",
-    "Sub",
-    "Mul",
-    "Div",
-    "Pow",
-    "Neg",
-    "Slice",
-    "Cast",
-    "pow",
-    "Ops",
+    "subtract",
 ]

@@ -74,74 +74,56 @@ should not need to import internal operation or graph-node classes.
 ```text
 tensors/
 ├── __init__.py            # root public facade
-├── backend/               # backend selection and optional kernels
+├── backend/               # backend selection, dispatch, and kernels
 │   ├── __init__.py        # backend facade and re-exports
 │   ├── types.py           # backend and operation type aliases
 │   ├── config.py          # selection, availability, and configuration
 │   ├── policy.py          # workload-size policy for acceleration
-│   ├── loading.py         # provider-module and kernel loading
-│   ├── dispatch/          # execute_* dispatch entry points
+│   ├── loading.py         # lazy loading of a backend's kernel package
+│   ├── storage.py         # the Storage contract every backend implements
+│   ├── conversion.py      # conversion between backend representations
+│   ├── dispatch/          # one execute_* entry point per operation
 │   │   ├── __init__.py    # dispatch facade
-│   │   ├── elementwise.py
-│   │   ├── creation.py
-│   │   ├── manipulation.py
-│   │   ├── reductions.py
-│   │   ├── linalg.py
-│   │   ├── convolution.py
-│   │   ├── fusion.py
-│   │   ├── nn.py
-│   │   └── optim.py
-│   ├── kernels/           # shared NumPy/CuPy kernel implementation
-│   │   ├── __init__.py    # internal kernel facade
-│   │   ├── core.py        # Tensor/Storage to native-array boundary
-│   │   ├── creation.py    # arrays built from parameters
-│   │   ├── manipulation.py# shape, layout, and indexing
-│   │   ├── elementwise/   # elementwise kernels and their VJPs
-│   │   │   ├── binary_ops.py
-│   │   │   ├── unary_ops.py
-│   │   │   ├── comparison_ops.py
-│   │   │   ├── selection.py
-│   │   │   ├── extrema.py
-│   │   │   └── clipping.py
-│   │   ├── fusion/        # fused-chain compilation and execution
-│   │   │   ├── expressions.py  # step, operand, and derivative expressions
-│   │   │   ├── source.py       # CUDA source assembly
-│   │   │   ├── errors.py       # domain guards and error reporting
-│   │   │   ├── common.py       # operand marshalling for both passes
-│   │   │   ├── forward.py
-│   │   │   └── backward.py
-│   │   ├── reductions/    # reductions and stable summation
-│   │   │   ├── stability.py    # summation guards, scaled accumulation
-│   │   │   ├── reduction_ops.py
-│   │   │   ├── extrema.py      # index-of-extremum reductions
-│   │   │   ├── shape.py        # summation down to a broadcast shape
-│   │   │   └── logsumexp_ops.py # log-sum-exp and its shared terms
-│   │   ├── linalg/        # matrix and vector products
-│   │   │   ├── matmul_ops.py
-│   │   │   └── outer_ops.py
-│   │   ├── nn/            # normalization, probability, and losses
-│   │   │   ├── normalization_ops.py
-│   │   │   ├── losses.py
-│   │   │   └── validation.py
-│   │   ├── conv/          # grouped cross-correlation
-│   │   │   ├── common.py       # padding, tiling, columns, storage
-│   │   │   ├── forward.py
-│   │   │   └── backward.py
-│   │   └── optim/         # optimizer updates
-│   │       ├── batching.py     # workspace reuse and parameter batching
-│   │       ├── cuda.py         # batched CUDA optimizer kernels
-│   │       ├── sgd.py
-│   │       ├── adam.py
-│   │       └── rmsprop.py
-│   ├── numpy.py
-│   ├── cuda.py
-│   └── storage/           # internal native storage implementations
-│       ├── __init__.py
-│       ├── contract.py
-│       ├── conversion.py
-│       ├── python.py
-│       ├── numpy.py
-│       └── cuda.py
+│   │   ├── arithmetic/    # add.py, subtract.py, multiply.py, ...
+│   │   ├── elementwise/   # exp.py, exp_gradient.py, clip.py, where.py, ...
+│   │   ├── creation/      # arange.py, eye.py, full.py, linspace.py, ...
+│   │   ├── manipulation/  # cast.py, concat.py, slice.py, transpose.py, ...
+│   │   ├── reductions/    # reduce_sum.py, reduce_sum_gradient.py, ...
+│   │   ├── linalg/        # matmul.py, matmul_gradient.py, outer.py, ...
+│   │   ├── convolution/   # convolution.py, convolution_gradient.py
+│   │   ├── fusion/        # fused_elementwise.py and its VJP
+│   │   ├── nn/            # softmax.py, cross_entropy.py, ...
+│   │   └── optim/         # sgd_update.py, adam_update.py, ...
+│   ├── python/            # the reference backend
+│   │   ├── storage.py     # array.array storage
+│   │   └── kernels/       # one module per operation, by domain
+│   │       ├── arithmetic/    # add.py, subtract.py, ...
+│   │       ├── elementwise/   # exp.py, exp_gradient.py, ...
+│   │       ├── creation/
+│   │       ├── manipulation/
+│   │       ├── reductions/
+│   │       ├── linalg/
+│   │       ├── convolution/
+│   │       ├── fusion/
+│   │       ├── nn/            # plus _normalization.py, shared axis helpers
+│   │       └── optim/
+│   ├── numpy/             # the NumPy backend
+│   │   ├── storage.py     # numpy.ndarray storage
+│   │   ├── conversion.py  # the Tensor/Storage to ndarray boundary
+│   │   └── kernels/       # the same domains, implemented with NumPy
+│   └── cuda/              # the CUDA backend
+│       ├── storage.py     # device-resident cupy.ndarray storage
+│       ├── conversion.py  # the Tensor/Storage to device-array boundary
+│       └── kernels/       # the same domains, implemented with CuPy
+│           ├── fusion/        # generated-kernel compilation and execution
+│           │   ├── expressions.py  # step, operand, derivative expressions
+│           │   ├── source.py       # CUDA source assembly
+│           │   ├── errors.py       # domain guards and error reporting
+│           │   ├── common.py       # operand marshalling for both passes
+│           │   ├── fused_elementwise.py
+│           │   └── fused_elementwise_backward.py
+│           ├── convolution/   # common.py holds padding, tiling, columns
+│           └── optim/         # batch_kernels.py holds the fused updates
 ├── _typing.py             # shared public type aliases
 ├── shape.py               # immutable logical tensor extents
 ├── strides.py             # immutable physical storage movement
@@ -157,17 +139,33 @@ tensors/
 │   ├── indexing.py
 │   ├── lists.py
 │   └── slicing.py
-├── ops/                   # the Operation contract and its implementations
-│   ├── operation.py       # the Operation abstract base class
-│   ├── add.py, sub.py, mul.py, div.py, neg.py
-│   └── pow.py, slice.py, cast.py
-├── linalg/                # linear algebra
-│   ├── dot.py
-│   ├── matmul.py
-│   ├── norm.py
-│   ├── outer.py
-│   └── transpose.py
-├── math/                  # functions, reductions, activations, and losses
+├── operations/            # the semantic operation hierarchy (canonical)
+│   ├── base.py            # the Operation abstract base class, UNARY_DEMAND
+│   ├── _gradient_shaping.py  # cross-domain VJP shaping operations
+│   ├── arithmetic/        # add.py, subtract.py, multiply.py, divide.py,
+│   │                      # negate.py, power.py
+│   ├── elementary/        # abs.py, sign.py, sqrt.py, exp.py, log.py
+│   ├── trigonometric/     # sin.py, cos.py, tan.py, arcsin.py, arccos.py,
+│   │                      # arctan.py
+│   ├── hyperbolic/        # sinh.py, cosh.py, tanh.py, arcsinh.py,
+│   │                      # arccosh.py, arctanh.py
+│   ├── activations/       # relu.py, sigmoid.py, softplus.py
+│   ├── comparison/        # equal.py, not_equal.py, less.py, less_equal.py,
+│   │                      # greater.py, greater_equal.py, _operands.py
+│   ├── selection/         # minimum.py, maximum.py, clip.py, where.py,
+│   │                      # _extremum.py
+│   ├── reductions/        # sum.py, mean.py, prod.py, min.py, max.py,
+│   │                      # variance.py, std.py, norm.py, logsumexp.py,
+│   │                      # argmin.py, argmax.py, _arg_extremum.py
+│   ├── manipulation/      # reshape.py, transpose.py, concat.py, stack.py,
+│   │                      # slice.py, cast.py
+│   ├── linalg/            # matmul.py, outer.py
+│   ├── normalization/     # softmax.py, log_softmax.py
+│   ├── losses/            # binary_cross_entropy.py, cross_entropy.py
+│   └── convolution/       # convolution.py
+├── ops/                   # facade: the Operation contract and primitives
+├── linalg/                # facade: linear algebra
+├── math/                  # facade: functions, reductions, activations, losses
 ├── optim/                 # parameter-update algorithms
 │   ├── optimizer.py
 │   ├── sgd.py
@@ -210,9 +208,28 @@ ts.math.exp(x)
 ts.math.mean(x)
 ```
 
-Primitive operation classes remain available through `ts.ops` for advanced
-inspection, and the compatibility namespace exposes calls such as
-`ts.Ops.add(x, y)`.
+`tensors.operations` is where every operation is defined, grouped by what it
+means. `ts.math`, `ts.linalg`, and `ts.ops` are convenience namespaces over
+it: they re-export selected names and define nothing of their own, so
+`ts.math.exp` and `tensors.operations.elementary.exp` are the same object.
+Import from `tensors.operations` when the semantic domain matters, and from a
+facade when the shorter name reads better.
+
+```python
+from tensors.operations.linalg import matmul
+from tensors.operations.reductions import mean
+from tensors.ops import Operation      # defined in tensors.operations.base
+```
+
+The `Ops` static-method namespace has been removed. The functions it wrapped
+are root-level calls:
+
+```python
+ts.add(x, y)        # was ts.Ops.add(x, y)
+ts.subtract(x, y)
+ts.multiply(x, y)
+ts.divide(x, y)
+```
 
 Common math functions are also root aliases for concise model code:
 
@@ -224,41 +241,42 @@ ts.mean(x)
 
 The folders have deliberately narrow responsibilities:
 
-- `backend` owns process and context-local selection, cached internal kernel
-  dispatch, provider-neutral array kernels, and optional NumPy/CUDA entry
-  points. Its package module is a facade: `types` names the backends and their
-  operations, `config` selects one and reports availability, `policy` decides
-  when a workload is worth accelerating, `loading` resolves a kernel for the
-  selected backend, and `dispatch` holds the `execute_*` entry points, grouped
-  by execution domain so each module sits beside the kernel family it reaches.
-  A dispatch module reads the policy and the loader; it never imports a
-  sibling, and returning `None` from an `execute_*` function still means the
-  caller should run its own Python fallback.
-- `backend.kernels` owns the provider-neutral NumPy/CuPy kernels, split by
-  family. The larger domains are packages whose modules each hold one
-  responsibility; `core`, `creation`, and `manipulation` stay single modules
-  because they are already cohesive. `core` is the only shared layer: it moves
-  values between Tensor/Storage and native arrays and selects the array module
-  for the active backend. Every family depends on `core`; beyond that, `linalg`
-  reuses `reductions.stability` and `nn` reuses `reductions.reduction` and
-  `reductions.logsumexp`. Nothing in `reductions` depends on `nn`.
-  Within a family package the lower modules never import the upper ones:
-  fusion's `expressions`, `source`, `errors`, and `common` are independent of
-  `forward` and `backward`, and optim's `batching` and `cuda` are independent
-  of `sgd`, `adam`, and `rmsprop`. The convolution package is named `conv` so
-  that the exported `convolution` kernel does not shadow a same-named module.
-  `numpy.py` and `cuda.py` import the kernel surface from the `kernels` facade,
-  which is what the backend loader resolves names against; they never import an
-  implementation module directly.
+- `backend` owns process and context-local selection, per-operation dispatch,
+  and one kernel package per backend. Its package module is a facade: `types`
+  names the backends and their operations, `config` selects one and reports
+  availability, `policy` decides when a workload is worth accelerating,
+  `loading` resolves a kernel package for the selected backend, `storage`
+  states the contract every backend's storage implements, and `conversion`
+  moves values between those representations.
+- `backend.dispatch` holds one module per operation, grouped into domain
+  packages. A dispatch module reads the policy, calls the selected backend's
+  kernel, and runs the Python reference itself when either declines, so an
+  `execute_*` function returns a result rather than a decision. It never
+  imports a sibling dispatch module. The two exceptions that may still return
+  `None` are optional optimizations whose alternative is ordinary execution
+  rather than a reference kernel: `fusion` and the batched `optim` updates.
+- `backend.python`, `backend.numpy`, and `backend.cuda` each own one backend
+  end to end: its `storage`, its array boundary (`conversion`, for the two
+  array backends), and a `kernels` package holding one module per operation
+  under the same domain names dispatch uses. The three implementations are
+  deliberately independent — NumPy and CUDA do not share a numerical body, and
+  neither imports the other — so "where is this operation implemented for this
+  backend" has one answer per backend. A backend's `kernels/__init__.py`
+  re-exports every kernel under the flat name the loader resolves, which is
+  the only name dispatch knows.
+- Within a backend, a module is shared only where several operations genuinely
+  need the same helper: the Python backend's `nn/_normalization.py` holds the
+  axis traversal and softmax components its softmax-family kernels share, and
+  the CUDA backend's `fusion` and `convolution` packages hold the source
+  assembly, domain guards, and tiling their kernels build on. These never
+  import the operation modules above them.
+- The Python backend is the reference implementation: it defines shape, dtype,
+  error, and differentiation semantics, and it evaluates them in ordinary
+  Python. It never calls a public operation class to produce its own result.
 - No kernels package exposes a submodule and an exported kernel under the same
-  name. Where an implementation module would have collided with the kernel it
-  defines, the module carries an `_ops` suffix, so `linalg.matmul` is the
-  kernel function and `linalg.matmul_ops` is the module holding it. `conv` is
-  named for the same reason. Module names that do not collide keep their plain
-  form.
-- `backend.storage` owns the internal Python, NumPy, and CUDA representations
-  and their lazy conversion cache. Storage classes are not a second public
-  tensor API.
+  name. Where a module would collide with a Python builtin or the kernel it
+  defines, the module and kernel take a qualified name together, so
+  `manipulation/cast_tensor.py` defines `cast_tensor` for every backend.
 - `Shape` owns logical dimensions, rank, size, tuple-like slicing of its
   dimension values (for example, `Shape(2, 3, 4)[1:]`), and pure
   broadcast-shape inference. `Strides` owns physical traversal metadata and
@@ -268,11 +286,33 @@ The folders have deliberately narrow responsibilities:
   [Tensor memory model](memory-model.md).
 - `creation` provides public constructors for mathematically defined tensor
   values, including zeros, ones, ranges, and identity matrices.
-- `ops` owns `Operation`, the abstract contract every concrete mathematical
-  operation implements, plus the primitive differentiable operations such as
-  arithmetic, powers, slicing, and casting. The graph package references an
-  operation through `OperationNode` and `Instruction`; it does not define what
-  an operation is.
+- `operations` owns every computation the library exposes, grouped by what
+  the operation *means* rather than by how a backend executes it or by which
+  Python syntax reaches it. `base.py` holds `Operation`, the abstract contract
+  every concrete operation implements, and `UNARY_DEMAND`. The graph package
+  references an operation through `OperationNode` and `Instruction`; it does
+  not define what an operation is.
+
+  An operation module owns its input and configuration validation, its output
+  shape and dtype, the dispatch call that evaluates it, the storage it wraps,
+  and its reverse-mode and higher-order derivative rules. It never names a
+  concrete backend: choosing one is dispatch's job.
+
+  A semantic domain and a backend execution domain are different
+  classifications and need not share names. `trigonometric`, `hyperbolic`,
+  `activations`, and `selection` all dispatch to backend *elementwise*
+  kernels; the semantic folder says what the operation means, the backend
+  folder says how it runs.
+
+  Two modules start with an underscore because they are shared structure
+  rather than operations: `_gradient_shaping.py` holds the small graph
+  operations a VJP needs to broadcast a gradient back to an operand's shape,
+  and each `_extremum.py`, `_arg_extremum.py`, and `_operands.py` holds what a
+  pair or family of neighbouring operations genuinely shares.
+- `ops`, `linalg`, and `math` are public facade packages. Each is a single
+  `__init__.py` that re-exports names from `tensors.operations`; none of them
+  holds an implementation. They exist because they are documented, familiar
+  user-facing namespaces, not as compatibility adapters.
 - `utils/coordinates.py` converts between logical coordinates and canonical
   row-major logical linear indices using `Shape` and canonical contiguous
   strides derived from that `Shape`; arbitrary Tensor strides and `offset`
@@ -284,11 +324,11 @@ The folders have deliberately narrow responsibilities:
   Tensor broadcasting. Pure broadcast-shape inference lives on `Shape`, while
   stride construction lives on `Strides`. The `utils` package is not
   re-exported from the root.
-- `linalg` contains linear-algebra operations such as dot products and matrix
-  multiplication.
-- `math` contains all mathematical functions, including reductions and
-  activation functions. It remains flat rather than separating activations or
-  reductions into extra namespaces.
+- `matmul` is one operation with two public names. `ts.matmul` and `ts.dot`
+  both contract the final axes with matrix-product semantics and broadcast any
+  leading batch axes; `dot` is an entry point to the same `MatMul` class, not
+  a second contraction. The class is named for what it does, and matches the
+  vocabulary dispatch and the kernels already use.
 - `graph` owns the recorded structure, tracing state, and the public `Graph`
   abstraction; its `computation` subpackage owns the executable,
   differentiable form of that structure. A recorded graph

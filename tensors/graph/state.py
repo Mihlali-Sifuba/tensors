@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from ._weak_registry import WeakRegistry
 from .edge import Edge
 from .node import Node, OperationNode, VariableNode
-from ..ops.operation import Operation
+from ..operations.base import Operation
 
 if TYPE_CHECKING:
     from ..variable import Variable

@@ -562,22 +562,226 @@ upstream gradient through the sequence is calculated regardless, because
 reverse propagation needs it even when it is never published. Intermediate
 `.data` and `.grad` values are still published, so fusion changes execution
 cost rather than graph semantics.
-Native backend VJPs are also used for supported reductions and elementwise
-operations; numerically delicate inputs return to the stable Python rules.
+
+### Backend execution during differentiation
+
+Differentiation is execution. A reverse pass runs kernels exactly as a forward
+pass does, so it is governed by the same rules, and
+[Numerical backends](backends.md) is the authoritative source for them. They
+are not restated here.
+
+> **Verified current behaviour, outside the arithmetic contract.** Native
+> backend VJPs are used for supported reductions and elementwise operations,
+> and numerically delicate inputs return to the stable Python rules. A reverse
+> pass for those operations may therefore execute on the Python backend even
+> when NumPy or CUDA was selected.
+
+> **Approved target contract, implemented for `+`, `-`, `*` and `/`.** Under
+> **explicit** backend selection, a supported operation's VJP must execute on
+> the selected backend. If it cannot execute conformingly there, it must raise
+> a clear unsupported-operation error. It must not silently run its VJP
+> through the Python backend. Under **automatic** selection the resolved
+> backend is treated the same way, because `"auto"` resolves once and then
+> names a backend like any other selection.
+>
+> The four arithmetic VJPs meet this at every size. Their computations are
+> `sum_to_shape` for `+` and `-`, a negation for the right operand of `-`,
+> `sum_products_to_shape` for `*`, and ordinary division for `/`; each
+> dispatches through an entry point that consults no workload policy and
+> raises `BackendOperationUnsupportedError` rather than answering with another
+> backend's kernel.
+>
+> A VJP outside those four still does not. Operations such as `power`,
+> `where`, the losses and the extrema reduce their broadcast gradients through
+> `execute_sum_to_shape`, which keeps the workload threshold and the reference
+> fallback. Closing that means extending the execution requirement past
+> arithmetic, which is separate work, and is why two entry points exist for
+> the same reduction.
+>
+> **Power is a partial case, and the distinction matters.** Its two gradient
+> *kernels* now dispatch strictly — no threshold, no fallback, no
+> operand-reading decline — under
+> [arithmetic semantics G6](arithmetic-semantics.md#1271-rules). The broadcast
+> reduction that shapes their results does not, because it is the shared
+> `sum_to_shape` above. So a four-element power backward pass under explicit
+> NumPy returns `NumPyStorage` without broadcasting and `PythonStorage` with
+> it. The gradient's *numerical* contract is met in both cases; only its
+> execution location differs, and the two requirements are separate.
+
+> **Consequence worth knowing.** The array `sum_to_shape` and
+> `sum_products_to_shape` kernels decline when a gradient contains an infinity
+> or a NaN, and `sum_to_shape` also declines on subnormals, because their
+> scaled accumulation cannot carry those values. A decline used to mean a
+> quiet trip to the Python reference; for the arithmetic VJPs it now means an
+> error. So a reverse pass through `+`, `-` or `*` whose upstream gradient has
+> already become non-finite raises under NumPy or CUDA, where it previously
+> returned a non-finite gradient computed in Python. Verified on both
+> backends. Diverging training is the obvious way to meet this. Teaching those
+> kernels to handle non-finite operands natively would remove it without
+> weakening the contract, and is not part of this change.
+
+> **Exponentiation.** The derivatives of `**` are specified in
+> [arithmetic semantics section 12.7](arithmetic-semantics.md#127-differentiation-d7).
+> Three requirements bear on this document. **All three are implemented (D7);
+> the descriptions below of what happens "today" are historical.**
+>
+> - **The two gradients are independent.** A base gradient that exists is
+>   returned even when the exponent gradient does not. `(-2.0) ** 3.0` yields a
+>   base gradient of `12.0` and an exponent gradient of `NaN`. Before D7 the
+>   whole backward pass raised and both were lost.
+> - **Differentiation does not raise on a numerical condition**, and no backend
+>   may synchronise with the host to detect one. An undefined derivative is
+>   `NaN`; an approved one-sided infinite slope is `±inf`, and that convention
+>   is confined to the single region that names it.
+> - **Gradients execute on the selected backend** at every size, carrying each
+>   operand's own declared dtype and reduced to that operand's shape.
+>
+> The fused CUDA backward used to raise `"power derivative is undefined at a
+> zero base"` (error code 14), which would have made the fused and unfused
+> passes disagree — the same failure already corrected for division by zero.
+> **Code 14 was removed with D7**, together with power's forward codes 8 and 9,
+> and the generated kernel now carries the whole region table instead.
+
+Two kinds of fallback are easy to confuse, and only one of them is a backend
+fallback:
+
+| Fallback | Stays on the selected backend? | Permitted under explicit selection? |
+| --- | --- | --- |
+| **Plan-level** — a fused run executes as ordinary unfused operations | yes | yes |
+| **Backend-level** — an operation executes on a different backend | no | no; it must raise instead |
+
+Plan-level fallback is the case described above, where a requested derivative
+is one the compact fused form cannot express and the group reverts to ordinary
+operation VJP execution. That changes the execution plan, not the executor,
+and it remains available under explicit selection — provided it satisfies the
+equivalence requirement below.
+
+Backend-level fallback is what explicit selection forbids. A reverse pass that
+quietly reaches the Python kernel is indistinguishable, from the caller's side,
+from one that ran where they asked.
+
+### Numerical equivalence under optimisation
+
+> **Status: implemented for the CUDA fusion kernels.**
+
+An optimisation must preserve the **specified** result of the original
+sequence of typed operations. Fusion may remove intermediate allocations and
+memory traffic; it may not change what the function computes.
+
+What "preserve" requires depends on what the specification determines, and the
+distinction matters now that exponentiation is specified:
+
+| operation | requirement on a fused or relocated execution |
+| --- | --- |
+| `+`, `-`, `*`, `/` | **Bitwise identical.** IEEE 754 requires these to be correctly rounded, so the result is uniquely determined. Unchanged by this section. |
+| integer `**` | **Bitwise identical.** Exact fixed-width arithmetic ([Arithmetic semantics §12.4.1](arithmetic-semantics.md#1241-non-negative-exponents-wrap-d3)). |
+| floating `**` | The accuracy contract in [Arithmetic semantics §12.6](arithmetic-semantics.md#126-accuracy): IEEE special values exactly, and every other result within the stated bound of the correctly rounded value. **Bitwise equality is not required and must not be inferred.** |
+
+Whatever the operation, fusion must preserve **the mathematical operation
+performed, the declared dtype, the exceptional-value semantics including the
+signs of zeros and infinities, and every rounding boundary the unfused form
+has**. A fused kernel must not introduce an additional numerical operation,
+omit one, or reassociate operations that were not authorised to be
+reassociated.
+
+Concretely, for an expression evaluated in dtype `d`, the unfused form rounds
+at every operation:
+
+```text
+t = round_d(a * b)
+r = round_d(t + c)
+```
+
+A fused kernel must preserve **both** rounding boundaries. It must not
+contract the pair into a fused multiply-add that rounds once, because that
+changes the result. On CUDA this is not hypothetical: NVRTC contracts `a*b+c`
+into an FMA by default, and compiling the statement shape the fusion kernels
+emit, without the per-step stores, makes 25.6% of 65536 random `float64`
+triples differ from the two-rounding result.
+
+The fusion kernels are therefore compiled with `--fmad=false`. Measured on
+this toolchain the generated source does not currently contract even without
+it, because every step is written to memory and that makes each intermediate
+observable to the compiler. The option is set so the guarantee follows from
+the compilation rather than from a code-generation detail that no test pins
+down, and it is not claimed to have changed any result.
+
+A second equivalence failure was real. The fused forward kernel tested every
+denominator and raised `ZeroDivisionError`, so an expression returning an
+infinity eagerly raised once compiled. Floating division delivers the IEEE
+result in both forms now.
+
+The same constraint forbids a fused kernel from carrying an intermediate at
+wider precision than the declared dtype, for the reason given in
+[Arithmetic semantics §5.5](arithmetic-semantics.md#55-why-declared-precision-matters).
+
+Two consequences follow. Both are stated **per operation**, against the table
+above, so that neither claims bitwise equality where the specification does not
+provide it:
+
+- **Replay.** A Computation replayed with fusion enabled must produce what the
+  same Computation produces without it: every operation in the replayed graph
+  performs the same mathematical operation, in the same declared dtype, at the
+  same rounding boundaries, and satisfies its own numerical specification on
+  the inputs it actually receives — bit for bit where the table requires it,
+  and with the same exceptional values. Fusion is an execution plan, and a plan
+  does not change the function.
+- **Backend switching.** The same graph replayed on a different backend must
+  likewise satisfy every operation's own specification: identical results for
+  the four arithmetic operations and for integer exponentiation, and for
+  floating exponentiation a result satisfying
+  [§12.6](arithmetic-semantics.md#126-accuracy) with identical special values,
+  signs and dtype. A fused CUDA kernel and an unfused Python execution of one
+  expression are two implementations of one specified function; where that
+  function is not uniquely determined by the standard, they must both be
+  conforming implementations of it rather than bit-for-bit copies of each
+  other.
+
+**Conformance is per operation and does not compose into a graph-level bound.**
+The limits in
+[§12.6.2](arithmetic-semantics.md#1262-the-accuracy-bounds) apply to each
+individual power, evaluated on the inputs that power actually receives. They
+say nothing about the final value of a computation that contains one. In
+
+```python
+t = x ** y
+r = t - c
+```
+
+two conforming backends may compute different `t`, each within the bound. The
+subtraction then meets its own specification exactly, on the inputs it was
+given, and `r` still differs. **That difference is permitted, and later
+operations may amplify it. A graph containing floating-point power has no
+universal graph-level ULP bound under this specification.**
+
+This concerns accuracy alone. It does not license a fused kernel to reassociate
+operations, to contract them, or to omit one: the requirements above on the
+operation sequence, the declared dtypes and the rounding boundaries are
+unchanged, as are the bitwise requirements for the correctly rounded arithmetic
+operations and for integer exponentiation.
+
+If a relaxed numerical mode permitting contraction or reassociation is wanted
+later, it must be an explicit, separately documented execution mode. It is not
+introduced now.
+
+The arithmetic rules themselves — rounding, overflow, dtype, promotion — are
+specified once, in [Arithmetic semantics](arithmetic-semantics.md), and are
+not restated here.
 
 Call `Computation.release()` when a long-lived Computation object no longer
 needs its output or plan. A released Computation cannot be reused.
 
 ## The operation contract
 
-`ts.ops.Operation` is an abstract base class. It lives in the operations
-subsystem because it is the contract every concrete mathematical operation
-implements; the graph package references an operation rather than defining
-what one is. A concrete operation inherits from it and implements `forward()`
-and `backward()`:
+`Operation` is an abstract base class defined in
+`tensors.operations.base`, and re-exported as `ts.ops.Operation`. It lives in
+the operations subsystem because it is the contract every concrete
+mathematical operation implements; the graph package references an operation
+rather than defining what one is. A concrete operation inherits from it and
+implements `forward()` and `backward()`:
 
 ```python
-from tensors.ops import Operation
+from tensors.operations import Operation      # or: from tensors.ops import Operation
 
 
 class Identity(Operation):

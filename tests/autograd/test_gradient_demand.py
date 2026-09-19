@@ -1,18 +1,19 @@
 """Reverse gradient demand belongs to Computation, not to Operation."""
 
+import math
 import unittest
 
 import tensors as ts
 from tensors.graph import Computation
 from tensors.ops import Operation
 from tensors.graph.state import reset_graph_state
-from tensors.math.binary_cross_entropy import BinaryCrossEntropy
-from tensors.math.cross_entropy import CrossEntropy
-from tensors.math.elementwise_extrema import Maximum, Minimum
-from tensors.math.where import Where
+from tensors.operations.losses.binary_cross_entropy import BinaryCrossEntropy
+from tensors.operations.losses.cross_entropy import CrossEntropy
+from tensors.operations.selection import Maximum, Minimum
+from tensors.operations.selection.where import Where
 from tensors.ops import Add, Div, Mul, Pow, Sub
-from tensors.ops.div import DivisionDenominatorGradient
-from tensors.ops.pow import PowerBaseGradient, PowerExponentGradient
+from tensors.operations.arithmetic.divide import DivisionDenominatorGradient
+from tensors.operations.arithmetic.power import PowerBaseGradient, PowerExponentGradient
 
 
 class _Recorder:
@@ -90,7 +91,7 @@ class OperationConfigurationTests(unittest.TestCase):
         self.assertGreater(seen, 40)
 
     def test_configured_operations_keep_their_mathematical_settings(self):
-        from tensors.math.sum import Sum
+        from tensors.operations.reductions.sum import Sum
 
         operation = Sum(axis=(1,), keepdims=True)
         self.assertEqual(operation.axis, (1,))
@@ -314,19 +315,32 @@ class DemandScopedDomainTests(unittest.TestCase):
     def tearDown(self):
         reset_graph_state()
 
-    def test_power_domain_check_only_guards_a_requested_derivative(self):
+    def test_an_undefined_power_derivative_is_nan_not_an_exception(self):
+        """Section 12.7, rules G1 and G2.
+
+        This test previously required ``ValueError`` from a requested
+        exponent derivative at a negative base, and required ``ts.backward``
+        to raise as well. Section 12.7.2 classifies that derivative as NaN —
+        ``ln x`` is undefined for ``x < 0`` — and rule G2 states that
+        differentiation does not raise on a numerical condition. Rule G1
+        adds that the condition must not suppress the base derivative, which
+        the old behaviour did: ``ts.backward`` raised and both gradients were
+        lost, including the valid one.
+        """
         base = ts.Variable([-2.0])
         exponent = ts.Variable([2.0])
-        output = base ** exponent
+        output = base**exponent
 
-        # The base derivative is defined at a negative base.
+        # The base derivative exists at a negative base with an integral
+        # exponent, and is returned whether or not the other is requested.
         self.assertEqual(ts.grad(output, base).tolist(), [-4.0])
 
-        # The exponent derivative is not, and only its request raises.
-        with self.assertRaisesRegex(ValueError, "non-negative bases"):
-            ts.grad(output, exponent)
-        with self.assertRaisesRegex(ValueError, "non-negative bases"):
-            ts.backward(output)
+        undefined = ts.grad(output, exponent).tolist()
+        self.assertTrue(math.isnan(undefined[0]), undefined)
+
+        ts.backward(output)
+        self.assertEqual(base.grad.tolist(), [-4.0])
+        self.assertTrue(math.isnan(exponent.grad.tolist()[0]))
 
     def test_binary_cross_entropy_higher_order_domain_follows_demand(self):
         prediction = ts.Variable([0.0])
@@ -356,11 +370,11 @@ class FusionDemandTests(unittest.TestCase):
     def test_forward_fusion_is_independent_of_backward_demand(self):
         from unittest.mock import patch
 
-        from tensors.backend import cuda as cuda_backend
+        from tensors.backend.cuda import kernels as cuda_backend
         from tensors.backend import _clear_backend_kernel_cache
 
         def expression(base, exponent):
-            return ts.sin(base ** exponent) * 2.0 + 1.0
+            return ts.sin(base**exponent) * 2.0 + 1.0
 
         with ts.use_backend("cuda"):
             base = ts.Variable(ts.full((4_096,), 1.5))
@@ -384,7 +398,7 @@ class FusionDemandTests(unittest.TestCase):
     )
     def test_fused_backward_falls_back_for_an_unsupported_derivative(self):
         def expression(base, exponent):
-            return ts.sin(base ** exponent) * 2.0 + 1.0
+            return ts.sin(base**exponent) * 2.0 + 1.0
 
         with ts.use_backend("python"):
             reference_base = ts.Variable(ts.full((4_096,), 1.5))
@@ -423,14 +437,14 @@ class FusionDemandTests(unittest.TestCase):
         with ts.use_backend("python"):
             reference_value = ts.Variable(ts.full((4_096,), 1.5))
             expected = ts.grad(
-                ts.sin(reference_value ** 2.0) * 2.0 + 1.0,
+                ts.sin(reference_value**2.0) * 2.0 + 1.0,
                 reference_value,
                 ts.ones((4_096,)),
             )
 
         with ts.use_backend("cuda"):
             value = ts.Variable(ts.full((4_096,), 1.5))
-            output = ts.sin(value ** 2.0) * 2.0 + 1.0
+            output = ts.sin(value**2.0) * 2.0 + 1.0
             actual = ts.grad(output, value, ts.ones((4_096,)))
 
         self.assertAlmostEqual(actual[0], expected[0], places=10)

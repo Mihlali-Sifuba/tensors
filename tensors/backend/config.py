@@ -27,6 +27,15 @@ class BackendUnavailableError(RuntimeError):
     """Raised when an explicitly selected optional backend is unavailable."""
 
 
+class BackendOperationUnsupportedError(RuntimeError):
+    """Raised when an explicitly selected backend cannot execute an operation.
+
+    Explicit selection is an execution requirement (`docs/backends.md`,
+    *Execution requirements*), so a backend that cannot produce the required
+    result says so rather than letting another backend answer in its place.
+    """
+
+
 _VALID_BACKENDS = {"python", "numpy", "cuda", "auto"}
 _backend_lock = threading.RLock()
 _backend_override: ContextVar[BackendName | None] = ContextVar(
@@ -68,21 +77,19 @@ def _resolve_backend(backend: str) -> BackendName:
     normalized = backend.strip().lower()
     if normalized not in _VALID_BACKENDS:
         choices = ", ".join(sorted(_VALID_BACKENDS))
-        raise ValueError(
-            f"Unknown backend {backend!r}; expected one of: {choices}"
-        )
+        raise ValueError(f"Unknown backend {backend!r}; expected one of: {choices}")
     if normalized == "auto":
         return "numpy" if _numpy_available() else "python"
     if normalized == "numpy" and not _numpy_available():
         raise BackendUnavailableError(
             "The NumPy backend is unavailable. Install it with "
-            "`pip install \"ms-tensors[numpy]\"`."
+            '`pip install "ms-tensors[numpy]"`.'
         )
     if normalized == "cuda" and not _cuda_available():
         raise BackendUnavailableError(
             "The CUDA backend is unavailable. Install the CuPy build matching "
-            "your driver with `pip install \"ms-tensors[cuda12]\"` or "
-            "`pip install \"ms-tensors[cuda13]\"`."
+            'your driver with `pip install "ms-tensors[cuda12]"` or '
+            '`pip install "ms-tensors[cuda13]"`.'
         )
     return cast(BackendName, normalized)
 

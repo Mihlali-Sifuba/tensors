@@ -8,8 +8,8 @@ from tensors.graph import Computation
 from tensors.graph.computation.compiler import Compiler
 from tensors.graph.node import OperationNode, VariableNode
 from tensors.graph.state import TraceScope, get_graph_state, reset_graph_state
-from tensors.math.concat import Concat
-from tensors.math.where import Where
+from tensors.operations.manipulation.concat import Concat
+from tensors.operations.selection.where import Where
 from tensors.ops import Add
 
 

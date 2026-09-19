@@ -65,11 +65,17 @@ class TensorOpsTests(unittest.TestCase):
         self.assertIs((signed + unsigned).dtype, ts.int16)
         self.assertEqual((signed + unsigned).tolist(), [256])
 
-    def test_integer_tensor_plus_float_scalar_promotes_to_float64(self):
-        result = ts.Tensor([1, 2], dtype=ts.int32) + 0.5
+    def test_integer_tensor_plus_fractional_scalar_is_rejected(self):
+        # Breaking change B8. Rule S2 admits a Python float into an integer
+        # tensor only when it is integral and in range, so the declared dtype
+        # decides the arithmetic rather than the scalar's type.
+        with self.assertRaises(TypeError):
+            _ = ts.Tensor([1, 2], dtype=ts.int32) + 0.5
 
-        self.assertIs(result.dtype, ts.float64)
-        self.assertEqual(result.tolist(), [1.5, 2.5])
+        integral = ts.Tensor([1, 2], dtype=ts.int32) + 2.0
+
+        self.assertIs(integral.dtype, ts.int32)
+        self.assertEqual(integral.tolist(), [3, 4])
 
     def test_float32_tensor_division_by_scalar_preserves_float32(self):
         result = ts.Tensor([2, 4], dtype=ts.float32) / 2
@@ -83,14 +89,21 @@ class TensorOpsTests(unittest.TestCase):
         self.assertIs(result.dtype, ts.float32)
         self.assertEqual(result.tolist(), [1.0, 0.5])
 
-    def test_float32_and_wide_integer_promote_to_float64(self):
+    def test_float32_and_wide_integer_require_an_explicit_cast(self):
+        # Breaking change B6. No public floating dtype represents every
+        # int64 exactly, so the promotion that silently lost precision above
+        # 2**53 is now refused and the caller states the intent.
         floating = ts.Tensor([0.0], dtype=ts.float32)
         integer = ts.Tensor([16_777_217], dtype=ts.int64)
 
-        self.assertIs((floating + integer).dtype, ts.float64)
-        self.assertEqual((floating + integer).tolist(), [16_777_217.0])
-        self.assertIs((integer + floating).dtype, ts.float64)
-        self.assertEqual((integer + floating).tolist(), [16_777_217.0])
+        with self.assertRaises(TypeError):
+            _ = floating + integer
+        with self.assertRaises(TypeError):
+            _ = integer + floating
+
+        cast = floating + integer.astype(ts.float32)
+
+        self.assertIs(cast.dtype, ts.float32)
 
     def test_negating_uint8_promotes_to_signed_dtype(self):
         result = -ts.Tensor([1, 2], dtype=ts.uint8)
@@ -98,12 +111,24 @@ class TensorOpsTests(unittest.TestCase):
         self.assertIs(result.dtype, ts.int16)
         self.assertEqual(result.tolist(), [-1, -2])
 
-    def test_division_by_zero_is_rejected(self):
+    def test_floating_division_by_zero_gives_the_ieee_result(self):
+        # Breaking change B3. Floating division delivers a value where it
+        # used to raise; arithmetic-semantics.md section 7.2 has the table.
+        infinity = float("inf")
+        self.assertEqual((ts.Tensor([1.0, -1.0]) / 0.0).tolist(), [infinity, -infinity])
+        self.assertEqual(
+            (ts.Tensor([1.0, 2.0]) / ts.Tensor([1.0, 0.0])).tolist(), [1.0, infinity]
+        )
+        self.assertNotEqual((ts.Tensor([0.0]) / 0.0).tolist()[0], 0.0)
+
+    def test_integer_division_by_zero_still_raises(self):
+        # Breaking change B4: integers have no infinity to deliver.
+        integers = ts.Tensor([1, 2], dtype=ts.int32)
         with self.assertRaises(ZeroDivisionError):
-            _ = ts.Tensor([1, 2]) / 0
+            _ = integers / 0
 
         with self.assertRaises(ZeroDivisionError):
-            _ = ts.Tensor([1, 2]) / ts.Tensor([1, 0])
+            _ = integers / ts.Tensor([1, 0], dtype=ts.int32)
 
     def test_broadcast_add(self):
         left = ts.Tensor([[1, 2, 3], [4, 5, 6]])
@@ -173,12 +198,15 @@ class TensorOpsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _ = ts.Tensor([1.0, 2.0]) + ts.Tensor([1.0, 2.0, 3.0])
         with self.assertRaises(ZeroDivisionError):
-            _ = ts.Tensor([1.0, 2.0]) / 0
+            _ = ts.Tensor([1, 2], dtype=ts.int32) / 0
 
         # Supported operands are unaffected by the deferral.
         self.assertEqual((ts.Tensor([1.0]) + ts.Tensor([2.0])).tolist(), [3.0])
         self.assertEqual((ts.Tensor([1.0]) + 2).tolist(), [3.0])
-        self.assertEqual((ts.Tensor([1.0]) + True).tolist(), [2.0])
+        # Section 6.5: bool is a subclass of int but is not a numeric
+        # scalar, and there is no public boolean dtype.
+        with self.assertRaises(TypeError):
+            _ = ts.Tensor([1.0]) + True
         self.assertEqual((ts.Tensor([3.0]) ** 2).tolist(), [9.0])
 
 

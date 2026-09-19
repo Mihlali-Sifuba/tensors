@@ -22,11 +22,18 @@ from types import NotImplementedType
 from typing import Any
 
 from ._typing import TensorData, TensorIndex, TensorLike, TensorOperand, VariableData
-from .dtype import DataType, from_typecode, result_dtype
+from .dtype import (
+    DataType,
+    from_typecode,
+    resolve_binary,
+    resolve_power,
+    resolve_power_scalar_base,
+)
 from .shape import Shape
 from .tensor import Tensor
-from .ops import Add, Sub, Mul, Div, Pow, Neg, Operation, Slice, Cast
-from .ops.pow import _power_dtype
+from .operations.arithmetic import Add, Div, Mul, Neg, Pow, Sub
+from .operations.base import Operation
+from .operations.manipulation import Cast, Slice
 from .graph.node import VariableNode
 from .graph.state import get_graph_state
 
@@ -247,14 +254,14 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = result_dtype(self.dtype, other)
+        dtype, converted = resolve_binary(self.dtype, other)
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
             operand = Variable(other, requires_grad=False)
         else:
             operand = Variable(
-                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -269,14 +276,14 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = result_dtype(self.dtype, other)
+        dtype, converted = resolve_binary(self.dtype, other)
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
             operand = Variable(other, requires_grad=False)
         else:
             operand = Variable(
-                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -284,6 +291,10 @@ class Variable:
         return self._apply_operation(operation, (self, operand))
 
     def __rsub__(self, other: int | float | Tensor) -> Variable:
+        # The scalar is measured against this Variable's declared dtype, so
+        # it is validated before the negation that would widen an unsigned
+        # dtype. See docs/arithmetic-semantics.md section 6.5.
+        resolve_binary(self.dtype, other)
         return (-self) + other
 
     def __mul__(self, other: TensorOperand) -> Variable:
@@ -291,14 +302,14 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = result_dtype(self.dtype, other)
+        dtype, converted = resolve_binary(self.dtype, other)
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
             operand = Variable(other, requires_grad=False)
         else:
             operand = Variable(
-                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -313,14 +324,14 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = result_dtype(self.dtype, other, division=True)
+        dtype, converted = resolve_binary(self.dtype, other, division=True)
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
             operand = Variable(other, requires_grad=False)
         else:
             operand = Variable(
-                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -329,14 +340,14 @@ class Variable:
 
     def __rtruediv__(self, other: int | float | Tensor) -> Variable:
         # Operand order carries the semantics: the numerator is input_0.
-        dtype = result_dtype(self.dtype, other, division=True)
+        dtype, converted = resolve_binary(self.dtype, other, division=True)
         if isinstance(other, Variable):
             numerator = other
         elif isinstance(other, Tensor):
             numerator = Variable(other, requires_grad=False)
         else:
             numerator = Variable(
-                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -348,7 +359,11 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype = _power_dtype(self.data, other)
+        # A Variable exponent carries a declared dtype, so it promotes like
+        # any other typed operand. The previous resolution needed element
+        # values, so it compared the operand against an integer and raised
+        # TypeError whenever the exponent was a Variable.
+        dtype, other = resolve_power(self.dtype, other)
         if isinstance(other, Variable):
             exponent = other
         elif isinstance(other, Tensor):
@@ -368,8 +383,13 @@ class Variable:
     ) -> Variable | NotImplementedType:
         if not isinstance(other, (int, float, Tensor)) or isinstance(other, bool):
             return NotImplemented
-        # Operand order carries the semantics: the base is input_0.
-        dtype = result_dtype(self.dtype, other)
+        # Operand order carries the semantics: the base is input_0. A tensor
+        # base promotes against this Variable's dtype; a scalar base converts
+        # under rule S-p.
+        if isinstance(other, Tensor):
+            dtype, _ = resolve_power(other.dtype, self)
+        else:
+            dtype, other = resolve_power_scalar_base(other, self.dtype)
         if isinstance(other, Tensor):
             base = Variable(other, requires_grad=False)
         else:
@@ -386,15 +406,15 @@ class Variable:
         return self._apply_operation(operation, (self,))
 
     def __abs__(self) -> Variable:
-        from .math import abs
+        from .operations.elementary.abs import abs
         return abs(self)
 
     def __matmul__(self, other: TensorLike) -> Variable:
-        from .linalg import matmul
+        from .operations.linalg.matmul import matmul
         return matmul(self, other)
 
     def __rmatmul__(self, other: TensorLike) -> Variable:
-        from .linalg import matmul
+        from .operations.linalg.matmul import matmul
         return matmul(other, self)
 
     def __getitem__(self, key: TensorIndex) -> Variable:

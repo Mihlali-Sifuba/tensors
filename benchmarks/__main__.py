@@ -1,251 +1,200 @@
-"""Command-line entry point for the benchmark package."""
+"""Command-line entry point for the benchmark suite."""
 
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
+import sys
+import time
 from pathlib import Path
-from typing import Any
 
 import tensors as ts
 
-from . import (
-    autograd_cases,
-    backend_cases,
-    chain_cases,
-    convolution_cases,
-    graph_cases,
-    init_cases,
-    loss_cases,
-    optimizer_cases,
-    provider_cases,
-    random_cases,
-    scaling_cases,
-    startup_cases,
-    storage_cases,
-    system_cases,
-    tensor_cases,
-    training_cases,
-)
-from .runner import (
-    BenchmarkCase,
-    combine_backend_reports,
-    print_backend_comparison,
-    print_report,
-    run_suite,
-    write_report,
-)
-
-
-CaseFactory = Callable[[], list[BenchmarkCase]]
-SUITES: dict[str, CaseFactory] = {
-    "tensor": tensor_cases.cases,
-    "backend": backend_cases.cases,
-    "graph": graph_cases.cases,
-    "autograd": autograd_cases.cases,
-    "training": training_cases.cases,
-    "provider": provider_cases.cases,
-    "scaling": scaling_cases.cases,
-    "storage": storage_cases.cases,
-    "chain": chain_cases.cases,
-    "convolution": convolution_cases.cases,
-    "loss": loss_cases.cases,
-    "optimizer": optimizer_cases.cases,
-    "startup": startup_cases.cases,
-    "init": init_cases.cases,
-    "random": random_cases.cases,
-    "system": system_cases.cases,
-}
-
-SUITE_PREFIXES: dict[str, frozenset[str]] = {
-    "tensor": frozenset({"tensor", "reduction", "linalg"}),
-    "backend": frozenset({
-        "unary", "normalization", "loss", "reduction", "selection",
-        "layout", "creation", "optimizer", "backend",
-    }),
-    "graph": frozenset({"graph"}),
-    "autograd": frozenset({"autograd"}),
-    "training": frozenset({"training"}),
-    "provider": frozenset({"provider", "kernel"}),
-    "scaling": frozenset({"scaling"}),
-    "storage": frozenset({"storage"}),
-    "chain": frozenset({"chain"}),
-    "convolution": frozenset({"convolution"}),
-    "loss": frozenset({"loss", "kernel"}),
-    "optimizer": frozenset({"optimizer"}),
-    "startup": frozenset({"startup"}),
-    "init": frozenset({"init"}),
-    "random": frozenset({"random"}),
-    "system": frozenset({"system", "threading"}),
-}
-
-CORE_FACTORIES: tuple[CaseFactory, ...] = (
-    tensor_cases.cases,
-    backend_cases.cases,
-    convolution_cases.cases,
-    graph_cases.core_cases,
-    autograd_cases.core_cases,
-    training_cases.core_cases,
-)
-
-
-def _matches(case: BenchmarkCase, match: str | None) -> bool:
-    return match is None or match.casefold() in case.name.casefold()
-
-
-def _cases(suite: str, match: str | None = None) -> list[BenchmarkCase]:
-    if suite == "core":
-        cases = [case for factory in CORE_FACTORIES for case in factory()]
-        return [case for case in cases if _matches(case, match)]
-    if suite == "all":
-        factories = SUITES.items()
-        if match:
-            requested_prefix = match.casefold().split(".", 1)[0]
-            matching_suites = {
-                name
-                for name, prefixes in SUITE_PREFIXES.items()
-                if requested_prefix in prefixes
-            }
-            if matching_suites:
-                factories = (
-                    (name, factory)
-                    for name, factory in factories
-                    if name in matching_suites
-                )
-        return [
-            case
-            for _, factory in factories
-            for case in factory()
-            if _matches(case, match)
-        ]
-    return [
-        case for case in SUITES[suite]()
-        if _matches(case, match)
-    ]
+from . import profiles, registry
+from .runner import Runner, job_record
+from .memory import device_memory_status
+from .environment import environment_metadata
+from .reporting.console import print_summary
+from .reporting.csv import write_csv, write_samples_csv
+from .reporting.json import build_report, write_json
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Benchmark the public tensors API.",
-    )
-    parser.add_argument(
-        "--backend",
-        choices=("all", "accelerated", "python", "numpy", "cuda", "auto"),
-        default="all",
-        help="backend to benchmark (default: all available backends)",
+        prog="python -m benchmarks",
+        description=(
+            "Measure the tensors package at every layer of its execution "
+            "stack and write a machine-readable performance map."
+        ),
     )
     parser.add_argument(
         "--suite",
-        choices=("core", "all", *SUITES),
-        default="core",
-        help="benchmark group to run (default: core)",
+        action="append",
+        metavar="NAME",
+        help=(
+            "suite to run; repeatable. Defaults to every suite. "
+            "Use --list-suites to see the names."
+        ),
+    )
+    parser.add_argument(
+        "--backend",
+        action="append",
+        choices=("python", "numpy", "cuda"),
+        metavar="NAME",
+        help="backend to measure; repeatable. Defaults to all installed.",
     )
     parser.add_argument(
         "--match",
         metavar="TEXT",
-        help="run only case names containing this text",
+        help="run only groups whose name contains this text",
     )
     parser.add_argument(
-        "--quick",
-        action="store_true",
-        help="use three short samples for a fast smoke run",
+        "--profile",
+        choices=profiles.PROFILE_NAMES,
+        default="standard",
+        help=(
+            "how much of the matrix to run and how hard to measure it "
+            "(default: standard, which runs every case a suite declares)"
+        ),
     )
     parser.add_argument(
-        "--repeats",
+        "--rounds",
         type=int,
-        help="number of measured samples per case",
+        help="override the profile's measured samples per case",
     )
     parser.add_argument(
         "--target-time",
         type=float,
-        help="calibration target in seconds per sample",
+        help="override the profile's calibration target, in seconds",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=20260910,
+        help="seed for the per-round execution order",
+    )
+    parser.add_argument(
+        "--memory",
+        action="store_true",
+        help="run the allocation pass even if the profile does not ask for it",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        help="optional JSON result path",
+        help="JSON result path; CSV siblings are written beside it",
     )
     parser.add_argument(
-        "--list",
+        "--list-suites",
         action="store_true",
-        help="list selected cases without running them",
+        help="list suite names and exit",
+    )
+    parser.add_argument(
+        "--list-groups",
+        action="store_true",
+        help="list the selected groups without measuring them",
     )
     return parser
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = _parser()
-    arguments = parser.parse_args()
-    if arguments.backend == "all":
-        backends = ts.available_backends()
-    elif arguments.backend == "accelerated":
-        backends = tuple(
-            backend
-            for backend in ts.available_backends()
-            if backend != "python"
-        )
-        if not backends:
-            parser.error("no accelerated backend is available")
-    else:
-        try:
-            with ts.use_backend(arguments.backend):
-                backends = (ts.get_backend(),)
-        except (ValueError, ts.BackendUnavailableError) as error:
-            parser.error(str(error))
-    if arguments.list:
-        listed: dict[str, list[str]] = {}
-        for backend in backends:
-            with ts.use_backend(backend):
-                for case in _cases(arguments.suite, arguments.match):
-                    if not case.supports_backend(backend):
-                        continue
-                    listed.setdefault(case.name, []).append(backend)
-        if not listed:
-            parser.error("no benchmark cases matched")
-        for name, eligible in listed.items():
-            print(f"{name} [{','.join(eligible)}]")
+    arguments = parser.parse_args(argv)
+
+    if arguments.list_suites:
+        for name in registry.SUITE_MODULES:
+            print(name)
         return 0
 
-    repeats = arguments.repeats
-    if repeats is None:
-        repeats = 3 if arguments.quick else 7
-    if repeats <= 0:
-        parser.error("--repeats must be positive")
+    profile = profiles.load(arguments.profile)
+    suites = arguments.suite or list(profile.suites) or list(registry.DEFAULT_SUITES)
+    unknown = [name for name in suites if name not in registry.SUITE_MODULES]
+    if unknown:
+        parser.error(f"unknown suite(s): {', '.join(unknown)}")
 
-    target_seconds = arguments.target_time
-    if target_seconds is None:
-        target_seconds = 0.02 if arguments.quick else 0.2
-    if target_seconds <= 0.0:
+    backends = (
+        arguments.backend or list(profile.backends) or list(ts.available_backends())
+    )
+    missing = [name for name in backends if name not in ts.available_backends()]
+    if missing:
+        parser.error(
+            f"backend(s) not installed: {', '.join(missing)}; available: "
+            f"{', '.join(ts.available_backends())}"
+        )
+
+    with profiles.use(profile):
+        groups = registry.collect(suites, match=arguments.match)
+    if not groups:
+        parser.error("no groups matched the selection")
+
+    if arguments.list_groups:
+        for group in groups:
+            print(f"{group.suite:14} {group.name}")
+        print(f"\n{len(groups)} groups")
+        return 0
+
+    rounds = arguments.rounds if arguments.rounds is not None else profile.rounds
+    target = (
+        arguments.target_time
+        if arguments.target_time is not None
+        else profile.target_seconds
+    )
+    collect_memory = arguments.memory or profile.collect_memory
+    if rounds <= 0:
+        parser.error("--rounds must be positive")
+    if target <= 0.0:
         parser.error("--target-time must be positive")
 
-    reports: dict[str, dict[str, Any]] = {}
-    for backend in backends:
-        with ts.use_backend(backend):
-            backend_cases = _cases(arguments.suite, arguments.match)
-            backend_cases = [
-                case
-                for case in backend_cases
-                if case.supports_backend(backend)
-            ]
-            if not backend_cases:
-                continue
-            reports[backend] = run_suite(
-                backend_cases,
-                repeats=repeats,
-                target_seconds=target_seconds,
-            )
+    print(
+        f"Measuring {len(groups)} groups on "
+        f"{', '.join(backends)} with {rounds} rounds "
+        f"(profile {profile.name}, target {target * 1000:.0f} ms/sample)",
+        flush=True,
+    )
+    started = time.perf_counter()
+    runner = Runner(
+        backends=backends,
+        rounds=rounds,
+        target_seconds=target,
+        seed=arguments.seed,
+        collect_memory=collect_memory,
+    )
+    with profiles.use(profile):
+        jobs = runner.run(groups)
+    elapsed = time.perf_counter() - started
 
-    if not reports:
-        parser.error("no benchmark cases matched the selected backends")
-    if len(reports) == 1:
-        report = next(iter(reports.values()))
-        print_report(report)
-    else:
-        report = combine_backend_reports(reports)
-        print_backend_comparison(report)
+    records = [job_record(job) for job in jobs]
+    metadata = environment_metadata()
+    metadata["run"] = {
+        "suites": suites,
+        "group_count": len(groups),
+        "record_count": len(records),
+        "wall_clock_seconds": elapsed,
+        "match": arguments.match,
+        "device_memory_after": device_memory_status(),
+        "command": " ".join(sys.argv),
+    }
+    settings = runner.settings()
+    with profiles.use(profile):
+        settings["profile"] = profiles.settings()
+    report = build_report(
+        metadata=metadata,
+        settings=settings,
+        records=records,
+    )
+    print_summary(report)
+    print(f"\nCompleted {len(records)} records in {elapsed:.1f}s")
+
     if arguments.output is not None:
-        write_report(report, arguments.output)
-        print(f"\nWrote {arguments.output}")
+        output = arguments.output
+        write_json(report, output)
+        write_csv(records, output.with_suffix(".csv"))
+        write_samples_csv(
+            records,
+            output.with_name(output.stem + "-samples.csv"),
+        )
+        print(
+            f"Wrote {output}, {output.with_suffix('.csv')}, and "
+            f"{output.with_name(output.stem + '-samples.csv')}"
+        )
     return 0
 
 

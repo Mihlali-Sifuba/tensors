@@ -1,371 +1,434 @@
-"""Reusable timing and reporting utilities for the benchmark suite."""
+"""The interleaving measurement scheduler.
+
+A measurement here is a ``(case, backend)`` job. Jobs from every backend a
+group supports are built together and then measured in rotated, seeded random
+order across several rounds, so a thermal or allocator drift during the run
+spreads across all of them instead of landing on whichever backend happened
+to be measured last.
+"""
 
 from __future__ import annotations
 
 import gc
-import json
-import platform
+import random
 import statistics
-import subprocess
-import sys
-import timeit
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Literal, TypeAlias
+import time
+import traceback
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
-from tensors import get_backend
+import tensors as ts
 
-
-BenchmarkBackend: TypeAlias = Literal["python", "numpy", "cuda"]
-BenchmarkLayer: TypeAlias = Literal[
-    "provider",
-    "kernel",
-    "public",
-    "storage",
-    "graph",
-    "autograd",
-    "optimizer",
-    "training",
-    "startup",
-]
+from .case import Case, Classification, Group, Unsupported
+from .measurement import SYNC_POLICY, Timing, timer_for
+from .memory import measure_memory, release_device_memory
+from .statistics import NOISE_THRESHOLD_PERCENT, summarize
 
 
-@dataclass(frozen=True)
-class BenchmarkCase:
-    """One independently calibrated benchmark with explicit applicability."""
+@dataclass
+class Job:
+    """One case bound to the backend it will be measured on."""
 
-    name: str
-    run: Callable[[], object]
-    validate: Callable[[], None] | None = None
-    work_items: int | None = None
-    gc_enabled: bool = False
-    description: str = ""
-    layer: BenchmarkLayer = "public"
-    backends: frozenset[BenchmarkBackend] | None = None
-    setup: Callable[[], None] | None = None
-    reset: Callable[[], None] | None = None
-    teardown: Callable[[], None] | None = None
+    case: Case
+    backend: str
+    suite: str
+    group: str
+    loops: int = 1
+    submit_samples: list[float] = field(default_factory=list)
+    total_samples: list[float] = field(default_factory=list)
+    device_samples: list[float] = field(default_factory=list)
+    single_submit_samples: list[float] = field(default_factory=list)
+    single_total_samples: list[float] = field(default_factory=list)
+    classification: Classification = "measured"
+    reason: str | None = None
+    memory: dict[str, Any] | None = None
+    synchronization: dict[str, Any] | None = None
 
-    def supports_backend(self, backend: str) -> bool:
-        """Return whether this case is meaningful for ``backend``."""
-        return self.backends is None or backend in self.backends
+    @property
+    def key(self) -> str:
+        """Return the identity used in reports and comparisons."""
+        return f"{self.backend}::{self.case.name}"
 
 
-def _calibrate(timer: timeit.Timer, target_seconds: float) -> int:
-    """Choose a loop count whose sample approaches the target duration."""
+def _calibrate(
+    run: Callable[[], Any],
+    timer: Any,
+    target_seconds: float,
+    *,
+    single_shot: bool,
+) -> int:
+    """Choose an invocation count whose batch approaches the target duration."""
+    if single_shot:
+        return 1
     loops = 1
-    maximum_loops = 10_000_000
-    while True:
-        elapsed = timer.timeit(number=loops)
-        if elapsed >= target_seconds or loops >= maximum_loops:
+    ceiling = 5_000_000
+    while loops < ceiling:
+        elapsed = timer.run_batch(run, loops).total_seconds * loops
+        if elapsed >= target_seconds:
             return loops
         if elapsed <= 0.0:
-            scale = 10
+            scale = 16
         else:
-            scale = max(2, min(10, int(target_seconds / elapsed)))
-        loops = min(loops * scale, maximum_loops)
+            scale = max(2, min(16, int(target_seconds / elapsed) + 1))
+        loops = min(loops * scale, ceiling)
+    return loops
 
 
-def _timer(case: BenchmarkCase) -> timeit.Timer:
-    """Create a Timer with consistent garbage-collection behavior."""
-    def prepare_sample() -> None:
+class Runner:
+    """Builds, calibrates, and measures jobs group by group."""
+
+    def __init__(
+        self,
+        *,
+        backends: Sequence[str],
+        rounds: int,
+        target_seconds: float,
+        seed: int,
+        collect_memory: bool,
+        progress: bool = True,
+    ) -> None:
+        self.backends = tuple(backends)
+        self.rounds = rounds
+        self.target_seconds = target_seconds
+        self.random = random.Random(seed)
+        self.seed = seed
+        self.collect_memory = collect_memory
+        self.progress = progress
+        self.jobs: list[Job] = []
+        self._started = time.perf_counter()
+
+    # -- construction ---------------------------------------------------
+
+    def _classified(
+        self,
+        group: Group,
+        backend: str,
+        classification: Classification,
+        reason: str,
+    ) -> Job:
+        """Return a job that records why a group produced no measurement."""
+        return Job(
+            case=Case(
+                name=group.name,
+                run=lambda: None,
+                family=group.suite,
+            ),
+            backend=backend,
+            suite=group.suite,
+            group=group.name,
+            classification=classification,
+            reason=reason,
+        )
+
+    def _build(self, group: Group) -> list[Job]:
+        """Build every backend's jobs for one group, classifying failures."""
+        jobs: list[Job] = []
+        for backend in self.backends:
+            try:
+                with ts.use_backend(backend):
+                    cases = list(group.factory(backend))
+            except Unsupported as error:
+                jobs.append(self._classified(group, backend, "unsupported", str(error)))
+                continue
+            except Exception as error:  # noqa: BLE001 - recorded, not hidden
+                jobs.append(
+                    self._classified(
+                        group,
+                        backend,
+                        "error",
+                        f"{type(error).__name__}: {error}\n"
+                        + traceback.format_exc(limit=4),
+                    )
+                )
+                continue
+            for case in cases:
+                if not case.supports(backend):
+                    jobs.append(
+                        Job(
+                            case=case,
+                            backend=backend,
+                            suite=group.suite,
+                            group=group.name,
+                            classification="unsupported",
+                            reason=(
+                                "case declares this backend out of scope; "
+                                f"eligible={sorted(case.backends or ())}"
+                            ),
+                        )
+                    )
+                    continue
+                jobs.append(
+                    Job(
+                        case=case,
+                        backend=backend,
+                        suite=group.suite,
+                        group=group.name,
+                    )
+                )
+        return jobs
+
+    # -- measurement ----------------------------------------------------
+
+    def _prepare(self, job: Job, timer: Any) -> bool:
+        """Validate and calibrate one job; return whether it can be measured."""
+        case = job.case
+        try:
+            if case.setup is not None:
+                case.setup()
+            if case.reset is not None:
+                case.reset()
+            if case.validate is not None:
+                case.validate()
+            timer.prepare()
+            if case.reset is not None:
+                case.reset()
+            job.loops = _calibrate(
+                case.run,
+                timer,
+                self.target_seconds,
+                single_shot=case.single_shot,
+            )
+            if case.reset is not None:
+                case.reset()
+        except Unsupported as error:
+            job.classification = "unsupported"
+            job.reason = str(error)
+            return False
+        except Exception as error:  # noqa: BLE001 - recorded, not hidden
+            job.classification = "error"
+            job.reason = f"{type(error).__name__}: {error}\n" + traceback.format_exc(
+                limit=6
+            )
+            return False
+        return True
+
+    def _sample(self, job: Job, timer: Any) -> None:
+        """Take one timed sample, warming the kernel cache first."""
+        case = job.case
         if case.gc_enabled:
             gc.enable()
-        if case.reset is not None:
-            case.reset()
-
-    def run_and_synchronize() -> object:
-        result = case.run()
-        _synchronize_backend()
-        return result
-
-    return timeit.Timer(run_and_synchronize, setup=prepare_sample)
-
-
-def _synchronize_backend() -> None:
-    """Wait for asynchronous backend work before recording elapsed time."""
-    if get_backend() != "cuda":
-        return
-    import cupy
-
-    cupy.cuda.get_current_stream().synchronize()
-
-
-def measure(
-    case: BenchmarkCase,
-    *,
-    repeats: int,
-    target_seconds: float,
-) -> dict[str, Any]:
-    """Validate, calibrate, and measure one benchmark case."""
-    if case.setup is not None:
-        case.setup()
-    try:
-        if case.reset is not None:
-            case.reset()
-        if case.validate is not None:
-            case.validate()
-        _synchronize_backend()
-
-        gc.collect()
-        timer = _timer(case)
-        # A resettable case represents one isolated state transition. Running
-        # several transitions inside one calibrated sample would make its
-        # inputs depend on backend speed and loop calibration.
-        loops = (
-            1
-            if case.reset is not None
-            else _calibrate(timer, target_seconds)
-        )
-
-        samples = []
-        for _ in range(repeats):
+        else:
             gc.collect()
-            samples.append(timer.timeit(number=loops) / loops)
-    finally:
-        if case.teardown is not None:
-            case.teardown()
+            gc.disable()
+        try:
+            # Entering a backend context clears the kernel-lookup cache, so
+            # one untimed call restores steady state before sampling.
+            if case.reset is not None:
+                case.reset()
+            case.run()
+            if case.reset is not None:
+                case.reset()
+            timer.prepare()
+            timing: Timing = timer.run_batch(case.run, job.loops)
+        finally:
+            gc.enable()
+        job.submit_samples.append(timing.submit_seconds)
+        job.total_samples.append(timing.total_seconds)
+        if timing.device_seconds is not None:
+            job.device_samples.append(timing.device_seconds)
+        if timing.single_submit_seconds is not None:
+            job.single_submit_samples.append(timing.single_submit_seconds)
+        if timing.single_total_seconds is not None:
+            job.single_total_samples.append(timing.single_total_seconds)
 
-    median_seconds = statistics.median(samples)
-    deviations = [abs(sample - median_seconds) for sample in samples]
-    median_absolute_deviation = statistics.median(deviations)
-    variability_percent = (
-        0.0
-        if median_seconds == 0.0
-        else median_absolute_deviation / median_seconds * 100.0
-    )
+    def _memory_pass(self, job: Job) -> None:
+        """Run the separate, untimed allocation pass for one job."""
+        case = job.case
+        try:
+            if case.reset is not None:
+                case.reset()
+            sample = measure_memory(case.run, backend=job.backend)
+        except Exception as error:  # noqa: BLE001 - recorded, not hidden
+            job.memory = {"error": f"{type(error).__name__}: {error}"}
+            return
+        job.memory = sample.as_dict()
 
-    result: dict[str, Any] = {
-        "description": case.description,
-        "layer": case.layer,
-        "loops_per_sample": loops,
-        "median_seconds": median_seconds,
-        "minimum_seconds": min(samples),
-        "median_absolute_deviation_seconds": median_absolute_deviation,
-        "variability_percent": variability_percent,
-        "samples_seconds": samples,
-    }
-    if case.work_items is not None:
-        result["work_items"] = case.work_items
-        result["work_items_per_second"] = (
-            None if median_seconds == 0.0 else case.work_items / median_seconds
-        )
-    return result
-
-
-def _git_commit() -> str | None:
-    """Return the current short commit when running inside the repository."""
-    repository = Path(__file__).resolve().parents[1]
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=repository,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return None
-    return completed.stdout.strip() or None
-
-
-def _git_dirty() -> bool | None:
-    """Report whether tracked or untracked repository files are modified."""
-    repository = Path(__file__).resolve().parents[1]
-    try:
-        completed = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=repository,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return None
-    return bool(completed.stdout.strip())
-
-
-def environment_metadata() -> dict[str, Any]:
-    """Return enough context to make a benchmark result interpretable."""
-    metadata = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "commit": _git_commit(),
-        "git_dirty": _git_dirty(),
-        "backend": get_backend(),
-        "python": sys.version,
-        "python_implementation": platform.python_implementation(),
-        "platform": platform.platform(),
-        "machine": platform.machine(),
-        "processor": platform.processor(),
-    }
-    if get_backend() == "cuda":
-        import cupy
-
-        device = cupy.cuda.Device()
-        properties = cupy.cuda.runtime.getDeviceProperties(device.id)
-        name = properties["name"]
-        if isinstance(name, bytes):
-            name = name.decode("utf-8")
-        metadata["cupy"] = cupy.__version__
-        metadata["cuda_runtime"] = cupy.cuda.runtime.runtimeGetVersion()
-        metadata["cuda_device"] = name
-        metadata["cuda_device_id"] = device.id
-    return metadata
-
-
-def run_suite(
-    cases: Iterable[BenchmarkCase],
-    *,
-    repeats: int,
-    target_seconds: float,
-) -> dict[str, Any]:
-    """Run cases in order and return a serializable report."""
-    results: dict[str, Any] = {}
-    backend = get_backend()
-    for case in cases:
-        if not case.supports_backend(backend):
-            continue
-        print(f"Running [{backend}] {case.name}...", flush=True)
-        results[case.name] = measure(
-            case,
-            repeats=repeats,
-            target_seconds=target_seconds,
-        )
-    return {
-        "metadata": environment_metadata(),
-        "settings": {
-            "repeats": repeats,
-            "target_seconds_per_sample": target_seconds,
-        },
-        "benchmarks": results,
-    }
-
-
-def combine_backend_reports(
-    reports: Mapping[str, dict[str, Any]],
-) -> dict[str, Any]:
-    """Combine independently measured backend reports for serialization."""
-    if not reports:
-        raise ValueError("at least one backend report is required")
-    first_report = next(iter(reports.values()))
-    return {
-        "metadata": {
-            "backends": list(reports),
-        },
-        "settings": first_report["settings"],
-        "backends": dict(reports),
-    }
-
-
-def _duration(seconds: float) -> str:
-    if seconds < 1e-6:
-        return f"{seconds * 1e9:.2f} ns"
-    if seconds < 1e-3:
-        return f"{seconds * 1e6:.2f} us"
-    if seconds < 1.0:
-        return f"{seconds * 1e3:.2f} ms"
-    return f"{seconds:.2f} s"
-
-
-def _throughput(value: float | None) -> str:
-    if value is None:
-        return "-"
-    if value >= 1e9:
-        return f"{value / 1e9:.2f} G/s"
-    if value >= 1e6:
-        return f"{value / 1e6:.2f} M/s"
-    if value >= 1e3:
-        return f"{value / 1e3:.2f} K/s"
-    return f"{value:.2f}/s"
-
-
-def print_report(report: dict[str, Any]) -> None:
-    """Print a compact comparison-friendly result table."""
-    benchmarks = report["benchmarks"]
-    if not benchmarks:
-        print(f"\nBackend: {report['metadata']['backend']} (no eligible cases)")
-        return
-    name_width = max([len("benchmark"), *(len(name) for name in benchmarks)])
-    heading = (
-        f"{'benchmark':<{name_width}}  {'median':>10}  "
-        f"{'MAD':>8}  {'work':>12}"
-    )
-    print(f"\nBackend: {report['metadata']['backend']}")
-    print(heading)
-    print("-" * len(heading))
-    for name, result in benchmarks.items():
-        print(
-            f"{name:<{name_width}}  "
-            f"{_duration(result['median_seconds']):>10}  "
-            f"{result['variability_percent']:>7.2f}%  "
-            f"{_throughput(result.get('work_items_per_second')):>12}"
-        )
-
-
-def print_backend_comparison(report: dict[str, Any]) -> None:
-    """Print backend medians, variability, and optional-backend speedups."""
-    reports = report["backends"]
-    backend_names = list(reports)
-    benchmark_names = list(dict.fromkeys(
-        name
-        for backend in backend_names
-        for name in reports[backend]["benchmarks"]
-    ))
-    name_width = max(
-        [len("benchmark"), *(len(name) for name in benchmark_names)]
-    )
-    columns = "".join(
-        f"  {backend + ' median':>14}  {backend + ' MAD':>10}"
-        for backend in backend_names
-    )
-    speedup_backends = (
-        [name for name in backend_names if name != "python"]
-        if "python" in reports
-        else []
-    )
-    speedup_headings = "".join(
-        f"  {backend.title() + ' speedup':>13}"
-        for backend in speedup_backends
-    )
-    heading = f"{'benchmark':<{name_width}}{columns}{speedup_headings}"
-
-    print("\nBackend comparison")
-    print(heading)
-    print("-" * len(heading))
-    for name in benchmark_names:
-        row = f"{name:<{name_width}}"
-        for backend in backend_names:
-            result = reports[backend]["benchmarks"].get(name)
-            if result is None:
-                row += f"  {'-':>14}  {'-':>10}"
-            else:
-                row += (
-                    f"  {_duration(result['median_seconds']):>14}"
-                    f"  {result['variability_percent']:>9.2f}%"
+    def run(self, groups: Iterable[Group]) -> list[Job]:
+        """Measure every group and return the completed jobs."""
+        for group in groups:
+            jobs = self._build(group)
+            pending = [job for job in jobs if job.classification == "measured"]
+            if self.progress and jobs:
+                elapsed = time.perf_counter() - self._started
+                print(
+                    f"[{elapsed:7.1f}s] {group.name} ({len(pending)} jobs)",
+                    flush=True,
                 )
-        for backend in speedup_backends:
-            python_result = reports["python"]["benchmarks"].get(name)
-            backend_result = reports[backend]["benchmarks"].get(name)
-            if python_result is None or backend_result is None:
-                row += f"  {'-':>13}"
+            try:
+                self._measure_group(pending)
+            finally:
+                for job in jobs:
+                    teardown = job.case.teardown
+                    if teardown is not None:
+                        try:
+                            teardown()
+                        except Exception:  # noqa: BLE001, S110
+                            pass
+                self.jobs.extend(jobs)
+                # Inputs for this group die with the closures they were
+                # captured in, so the next group starts from a clean pool.
+                del jobs
+                del pending
+                gc.collect()
+                release_device_memory()
+        return self.jobs
+
+    def _measure_group(self, pending: list[Job]) -> None:
+        """Calibrate then interleave the measurable jobs of one group."""
+        timers: dict[str, Any] = {}
+        ready: list[Job] = []
+        for job in pending:
+            timer = timers.setdefault(job.backend, timer_for(job.backend))
+            with ts.use_backend(job.backend):
+                if self._prepare(job, timer):
+                    ready.append(job)
+
+        # Whether a call blocks is a property of the implementation, not of
+        # the sample, so it is probed once per job rather than per round.
+        for job in ready:
+            timer = timers[job.backend]
+            if not hasattr(timer, "probe_synchronization"):
                 continue
-            python_seconds = python_result["median_seconds"]
-            backend_seconds = backend_result["median_seconds"]
-            speedup = (
-                float("inf")
-                if backend_seconds == 0.0
-                else python_seconds / backend_seconds
-            )
-            row += f"  {speedup:>12.2f}x"
-        print(row)
+            with ts.use_backend(job.backend):
+                try:
+                    if job.case.reset is not None:
+                        job.case.reset()
+                    job.synchronization = timer.probe_synchronization(job.case.run)
+                    if job.case.reset is not None:
+                        job.case.reset()
+                except Exception as error:  # noqa: BLE001 - recorded
+                    job.synchronization = {"error": f"{type(error).__name__}: {error}"}
+
+        for round_index in range(self.rounds):
+            order = list(ready)
+            # Rotate first so comparable backends do not keep the same
+            # relative position, then shuffle within the round.
+            if order:
+                offset = round_index % len(order)
+                order = order[offset:] + order[:offset]
+            self.random.shuffle(order)
+            for job in order:
+                with ts.use_backend(job.backend):
+                    try:
+                        self._sample(job, timers[job.backend])
+                    except Exception as error:  # noqa: BLE001
+                        job.classification = "error"
+                        job.reason = (
+                            f"{type(error).__name__}: {error}\n"
+                            + traceback.format_exc(limit=6)
+                        )
+
+        if not self.collect_memory:
+            return
+        for job in ready:
+            if not job.case.memory or job.classification != "measured":
+                continue
+            with ts.use_backend(job.backend):
+                self._memory_pass(job)
+
+    # -- reporting ------------------------------------------------------
+
+    def settings(self) -> dict[str, Any]:
+        """Return the methodology settings used for this run."""
+        return {
+            "backends": list(self.backends),
+            "rounds": self.rounds,
+            "samples_per_round": 1,
+            "sample_count": self.rounds,
+            "target_seconds_per_sample": self.target_seconds,
+            "random_seed": self.seed,
+            "ordering": (
+                "jobs grouped by comparable workload; per round the group's "
+                "jobs are rotated then shuffled with a seeded generator"
+            ),
+            "warmup": (
+                "validation, calibration, and one untimed call per sample "
+                "after entering the backend context"
+            ),
+            "synchronization_policy": SYNC_POLICY,
+            "garbage_collection": (
+                "disabled during timing except for cases that build cyclic "
+                "graph objects, which keep collection in scope"
+            ),
+            "memory_pass": (
+                "separate untimed tracemalloc and CuPy-pool pass"
+                if self.collect_memory
+                else "disabled"
+            ),
+            "noise_threshold_percent": NOISE_THRESHOLD_PERCENT,
+            "statistic_for_comparison": "median of total_seconds",
+        }
 
 
-def write_report(report: dict[str, Any], output: Path) -> None:
-    """Write a JSON result file selected explicitly by the caller."""
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(report, indent=2, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
+def job_record(job: Job) -> dict[str, Any]:
+    """Return the serializable record for one measured or classified job."""
+    case = job.case
+    record: dict[str, Any] = {
+        "name": case.name,
+        "backend": job.backend,
+        "suite": job.suite,
+        "group": job.group,
+        "layer": case.layer,
+        "family": case.family,
+        "dtype": case.dtype,
+        "shape": (list(case.shape) if isinstance(case.shape, tuple) else case.shape),
+        "elements": case.elements,
+        "description": case.description,
+        "tags": dict(case.tags),
+        "classification": job.classification,
+        "reason": job.reason,
+    }
+    if job.classification != "measured" or not job.total_samples:
+        if job.classification == "measured":
+            record["classification"] = "skipped"
+            record["reason"] = record["reason"] or "no samples recorded"
+        return record
+
+    record["loops_per_sample"] = job.loops
+    record["host_total"] = summarize(job.total_samples)
+    record["host_submit"] = summarize(job.submit_samples)
+    if job.device_samples:
+        record["device"] = summarize(job.device_samples)
+        submit_median = record["host_submit"]["median_seconds"]
+        total_median = record["host_total"]["median_seconds"]
+        device_median = record["device"]["median_seconds"]
+        single_submit = (
+            statistics.median(job.single_submit_samples)
+            if job.single_submit_samples
+            else None
+        )
+        single_total = (
+            statistics.median(job.single_total_samples)
+            if job.single_total_samples
+            else None
+        )
+        probe = job.synchronization or {}
+        record["cuda"] = {
+            "submit_fraction_of_total": (
+                None if total_median == 0 else submit_median / total_median
+            ),
+            "device_fraction_of_total": (
+                None if total_median == 0 else device_median / total_median
+            ),
+            "host_overhead_seconds": total_median - device_median,
+            "single_call_submit_seconds": single_submit,
+            "single_call_total_seconds": single_total,
+            "synchronization_probe": probe,
+            # Only the barrier probe can tell a blocking call from one that
+            # is merely expensive to launch.
+            "hidden_synchronization": bool(probe.get("synchronizes")),
+            "absorbed_fraction_of_barrier": probe.get("absorbed_fraction_of_barrier"),
+        }
+    median = record["host_total"]["median_seconds"]
+    if case.work_items is not None:
+        record["work_items"] = case.work_items
+        record["work_items_per_second"] = (
+            None if median == 0 else case.work_items / median
+        )
+    if job.memory is not None:
+        record["memory"] = job.memory
+    return record
+
+
+__all__ = ["Job", "Runner", "job_record"]

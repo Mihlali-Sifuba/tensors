@@ -125,7 +125,8 @@ def _assemble_rows(
         return Variable(zero, requires_grad=False) if create_graph else zero
 
     if create_graph:
-        from ...math import reshape, stack
+        from ...operations.manipulation.reshape import reshape
+        from ...operations.manipulation.stack import stack
 
         return reshape(stack(rows, axis=0), shape)
 
