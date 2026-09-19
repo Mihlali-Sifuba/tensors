@@ -87,7 +87,9 @@ def _operand(value: Tensor | Scalar, dtype: DataType) -> Any:
     if dtype.kind == "integer":
         raise TypeError("CUDA integer kernels require the Python fallback")
     result = _view(value) if isinstance(value, Tensor) else value
-    return cupy.asarray(result, dtype=cupy.float64)
+    # The same crossing as _working_values, reached through a second helper.
+    # cupy.asarray widens with astype, which flushes a binary32 subnormal.
+    return _widen(cupy.asarray(result))
 
 
 def _storage(
