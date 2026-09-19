@@ -1,6 +1,18 @@
-"""Helpers for NumPy-style tensor broadcasting."""
+"""NumPy-style tensor broadcasting.
 
-from collections.abc import Callable, Iterable
+Broadcasting is one responsibility: given a tensor and a target shape, return
+a tensor whose logical values and shape are that tensor broadcast to it.
+Nothing here performs arithmetic, comparison or selection, resolves a result
+dtype, or selects a backend — an operation broadcasts its operands and then
+computes for itself, so this module never needs to know which operation
+consumes its result.
+
+:meth:`Shape.broadcast_with` agrees the common shape between two operands;
+:func:`broadcast_to` expands one operand to it; :func:`broadcast_tensors` does
+both for a pair.
+"""
+
+from collections.abc import Iterable
 from itertools import product
 from typing import Tuple
 
@@ -15,13 +27,9 @@ def broadcast_to(tensor: Tensor, shape: Shape | Iterable[int]) -> Tensor:
     if tensor.shape == output_shape:
         return tensor
     if tensor.shape.rank > output_shape.rank:
-        raise ValueError(
-            f"Shape {tensor.shape} cannot be broadcast to {output_shape}"
-        )
+        raise ValueError(f"Shape {tensor.shape} cannot be broadcast to {output_shape}")
 
-    padded_shape = (
-        (1,) * (output_shape.rank - tensor.ndim) + tensor.shape
-    )
+    padded_shape = (1,) * (output_shape.rank - tensor.ndim) + tensor.shape
     for source_dimension, target_dimension in zip(padded_shape, output_shape):
         if source_dimension not in {1, target_dimension}:
             raise ValueError(
@@ -44,10 +52,12 @@ def broadcast_to(tensor: Tensor, shape: Shape | Iterable[int]) -> Tensor:
         for source_dimension, stride in zip(padded_shape, source_strides)
     )
     values = [
-        source_data[sum(
-            coordinate * stride
-            for coordinate, stride in zip(coordinates, broadcast_strides)
-        )]
+        source_data[
+            sum(
+                coordinate * stride
+                for coordinate, stride in zip(coordinates, broadcast_strides)
+            )
+        ]
         for coordinates in product(*(range(dimension) for dimension in output_shape))
     ]
 
@@ -60,67 +70,4 @@ def broadcast_tensors(a: Tensor, b: Tensor) -> Tuple[Tensor, Tensor]:
     return broadcast_to(a, shape), broadcast_to(b, shape)
 
 
-def broadcast_binary_values(
-    left: Tensor,
-    right: Tensor,
-    shape: Shape | Iterable[int],
-    operation: Callable[[object, object], object],
-) -> list[object]:
-    """Apply a binary operation while walking broadcast offsets once."""
-    output_shape = Shape.from_iterable(shape)
-    # Callers derive ``shape`` from the operands, so confirm the common
-    # agreements directly before paying for a full broadcast resolution.
-    if (
-        left.shape != output_shape or right.shape != output_shape
-    ) and left.shape.broadcast_with(right.shape) != output_shape:
-        raise ValueError(
-            f"Shapes {left.shape} and {right.shape} do not broadcast to "
-            f"{output_shape}"
-        )
-    left_data = left._data
-    right_data = right._data
-    if left.shape == right.shape:
-        return [operation(a, b) for a, b in zip(left_data, right_data)]
-    if len(left_data) == 1:
-        scalar = left_data[0]
-        return [operation(scalar, value) for value in right_data]
-    if len(right_data) == 1:
-        scalar = right_data[0]
-        return [operation(value, scalar) for value in left_data]
-
-    rank = output_shape.rank
-    left_padding = rank - left.ndim
-    right_padding = rank - right.ndim
-    left_shape = (1,) * left_padding + tuple(left.shape)
-    right_shape = (1,) * right_padding + tuple(right.shape)
-    left_physical = (0,) * left_padding + tuple(Strides.contiguous(left.shape))
-    right_physical = (0,) * right_padding + tuple(Strides.contiguous(right.shape))
-    left_strides = tuple(
-        0 if dimension == 1 else stride
-        for dimension, stride in zip(left_shape, left_physical)
-    )
-    right_strides = tuple(
-        0 if dimension == 1 else stride
-        for dimension, stride in zip(right_shape, right_physical)
-    )
-
-    coordinates = [0] * rank
-    left_offset = 0
-    right_offset = 0
-    values: list[object] = []
-    append = values.append
-    for _ in range(output_shape.size):
-        append(operation(left_data[left_offset], right_data[right_offset]))
-        for axis in range(rank - 1, -1, -1):
-            coordinates[axis] += 1
-            left_offset += left_strides[axis]
-            right_offset += right_strides[axis]
-            if coordinates[axis] < output_shape[axis]:
-                break
-            coordinates[axis] = 0
-            left_offset -= left_strides[axis] * output_shape[axis]
-            right_offset -= right_strides[axis] * output_shape[axis]
-    return values
-
-
-__all__ = ["broadcast_binary_values", "broadcast_to", "broadcast_tensors"]
+__all__ = ["broadcast_to", "broadcast_tensors"]
