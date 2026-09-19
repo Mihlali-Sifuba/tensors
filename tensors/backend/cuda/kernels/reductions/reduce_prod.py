@@ -7,6 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _storage
 from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _widen
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -26,11 +27,7 @@ def reduce_prod(
         return None
     axis = axes
     values = _view(value)
-    working = (
-        values.astype(object)
-        if dtype.kind == "integer"
-        else values.astype(cupy.float64, copy=False)
-    )
+    working = values.astype(object) if dtype.kind == "integer" else _widen(values)
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
         result = cupy.prod(working, axis=axis, keepdims=keepdims)
     return _storage(result, dtype=dtype, output_shape=output_shape)

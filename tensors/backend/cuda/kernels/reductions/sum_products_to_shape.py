@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 from tensors.backend.cuda.kernels.reductions.stability import _scaled_product_sum
 from tensors.backend.cuda.kernels.reductions.stability import _stable_sum_candidate
 from tensors.backend.cuda.kernels.reductions.stability import _sum_axes
@@ -24,8 +24,8 @@ def sum_products_to_shape(
         return None
     try:
         left, right = cupy.broadcast_arrays(
-            _view(gradient).astype(cupy.float64, copy=False),
-            _view(factor).astype(cupy.float64, copy=False),
+            _working_values(gradient),
+            _working_values(factor),
         )
     except ValueError:
         return None

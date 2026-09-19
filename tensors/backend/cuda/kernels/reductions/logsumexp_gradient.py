@@ -7,7 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _finite_operands
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -18,8 +18,8 @@ def logsumexp_gradient(
     grad: Tensor, value: Tensor, axes: tuple[int, ...], *, keepdims: bool
 ) -> Storage | None:
     """Run a stable log-sum-exp VJP on finite values."""
-    values = _view(value).astype(cupy.float64, copy=False)
-    upstream = _view(grad).astype(cupy.float64, copy=False)
+    values = _working_values(value)
+    upstream = _working_values(grad)
     _, _, probabilities = _normalization_terms(values, axes)
     expanded_shape = tuple(
         (1 if dimension in axes else size for dimension, size in enumerate(value.shape))

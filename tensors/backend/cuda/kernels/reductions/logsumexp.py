@@ -7,7 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _finite_operands
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -24,7 +24,7 @@ def logsumexp(
     output_shape: tuple[int, ...],
 ) -> Storage | None:
     """Run a stable log-sum-exp reduction on finite values."""
-    values = _view(value).astype(cupy.float64, copy=False)
+    values = _working_values(value)
     maximum, correction, probabilities = _normalization_terms(values, axes)
     with _errstate(over="ignore", invalid="ignore"):
         result = maximum + correction

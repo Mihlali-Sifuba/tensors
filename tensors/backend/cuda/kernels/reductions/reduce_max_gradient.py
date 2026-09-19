@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -16,8 +16,8 @@ def reduce_max_gradient(
     grad: Tensor, value: Tensor, axes: tuple[int, ...], *, keepdims: bool
 ) -> Storage | None:
     """Run fused VJPs for reductions with regular native fast paths."""
-    values = _view(value).astype(cupy.float64, copy=False)
-    upstream = _view(grad).astype(cupy.float64, copy=False)
+    values = _working_values(value)
+    upstream = _working_values(grad)
     expanded_shape = tuple(
         (1 if dimension in axes else size for dimension, size in enumerate(value.shape))
     )

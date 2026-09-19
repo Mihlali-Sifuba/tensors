@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -25,7 +25,7 @@ def reduce_std(
     if value.size == 0:
         return None
     axis = axes
-    values = _view(value).astype(cupy.float64, copy=False)
+    values = _working_values(value)
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
         center = cupy.mean(values, axis=axis, keepdims=True)
         centered = values - center
