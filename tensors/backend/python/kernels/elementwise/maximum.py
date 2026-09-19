@@ -6,7 +6,7 @@ from tensors.backend.python.storage import PythonStorage
 
 def maximum(left, right, *, dtype, output_shape):
     """Select the larger of each broadcast pair, propagating NaN."""
-    from tensors.utils.broadcasting import broadcast_binary_values
+    from tensors.utils.broadcasting import broadcast_to
 
     def select(x, y):
         if isinstance(x, float) and math.isnan(x):
@@ -15,6 +15,7 @@ def maximum(left, right, *, dtype, output_shape):
             return y
         return x if x >= y else y
 
-    return PythonStorage.from_values(
-        broadcast_binary_values(left, right, output_shape, select), dtype
-    )
+    left_values = broadcast_to(left, output_shape)._data
+    right_values = broadcast_to(right, output_shape)._data
+    values = [select(x, y) for x, y in zip(left_values, right_values)]
+    return PythonStorage.from_values(values, dtype)
