@@ -504,5 +504,270 @@ class NoRegressionAtOrdinaryAndExceptionalInputs(unittest.TestCase):
                 )
 
 
+#: The six kernels whose input conversion was corrected after the first
+#: twelve. Only ``log`` failed visibly; see :class:`TheOtherFiveConversions`
+#: for why the others could not.
+LATER = {
+    "log": ts.log,
+    "exp": ts.exp,
+    "cos": ts.cos,
+    "cosh": ts.cosh,
+    "arccos": ts.arccos,
+    "arccosh": ts.arccosh,
+}
+
+
+def log_of_a_power_of_two(exponent: int) -> float:
+    """``log(2**exponent)`` rounded to binary32, by high-precision decimal.
+
+    ``ln(2**n) = n ln 2`` exactly, so the only approximation is ``ln 2``
+    itself, which :meth:`decimal.Decimal.ln` produces correctly rounded at
+    whatever precision is asked. Fifty digits is far more than the twenty-four
+    significand bits of the result need, and nothing here consults a backend
+    or a library ``log``.
+    """
+    from decimal import Decimal, localcontext
+
+    with localcontext() as context:
+        context.prec = 50
+        value = Decimal(exponent) * Decimal(2).ln()
+    return struct.unpack("<f", struct.pack("<f", float(value)))[0]
+
+
+@requires_cuda
+class LogAcceptsSubnormalOperands(unittest.TestCase):
+    """``log`` did not merely lose precision: it rejected a valid operand.
+
+    The flushed operand became zero, which is outside ``log``'s domain, so the
+    kernel raised ``ValueError`` for an operand the function is defined at.
+    This is the one of the six where the output distinguishes a preserved
+    operand from a flushed one, and it distinguishes them completely.
+    """
+
+    def setUp(self):
+        self.previous = ts.get_backend()
+
+    def tearDown(self):
+        ts.set_backend(self.previous)
+
+    def test_the_smallest_subnormal_is_accepted(self):
+        with ts.use_backend("cuda"):
+            produced = ts.log(ts.Tensor([SMALLEST], dtype=ts.float32)).tolist()[0]
+        self.assertTrue(math.isfinite(produced), f"log gave {produced!r}")
+
+    def test_every_subnormal_power_of_two_matches_the_decimal_oracle(self):
+        """``log(2**-n)`` is ``-n ln 2``; the oracle computes it independently."""
+        exponents = list(range(-149, -126))
+        operands = [from_bits32(1 << (k + 149)) for k in exponents]
+        with ts.use_backend("cuda"):
+            produced = ts.log(ts.Tensor(operands, dtype=ts.float32)).tolist()
+        for exponent, operand, got in zip(exponents, operands, produced):
+            with self.subTest(exponent=exponent):
+                self.assertEqual(
+                    bits32(got),
+                    bits32(log_of_a_power_of_two(exponent)),
+                    f"log(2**{exponent}) = log({operand!r}) gave {got!r}",
+                )
+
+    def test_the_oracle_agrees_with_exactly_known_logarithms(self):
+        """Validate the oracle before it judges anything."""
+        self.assertEqual(log_of_a_power_of_two(0), 0.0)
+        for exponent in (1, -1, 10, -10, 100):
+            with self.subTest(exponent=exponent):
+                operand = math.ldexp(1.0, exponent)
+                # log(2**n) / log(2) recovers n, within binary32 resolution.
+                recovered = log_of_a_power_of_two(exponent) / log_of_a_power_of_two(1)
+                self.assertAlmostEqual(recovered, exponent, places=4, msg=repr(operand))
+
+    def test_the_domain_rules_are_unchanged(self):
+        """Genuinely invalid operands must still be rejected."""
+        for label, value in (
+            ("zero", 0.0),
+            ("negative zero", -0.0),
+            ("negative", -1.0),
+            ("negative subnormal", -SMALLEST),
+        ):
+            for backend in ts.available_backends():
+                with self.subTest(case=label, backend=backend):
+                    with ts.use_backend(backend):
+                        with self.assertRaises(ValueError):
+                            ts.log(ts.Tensor([value], dtype=ts.float32))
+
+    def test_a_subnormal_and_zero_are_no_longer_confused(self):
+        """The defect made these two operands indistinguishable."""
+        with ts.use_backend("cuda"):
+            finite = ts.log(ts.Tensor([SMALLEST], dtype=ts.float32)).tolist()[0]
+            with self.assertRaises(ValueError):
+                ts.log(ts.Tensor([0.0], dtype=ts.float32))
+        self.assertTrue(math.isfinite(finite))
+
+
+@requires_cuda
+class TheOtherFiveConversions(unittest.TestCase):
+    """``exp``, ``cos``, ``cosh``, ``arccos`` and ``arccosh``.
+
+    None of these can be distinguished by its *output*. Each is even or has a
+    derivative of order one at zero, so ``f(subnormal)`` and ``f(0)`` differ by
+    at most ``2**-126`` where the result's ulp is at least ``2**-24`` — more
+    than a hundred binary orders below half an ulp. The correctly rounded
+    results are therefore identical, and no assertion on the returned value
+    could tell a preserved operand from a flushed one.
+
+    That is exactly why these five were mistaken for beneficiaries of the
+    output-conversion fix. What can be tested is the conversion itself: the
+    value that reaches the mathematics must be the value supplied.
+    """
+
+    def setUp(self):
+        self.previous = ts.get_backend()
+
+    def tearDown(self):
+        ts.set_backend(self.previous)
+
+    def test_the_input_conversion_preserves_the_operand(self):
+        """The property the output cannot show, asserted where it happens."""
+        import cupy
+
+        from tensors.backend.cuda.conversion import _working_values
+
+        operands = [
+            SMALLEST,
+            -SMALLEST,
+            2 * SMALLEST,
+            LARGEST_SUBNORMAL,
+            -LARGEST_SUBNORMAL,
+            MIN_NORMAL,
+            0.0,
+            -0.0,
+            1.5,
+        ]
+        with ts.use_backend("cuda"):
+            tensor = ts.Tensor(operands, dtype=ts.float32)
+            widened = cupy.asnumpy(_working_values(tensor))
+        for operand, got in zip(operands, widened):
+            with self.subTest(operand=operand):
+                self.assertEqual(
+                    float(got), operand, f"widening changed {operand!r} to {got!r}"
+                )
+
+    def test_the_old_conversion_would_have_flushed(self):
+        """Pins why the helper is needed, rather than assuming it."""
+        import cupy
+
+        with ts.use_backend("cuda"):
+            tensor = ts.Tensor([SMALLEST], dtype=ts.float32)
+            from tensors.backend.cuda.conversion import _view
+
+            flushed = cupy.asnumpy(_view(tensor).astype(cupy.float64, copy=False))
+        self.assertEqual(
+            float(flushed[0]), 0.0, "astype no longer flushes; this test is obsolete"
+        )
+
+    def test_subnormal_operands_are_accepted_where_the_domain_permits(self):
+        for name in ("exp", "cos", "cosh", "arccos"):
+            for label, value in (("positive", SMALLEST), ("negative", -SMALLEST)):
+                with self.subTest(operation=name, sign=label):
+                    with ts.use_backend("cuda"):
+                        produced = LATER[name](
+                            ts.Tensor([value], dtype=ts.float32)
+                        ).tolist()[0]
+                    self.assertTrue(
+                        math.isfinite(produced), f"{name}({value!r}) = {produced!r}"
+                    )
+
+    def test_arccosh_still_rejects_operands_below_one(self):
+        """Its domain is [1, inf), so a subnormal is genuinely invalid."""
+        for value in (SMALLEST, -SMALLEST, 0.0, 0.5):
+            for backend in ts.available_backends():
+                with self.subTest(value=value, backend=backend):
+                    with ts.use_backend(backend):
+                        with self.assertRaises(ValueError):
+                            ts.arccosh(ts.Tensor([value], dtype=ts.float32))
+
+    def test_results_stay_in_cuda_storage(self):
+        for name, function in LATER.items():
+            operand = 1.5 if name == "arccosh" else SMALLEST
+            for size in (1, 64, 100_000):
+                with self.subTest(operation=name, size=size):
+                    with ts.use_backend("cuda"):
+                        produced = function(
+                            ts.Tensor([operand] * size, dtype=ts.float32)
+                        )
+                        self.assertEqual(
+                            type(produced._storage).__name__, "CudaStorage"
+                        )
+                        self.assertIs(produced.dtype, ts.float32)
+
+    def test_no_operand_is_read_back_to_the_host(self):
+        import contextlib
+
+        import tensors.tensor as tensor_module
+
+        @contextlib.contextmanager
+        def counting():
+            reads = []
+            original = tensor_module.Tensor._data.fget
+
+            def counted(self):
+                reads.append(1)
+                return original(self)
+
+            tensor_module.Tensor._data = property(counted)
+            try:
+                yield reads
+            finally:
+                tensor_module.Tensor._data = property(original)
+
+        for name, function in LATER.items():
+            operand = 1.5 if name == "arccosh" else SMALLEST
+            with self.subTest(operation=name):
+                with ts.use_backend("cuda"):
+                    values = ts.Tensor([operand] * 4096, dtype=ts.float32) + 0.0
+                    with counting() as reads:
+                        produced = function(values)
+                        self.assertEqual(
+                            type(produced._storage).__name__, "CudaStorage"
+                        )
+                self.assertEqual(
+                    len(reads), 0, f"{name} materialised an operand on the host"
+                )
+
+    def test_ordinary_operands_have_not_regressed(self):
+        """A divergence here would mean the conversion disturbed a result."""
+        for name, function in LATER.items():
+            if name == "arccosh":
+                values = [1.0, 1.5, 2.0, 10.0]
+            elif name == "log":
+                values = [0.5, 1.0, 2.0, 10.0]
+            elif name == "arccos":
+                values = [-0.5, 0.0, 0.5, 1.0]
+            else:
+                values = [-1.0, -0.5, 0.0, 0.5, 1.0]
+            with self.subTest(operation=name):
+                results = {}
+                for backend in ts.available_backends():
+                    with ts.use_backend(backend):
+                        results[backend] = function(
+                            ts.Tensor(values, dtype=ts.float32)
+                        ).tolist()
+                for backend, produced in results.items():
+                    for index, got in enumerate(produced):
+                        self.assertEqual(
+                            bits32(got),
+                            bits32(results["python"][index]),
+                            f"{name} on {backend} at {values[index]!r}",
+                        )
+
+    def test_float64_is_unaffected(self):
+        for name, function in LATER.items():
+            operand = 1.5 if name == "arccosh" else 5e-324
+            with self.subTest(operation=name):
+                with ts.use_backend("cuda"):
+                    produced = function(
+                        ts.Tensor([operand], dtype=ts.float64)
+                    ).tolist()[0]
+                self.assertFalse(math.isnan(produced), name)
+
+
 if __name__ == "__main__":
     unittest.main()
