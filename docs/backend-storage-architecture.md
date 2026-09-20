@@ -21,9 +21,9 @@
 > lifecycle (Q1, Q2) is **resolved** in T7 and T8, and construction from a
 > `Tensor` (Q3) is **resolved** in 5.1.1, and construction from a `Storage`
 > (Q4) is **resolved** in 5.1.3. Graph replay (Q5) is **resolved** in
-> 5.7 and 5.8. Q6 to Q8 remain open design
-> decisions, listed with their alternatives and consequences rather than
-> resolved in passing.
+> 5.7 and 5.8, and host access (Q7) is **resolved** in 5.5. Q6 and Q8 remain
+> open design decisions, listed with their alternatives and consequences
+> rather than resolved in passing.
 
 ## 2. The problem
 
@@ -253,10 +253,34 @@ not something the current implementation can prove.
 
 ### 3.6 Display and host access populate the host representation
 
-`repr`, `tolist()` and `item()` work from any representation and leave a
-`python` entry in the cache. These are host-facing by definition and their
-transfer is intended — see
-[backends.md, Storage residency](backends.md#storage-residency-and-transfers).
+`repr` (also used by `str`, because no separate `__str__` is defined),
+`tolist()`, `item()`, scalar indexing, scalar formatting and tensor equality
+ultimately read `_data`. `_data` calls
+`_logical_storage_for("python")`, which first calls `_storage_for("python")`.
+For NumPy storage this serializes the native buffer through bytes into an
+`array.array`; for CUDA storage it first calls `cupy.asnumpy` and then takes
+the same bytes path. `_storage_for` retains that full physical
+`PythonStorage` in `_storage_cache`. A non-compact tensor is gathered into a
+second, compact `PythonStorage` in logical row-major order; that compact
+object is temporary, but the full physical host representation remains
+cached. A compact Python-backed tensor simply exposes its authoritative
+buffer to `_data`.
+
+`tolist()` copies those logical values into an independent flat list and
+`item()` returns one Python scalar. `repr` repeatedly indexes `_data` while it
+formats nested display text. Complete integer indexing is different from a
+slice: it first runs the selected backend's slice operation to produce a
+zero-dimensional tensor, then calls `item()` on that result. Tensor equality
+compares shapes and then two `tolist()` results; elementwise comparison
+operations still produce tensors and are not host observations.
+
+The intended transfer for these public host-facing operations is consistent
+with [backends.md, Storage residency](backends.md#storage-residency-and-transfers).
+The current helper is much broader, however: 109 Python reference-kernel
+files and many operation, gradient, validation, broadcasting and manipulation
+helpers also read `_data`. Those internal reads can silently populate host
+storage while numerical work is executing, so they are not evidence that
+public inspection and internal execution have the same permission.
 
 ### 3.7 Graph replay follows the selection at replay time
 
@@ -980,16 +1004,78 @@ host-facing read (5.5), and is intended.
 
 ### 5.5 Display and host access
 
-`repr`, `str`, `tolist()`, `item()` and comparison to a Python value read
-values on the host. **This is the caller's request, not an implicit transfer**,
-and it remains permitted from any backend under any selection. It is the same
-position [backends.md](backends.md#storage-residency-and-transfers) already
-takes.
+The public request for a Python value or display string is an explicit host
+read, not an implicit transfer. The following rules are normative.
 
-The one change from 3.6: the host values obtained this way are **not retained**
-on the tensor. There is no cache for them to populate, so a second `tolist()`
-transfers again. [Question Q7](#q7--repeated-host-reads) records whether that
-cost is acceptable.
+**H1 — Public host reads are permitted independently of the active backend.**
+`repr`/`str`, `tolist()`, `item()`, complete integer indexing that returns a
+scalar, scalar formatting and tensor equality may observe a tensor from any
+resident backend under any active selection. They read the tensor's own
+authoritative storage; they do not ask the active backend to execute numerical
+work or require residency to match it.
+
+**H2 — A read does not change tensor state.** It does not replace or mutate
+storage: the authoritative `Storage` object and buffer retain their identity.
+It does not change the tensor's backend, increment its version, change shape,
+strides or offset, or create a persistent Python/host representation. There
+is no host cache. Repeating the same read may repeat the transfer.
+
+**H3 — Values are logical, not physical.** Host results enumerate the tensor's
+logical elements in row-major order, respecting shape, strides and offset and
+excluding unrelated physical storage. The existing flat-list behaviour of
+`tolist()` remains unchanged. `item()` and complete integer indexing return
+the selected logical scalar. Display and equality observe the same logical
+values.
+
+**H4 — Returned Python values are independent.** A list returned by
+`tolist()` is a new container and cannot mutate or alias the tensor's storage.
+A scalar or string is an ordinary Python value. Later tensor mutation cannot
+retroactively change a value already returned.
+
+**H5 — Temporaries are bounded by one public operation.** Implementations may
+gather native logical values and materialize an operation-local host buffer,
+list or scalar. The temporary must become unreachable when the public call
+finishes and must not be stored on the tensor, in a backend cache, or in graph
+state. A nested formatter should materialize once per top-level display call,
+not transfer once per element.
+
+**H6 — Native host storage avoids a transfer, not the ownership rule.** A
+compact Python-backed tensor may read its authoritative buffer directly; a
+non-compact Python-backed tensor may gather from it. NumPy-backed tensors may
+gather with NumPy before conversion to Python values. CUDA-backed tensors
+gather the requested logical region on device before the device-to-host copy,
+so a view does not transfer unrelated physical values. `tolist()` still
+returns an independent list in every case.
+
+**H7 — Inspection permission is not execution permission.** `_data` must not
+remain a general numerical interface. Python reference kernels may read native
+Python storage only when T4 has already established Python execution with
+Python-native operands. Operations, gradients, validation, broadcasting,
+manipulation and graph code must not call the public host-read path to obtain
+values for computation. An internal consumer either operates on native
+storage through the selected backend or is rejected by T4–T6 and T11; it may
+not label its transfer “inspection.”
+
+**H8 — Scalar indexing separates inspection from tensor-producing slicing.**
+Complete integer indexing resolves the coordinate from tensor metadata,
+gathers from the tensor's own resident storage and returns a Python scalar;
+like `item()`, it is permitted under any active selection. Indexing that
+returns a `Tensor` is an ordinary backend-native layout operation governed by
+T4 and T10. The scalar permission cannot make a mismatched tensor-producing
+slice kernel or Python fallback valid.
+
+| Case | Required host-access behaviour | Persistent effect |
+| --- | --- | --- |
+| Python-backed tensor | Read the authoritative buffer directly; gather locally when the layout is non-compact. `tolist()` still creates an independent list. | None |
+| NumPy-backed tensor | Gather logical values with NumPy, then create the requested Python scalar, flat list or string. | None |
+| CUDA-backed tensor | Gather the logical selection on device, transfer only that selection to an operation-local host buffer, then create the Python result. | None |
+| Non-contiguous or offset tensor | Follow shape, strides and offset in logical row-major order; never expose or transfer unrelated physical elements merely to fit a host helper. | Layout and authoritative storage remain unchanged. |
+| Repeated reads | Perform a fresh observation; NumPy conversion or CUDA transfer may happen again. | No representation from the earlier read is reused from the tensor. |
+| Mutation between reads | The later read observes current authoritative values and version; it cannot consult stale host state. | The reads themselves do not advance the version. |
+| Different active backend | Read the tensor's own resident storage using H1/H8; do not switch the active backend or convert the tensor to the active selection. | Storage identity, residency and selection remain unchanged. |
+
+This resolves [Q7](#q7--repeated-host-reads--resolved) by accepting visible,
+repeatable transfer cost rather than restoring a second representation.
 
 ### 5.6 Serialization
 
@@ -1190,12 +1276,14 @@ objective is to remove indirection, not to rename it.
 | `tensors/tensor.py` — `_logical_storage_for(kind)` | Converts, then gathers | **Split.** The gather survives as a within-backend layout operation (T10); the conversion does not. |
 | `tensors/tensor.py` — `_set_storage` | Installs storage, resets the cache | Installs storage. The dtype agreement check it also performs is unrelated and stays. |
 | `tensors/tensor.py` — `_mutable_data` | Converts to host and installs it | **Changed.** Mutation acts on the tensor's own backend (5.4). |
-| `tensors/tensor.py` — `_data` | Gathers host values | Becomes a host-facing read (5.5), not a conversion. |
+| `tensors/tensor.py` — `_data` | Converts through `_storage_for("python")`, retains a full physical host representation, then gathers logical values; also serves internal numerical code | **Restricted or replaced.** Public inspection gets an uncached logical host-read path governed by H1–H6. Internal numerical consumers do not get access to it (H7). |
+| `tensors/tensor.py` — `tolist`, `item`, display/formatting, equality and scalar `__getitem__` | Share `_data`; display can request it repeatedly, equality materializes two lists, and scalar indexing dispatches a slice before `item()` | **Changed.** Each top-level observation follows H1–H8, materializes at most operation-local host state and returns independent Python values. Elementwise comparison remains ordinary backend execution. |
 | `tensors/tensor.py` — `__init__` | Host storage for scalars/lists; copies a Tensor's or Storage's kind; a Tensor dtype change routes through host values, while a Storage dtype change raises | **Changed.** T1 for host inputs; 5.1.1 for a `Tensor` input; 5.1.3 for a `Storage` input, including the early backend check, public deep copy and backend-native dtype conversion. |
 | `tensors/tensor.py` — `_from_owned_storage` | Adopts the exact supplied internal storage without checking the active backend; validates dtype and size | **Contract retained and made explicit.** 5.1.3 reserves it for exclusive, newly produced internal results. It remains no-copy and selection-independent; dispatch remains responsible for T4/T11. |
 | `tensors/tensor.py` — `clone` | Defined as `Tensor(self)`; already returns the source's backend whatever the active backend is | **Behaviour unchanged; the definition must change.** 5.1.2 requires exactly what `clone()` already does, but `Tensor(self)` stops expressing it once the constructor gains R1, because it would then raise whenever the source's backend and the active backend differ. |
 | `tensors/backend/dispatch/manipulation/cast.py` — `execute_cast` | Falls back to the Python reference below a workload threshold | **Changed.** 5.1.1 R6 requires a dtype conversion to produce the active backend's storage, which T4 already requires of any operation. See the dependency note in 5.1.1. |
 | `tensors/backend/conversion.py` — `convert_storage` | The only cross-backend conversion | **Gone**, unless a deliberate migration API is added — see [Q8](#q8--an-explicit-migration-api). Its one caller is `_storage_for`. |
+| Python reference kernels and `_data` consumers in `tensors/operations`, `tensors/graph` and `tensors/utils` | Read `_data`, so NumPy/CUDA operands can be materialized and retained on host during internal computation | **Changed.** Python kernels read Python-native operands only after dispatch enforces T4. Other internal consumers use backend-native operations or dispatch; none may use the public host-read permission as fallback (H7). |
 | `tensors/backend/numpy/conversion.py` — `_view`, `_operand`, `_arithmetic_operand` | Each begins by asking for a NumPy representation | **Simplified.** Under T4 the operand already is one; what remains is dtype handling and the logical gather. |
 | `tensors/backend/cuda/conversion.py` — the same three, plus `_widen`, `_narrow`, `_working_values` | As above, plus the PTX-based binary32 widening | As above. The subnormal-preserving widening is numerical (T9) and stays exactly as it is. |
 | `tensors/backend/config.py` — `set_backend` | Reassignable at any time (3.9) | **Changed.** Sets the process default and locks it on first tensor storage; same-backend calls are accepted, a different backend raises (T7). |
@@ -1221,12 +1309,12 @@ objective is to remove indirection, not to rename it.
 
 ## 8. Questions
 
-Q1 through Q5 are **resolved**. Each decision is normative elsewhere — T7 and
-T8 for the lifecycle, 5.1.1 for construction from a `Tensor`, 5.1.3 for public
-and internal construction from `Storage`, and 5.7–5.8 for graph replay and
-differentiation. The entries here remain so rejected alternatives stay on
-record. Q6 to Q8 remain **open**: each records the alternatives, consequences
-and an unadopted recommendation.
+Q1 through Q5 and Q7 are **resolved**. Each decision is normative elsewhere —
+T7 and T8 for the lifecycle, 5.1.1 for construction from a `Tensor`, 5.1.3 for
+public and internal construction from `Storage`, 5.7–5.8 for graph replay and
+differentiation, and 5.5 for host access. The entries here remain so rejected
+alternatives stay on record. Q6 and Q8 remain **open**: each records the
+alternatives, consequences and an unadopted recommendation.
 
 ### Q1 — When the process default locks — RESOLVED
 
@@ -1379,17 +1467,23 @@ No serialization exists (3.10), so this is a question about future work.
 **Recommended: A** if serialization is added. Nothing needs deciding until it
 is.
 
-### Q7 — Repeated host reads
+### Q7 — Repeated host reads — RESOLVED
+
+*Resolved in [5.5](#55-display-and-host-access), which is normative. The entry
+is kept so the rejected alternative stays on record.*
 
 T3 removes the cache, so `tolist()` twice transfers twice (5.5).
 
 | Option | Consequence |
 | --- | --- |
-| **A. Accept the cost** | Simple and honest: each host read is a transfer, and the caller can see how many they asked for. Printing a large device tensor in a loop is slow. |
+| **A. Accept the cost — ADOPTED** | Simple and honest: each host read may transfer, and the caller can see how many they asked for. Printing a large device tensor in a loop is slow. Operation-local buffers are permitted but no representation survives the call. |
 | **B. Cache host values** | Restores a second representation, which is what T3 removes, and raises a staleness question on mutation. |
 
-**Recommended: A.** B is the cache under another name. Whether the cost bites
-in practice should be measured once the rest is implemented.
+**Adopted: A.** B is the cache under another name. A host read is explicit,
+leaves the authoritative storage and tensor backend unchanged, and may perform
+the same transfer again when repeated. The permission is limited to returning
+a Python value or display representation; internal kernels and graph work
+remain subject to T4–T6 and T11.
 
 ### Q8 — An explicit migration API
 
