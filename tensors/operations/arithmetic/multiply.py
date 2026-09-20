@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Union
 from tensors.backend import execute_multiply
-from tensors.dtype import resolve_binary
+from tensors.dtype import convert_scalar, resolve_result_dtype
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.operations._gradient_shaping import sum_products_to_shape
@@ -20,11 +20,16 @@ class Mul(Operation):
         """Element-wise multiplication of two tensors or a tensor and a scalar."""
         if not isinstance(b, (int, float, Tensor)):
             raise TypeError(f"Unsupported: {type(b)}")
-        # Promotion for a tensor operand, conversion for a scalar.
-        dtype, other = resolve_binary(a.dtype, b)
-        output_shape = (
-            a.shape.broadcast_with(b.shape) if isinstance(b, Tensor) else a.shape
-        )
+        # Two declared dtypes promote; a scalar converts to the tensor's
+        # dtype and never widens the result. See section 6.2 and 6.5.
+        if isinstance(b, Tensor):
+            other = b
+            dtype = resolve_result_dtype(a.dtype, b.dtype)
+            output_shape = a.shape.broadcast_with(b.shape)
+        else:
+            other = convert_scalar(b, a.dtype)
+            dtype = a.dtype
+            output_shape = a.shape
         accelerated = execute_multiply(a, other, dtype=dtype, output_shape=output_shape)
         return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
 

@@ -317,36 +317,49 @@ def _domain_fits(integer_dtype: DataType, float_dtype: DataType) -> bool:
     return -limit <= lower and upper <= limit
 
 
-def arithmetic_result_dtype(left: DataType, right: DataType) -> DataType:
-    """Return the result dtype of ``+``, ``-`` or ``*`` (section 6.2).
+def resolve_result_dtype(left_dtype: DataType, right_dtype: DataType) -> DataType:
+    """Return the result dtype of two declared operand dtypes (section 6.2).
+
+    This is the single authority for the section 6 promotion table. It takes
+    two declarations and returns one, so it resolves a dtype and does nothing
+    else: it never converts a scalar, never receives an operand or an
+    operation name, and never inspects element values, storage or the
+    selected backend. The table is symmetric, so the operand order does not
+    affect the result.
+
+    Operations whose result domain differs from the table apply their own
+    adjustment to what this returns — true division does, through
+    :func:`true_division_dtype`.
 
     Raises :class:`DtypePromotionError` for a combination no public dtype can
     carry without losing a domain, which the caller resolves with a cast.
     """
-    if left == right:
-        return left
-    left_integer = left.kind == "integer"
-    right_integer = right.kind == "integer"
+    if left_dtype == right_dtype:
+        return left_dtype
+    left_integer = left_dtype.kind == "integer"
+    right_integer = right_dtype.kind == "integer"
 
     if left_integer and right_integer:
-        low = min(integer_limits(left)[0], integer_limits(right)[0])
-        high = max(integer_limits(left)[1], integer_limits(right)[1])
+        low = min(integer_limits(left_dtype)[0], integer_limits(right_dtype)[0])
+        high = max(integer_limits(left_dtype)[1], integer_limits(right_dtype)[1])
         for candidate in _INTEGER_ORDER:
             candidate_low, candidate_high = integer_limits(candidate)
             if candidate_low <= low and high <= candidate_high:
                 return candidate
         raise DtypePromotionError(
             "no supported integer dtype represents both "
-            + left.name
+            + left_dtype.name
             + " and "
-            + right.name
+            + right_dtype.name
             + "; cast one operand explicitly"
         )
 
     if not left_integer and not right_integer:
         return float64
 
-    integer, floating = (left, right) if left_integer else (right, left)
+    integer, floating = (
+        (left_dtype, right_dtype) if left_integer else (right_dtype, left_dtype)
+    )
     precision = _FLOAT_PRECISION[floating.typecode]
     for candidate in _FLOAT_ORDER:
         if _FLOAT_PRECISION[candidate.typecode] < precision:
@@ -363,27 +376,34 @@ def arithmetic_result_dtype(left: DataType, right: DataType) -> DataType:
     )
 
 
-def division_result_dtype(left: DataType, right: DataType) -> DataType:
-    """Return the result dtype of true division (section 7, rule D).
+def true_division_dtype(resolved_dtype: DataType) -> DataType:
+    """Adapt an already-resolved dtype for true division (section 7.3, rule D).
 
-    Division never yields an integer. Integer operands promote first, and the
-    promoted integer dtype must then be exact in a floating dtype.
+    True division never yields an integer, so an integer dtype becomes the
+    narrowest floating dtype that represents its whole domain exactly. A
+    floating dtype is already a true-division result and is preserved, which
+    is what keeps ``float32 / float32`` at ``float32`` (section 7.1).
+
+    This is deliberately a one-dtype adjustment. Resolving the two operand
+    dtypes is :func:`resolve_result_dtype`'s job and is done before this is
+    called, so the two rules stay separable and neither repeats the other.
+
+    Raises :class:`DtypePromotionError` when no public floating dtype holds
+    the resolved integer domain — the ``int64`` case, which requires the
+    explicit cast section 7.3 describes.
     """
-    promoted = arithmetic_result_dtype(left, right)
-    if promoted.kind != "integer":
-        return promoted
+    if resolved_dtype.kind != "integer":
+        return resolved_dtype
     for candidate in _FLOAT_ORDER:
-        if _domain_fits(promoted, candidate):
+        if _domain_fits(resolved_dtype, candidate):
             return candidate
     raise DtypePromotionError(
-        "true division of "
-        + left.name
-        + " by "
-        + right.name
-        + " promotes to "
-        + promoted.name
-        + ", which no supported floating dtype represents exactly; cast "
-        + "explicitly, for example x.astype(float64) / y.astype(float64)"
+        "true division of operands promoting to "
+        + resolved_dtype.name
+        + " has no supported floating result dtype that represents every "
+        + resolved_dtype.name
+        + " value exactly; cast explicitly, for example "
+        + "x.astype(float64) / y.astype(float64)"
     )
 
 
@@ -457,24 +477,6 @@ def convert_scalar(value, dtype: DataType):
     raise TypeError("Unsupported scalar type: " + type(value).__name__)
 
 
-def resolve_binary(left_dtype: DataType, right, *, division: bool = False):
-    """Return ``(result_dtype, right_operand)`` for one arithmetic call.
-
-    ``right`` is either a Tensor, whose dtype takes part in promotion, or a
-    Python scalar, which converts to ``left_dtype`` under S1 to S4 and leaves
-    the result dtype to the tensor.
-    """
-    right_dtype = getattr(right, "dtype", None)
-    if isinstance(right_dtype, DataType):
-        if division:
-            return division_result_dtype(left_dtype, right_dtype), right
-        return arithmetic_result_dtype(left_dtype, right_dtype), right
-    converted = convert_scalar(right, left_dtype)
-    if division:
-        return division_result_dtype(left_dtype, left_dtype), converted
-    return left_dtype, converted
-
-
 def resolve_power(base_dtype: DataType, exponent):
     """Return ``(result_dtype, exponent_operand)`` for ``base ** exponent``.
 
@@ -493,7 +495,7 @@ def resolve_power(base_dtype: DataType, exponent):
     """
     exponent_dtype = getattr(exponent, "dtype", None)
     if isinstance(exponent_dtype, DataType):
-        return arithmetic_result_dtype(base_dtype, exponent_dtype), exponent
+        return resolve_result_dtype(base_dtype, exponent_dtype), exponent
     return base_dtype, convert_scalar(exponent, base_dtype)
 
 
@@ -518,5 +520,5 @@ def resolve_power_scalar_base(base, exponent_dtype: DataType):
         return exponent_dtype, convert_scalar(base, exponent_dtype)
     # A Python float base is taken as float64, the default floating dtype, and
     # the ordinary promotion restrictions then apply against the exponent.
-    result = arithmetic_result_dtype(float64, exponent_dtype)
+    result = resolve_result_dtype(float64, exponent_dtype)
     return result, convert_scalar(base, result)

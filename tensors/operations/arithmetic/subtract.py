@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Union
 from tensors.backend import execute_subtract
-from tensors.dtype import resolve_binary
+from tensors.dtype import convert_scalar, resolve_result_dtype
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.operations._gradient_shaping import (
@@ -23,11 +23,16 @@ class Sub(Operation):
         """Element-wise subtraction of two tensors or a tensor and a scalar."""
         if not isinstance(b, (int, float, Tensor)):
             raise TypeError(f"Unsupported: {type(b)}")
-        # Promotion for a tensor operand, conversion for a scalar.
-        dtype, other = resolve_binary(a.dtype, b)
-        output_shape = (
-            a.shape.broadcast_with(b.shape) if isinstance(b, Tensor) else a.shape
-        )
+        # Two declared dtypes promote; a scalar converts to the tensor's
+        # dtype and never widens the result. See section 6.2 and 6.5.
+        if isinstance(b, Tensor):
+            other = b
+            dtype = resolve_result_dtype(a.dtype, b.dtype)
+            output_shape = a.shape.broadcast_with(b.shape)
+        else:
+            other = convert_scalar(b, a.dtype)
+            dtype = a.dtype
+            output_shape = a.shape
         accelerated = execute_subtract(a, other, dtype=dtype, output_shape=output_shape)
         return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
 
@@ -70,7 +75,8 @@ def subtract_scalar(left: Scalar, right: Tensor) -> Tensor:
     it as ``-right + left`` would not: negating an unsigned tensor widens it,
     and the scalar would then be measured against the wider dtype.
     """
-    dtype, converted = resolve_binary(right.dtype, left)
+    converted = convert_scalar(left, right.dtype)
+    dtype = right.dtype
     accelerated = execute_subtract(
         converted, right, dtype=dtype, output_shape=right.shape
     )

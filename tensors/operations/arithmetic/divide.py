@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Union
 from tensors.backend import execute_divide, execute_division_denominator_gradient
-from tensors.dtype import resolve_binary
+from tensors.dtype import convert_scalar, resolve_result_dtype, true_division_dtype
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.utils.broadcasting import broadcast_to, broadcast_tensors
@@ -93,7 +93,17 @@ class Div(Operation):
         """Element-wise division."""
         if not isinstance(b, (int, float, Tensor)):
             raise TypeError(f"Unsupported: {type(b)}")
-        dtype, other = resolve_binary(a.dtype, b, division=True)
+        # Resolve the declared dtypes first, then let true division adapt
+        # the result domain. A scalar converts to the tensor's dtype, which
+        # is the conversion target even when the result is floating.
+        # Sections 6.2, 6.5 and 7.3.
+        if isinstance(b, Tensor):
+            other = b
+            resolved_dtype = resolve_result_dtype(a.dtype, b.dtype)
+        else:
+            other = convert_scalar(b, a.dtype)
+            resolved_dtype = a.dtype
+        dtype = true_division_dtype(resolved_dtype)
         if _is_integer_division(a, b):
             if isinstance(b, Tensor):
                 if _denominator_has_zero(b):
@@ -263,7 +273,8 @@ divide = Div().forward
 
 def divide_scalar(numerator: Scalar, denominator: Tensor) -> Tensor:
     """Return ``numerator / denominator`` for a scalar left operand."""
-    dtype, converted = resolve_binary(denominator.dtype, numerator, division=True)
+    converted = convert_scalar(numerator, denominator.dtype)
+    dtype = true_division_dtype(denominator.dtype)
     if denominator.dtype.kind == "integer" and _denominator_has_zero(denominator):
         raise ZeroDivisionError("Division by zero")
     numerator = converted

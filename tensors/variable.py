@@ -24,10 +24,12 @@ from typing import Any
 from ._typing import TensorData, TensorIndex, TensorLike, TensorOperand, VariableData
 from .dtype import (
     DataType,
+    convert_scalar,
     from_typecode,
-    resolve_binary,
     resolve_power,
     resolve_power_scalar_base,
+    resolve_result_dtype,
+    true_division_dtype,
 )
 from .shape import Shape
 from .tensor import Tensor
@@ -254,7 +256,11 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype, converted = resolve_binary(self.dtype, other)
+        if isinstance(other, (Variable, Tensor)):
+            dtype = resolve_result_dtype(self.dtype, other.dtype)
+        else:
+            converted = convert_scalar(other, self.dtype)
+            dtype = self.dtype
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
@@ -276,7 +282,11 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype, converted = resolve_binary(self.dtype, other)
+        if isinstance(other, (Variable, Tensor)):
+            dtype = resolve_result_dtype(self.dtype, other.dtype)
+        else:
+            converted = convert_scalar(other, self.dtype)
+            dtype = self.dtype
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
@@ -294,7 +304,10 @@ class Variable:
         # The scalar is measured against this Variable's declared dtype, so
         # it is validated before the negation that would widen an unsigned
         # dtype. See docs/arithmetic-semantics.md section 6.5.
-        resolve_binary(self.dtype, other)
+        if isinstance(other, (Variable, Tensor)):
+            resolve_result_dtype(self.dtype, other.dtype)
+        else:
+            convert_scalar(other, self.dtype)
         return (-self) + other
 
     def __mul__(self, other: TensorOperand) -> Variable:
@@ -302,7 +315,11 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype, converted = resolve_binary(self.dtype, other)
+        if isinstance(other, (Variable, Tensor)):
+            dtype = resolve_result_dtype(self.dtype, other.dtype)
+        else:
+            converted = convert_scalar(other, self.dtype)
+            dtype = self.dtype
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
@@ -324,7 +341,12 @@ class Variable:
             # A structural expression belongs to the vertex: it records
             # the operation instead of calculating a value.
             return NotImplemented
-        dtype, converted = resolve_binary(self.dtype, other, division=True)
+        if isinstance(other, (Variable, Tensor)):
+            resolved_dtype = resolve_result_dtype(self.dtype, other.dtype)
+        else:
+            converted = convert_scalar(other, self.dtype)
+            resolved_dtype = self.dtype
+        dtype = true_division_dtype(resolved_dtype)
         if isinstance(other, Variable):
             operand = other
         elif isinstance(other, Tensor):
@@ -340,7 +362,12 @@ class Variable:
 
     def __rtruediv__(self, other: int | float | Tensor) -> Variable:
         # Operand order carries the semantics: the numerator is input_0.
-        dtype, converted = resolve_binary(self.dtype, other, division=True)
+        if isinstance(other, (Variable, Tensor)):
+            resolved_dtype = resolve_result_dtype(self.dtype, other.dtype)
+        else:
+            converted = convert_scalar(other, self.dtype)
+            resolved_dtype = self.dtype
+        dtype = true_division_dtype(resolved_dtype)
         if isinstance(other, Variable):
             numerator = other
         elif isinstance(other, Tensor):
