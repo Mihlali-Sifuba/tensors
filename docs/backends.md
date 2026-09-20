@@ -76,6 +76,13 @@ such as `tolist()` materialize host values when needed. An in-place mutation
 makes host storage authoritative and invalidates cached native representations,
 preventing stale backend data.
 
+That lazy-conversion model is **current behaviour, and it is the part of this
+document a proposed redesign replaces**: under the target contract a tensor has
+one storage representation, there is no cache, and a backend mismatch raises
+instead of converting. See
+[Backend and storage architecture](backend-storage-architecture.md), which is a
+proposal and describes nothing implemented.
+
 These storage classes are internal implementation details, not a second public
 array API. Users continue to write ordinary tensor expressions.
 
@@ -398,6 +405,14 @@ those operations to be correctly rounded. The full contract, the breaking
 changes it introduces and the conformance requirements are in
 [Arithmetic semantics](arithmetic-semantics.md), which is awaiting
 implementation and does not describe current behaviour.
+
+**Proposed storage contract.** Where a tensor's values live is the subject of a
+separate proposal,
+[Backend and storage architecture](backend-storage-architecture.md): selection
+determines construction as well as execution, a tensor has one authoritative
+representation, and cross-backend use is an error rather than an implicit
+transfer. It is not approved and not implemented; the residency behaviour
+described above is what the package does today.
 
 Changing a backend remains an execution choice and not a change to the
 mathematical API — but under the target contract, *choosing* one explicitly is

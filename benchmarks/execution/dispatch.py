@@ -25,7 +25,7 @@ from tensors.graph.state import get_graph_state
 from tensors.ops import Add, Mul
 from tensors.shape import Shape
 from tensors.strides import Strides
-from tensors.utils.broadcasting import broadcast_binary_values
+from tensors.utils.broadcasting import broadcast_to
 from benchmarks.case import Case, Group, Unsupported
 from benchmarks.inputs import ACCELERATED, tensor
 
@@ -188,13 +188,31 @@ def _metadata_cases(backend: str) -> list[Case]:
             **common,
         ),
         Case(
-            name="framework.broadcast_binary_values",
-            run=lambda: broadcast_binary_values(scalar, scalar, Shape(1), _add_scalars),
+            name="framework.broadcast_to_equal_shape",
+            run=lambda: broadcast_to(scalar, Shape(1)),
             layer="dispatch",
-            validate=lambda: broadcast_binary_values(
-                scalar, scalar, Shape(1), _add_scalars
-            ),
-            description="the reference broadcast helper, which walks broadcast offsets and applies the operation per element",
+            validate=lambda: broadcast_to(scalar, Shape(1)),
+            description="broadcasting to a shape the tensor already has, which returns it unchanged",
+            **common,
+        ),
+        Case(
+            name="framework.broadcast_then_operate",
+            run=lambda: [
+                _add_scalars(x, y)
+                for x, y in zip(
+                    broadcast_to(scalar, Shape(1))._data,
+                    broadcast_to(scalar, Shape(1))._data,
+                )
+            ],
+            layer="dispatch",
+            validate=lambda: [
+                _add_scalars(x, y)
+                for x, y in zip(
+                    broadcast_to(scalar, Shape(1))._data,
+                    broadcast_to(scalar, Shape(1))._data,
+                )
+            ],
+            description="broadcasting both operands and then applying the operation, as the reference kernels now do",
             **common,
         ),
         Case(

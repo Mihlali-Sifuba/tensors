@@ -19,17 +19,18 @@ def subtract(
 ) -> Storage:
     """Subtract each broadcast pair with Python scalar semantics."""
     from tensors.tensor import Tensor
-    from tensors.utils.broadcasting import broadcast_binary_values
-
-    def evaluate(x, y):
-        return x - y
+    from tensors.utils.broadcasting import broadcast_to
 
     if isinstance(left, Tensor) and isinstance(right, Tensor):
-        values = broadcast_binary_values(left, right, output_shape, evaluate)
+        # Broadcasting first, then the operation: each is one
+        # responsibility, and neither needs to know the other.
+        left_values = broadcast_to(left, output_shape)._data
+        right_values = broadcast_to(right, output_shape)._data
+        values = [x - y for x, y in zip(left_values, right_values)]
     elif isinstance(left, Tensor):
-        values = [evaluate(x, right) for x in left._data]
+        values = [x - right for x in left._data]
     elif isinstance(right, Tensor):
-        values = [evaluate(left, y) for y in right._data]
+        values = [left - y for y in right._data]
     else:
-        values = [evaluate(left, right)]
+        values = [left - right]
     return PythonStorage.from_arithmetic(values, dtype)

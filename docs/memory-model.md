@@ -7,6 +7,13 @@ while public construction, reshape, transpose, slicing, and broadcasting retain
 their existing owning/materializing behavior. Shared-storage views are not part
 of this change.
 
+This document covers **layout** — where a value sits inside one backend's
+buffer. Which backend that buffer belongs to is a separate question, and a
+proposed redesign of it is in
+[Backend and storage architecture](backend-storage-architecture.md). That
+proposal keeps everything here unchanged, including the deferred view work
+below, and is not implemented.
+
 ## Metadata
 
 Every Tensor has four fundamental layout components:
@@ -228,7 +235,9 @@ The metadata model prepares the package for deliberate follow-up work on:
 
 - zero-copy transpose;
 - zero-copy slicing;
-- zero-stride broadcasting;
+- zero-stride broadcasting — now the single remaining cost of separating
+  broadcasting from computation, since `broadcast_to` materializes its
+  expansion and the reference kernels call it twice per binary operation;
 - negative-stride reversal;
 - shared-storage lifetime and ownership;
 - mutation propagation and Tensor versioning across aliases;
