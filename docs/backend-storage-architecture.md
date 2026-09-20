@@ -272,20 +272,51 @@ the lock is what makes that choice meaningful.
 - **Before the lock**, any available backend may be selected, as often as
   wanted. A program may read configuration, inspect
   `available_backends()` and decide.
-- **The lock is taken when the first tensor storage is constructed.** That is
-  the first moment a tensor exists whose backend the default determined, and
-  the point after which changing the default would leave that tensor behind.
-  It is a property of the process, not of any tensor, and it is taken once.
+- **The lock is taken when the first tensor storage is constructed**, whether
+  that happens under the process default or under a scoped override. It marks
+  the moment the process stops configuring and starts operating. It is a
+  property of the process, not of any tensor, and it is taken once.
 - **After the lock, selecting the same backend again is permitted and has no
   effect.** It is idempotent by design, so library or setup code may state its
   requirement without needing to know whether it ran first.
 - **After the lock, selecting a different backend raises.** The error names the
   locked default, the requested backend, and that storage has been constructed.
 
-The alternative to raising is not "it works": it is that existing tensors hold
-a backend the process no longer selects, which under T3 and T6 makes them
-unusable at their next operation. The lock converts a confusing failure far
-from its cause into an explicit one at the call responsible.
+The alternative to raising is not "it works". If the default can change
+mid-run, the same unqualified `ts.Tensor([...])` means one backend early in a
+process and another backend later, and under T3 and T6 the two results cannot
+be combined. The failure surfaces at whichever operation first mixes them, far
+from the `set_backend` that caused it. The lock moves it to the call
+responsible.
+
+This is not a rule against a process using more than one backend — T8 permits
+that deliberately. It is a rule against the *same expression* quietly changing
+meaning. A `use_backend` scope states in the source which backend it selects;
+a reassigned default changes every later construction that says nothing at all.
+
+**The lock does not depend on how the first tensor was built.** Construction
+under a scoped override takes it exactly as construction under the default
+does:
+
+```python
+ts.set_backend("python")
+
+with ts.use_backend("numpy"):
+    a = ts.Tensor([1.0, 2.0])   # takes the lock; a is NumPy-backed
+
+ts.set_backend("cuda")          # raises: the default is locked to python
+```
+
+`a` owes nothing to the Python default — it was built under the override, and
+T8 guarantees the default never touched it. The lock still applies, because it
+is a statement about the **process** and not about `a`: once a process has
+started building tensors, the backend that unqualified construction targets is
+settled.
+
+Making the lock conditional on a tensor's provenance was considered and
+rejected. Its timing would then depend on which scopes happened to be open, so
+whether a `set_backend` call succeeded would vary with unrelated code. One
+process-wide rule is predictable and states in a sentence when it applies.
 
 **What the lock does not do.** It does not restrict `use_backend` (T8), which
 changes the active backend rather than the default. It does not migrate,
@@ -402,7 +433,7 @@ keep doing so. Stated as behaviour:
 | Nesting scopes | Each scope restores the selection it replaced, innermost first. |
 | Leaving a scope normally | The previous active backend is restored. No tensor is touched. |
 | Leaving a scope by exception | Identical to leaving normally. The selection is restored before the exception propagates. |
-| A tensor built inside a scope | Belongs to the scoped backend, and still does after the scope exits. |
+| A tensor built inside a scope | Belongs to the scoped backend, and still does after the scope exits. If it is the process's first, it takes T7's lock like any other first construction. |
 | A tensor built outside a scope | Unchanged by the scope. Not usable inside one selecting a different backend (T6). |
 | A thread started inside a scope | Does not inherit the override; uses the locked process default (2.1, T7). |
 | `set_backend` called inside a scope | Governed by T7's lock, not by the scope. The override continues to win until the scope exits. |
@@ -531,7 +562,7 @@ What marks a process as locked, and what is the unit the rule applies to?
 
 | Option | Consequence |
 | --- | --- |
-| **A. First tensor storage constructed — ADOPTED** | A program may select freely during import and configuration, and is fixed from its first tensor. Requires one process-wide flag. |
+| **A. First tensor storage constructed — ADOPTED** | A program may select freely during import and configuration, and is fixed from its first tensor — built under the default or under a scoped override alike. Requires one process-wide flag and no provenance tracking. |
 | **B. First operation executed** | More permissive: tensors may be built, then the backend chosen. But tensors built before the choice already have a backend, so T3 makes them mismatched — the rule would not prevent the failure it exists to prevent. |
 | **C. Per-thread rather than per-process** | Allows a worker per backend. Multiplies the lifecycle by the thread model and interacts with `use_backend`'s context-local override in ways not thought through. |
 
