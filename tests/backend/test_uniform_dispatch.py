@@ -63,6 +63,16 @@ def tagged_tensor(kind, values):
     )
 
 
+def prepared(left, right, *, dtype, output_shape):
+    """Stand in for a backend's operand preparation, unchanged.
+
+    These tests are about which package is loaded and what the dispatcher does
+    with the result, not about conversion, so a stub backend declares the
+    identity preparation and the kernel sees exactly what was passed in.
+    """
+    return left, right
+
+
 class RecordingLoader:
     """Stands in for ``load_backend`` and records the backend it was asked for."""
 
@@ -99,7 +109,7 @@ class SelectedPackageTests(BackendTestCase):
                     calls.append((args, kwargs))
                     return PythonStorage.from_values([9.0, 9.0], ts.float64)
 
-                stub = SimpleNamespace(**{name: kernel})
+                stub = SimpleNamespace(**{name: kernel}, prepare_binary_operands=prepared)
                 with ts.use_backend("python"):
                     left = ts.Tensor([4.0, 6.0])
                     right = ts.Tensor([2.0, 3.0])
@@ -233,9 +243,7 @@ class PreservedContractTests(BackendTestCase):
     def test_a_result_from_another_backend_is_still_rejected(self):
         for name, dispatch, operation in ARITHMETIC:
             with self.subTest(operation=name):
-                stub = SimpleNamespace(
-                    **{name: lambda *a, **k: TaggedStorage("cuda", [1.0])}
-                )
+                stub = SimpleNamespace(**{name: lambda *a, **k: TaggedStorage("cuda", [1.0])}, prepare_binary_operands=prepared)
                 with ts.use_backend("python"):
                     left = ts.Tensor([4.0])
                     right = ts.Tensor([2.0])
@@ -248,7 +256,7 @@ class PreservedContractTests(BackendTestCase):
     def test_a_declining_kernel_raises_without_falling_back(self):
         for name, dispatch, operation in ARITHMETIC:
             with self.subTest(operation=name):
-                stub = SimpleNamespace(**{name: lambda *a, **k: None})
+                stub = SimpleNamespace(**{name: lambda *a, **k: None}, prepare_binary_operands=prepared)
                 with ts.use_backend("python"):
                     left = ts.Tensor([4.0])
                     right = ts.Tensor([2.0])
@@ -261,7 +269,7 @@ class PreservedContractTests(BackendTestCase):
                             operation(left, right)
 
     def test_a_declining_kernel_keeps_its_informative_message(self):
-        stub = SimpleNamespace(add=lambda *a, **k: None)
+        stub = SimpleNamespace(add=lambda *a, **k: None, prepare_binary_operands=prepared)
         with ts.use_backend("python"):
             left = ts.Tensor([4.0])
             with patch.object(

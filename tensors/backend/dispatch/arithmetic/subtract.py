@@ -37,7 +37,12 @@ def execute_subtract(
     selected = config.get_backend()
     validate_backend_residency((left, right), selected)
     backend: Any = load_backend(selected)
-    result = backend.subtract(left, right, dtype=dtype, output_shape=output_shape)
+    prepared_left, prepared_right = backend.prepare_binary_operands(
+        left, right, dtype=dtype, output_shape=output_shape
+    )
+    result = backend.subtract(
+        prepared_left, prepared_right, dtype=dtype, output_shape=output_shape
+    )
     if result is None:
         raise BackendOperationUnsupportedError(
             f"The {selected} backend cannot execute subtract at dtype "

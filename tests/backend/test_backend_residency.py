@@ -41,6 +41,16 @@ class TaggedStorage(Storage):
         return TaggedStorage(self.kind, self.buffer, self.dtype)
 
 
+def prepared(left, right, *, dtype, output_shape):
+    """Stand in for a backend's operand preparation, unchanged.
+
+    These tests are about which package is loaded and what the dispatcher does
+    with the result, not about conversion, so a stub backend declares the
+    identity preparation and the kernel sees exactly what was passed in.
+    """
+    return left, right
+
+
 def tagged_tensor(kind, values):
     return ts.Tensor._from_owned_storage(
         TaggedStorage(kind, values), dtype=ts.float64, shape=(len(values),)
@@ -237,7 +247,7 @@ class ResultResidencyTests(BackendTestCase):
     def _dispatch_with(self, kernel):
         from tensors.backend.dispatch.arithmetic import add as dispatch
 
-        backend = SimpleNamespace(add=kernel)
+        backend = SimpleNamespace(add=kernel, prepare_binary_operands=prepared)
         return patch(
             "tensors.backend.config.get_backend", return_value="numpy"
         ), patch.object(dispatch, "load_backend", return_value=backend)
@@ -362,7 +372,7 @@ class DispatchBehaviourTests(BackendTestCase):
         ]
 
         left = tagged_tensor("numpy", [1.0])
-        backend = SimpleNamespace(add=lambda *args, **kwargs: None)
+        backend = SimpleNamespace(add=lambda *args, **kwargs: None, prepare_binary_operands=prepared)
         with patch(
             "tensors.backend.config.get_backend", return_value="numpy"
         ), patch.object(dispatch, "load_backend", return_value=backend):
@@ -389,7 +399,7 @@ class DispatchBehaviourTests(BackendTestCase):
         from tensors.backend.dispatch.arithmetic import add as dispatch
 
         left = tagged_tensor("numpy", [1.0])
-        backend = SimpleNamespace(add=lambda *args, **kwargs: None)
+        backend = SimpleNamespace(add=lambda *args, **kwargs: None, prepare_binary_operands=prepared)
         with patch(
             "tensors.backend.config.get_backend", return_value="numpy"
         ), patch.object(dispatch, "load_backend", return_value=backend):

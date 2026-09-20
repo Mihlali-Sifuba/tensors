@@ -2,6 +2,8 @@
 
 import importlib
 import unittest
+
+import numpy
 from unittest.mock import patch
 import tensors as ts
 import tensors.backend as backend_state
@@ -59,8 +61,8 @@ class ArithmeticDispatchTests(unittest.TestCase):
                 self.assertIsInstance(result, NumPyStorage)
                 self.assertEqual(result.buffer.tolist(), [expected] * 32)
 
-    def test_each_dispatcher_forwards_operands_dtype_and_shape(self):
-        """The kernel receives exactly what the caller passed."""
+    def test_each_dispatcher_forwards_the_dtype_and_shape_it_resolved(self):
+        """The declared result dtype and shape reach the kernel unchanged."""
         for name, execute, _ in DISPATCHERS:
             with self.subTest(operation=name):
                 backend = load_backend("numpy")
@@ -72,11 +74,36 @@ class ArithmeticDispatchTests(unittest.TestCase):
                         execute(left, 2.0, dtype=ts.float32, output_shape=(2, 2))
                 backend_state._clear_backend_kernel_cache()
                 kernel.assert_called_once()
-                arguments, keywords = kernel.call_args
-                self.assertIs(arguments[0], left)
-                self.assertEqual(arguments[1], 2.0)
+                _, keywords = kernel.call_args
                 self.assertIs(keywords["dtype"], ts.float32)
                 self.assertEqual(keywords["output_shape"], (2, 2))
+
+    def test_each_dispatcher_prepares_operands_before_the_kernel(self):
+        """The kernel receives backend-native operands, not Tensors.
+
+        Turning a Tensor or a scalar into something the kernel can evaluate is
+        the preparation boundary's job, so by the time the kernel is called
+        both operands are native arrays already in the declared dtype.
+        """
+        for name, execute, _ in DISPATCHERS:
+            with self.subTest(operation=name):
+                backend = load_backend("numpy")
+                original = getattr(backend, name)
+                with patch.object(backend, name, wraps=original) as kernel:
+                    backend_state._clear_backend_kernel_cache()
+                    with ts.use_backend("numpy"):
+                        left = ts.Tensor([[2.0, 4.0], [6.0, 8.0]])
+                        execute(left, 2.0, dtype=ts.float32, output_shape=(2, 2))
+                backend_state._clear_backend_kernel_cache()
+                arguments, _ = kernel.call_args
+                prepared_left, prepared_right = arguments[:2]
+                for operand in (prepared_left, prepared_right):
+                    self.assertNotIsInstance(operand, ts.Tensor)
+                    self.assertEqual(operand.dtype, numpy.dtype("float32"))
+                self.assertEqual(
+                    prepared_left.tolist(), [[2.0, 4.0], [6.0, 8.0]]
+                )
+                self.assertEqual(float(prepared_right), 2.0)
 
     def test_each_dispatcher_runs_on_the_selected_backend(self):
         """Python, NumPy and auto, at a size the old threshold sent away."""

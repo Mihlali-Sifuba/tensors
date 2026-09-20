@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 import cupy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.kernels.arithmetic import _ieee32
-from tensors.backend.cuda.conversion import _arithmetic_operand
 from tensors.backend.cuda.conversion import _arithmetic_storage
 
 if TYPE_CHECKING:
-    from tensors._typing import Scalar
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
 #: The unsigned dtype of each width. Modular arithmetic is defined for
@@ -78,8 +75,8 @@ def _ieee_pow(left, right):
 
 
 def power(
-    left: Tensor | Scalar,
-    right: Tensor | Scalar,
+    left: Any,
+    right: Any,
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
@@ -92,8 +89,8 @@ def power(
         native = cupy.dtype(dtype.name)
         with _errstate(over="ignore", under="ignore", invalid="ignore"):
             result = _integer_power(
-                _arithmetic_operand(left, dtype),
-                _arithmetic_operand(right, dtype),
+                left,
+                right,
                 native,
             )
         return _arithmetic_storage(result, dtype=dtype, output_shape=output_shape)
@@ -102,17 +99,15 @@ def power(
     # section 12.3.3 is a result. Nothing here declines, so an infinity or a
     # NaN never sends the work to another backend, and the declared dtype is
     # preserved rather than widened to float64.
-    left_array = _arithmetic_operand(left, dtype)
-    right_array = _arithmetic_operand(right, dtype)
     if dtype.typecode == "f":
         # CuPy's generated binary32 code flushes subnormals, which section 5.4
         # forbids; the kernel below keeps them. The operands are handed over
         # untouched: an ElementwiseKernel broadcasts them itself, and routing a
         # scalar through cupy.asarray first would lose the sign of a negative
         # zero, which section 12.3.3 specifies.
-        result = _ieee32.apply("power", left_array, right_array)
+        result = _ieee32.apply("power", left, right)
         return _arithmetic_storage(result, dtype=dtype, output_shape=output_shape)
 
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        result = _ieee_pow(left_array, right_array)
+        result = _ieee_pow(left, right)
     return _arithmetic_storage(result, dtype=dtype, output_shape=output_shape)

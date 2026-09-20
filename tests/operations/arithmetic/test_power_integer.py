@@ -313,8 +313,11 @@ class CudaExecutesIntegerPowerNatively(ArithmeticTestCase):
 
         with ts.use_backend("cuda"):
             base = tensor("int32", [2, 3, 4, 5])
+            prepare = _backend_kernel("prepare_binary_operands")
             storage = _backend_kernel("power")(
-                base, 5, dtype=ts.int32, output_shape=(4,)
+                *prepare(base, 5, dtype=ts.int32, output_shape=(4,)),
+                dtype=ts.int32,
+                output_shape=(4,),
             )
         self.assertIsNotNone(storage, "the CUDA kernel declined integer operands")
         self.assertEqual(type(storage).__name__, "CudaStorage")

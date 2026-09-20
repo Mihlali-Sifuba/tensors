@@ -829,8 +829,16 @@ class CudaDoesNotTransferOrSynchronise(ArithmeticTestCase):
             with self.subTest(case=label):
                 with ts.use_backend("cuda"):
                     base = ts.full((64,), base_value, dtype=ts.float64) + 0.0
+                    prepare = _backend_kernel("prepare_binary_operands")
                     storage = _backend_kernel("power")(
-                        base, exponent, dtype=ts.float64, output_shape=(64,)
+                        *prepare(
+                            base,
+                            exponent,
+                            dtype=ts.float64,
+                            output_shape=(64,),
+                        ),
+                        dtype=ts.float64,
+                        output_shape=(64,),
                     )
                 self.assertIsNotNone(storage, f"{label} declined to the reference")
                 self.assertEqual(type(storage).__name__, "CudaStorage")

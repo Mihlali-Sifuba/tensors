@@ -166,6 +166,30 @@ def _arithmetic_operand(value: Tensor | Scalar, dtype: DataType) -> Any:
     return native.type(value)
 
 
+def prepare_binary_operands(
+    left: Tensor | Scalar,
+    right: Tensor | Scalar,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> tuple[Any, Any]:
+    """Return both operands as native arrays already in the declared dtype.
+
+    A kernel here receives arrays, not tensors. Reading a Tensor's device- or
+    host-resident buffer and placing both operands in ``dtype`` happens once,
+    at this boundary, rather than in each kernel.
+
+    Broadcasting is not materialized: CuPy applies its own
+    broadcasting rules to these operands during the vectorized call, which
+    costs no copy. ``output_shape`` is the shape the operation layer already
+    agreed for the result, and the kernel checks the result against it when it
+    builds storage; it is part of the shared preparation contract because the
+    Python backend, which has no array library to broadcast for it, expands
+    its operands to that shape here.
+    """
+    return _arithmetic_operand(left, dtype), _arithmetic_operand(right, dtype)
+
+
 def _arithmetic_storage(
     result: Any,
     *,

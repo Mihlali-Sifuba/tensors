@@ -164,15 +164,20 @@ def _strided_cases(backend: str, side: int) -> list[Case]:
                 **common,
             )
         )
+        # Prepared once, outside the timed call: this rung measures the
+        # kernel, not the conversion that precedes it.
+        prepared_layout = kernels.prepare_binary_operands(
+            value, value, dtype=ts.float64, output_shape=(side, side)
+        )
         cases.append(
             Case(
                 name=f"kernel.add/{name}/{side}x{side}",
-                run=lambda value=value: kernels.add(
-                    value, value, dtype=ts.float64, output_shape=(side, side)
+                run=lambda prepared=prepared_layout: kernels.add(
+                    *prepared, dtype=ts.float64, output_shape=(side, side)
                 ),
                 layer="kernel",
-                validate=lambda value=value: kernels.add(
-                    value, value, dtype=ts.float64, output_shape=(side, side)
+                validate=lambda prepared=prepared_layout: kernels.add(
+                    *prepared, dtype=ts.float64, output_shape=(side, side)
                 ),
                 description="a kernel reading a tensor with this layout",
                 **common,

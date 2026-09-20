@@ -571,7 +571,11 @@ class TheProviderNoLongerDeclines(unittest.TestCase):
                 with ts.use_backend("numpy"):
                     base = ts.Tensor(values * 64, dtype=dtype)
                     storage = numpy_kernels.power(
-                        base, exponent, dtype=dtype, output_shape=(64,)
+                        *numpy_kernels.prepare_binary_operands(
+                            base, exponent, dtype=dtype, output_shape=(64,)
+                        ),
+                        dtype=dtype,
+                        output_shape=(64,),
                     )
                 self.assertIsNotNone(
                     storage, f"{label} still declines to the reference"

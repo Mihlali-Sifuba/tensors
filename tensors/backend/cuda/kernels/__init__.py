@@ -5,6 +5,9 @@ module re-exports them under the flat names the dispatch layer
 resolves by.
 """
 
+from tensors.backend.cuda.conversion import (
+    prepare_binary_operands as prepare_binary_operands,
+)
 from tensors.backend.cuda.kernels.arithmetic.add import add as add
 from tensors.backend.cuda.kernels.arithmetic.divide import divide as divide
 from tensors.backend.cuda.kernels.arithmetic.multiply import multiply as multiply

@@ -5,6 +5,7 @@ from tensors.backend.python.storage import PythonStorage
 import math
 from tensors.tensor import Tensor
 from tensors.dtype import resolve_power
+from tensors.backend.python.conversion import prepare_binary_operands
 from tensors.backend.python.kernels.arithmetic.power import power, _power
 from tensors.utils.power_gradients import exponent_derivative
 from typing import TYPE_CHECKING
@@ -17,7 +18,13 @@ def _power_values(base, exponent):
     # The same resolution the forward operation uses, so a gradient never
     # disagrees with the value it differentiates (section 12.5).
     dtype, exponent = resolve_power(base.dtype, exponent)
-    storage = power(base, exponent, dtype=dtype, output_shape=base.shape)
+    storage = power(
+        *prepare_binary_operands(
+            base, exponent, dtype=dtype, output_shape=base.shape
+        ),
+        dtype=dtype,
+        output_shape=base.shape,
+    )
     return Tensor._from_owned_storage(storage, dtype=dtype, shape=base.shape)
 
 

@@ -239,7 +239,10 @@ def _construction_cases(backend: str) -> list[Case]:
         kernels = loading.load_backend(backend)
         left = tensor(shape, dtype_name="float64", kind="ramp")
         right = tensor(shape, dtype_name="float64", kind="constant", value=2.0)
-        storage = kernels.add(left, right, dtype=ts.float64, output_shape=shape)
+        prepared = kernels.prepare_binary_operands(
+            left, right, dtype=ts.float64, output_shape=shape
+        )
+        storage = kernels.add(*prepared, dtype=ts.float64, output_shape=shape)
         if storage is None:
             raise Unsupported(
                 "the binary kernel declined this configuration, so there is no native result to wrap"
