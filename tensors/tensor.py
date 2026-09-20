@@ -11,6 +11,7 @@ from tensors.backend.numpy.storage import NumPyStorage
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.backend.storage import StorageKind
+from tensors.backend.construction import storage_from_values
 from tensors.backend.conversion import convert_storage
 from tensors.strides import Strides
 from tensors.utils.lists import flatten_nested_list, infer_nested_list_shape
@@ -112,26 +113,14 @@ class Tensor:
             self._set_storage(data.copy())
             inferred_shape = (data.size,)
         elif isinstance(data, (int, float)):
-            self._set_storage(
-                self._construction_storage(
-                    PythonStorage.from_values([data], self.dtype)
-                )
-            )
+            self._set_storage(storage_from_values((data,), self.dtype))
             inferred_shape = ()
         elif isinstance(data, list):
             flat_data = flatten_nested_list(data)
-            self._set_storage(
-                self._construction_storage(
-                    PythonStorage.from_values(flat_data, self.dtype)
-                )
-            )
+            self._set_storage(storage_from_values(flat_data, self.dtype))
             inferred_shape = infer_nested_list_shape(data)
         elif isinstance(data, array):
-            self._set_storage(
-                self._construction_storage(
-                    PythonStorage.from_values(data, self.dtype)
-                )
-            )
+            self._set_storage(storage_from_values(data, self.dtype))
             inferred_shape = (len(data),)
         else:
             raise TypeError(f"Unsupported data type: {type(data)}")
@@ -144,14 +133,6 @@ class Tensor:
             raise ValueError(
                 f"Data size {self._storage.size} does not match shape {self.shape} (expected {expected_element_count} elements)"
             )
-
-    @staticmethod
-    def _construction_storage(storage: PythonStorage) -> Storage:
-        """Place host input in the active backend's authoritative storage."""
-        from tensors.backend.config import get_backend
-
-        active = get_backend()
-        return storage if active == "python" else convert_storage(storage, active)
 
     @classmethod
     def _from_owned_storage(
@@ -201,7 +182,7 @@ class Tensor:
         """
         tensor = cls.__new__(cls)
         tensor._dtype = dtype
-        tensor._set_storage(PythonStorage.from_values(values, dtype))
+        tensor._set_storage(storage_from_values(values, dtype))
         tensor._shape = shape
         tensor._strides = Strides.contiguous(shape)
         tensor._offset = 0

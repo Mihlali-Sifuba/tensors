@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 import importlib
+from collections.abc import Iterable
 from typing import Any
+from tensors._typing import Scalar
 from tensors.dtype import DataType
 from tensors.backend.storage import Storage
 
@@ -19,6 +21,11 @@ class CudaStorage(Storage):
         if not values.flags.c_contiguous:
             values = cupy.ascontiguousarray(values)
         self._buffer = values.copy() if copy else values
+
+    @classmethod
+    def from_values(cls, values: Iterable[Scalar], dtype: DataType) -> CudaStorage:
+        """Construct device-native storage directly from host values."""
+        return cls(tuple(values), dtype)
 
     @property
     def buffer(self) -> Any:

@@ -189,6 +189,27 @@ class NumPyConstructionResidencyTests(unittest.TestCase):
         self.assertIsInstance(literal._storage, NumPyStorage)
         self.assertIsInstance(created._storage, NumPyStorage)
 
+    def test_literal_construction_does_not_create_python_storage(self):
+        with patch.object(
+            PythonStorage,
+            "from_values",
+            side_effect=AssertionError("unexpected PythonStorage construction"),
+        ):
+            with ts.use_backend("numpy"):
+                value = ts.Tensor([1, 2], dtype=ts.int32)
+
+        self.assertIsInstance(value._storage, NumPyStorage)
+        self.assertEqual(value.tolist(), [1, 2])
+
+    def test_internal_scalar_construction_is_numpy_native(self):
+        from tensors.shape import Shape
+
+        with ts.use_backend("numpy"):
+            value = ts.Tensor._from_values((3,), ts.int32, Shape())
+
+        self.assertIsInstance(value._storage, NumPyStorage)
+        self.assertEqual(value.item(), 3)
+
 
 @requires_cuda
 class CudaConstructionResidencyTests(unittest.TestCase):
