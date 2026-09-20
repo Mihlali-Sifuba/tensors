@@ -340,10 +340,16 @@ The folders have deliberately narrow responsibilities:
   it had, since NumPy and CuPy broadcast natively — now read
 
   ```python
-  left = broadcast_to(left, output_shape)._data
-  right = broadcast_to(right, output_shape)._data
-  values = [evaluate(x, y) for x, y in zip(left, right)]
+  left_values = broadcast_to(left, output_shape)._data
+  right_values = broadcast_to(right, output_shape)._data
+  values = [x + y for x, y in zip(left_values, right_values)]
   ```
+
+  The element rule is written where it is used. A kernel whose rule is more
+  than an operator keeps a named local function for it — `maximum` and
+  `minimum` must propagate NaN, `divide` and `power` have domain rules — but
+  the wrapper exists only where it earns its name, not as a uniform shape
+  every kernel has to adopt.
 
   **This costs performance on the Python backend**, by roughly four times on a
   broadcasting binary operation. The single-pass helper allocated only its
