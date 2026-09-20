@@ -408,10 +408,13 @@ implementation and does not describe current behaviour.
 
 **Proposed storage contract.** Where a tensor's values live is the subject of a
 separate proposal,
-[Backend and storage architecture](backend-storage-architecture.md): selection
-determines construction as well as execution, a tensor has one authoritative
-representation, and cross-backend use is an error rather than an implicit
-transfer. It is not approved and not implemented; the residency behaviour
+[Backend and storage architecture](backend-storage-architecture.md): the active
+backend determines construction as well as execution, a tensor has one
+authoritative representation, and cross-backend use is an error rather than an
+implicit transfer. That proposal also fixes the selection lifecycle — the
+process default locks once the first tensor storage is built, while scoped
+`use_backend` overrides stay exempt and keep working as described above. It is
+not approved and not implemented; the selection and residency behaviour
 described above is what the package does today.
 
 Changing a backend remains an execution choice and not a change to the

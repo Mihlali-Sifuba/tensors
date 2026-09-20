@@ -17,22 +17,44 @@
 > right about today and this one is right about the target.** Neither
 > describes the other's subject, so there is one authority per question.
 >
-> Section 8 records the questions this document does **not** settle. They are
-> design decisions, not implementation details, and they are listed with their
-> alternatives and consequences rather than resolved in passing.
+> Section 8 separates what is decided from what is not. The backend-selection
+> lifecycle (Q1, Q2) is **resolved**, and T7 and T8 state it normatively.
+> Q3 to Q8 remain open design decisions, listed with their alternatives and
+> consequences rather than resolved in passing.
 
 ## 2. The problem
 
-A `Tensor` today can hold several storage representations of the same values —
-one authoritative, and others produced on demand and kept in a cache. The cache
-exists so that a tensor built on one backend can be used by an operation on
-another without the caller noticing.
+Three things are distinct in the current implementation, and stating them
+precisely matters, because the difficulty is not that the model is ill-defined:
 
-That convenience is the source of the difficulty:
+| | What it is |
+| --- | --- |
+| `Tensor._storage` | The tensor's **authoritative** storage. Its `kind` is the tensor's backend. |
+| `Tensor._storage_cache` | Representations of the same values **converted for other backends** and kept for reuse. |
+| Backend selection | The backend chosen to **execute** operations — see 2.1, which splits this into the process default and the active backend. |
 
-- **A tensor's backend is not a property of the tensor.** It is whichever
-  representation an operation last needed, which makes residency a question
-  with no stable answer.
+Asking for a representation does not make it authoritative. `_storage_for(kind)`
+returns a cached representation or converts and caches one, and leaves
+`_storage` untouched; a tensor used as an operand on another backend keeps the
+backend it had. Only `_set_storage` replaces the authoritative storage — it
+holds the package's single assignment to `_storage` — and it resets the cache
+when it does. The mutation path is what calls it: `_data` reads without
+replacing anything, while `_mutable_data` takes the host representation and
+installs it, so an in-place write migrates the tensor to the host (3.4).
+
+So a tensor's backend is well defined at every moment, and it is stable unless
+one of those specific paths changes it. The cost is elsewhere:
+
+- **A tensor's backend carries no obligation and gives no guarantee.** Knowing
+  a tensor is NumPy-backed tells you nothing about where an operation on it
+  will run, because the cache will manufacture whatever the active backend
+  asks for. The value is well defined and cannot be relied on, which is worse
+  than its being undefined: it invites exactly the assumption it does not
+  support.
+- **The same values are resident in several places at once.** A CUDA tensor
+  that has been printed holds both a device buffer and a host copy, and the
+  cache has no eviction. Memory cost scales with the number of backends a
+  tensor has been used on.
 - **Transfers are invisible.** A host-to-device copy costs orders of magnitude
   more than the arithmetic around it, and nothing in the calling code shows
   where one happened.
@@ -40,13 +62,35 @@ That convenience is the source of the difficulty:
   a device tensor silently converts one of them, so a program that has
   accidentally left half its data on the wrong side of the bus still runs, only
   slowly.
-- **Every kernel pays for the ambiguity.** Each one begins by asking for its
+- **Cache coherence is a standing obligation.** Every path that changes values
+  must go through `_set_storage` so the stale representations are dropped. That
+  is currently correct, but it is a rule the whole codebase has to keep, and
+  nothing structural enforces it.
+- **Every kernel pays for the indirection.** Each one begins by asking for its
   operands in its own representation, because it cannot assume what it was
   given.
 
-The proposal removes the ambiguity rather than managing it: a tensor has one
-storage representation, it is the selected backend's, and a mismatch is an
-error.
+The proposal removes the machinery rather than managing it: one representation
+per tensor, no cache to keep coherent, no conversion to be invisible, and a
+mismatch that is an error.
+
+### 2.1 Process default and active backend
+
+Two selections exist, and the contract below depends on telling them apart.
+The implementation already distinguishes them; this document names them.
+
+| Term | What it is | Today |
+| --- | --- | --- |
+| **Process default** | The backend a process uses when nothing narrower applies. | `_process_backend`, set by `set_backend`, initialized from `TENSORS_BACKEND`. |
+| **Active backend** | The backend in force at the point of execution. | `get_backend()`: the context-local override if one is in scope, otherwise the process default. |
+
+`use_backend` sets an override, so it changes the **active backend** without
+changing the process default. Because the override is a `ContextVar`, a thread
+started inside a scope does not inherit it and uses the process default — as
+[backends.md](backends.md#selection) already states.
+
+Wherever this document says an operation runs "under a selection", it means the
+**active** backend.
 
 ## 3. Existing behaviour
 
@@ -138,20 +182,47 @@ python -> use_backend("numpy") -> numpy -> use_backend("python") -> python
 `use_backend` nests and restores as a context-local override. This behaviour
 is kept unchanged by the proposal.
 
-### 3.9 There is no serialization
+### 3.9 The process default is reassignable at any time
+
+`set_backend` may be called any number of times, with any available backend,
+before or after tensors exist. Nothing records that tensors have been built.
+
+Calling it **inside** a scope changes the process default while the override
+continues to win, so the change surfaces only on exit:
+
+```
+with use_backend("numpy"):
+    get_backend()          -> numpy
+    set_backend("cuda")
+    get_backend()          -> numpy      # the override still wins
+    _process_backend       -> cuda       # the default did change
+get_backend()              -> cuda       # and surfaces here
+```
+
+A scope also restores its previous selection when the block raises, because
+`use_backend` resets its token in a `finally`:
+
+```
+before        python
+inside        numpy
+raise RuntimeError
+after         python
+```
+
+### 3.10 There is no serialization
 
 No `save` or `load` exists in the public API, and `Tensor` is not picklable
 (`pickle.dumps` succeeds, `loads` raises `TypeError: Invalid shape`). There is
 therefore no serialization behaviour to preserve — see
-[question Q6](#q6-serialization).
+[question Q6](#q6--serialization).
 
 ## 4. The target contract
 
 ### T1 — Selection determines construction and execution
 
-The active backend decides both where a new tensor's values live and where an
-operation runs. `Tensor([1.0, 2.0])` under NumPy selection produces NumPy
-storage; under CUDA, device storage. Creation operations follow the same rule,
+The **active backend** (2.1) decides both where a new tensor's values live and
+where an operation runs. `Tensor([1.0, 2.0])` with NumPy active produces NumPy
+storage; with CUDA active, device storage. Creation operations follow the same rule,
 so `zeros`, `full`, `eye`, `arange`, `linspace`, the random samplers and the
 initializers all agree with the selection. The inconsistency in 3.1 disappears
 because there is one rule.
@@ -166,57 +237,97 @@ public array API.
 
 A tensor has exactly one storage. **No alternative representation is retained
 to support an implicit transfer.** The storage's `kind` is the tensor's
-backend, it is fixed for the tensor's lifetime, and it is answerable at any
-time without qualification.
+backend, and it is answerable at any time without qualification.
+
+**A tensor keeps that backend for its whole life.** It is decided by the active
+backend when the tensor is constructed (T1) and nothing later changes it:
+not a later `set_backend`, not entering or leaving a `use_backend` scope (T8),
+not being used as an operand, and not being mutated (5.4). A tensor is never
+migrated, because there is nothing to migrate it to.
 
 ### T4 — Operations consume matching tensors and produce native storage
 
-An operation under a given selection requires operands whose storage belongs to
-that backend, and produces a result in that backend's storage. It does not
-inspect its operands to decide where to run, and it does not convert them.
+An operation runs on the **active backend** (2.1). It requires operands whose
+storage belongs to that backend, and produces a result in that backend's
+storage. It does not inspect its operands to decide where to run, and it does
+not convert them.
 
 ### T5 — Cross-backend transfer is outside the execution contract
 
-Combining tensors from different backends, or using a tensor under a selection
-other than its own, is **not** an operation this contract defines. It is not
+Combining tensors from different backends, or using a tensor while a different
+backend is active, is **not** an operation this contract defines. It is not
 slow, or discouraged: it is outside the contract.
 
 ### T6 — A mismatch is an error
 
-A mismatch raises, naming the tensor's backend, the active selection and the
+A mismatch raises, naming the tensor's backend, the active backend and the
 operation. It never converts, never falls back, and never succeeds quietly.
 The error is the mechanism by which T5 is enforced rather than merely advised.
 
-### T7 — `set_backend` is a one-time selection
+### T7 — The process default locks on first use
 
-`set_backend` configures the backend for normal execution, and the model is
-one selection per process, made before tensors exist.
+`set_backend` configures the **process default** (2.1). It is chosen once, and
+the lock is what makes that choice meaningful.
 
-- **Before initialization**, any available backend may be selected.
-- **Initialization** is the first construction of a tensor's storage under the
-  current selection — the point from which tensors exist that the selection
-  describes. It is a property of the process, not of any one tensor.
-- **After initialization**, selecting the *same* backend again is accepted and
-  has no effect. It is idempotent by design, so library code may assert its
-  requirement without needing to know whether it was first.
-- **After initialization**, selecting a *different* backend raises. Allowing it
-  would leave existing tensors describing a backend that is no longer selected,
-  which T3 and T6 together make unusable — a failure at the next operation
-  instead of at the call that caused it.
+- **Before the lock**, any available backend may be selected, as often as
+  wanted. A program may read configuration, inspect
+  `available_backends()` and decide.
+- **The lock is taken when the first tensor storage is constructed.** That is
+  the first moment a tensor exists whose backend the default determined, and
+  the point after which changing the default would leave that tensor behind.
+  It is a property of the process, not of any tensor, and it is taken once.
+- **After the lock, selecting the same backend again is permitted and has no
+  effect.** It is idempotent by design, so library or setup code may state its
+  requirement without needing to know whether it ran first.
+- **After the lock, selecting a different backend raises.** The error names the
+  locked default, the requested backend, and that storage has been constructed.
 
-[Question Q1](#q1-the-scope-of-the-one-time-rule) records what "initialization"
-should be measured by, which is not settled here.
+The alternative to raising is not "it works": it is that existing tensors hold
+a backend the process no longer selects, which under T3 and T6 makes them
+unusable at their next operation. The lock converts a confusing failure far
+from its cause into an explicit one at the call responsible.
 
-### T8 — `use_backend` is scoped and moves nothing
+**What the lock does not do.** It does not restrict `use_backend` (T8), which
+changes the active backend rather than the default. It does not migrate,
+convert or invalidate any tensor. It does not make `get_backend()` constant,
+because an override can still be in scope.
 
-`use_backend` selects a backend for the duration of a block and restores the
-previous selection on exit, nesting as it does today (3.8). It **does not**
-mutate, migrate, convert or copy any existing tensor. Tensors created inside
-the scope belong to the scoped backend and outlive it; tensors created outside
-it are unaffected and, under T6, are not usable inside it.
+**`set_backend` inside a scope.** Today this changes the default silently and
+the change surfaces when the scope exits (3.9). Under this contract it is
+governed by the lock like any other call: before the lock it is permitted and
+still surfaces on exit; after the lock it is accepted only for the backend
+already locked, and otherwise raises. The scope's override is unaffected
+either way.
 
-The relationship between `use_backend` and T7's one-time rule is
-[question Q2](#q2-use_backend-against-the-one-time-rule).
+**Threads.** The default is process-wide, so the lock is too. A thread started
+inside a scope does not inherit the override and uses the locked default
+(2.1) — which is why the default must be set before workers start.
+
+### T8 — `use_backend` is scoped, exempt, and moves nothing
+
+`use_backend` overrides the **active backend** for the duration of a block. It
+is **exempt from T7's lock**: it selects where operations run, not what the
+process defaults to, so it may be entered at any time, for any available
+backend, however many tensors already exist.
+
+- **It restores the previous selection on exit, including when the block
+  raises.** This holds today (3.8, 3.9) and is required, not incidental:
+  a scope that leaked its selection on an exception would silently change
+  where every later operation ran.
+- **Scopes nest**, and each restores the selection it replaced.
+- **Entering or leaving a scope never converts, migrates or mutates any
+  tensor.** No tensor changes backend because a block was entered, and none
+  changes back when it exits.
+- **Tensors created inside a scope belong to the scoped backend and outlive
+  it.** The scope decided where they were built; it does not own them.
+- **Tensors created outside are unaffected**, and under T6 are not usable
+  inside a scope selecting a different backend.
+
+The consequence is deliberate: a process may hold tensors of more than one
+backend. That is legal under T3 — each has exactly one authoritative
+representation — and every attempt to mix them is an error under T6 rather
+than a silent conversion. Scoped selection is a supported way to target a
+backend, not a loophole the lock is meant to close.
 
 ### T9 — Tensor properties are preserved
 
@@ -224,6 +335,12 @@ dtype, shape, strides, offset, ownership, mutation versioning and every rule in
 [Arithmetic semantics](arithmetic-semantics.md) are unchanged. This proposal
 concerns where values live, not what they are or what operations compute from
 them.
+
+That separation is already the stated position:
+[§3.4, *Storage residency is not semantics*](arithmetic-semantics.md#34-storage-residency-is-not-semantics)
+requires the same values from every backend and defers residency to
+[backends.md](backends.md). This proposal changes residency, so it changes
+nothing that section governs.
 
 ### T10 — Layout handling is not conversion
 
@@ -266,33 +383,48 @@ behaviour below holds.
 | Python scalar | storage for the active backend, shape `()` |
 | nested list | flattened and stored on the active backend |
 | `array.array` | values read on the host, stored on the active backend |
-| **`Tensor`** | see [Q3](#q3-construction-from-a-tensor-of-another-backend) |
-| **`Storage`** | see [Q4](#q4-construction-from-a-storage-object) |
+| **`Tensor`** | see [Q3](#q3--construction-from-a-tensor-of-another-backend) |
+| **`Storage`** | see [Q4](#q4--construction-from-a-storage-object) |
 
 The scalar, list and `array` cases are unambiguous: they are host inputs with
-no backend of their own, so they take the selection's. Construction from a
+no backend of their own, so they take the active backend's. Construction from a
 `Tensor` or a `Storage` is not, because the input already has a backend, and
 both are recorded as open questions rather than decided here.
 
 ### 5.2 Nested backend contexts
 
-Nesting is unchanged (3.8, T8). A tensor's backend is the selection in force
-when it was constructed, and it does not change when a scope exits. A program
+Scoped selection behaves as it does today (3.8, 3.9) and T8 requires that it
+keep doing so. Stated as behaviour:
+
+| Situation | Required behaviour |
+| --- | --- |
+| Entering a scope | The active backend becomes the scoped one. The process default is unchanged. No tensor is touched. |
+| Nesting scopes | Each scope restores the selection it replaced, innermost first. |
+| Leaving a scope normally | The previous active backend is restored. No tensor is touched. |
+| Leaving a scope by exception | Identical to leaving normally. The selection is restored before the exception propagates. |
+| A tensor built inside a scope | Belongs to the scoped backend, and still does after the scope exits. |
+| A tensor built outside a scope | Unchanged by the scope. Not usable inside one selecting a different backend (T6). |
+| A thread started inside a scope | Does not inherit the override; uses the locked process default (2.1, T7). |
+| `set_backend` called inside a scope | Governed by T7's lock, not by the scope. The override continues to win until the scope exits. |
+
+A tensor's backend is the **active** backend at the moment it was constructed,
+and nothing about entering or leaving a scope changes it afterwards. A program
 that constructs under `use_backend("cuda")` and then reads `tolist()` outside
 the scope still reads a device tensor's values, because host-facing access
-(5.5) does not depend on the selection.
+(5.5) does not depend on the selection at all.
 
 ### 5.3 Backend mismatch
 
 A mismatch is detected where the operand is consumed and raises there. The
-error names the tensor's backend, the active selection and the operation, so
-the cause is legible without a debugger. Three cases:
+error names the tensor's backend, the active backend and the operation, so the
+cause is legible without a debugger. Three cases:
 
-- **Operand against selection.** A NumPy tensor used under CUDA selection.
+- **Operand against the active backend.** A NumPy tensor used while CUDA is
+  active.
 - **Operand against operand.** A NumPy tensor and a CUDA tensor in one
   operation, whatever the selection.
 - **Operand against a graph.** A recorded computation replayed with operands
-  from a different backend — see [Q5](#q5-graph-replay-across-backends).
+  from a different backend — see [Q5](#q5--graph-replay-across-backends).
 
 ### 5.4 Mutation
 
@@ -314,14 +446,14 @@ takes.
 
 The one change from 3.6: the host values obtained this way are **not retained**
 on the tensor. There is no cache for them to populate, so a second `tolist()`
-transfers again. [Question Q7](#q7-repeated-host-reads) records whether that
+transfers again. [Question Q7](#q7--repeated-host-reads) records whether that
 cost is acceptable.
 
 ### 5.6 Serialization
 
-There is nothing to preserve (3.9), so no behaviour is specified. If
+There is nothing to preserve (3.10), so no behaviour is specified. If
 serialization is added, whether a stored tensor records its backend is
-[question Q6](#q6-serialization).
+[question Q6](#q6--serialization).
 
 ### 5.7 Graph execution
 
@@ -330,7 +462,7 @@ the target model its inputs have backends, so replay is constrained by them
 rather than by where the graph was built. Replay under a selection matching
 its inputs produces results on that backend, as it does today (3.7); replay
 against a different one is a mismatch under 5.3, which is a behaviour change
-from 3.7 and is [question Q5](#q5-graph-replay-across-backends).
+from 3.7 and is [question Q5](#q5--graph-replay-across-backends).
 
 ### 5.8 Differentiation
 
@@ -359,11 +491,12 @@ objective is to remove indirection, not to rename it.
 | `tensors/tensor.py` — `_mutable_data` | Converts to host and installs it | **Changed.** Mutation acts on the tensor's own backend (5.4). |
 | `tensors/tensor.py` — `_data` | Gathers host values | Becomes a host-facing read (5.5), not a conversion. |
 | `tensors/tensor.py` — `__init__` | Host storage for scalars/lists; copies a Tensor's or Storage's kind | **Changed.** T1 for host inputs; Q3 and Q4 for the rest. |
-| `tensors/backend/conversion.py` — `convert_storage` | The only cross-backend conversion | **Gone**, unless a deliberate migration API is added — see [Q8](#q8-an-explicit-migration-api). Its one caller is `_storage_for`. |
+| `tensors/backend/conversion.py` — `convert_storage` | The only cross-backend conversion | **Gone**, unless a deliberate migration API is added — see [Q8](#q8--an-explicit-migration-api). Its one caller is `_storage_for`. |
 | `tensors/backend/numpy/conversion.py` — `_view`, `_operand`, `_arithmetic_operand` | Each begins by asking for a NumPy representation | **Simplified.** Under T4 the operand already is one; what remains is dtype handling and the logical gather. |
 | `tensors/backend/cuda/conversion.py` — the same three, plus `_widen`, `_narrow`, `_working_values` | As above, plus the PTX-based binary32 widening | As above. The subnormal-preserving widening is numerical (T9) and stays exactly as it is. |
-| `tensors/backend/config.py` — `set_backend` | Reassignable at any time | **Changed.** T7's lifecycle, including what initialization means (Q1). |
-| `tensors/backend/config.py` — `use_backend` | Scoped override | Unchanged (T8), but see Q2. |
+| `tensors/backend/config.py` — `set_backend` | Reassignable at any time (3.9) | **Changed.** Sets the process default and locks it on first tensor storage; same-backend calls are accepted, a different backend raises (T7). |
+| `tensors/backend/config.py` — `use_backend` | Scoped context-local override, restored in a `finally` | **Unchanged**, and exempt from the lock. T8 makes the existing restore-on-exception behaviour a requirement rather than an implementation detail. |
+| `tensors/backend/config.py` — `get_backend` | Override if in scope, else the process default | **Unchanged.** It already answers the active-backend question (2.1). |
 | `tensors/backend/policy.py` | Workload thresholds choose a path | Untouched by this proposal; still governed by [backends.md](backends.md#execution-requirements). |
 | Creation ops and `tensors/init/` | Mixed agreement with the selection (3.1) | **Changed.** T1 makes them uniform. |
 | `tensors/graph/` | Replays under the current selection | **Changed** at the boundary only: operands are checked (5.7). Recording, replay order and differentiation are untouched. |
@@ -380,40 +513,62 @@ objective is to remove indirection, not to rename it.
   ([backends.md](backends.md#observability)).
 - Kernel coverage: which operations each backend implements.
 
-## 8. Open questions
+## 8. Questions
 
-Each records the alternatives, what follows from them, and a recommendation.
-**None is settled by this document.**
+Q1 and Q2 are **resolved**, and the decision is normative in T7 and T8 rather
+than here; the entries are kept so the alternatives that were rejected stay on
+record. Q3 to Q8 remain **open**: each records the alternatives, what follows
+from them, and a recommendation, and none of those recommendations has been
+adopted.
 
-### Q1 — The scope of the one-time rule
+### Q1 — When the process default locks — RESOLVED
 
-What marks a process as initialized, and what is the unit the rule applies to?
+*Resolved in [T7](#t7--the-process-default-locks-on-first-use): the lock is
+taken when the first tensor storage is constructed, and applies to the process
+default only.*
+
+What marks a process as locked, and what is the unit the rule applies to?
 
 | Option | Consequence |
 | --- | --- |
-| **A. First tensor storage constructed** | Matches T7 as written. A program may select freely during import and configuration, and is fixed from its first tensor. Requires one process-wide flag. |
+| **A. First tensor storage constructed — ADOPTED** | A program may select freely during import and configuration, and is fixed from its first tensor. Requires one process-wide flag. |
 | **B. First operation executed** | More permissive: tensors may be built, then the backend chosen. But tensors built before the choice already have a backend, so T3 makes them mismatched — the rule would not prevent the failure it exists to prevent. |
 | **C. Per-thread rather than per-process** | Allows a worker per backend. Multiplies the lifecycle by the thread model and interacts with `use_backend`'s context-local override in ways not thought through. |
 
-**Recommended: A**, with the flag reset only by an explicit test-support hook.
-B does not achieve the rule's purpose; C is a larger design and should be a
-separate question if multi-backend processes are ever wanted.
+**Adopted: A.** B does not achieve the rule's purpose. C was not adopted
+because the process default is process-wide and making it per-thread is a
+separate design; a process that wants to use two backends does so with
+`use_backend` (T8), which A leaves fully available.
 
-### Q2 — `use_backend` against the one-time rule
+Resetting the lock is a test-support concern, not part of the public contract.
+Since the suite exercises three backends in one process through `use_backend`,
+which T8 exempts, the need for a reset hook is an implementation question and
+is deliberately not specified here.
 
-T7 fixes the selection; T8 lets a block change it. They must be reconciled.
+### Q2 — `use_backend` against the lock — RESOLVED
+
+*Resolved in [T8](#t8--use_backend-is-scoped-exempt-and-moves-nothing):
+`use_backend` is exempt.*
+
+T7 locks the process default; T8 lets a block select a different backend. The
+two had to be reconciled.
 
 | Option | Consequence |
 | --- | --- |
-| **A. `use_backend` is exempt** | Scoped selection keeps working. A block may construct tensors on a second backend, so one process holds tensors of two backends — legal under T3, and every cross-use is an error under T6. This is the status quo plus enforcement. |
-| **B. `use_backend` is restricted to the initialized backend** | The one-time rule holds absolutely; `use_backend` becomes an assertion rather than a selection, and its remaining purpose is unclear. |
+| **A. `use_backend` is exempt — ADOPTED** | Scoped selection keeps working. A block may construct tensors on a second backend, so one process holds tensors of two backends — legal under T3, and every cross-use is an error under T6. |
+| **B. `use_backend` is restricted to the locked backend** | The lock holds absolutely; `use_backend` becomes an assertion rather than a selection, and its remaining purpose is unclear. |
 | **C. `use_backend` is removed** | Simplest model, largest breaking change. The test suite uses it heavily to exercise all three backends in one process. |
 
-**Recommended: A.** The one-time rule exists to stop a program's tensors
-silently disagreeing with its selection; a scoped block that constructs and
-consumes its own tensors does not create that problem, and T6 catches it if it
-escapes. Note that A means T7's "one-time" governs the *process default*, not
-every selection — T7 should be worded to say so once this is settled.
+**Adopted: A.** The lock exists to stop a program's tensors silently
+disagreeing with the default they were built under; a scoped block that
+constructs and consumes its own tensors does not create that problem, and T6
+catches it if one escapes. B and C would remove a legitimate capability to
+enforce a rule that was never aimed at it.
+
+The distinction this turns on is the one drawn in 2.1: T7 governs the
+**process default**, T8 governs the **active backend**. They are different
+selections, so exempting one from the other's lock is not an exception to the
+model — it is the model.
 
 ### Q3 — Construction from a Tensor of another backend
 
@@ -453,7 +608,7 @@ stops working, and that should be confirmed as acceptable before implementing.
 
 ### Q6 — Serialization
 
-No serialization exists (3.9), so this is a question about future work.
+No serialization exists (3.10), so this is a question about future work.
 
 | Option | Consequence |
 | --- | --- |
