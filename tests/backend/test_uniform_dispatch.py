@@ -18,7 +18,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import tensors as ts
-from tensors.backend import preparation
 from tensors.backend import config
 from tensors.backend.dispatch import _selected
 from tensors.backend.dispatch.arithmetic import add as add_dispatch
@@ -64,16 +63,6 @@ def tagged_tensor(kind, values):
     )
 
 
-def prepared(left, right, *, dtype, output_shape):
-    """Stand in for a backend's operand preparation, unchanged.
-
-    These tests are about which package is loaded and what the dispatcher does
-    with the result, not about conversion, so a stub backend declares the
-    identity preparation and the kernel sees exactly what was passed in.
-    """
-    return left, right
-
-
 class RecordingLoader:
     """Stands in for ``load_backend`` and records the backend it was asked for."""
 
@@ -96,12 +85,9 @@ class SelectedPackageTests(BackendTestCase):
                 with ts.use_backend("python"):
                     left = ts.Tensor([4.0, 6.0])
                     right = ts.Tensor([2.0, 3.0])
-                    with patch.object(dispatch, "load_backend", loader), patch.object(
-                        preparation, "load_backend", loader
-                    ):
+                    with patch.object(dispatch, "load_backend", loader):
                         operation(left, right)
-                self.assertTrue(loader.requested, "no package was loaded")
-                self.assertEqual(set(loader.requested), {"python"})
+                self.assertEqual(loader.requested, ["python"])
 
     def test_the_loaded_python_package_kernel_is_the_one_invoked(self):
         """No direct import can bypass the package the selection names."""
@@ -113,14 +99,12 @@ class SelectedPackageTests(BackendTestCase):
                     calls.append((args, kwargs))
                     return PythonStorage.from_values([9.0, 9.0], ts.float64)
 
-                stub = SimpleNamespace(**{name: kernel}, prepare_binary_operands=prepared)
+                stub = SimpleNamespace(**{name: kernel})
                 with ts.use_backend("python"):
                     left = ts.Tensor([4.0, 6.0])
                     right = ts.Tensor([2.0, 3.0])
                     with patch.object(
                         dispatch, "load_backend", RecordingLoader(stub)
-                    ), patch.object(
-                        preparation, "load_backend", RecordingLoader(stub)
                     ):
                         result = operation(left, right)
                 self.assertEqual(len(calls), 1, f"{name} did not use the package")
@@ -144,12 +128,9 @@ class SelectedPackageTests(BackendTestCase):
                 with ts.use_backend("numpy"):
                     left = ts.Tensor([4.0, 6.0])
                     right = ts.Tensor([2.0, 3.0])
-                    with patch.object(dispatch, "load_backend", loader), patch.object(
-                        preparation, "load_backend", loader
-                    ):
+                    with patch.object(dispatch, "load_backend", loader):
                         operation(left, right)
-                self.assertTrue(loader.requested, "no package was loaded")
-                self.assertEqual(set(loader.requested), {"numpy"})
+                self.assertEqual(loader.requested, ["numpy"])
 
     @requires_cuda
     def test_cuda_arithmetic_loads_the_cuda_backend_package(self):
@@ -160,14 +141,11 @@ class SelectedPackageTests(BackendTestCase):
                     try:
                         left = ts.Tensor([4.0, 6.0])
                         right = ts.Tensor([2.0, 3.0])
-                        with patch.object(dispatch, "load_backend", loader), patch.object(
-                        preparation, "load_backend", loader
-                    ):
+                        with patch.object(dispatch, "load_backend", loader):
                             operation(left, right)
                     except ts.BackendOperationUnsupportedError:
                         pass
-                self.assertTrue(loader.requested, "no package was loaded")
-                self.assertEqual(set(loader.requested), {"cuda"})
+                self.assertEqual(loader.requested, ["cuda"])
 
     def test_the_strict_helper_takes_no_python_reference(self):
         """Its callers name an operation; they do not supply an implementation."""
@@ -182,8 +160,7 @@ class SelectedPackageTests(BackendTestCase):
         with ts.use_backend("python"):
             with patch.object(_selected, "load_backend", loader):
                 ts.full((2,), 3.0)
-        self.assertTrue(loader.requested, "no package was loaded")
-        self.assertEqual(set(loader.requested), {"python"})
+        self.assertEqual(loader.requested, ["python"])
 
     def test_the_strict_helper_uses_the_loaded_package_kernel(self):
         calls = []
@@ -209,8 +186,7 @@ class CastDispatchTests(BackendTestCase):
             value = ts.Tensor([1, 2], dtype=ts.int32)
             with patch.object(cast_dispatch, "load_backend", loader):
                 result = value.astype(ts.float64)
-        self.assertTrue(loader.requested, "no package was loaded")
-        self.assertEqual(set(loader.requested), {"python"})
+        self.assertEqual(loader.requested, ["python"])
         self.assertIs(result.dtype, ts.float64)
 
     def test_cast_uses_the_loaded_package_kernel(self):
@@ -237,8 +213,7 @@ class CastDispatchTests(BackendTestCase):
             value = ts.Tensor([1, 2], dtype=ts.int32)
             with patch.object(cast_dispatch, "load_backend", loader):
                 value.astype(ts.float64)
-        self.assertTrue(loader.requested, "no package was loaded")
-        self.assertEqual(set(loader.requested), {"numpy"})
+        self.assertEqual(loader.requested, ["numpy"])
 
 
 class PreservedContractTests(BackendTestCase):
@@ -250,9 +225,7 @@ class PreservedContractTests(BackendTestCase):
                 loader = RecordingLoader()
                 left = tagged_tensor("numpy", [1.0])
                 right = ts.Tensor([2.0])
-                with patch.object(dispatch, "load_backend", loader), patch.object(
-                        preparation, "load_backend", loader
-                    ):
+                with patch.object(dispatch, "load_backend", loader):
                     with self.assertRaises(ts.BackendMismatchError):
                         operation(left, right)
                 self.assertEqual(loader.requested, [])
@@ -260,14 +233,14 @@ class PreservedContractTests(BackendTestCase):
     def test_a_result_from_another_backend_is_still_rejected(self):
         for name, dispatch, operation in ARITHMETIC:
             with self.subTest(operation=name):
-                stub = SimpleNamespace(**{name: lambda *a, **k: TaggedStorage("cuda", [1.0])}, prepare_binary_operands=prepared)
+                stub = SimpleNamespace(
+                    **{name: lambda *a, **k: TaggedStorage("cuda", [1.0])}
+                )
                 with ts.use_backend("python"):
                     left = ts.Tensor([4.0])
                     right = ts.Tensor([2.0])
                     with patch.object(
                         dispatch, "load_backend", RecordingLoader(stub)
-                    ), patch.object(
-                        preparation, "load_backend", RecordingLoader(stub)
                     ):
                         with self.assertRaises(ts.BackendMismatchError):
                             operation(left, right)
@@ -275,14 +248,12 @@ class PreservedContractTests(BackendTestCase):
     def test_a_declining_kernel_raises_without_falling_back(self):
         for name, dispatch, operation in ARITHMETIC:
             with self.subTest(operation=name):
-                stub = SimpleNamespace(**{name: lambda *a, **k: None}, prepare_binary_operands=prepared)
+                stub = SimpleNamespace(**{name: lambda *a, **k: None})
                 with ts.use_backend("python"):
                     left = ts.Tensor([4.0])
                     right = ts.Tensor([2.0])
                     with patch.object(
                         dispatch, "load_backend", RecordingLoader(stub)
-                    ), patch.object(
-                        preparation, "load_backend", RecordingLoader(stub)
                     ):
                         with self.assertRaises(
                             ts.BackendOperationUnsupportedError
@@ -290,7 +261,7 @@ class PreservedContractTests(BackendTestCase):
                             operation(left, right)
 
     def test_a_declining_kernel_keeps_its_informative_message(self):
-        stub = SimpleNamespace(add=lambda *a, **k: None, prepare_binary_operands=prepared)
+        stub = SimpleNamespace(add=lambda *a, **k: None)
         with ts.use_backend("python"):
             left = ts.Tensor([4.0])
             with patch.object(

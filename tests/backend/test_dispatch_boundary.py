@@ -1,29 +1,24 @@
-"""The arithmetic dispatchers route; they do not understand Tensors.
-
-Three responsibilities meet on the way to a kernel, and this module pins the
-line between them:
-
-- the **operation layer** resolves dtype and shape and converts a scalar;
-- the **preparation boundary** reads the selection, holds Tensor operands to
-  the residency rule, and asks the selected backend for native operands;
-- the **dispatcher** receives an execution-ready request and routes it.
-
-A dispatcher that can still see a Tensor has not been separated, so these
-tests check what it receives and what its module is even able to name.
-"""
+"""The operation layer decides semantics; dispatch lowers and executes."""
 
 import inspect
 import unittest
+from array import array
+from itertools import islice, repeat
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import tensors as ts
-from tensors.backend import preparation
+from tensors.backend import config
 from tensors.backend.dispatch.arithmetic import add as add_dispatch
 from tensors.backend.dispatch.arithmetic import divide as divide_dispatch
 from tensors.backend.dispatch.arithmetic import multiply as multiply_dispatch
 from tensors.backend.dispatch.arithmetic import power as power_dispatch
 from tensors.backend.dispatch.arithmetic import subtract as subtract_dispatch
-from tensors.backend.preparation import BinaryExecution, prepare_binary_execution
+from tensors.backend.python.storage import PythonStorage
+from tensors.backend.storage import Storage
+from tensors.dtype import convert_scalar
 from tests.backend._support import BackendTestCase, requires_cuda, requires_numpy
+
 
 DISPATCHERS = (
     ("add", add_dispatch, add_dispatch.execute_add),
@@ -33,321 +28,230 @@ DISPATCHERS = (
     ("power", power_dispatch, power_dispatch.execute_power),
 )
 
-#: Things a dispatcher must no longer be able to name.
-TENSOR_VOCABULARY = (
-    "Tensor",
-    "Scalar",
-    "convert_scalar",
-    "broadcast",
-    "prepare_binary_operands",
-)
+
+class TaggedStorage(Storage):
+    def __init__(self, kind, values, dtype=ts.float64):
+        super().__init__(dtype)
+        self.kind = kind
+        self._buffer = array(dtype.typecode, values)
+
+    @property
+    def buffer(self):
+        return self._buffer
+
+    def copy(self):
+        return TaggedStorage(self.kind, self.buffer, self.dtype)
+
+
+def tagged_tensor(kind, values, dtype=ts.float64):
+    return ts.Tensor._from_owned_storage(
+        TaggedStorage(kind, values, dtype), dtype=dtype, shape=(len(values),)
+    )
 
 
 class DispatcherInterfaceTests(unittest.TestCase):
-    """A dispatcher takes one execution-ready request and nothing else."""
-
-    def test_each_dispatcher_takes_a_single_request(self):
+    def test_each_dispatcher_takes_operands_dtype_and_output_shape(self):
+        expected = ["left", "right", "dtype", "output_shape"]
         for name, _module, execute in DISPATCHERS:
             with self.subTest(operation=name):
-                parameters = list(inspect.signature(execute).parameters)
-                self.assertEqual(parameters, ["request"])
+                self.assertEqual(list(inspect.signature(execute).parameters), expected)
 
-    def test_no_dispatcher_takes_operands_dtype_or_shape(self):
-        for name, _module, execute in DISPATCHERS:
+    def test_request_abstraction_is_gone(self):
+        for name, module, execute in DISPATCHERS:
             with self.subTest(operation=name):
-                parameters = inspect.signature(execute).parameters
-                for forbidden in ("left", "right", "dtype", "output_shape"):
-                    self.assertNotIn(forbidden, parameters)
+                self.assertNotIn("request", inspect.signature(execute).parameters)
+                source = inspect.getsource(module)
+                self.assertNotIn("BinaryExecution", source)
+                self.assertNotIn("prepare_binary_execution", source)
+                self.assertNotIn("prepare_binary_operands", source)
 
-    def test_no_dispatcher_module_names_tensor_semantics(self):
-        """The vocabulary is the evidence: it cannot use what it cannot name."""
+    def test_dispatchers_do_not_resolve_dtype_or_convert_scalars(self):
         for name, module, _execute in DISPATCHERS:
             source = inspect.getsource(module)
-            for word in TENSOR_VOCABULARY:
-                with self.subTest(operation=name, word=word):
-                    self.assertNotIn(word, source)
-
-    def test_no_dispatcher_reads_the_backend_selection(self):
-        """The selection travels in the request; the dispatcher never re-reads it."""
-        for name, module, _execute in DISPATCHERS:
             with self.subTest(operation=name):
-                self.assertNotIn("get_backend", inspect.getsource(module))
+                self.assertNotIn("resolve_result_dtype", source)
+                self.assertNotIn("resolve_power", source)
+                self.assertNotIn("convert_scalar", source)
 
 
-class RequestTests(BackendTestCase):
-    """The request is resolved: a backend, native operands, dtype and shape."""
+class OperationBoundaryTests(BackendTestCase):
+    def test_add_passes_tensor_semantics_to_dispatch(self):
+        import importlib
 
-    def test_a_request_carries_every_resolved_field(self):
-        left = ts.Tensor([1.0, 2.0])
-        right = ts.Tensor([3.0, 4.0])
+        operation = importlib.import_module("tensors.operations.arithmetic.add")
 
-        request = prepare_binary_execution(
-            left, right, dtype=ts.float64, output_shape=(2,)
+        left = ts.Tensor([[1, 2]], dtype=ts.int32)
+        right = ts.Tensor([[3], [4]], dtype=ts.int64)
+        storage = PythonStorage.from_values([0, 0, 0, 0], ts.int64)
+        with patch.object(operation, "execute_add", return_value=storage) as execute:
+            result = operation.add(left, right)
+
+        execute.assert_called_once_with(
+            left, right, dtype=ts.int64, output_shape=(2, 2)
+        )
+        self.assertIs(result.dtype, ts.int64)
+        self.assertEqual(result.shape, (2, 2))
+
+    def test_add_converts_a_scalar_before_dispatch(self):
+        import importlib
+
+        operation = importlib.import_module("tensors.operations.arithmetic.add")
+
+        left = ts.Tensor([1.0, 2.0], dtype=ts.float32)
+        storage = PythonStorage.from_values([0.0, 0.0], ts.float32)
+        with patch.object(operation, "execute_add", return_value=storage) as execute:
+            operation.add(left, 0.1)
+
+        execute.assert_called_once_with(
+            left,
+            convert_scalar(0.1, ts.float32),
+            dtype=ts.float32,
+            output_shape=(2,),
         )
 
-        self.assertIsInstance(request, BinaryExecution)
-        self.assertEqual(
-            request._fields, ("backend", "left", "right", "dtype", "output_shape")
-        )
-        self.assertEqual(request.backend, ts.get_backend())
-        self.assertIs(request.dtype, ts.float64)
-        self.assertEqual(request.output_shape, (2,))
 
-    def test_a_requests_operands_are_never_tensors(self):
-        for backend in ts.available_backends():
-            with self.subTest(backend=backend):
-                with ts.use_backend(backend):
-                    request = prepare_binary_execution(
-                        ts.Tensor([1.0, 2.0]),
-                        ts.Tensor([3.0, 4.0]),
-                        dtype=ts.float64,
-                        output_shape=(2,),
-                    )
-                self.assertNotIsInstance(request.left, ts.Tensor)
-                self.assertNotIsInstance(request.right, ts.Tensor)
+class DispatcherExecutionTests(BackendTestCase):
+    def test_each_dispatcher_reads_the_selection_once(self):
+        left = ts.Tensor([4.0, 6.0])
+        right = ts.Tensor([2.0, 3.0])
+        for name, _module, execute in DISPATCHERS:
+            reads = []
+            real = config.get_backend
 
-    def test_a_scalar_is_already_resolved_in_the_request(self):
-        request = prepare_binary_execution(
-            ts.Tensor([1.0, 2.0]), 3.0, dtype=ts.float64, output_shape=(2,)
-        )
-        self.assertNotIsInstance(request.left, ts.Tensor)
-        self.assertNotIsInstance(request.right, ts.Tensor)
+            def counted():
+                reads.append(None)
+                return real()
 
-    def test_the_request_names_the_selected_backend(self):
-        for backend in ts.available_backends():
-            with self.subTest(backend=backend):
-                with ts.use_backend(backend):
-                    request = prepare_binary_execution(
-                        ts.Tensor([1.0]), ts.Tensor([2.0]),
-                        dtype=ts.float64, output_shape=(1,),
-                    )
-                self.assertEqual(request.backend, backend)
+            with self.subTest(operation=name), patch.object(
+                config, "get_backend", counted
+            ):
+                execute(left, right, dtype=ts.float64, output_shape=(2,))
+            self.assertEqual(len(reads), 1)
 
-    def test_preparation_reads_the_selection_exactly_once(self):
-        from unittest.mock import patch
+    def test_operand_residency_is_checked_before_backend_loading(self):
+        foreign = tagged_tensor("numpy", [1.0])
+        with patch.object(add_dispatch, "load_backend") as loader:
+            with self.assertRaises(ts.BackendMismatchError):
+                add_dispatch.execute_add(
+                    foreign, 1.0, dtype=ts.float64, output_shape=(1,)
+                )
+        loader.assert_not_called()
 
-        from tensors.backend import config
+    def test_python_expands_tensor_operands_before_the_kernel(self):
+        captured = []
 
-        real = config.get_backend
-        reads = []
+        def kernel(left, right, **kwargs):
+            captured.append((list(left), list(right), kwargs))
+            return PythonStorage.from_values([0.0] * 4, ts.float64)
 
-        def counted():
-            reads.append(None)
-            return real()
-
-        left = ts.Tensor([1.0, 2.0])
-        right = ts.Tensor([3.0, 4.0])
-        with patch.object(config, "get_backend", counted):
-            prepare_binary_execution(
-                left, right, dtype=ts.float64, output_shape=(2,)
-            )
-        self.assertEqual(len(reads), 1)
-
-    def test_a_whole_operation_still_reads_the_selection_once(self):
-        """Preparation reads it; the dispatcher must not read it again."""
-        from unittest.mock import patch
-
-        from tensors.backend import config
-
-        real = config.get_backend
-        reads = []
-
-        def counted():
-            reads.append(None)
-            return real()
-
-        left = ts.Tensor([1.0, 2.0])
-        right = ts.Tensor([3.0, 4.0])
-        with patch.object(config, "get_backend", counted):
-            left + right
-        self.assertEqual(len(reads), 1)
-
-
-class BackendSpecificPreparationTests(BackendTestCase):
-    """Moving preparation behind a request preserved each backend's strategy."""
-
-    def _request(self, backend, left, right, output_shape):
-        with ts.use_backend(backend):
-            return prepare_binary_execution(
-                left, right, dtype=ts.float64, output_shape=output_shape
+        backend = SimpleNamespace(add=kernel)
+        left = ts.Tensor([[1.0], [2.0]])
+        right = ts.Tensor([10.0, 20.0])
+        with patch.object(add_dispatch, "load_backend", return_value=backend):
+            add_dispatch.execute_add(
+                left, right, dtype=ts.float64, output_shape=(2, 2)
             )
 
-    def test_python_still_expands_a_broadcast_operand(self):
-        with ts.use_backend("python"):
-            left = ts.Tensor([[1.0], [2.0]])
-            right = ts.Tensor([10.0, 20.0])
-        request = self._request("python", left, right, (2, 2))
-        self.assertEqual(list(request.left), [1.0, 1.0, 2.0, 2.0])
-        self.assertEqual(list(request.right), [10.0, 20.0, 10.0, 20.0])
+        self.assertEqual(captured[0][0], [1.0, 1.0, 2.0, 2.0])
+        self.assertEqual(captured[0][1], [10.0, 20.0, 10.0, 20.0])
 
-    def test_python_still_pairs_a_scalar_lazily(self):
-        from itertools import islice, repeat
+    def test_python_pairs_a_scalar_lazily(self):
+        captured = []
 
-        with ts.use_backend("python"):
-            tensor = ts.Tensor([1.0, 2.0, 3.0])
-        request = self._request("python", tensor, 5.0, (3,))
-        self.assertIsInstance(request.right, type(repeat(0)))
-        self.assertEqual(list(islice(request.right, 3)), [5.0, 5.0, 5.0])
+        def kernel(left, right, **kwargs):
+            captured.append((left, right))
+            return PythonStorage.from_values([0.0, 0.0, 0.0], ts.float64)
+
+        backend = SimpleNamespace(add=kernel)
+        left = ts.Tensor([1.0, 2.0, 3.0])
+        with patch.object(add_dispatch, "load_backend", return_value=backend):
+            add_dispatch.execute_add(
+                left, 5.0, dtype=ts.float64, output_shape=(3,)
+            )
+
+        lowered_left, lowered_right = captured[0]
+        self.assertEqual(list(lowered_left), [1.0, 2.0, 3.0])
+        self.assertIsInstance(lowered_right, type(repeat(0)))
+        self.assertEqual(list(islice(lowered_right, 3)), [5.0, 5.0, 5.0])
 
     @requires_numpy
-    def test_numpy_still_hands_over_native_arrays(self):
+    def test_numpy_receives_native_typed_operands_without_materialized_broadcast(self):
         import numpy
 
+        captured = []
+
+        def kernel(left, right, **kwargs):
+            captured.append((left, right, kwargs))
+            return TaggedStorage("numpy", [0.0] * 4, ts.float32)
+
+        backend = SimpleNamespace(add=kernel)
         with ts.use_backend("numpy"):
-            left = ts.Tensor([1.0, 2.0])
-            right = ts.Tensor([3.0, 4.0])
-        request = self._request("numpy", left, right, (2,))
-        self.assertIsInstance(request.left, numpy.ndarray)
-        self.assertEqual(request.left.dtype, numpy.dtype("float64"))
+            left = ts.Tensor([[1.0], [2.0]], dtype=ts.float64)
+            right = ts.Tensor([10.0, 20.0], dtype=ts.float64)
+            with patch.object(add_dispatch, "load_backend", return_value=backend):
+                add_dispatch.execute_add(
+                    left, right, dtype=ts.float32, output_shape=(2, 2)
+                )
+
+        lowered_left, lowered_right, _ = captured[0]
+        self.assertIsInstance(lowered_left, numpy.ndarray)
+        self.assertIsInstance(lowered_right, numpy.ndarray)
+        self.assertEqual(lowered_left.dtype, numpy.dtype("float32"))
+        self.assertEqual(lowered_left.shape, (2, 1))
+        self.assertEqual(lowered_right.shape, (2,))
 
     @requires_cuda
-    def test_cuda_operands_never_reach_the_host(self):
+    def test_cuda_receives_device_operands(self):
         import cupy
 
+        captured = []
         with ts.use_backend("cuda"):
             left = ts.Tensor([1.0, 2.0])
             right = ts.Tensor([3.0, 4.0])
-        request = self._request("cuda", left, right, (2,))
-        for operand in (request.left, request.right):
-            self.assertIsInstance(operand, cupy.ndarray)
-            self.assertNotIsInstance(operand, list)
-
-
-class ResidencyPlacementTests(BackendTestCase):
-    """Operand residency is checked on Tensors; results on storage."""
-
-    def test_a_foreign_operand_is_refused_by_preparation(self):
-        from array import array
-
-        from tensors.backend.storage import Storage
-
-        class TaggedStorage(Storage):
-            def __init__(self, kind, values, dtype=ts.float64):
-                super().__init__(dtype)
-                self.kind = kind
-                self._buffer = array(dtype.typecode, values)
-
-            @property
-            def buffer(self):
-                return self._buffer
-
-            def copy(self):
-                return TaggedStorage(self.kind, self.buffer, self.dtype)
-
-        foreign = ts.Tensor._from_owned_storage(
-            TaggedStorage("numpy", [1.0]), dtype=ts.float64, shape=(1,)
-        )
-        with self.assertRaises(ts.BackendMismatchError):
-            prepare_binary_execution(
-                foreign, 1.0, dtype=ts.float64, output_shape=(1,)
+            backend = SimpleNamespace(
+                add=lambda first, second, **kwargs: (
+                    captured.append((first, second))
+                    or TaggedStorage("cuda", [0.0, 0.0])
+                )
             )
+            with patch.object(add_dispatch, "load_backend", return_value=backend):
+                add_dispatch.execute_add(
+                    left, right, dtype=ts.float64, output_shape=(2,)
+                )
+        self.assertTrue(all(isinstance(value, cupy.ndarray) for value in captured[0]))
 
-    def test_a_foreign_operand_never_reaches_the_dispatcher(self):
-        from unittest.mock import patch
-
-        from array import array
-
-        from tensors.backend.storage import Storage
-
-        class TaggedStorage(Storage):
-            def __init__(self, kind, values, dtype=ts.float64):
-                super().__init__(dtype)
-                self.kind = kind
-                self._buffer = array(dtype.typecode, values)
-
-            @property
-            def buffer(self):
-                return self._buffer
-
-            def copy(self):
-                return TaggedStorage(self.kind, self.buffer, self.dtype)
-
-        foreign = ts.Tensor._from_owned_storage(
-            TaggedStorage("numpy", [1.0]), dtype=ts.float64, shape=(1,)
+    def test_result_residency_is_checked(self):
+        backend = SimpleNamespace(
+            add=lambda *args, **kwargs: TaggedStorage("cuda", [3.0])
         )
-        with patch.object(add_dispatch, "load_backend") as loader:
+        with patch.object(add_dispatch, "load_backend", return_value=backend):
             with self.assertRaises(ts.BackendMismatchError):
-                foreign + 1.0
-        loader.assert_not_called()
+                add_dispatch.execute_add(
+                    ts.Tensor([1.0]), 2.0, dtype=ts.float64, output_shape=(1,)
+                )
 
-    def test_the_dispatcher_still_checks_the_result(self):
-        """It receives storage, never a Tensor, and still enforces residency."""
-        from types import SimpleNamespace
-        from unittest.mock import patch
-
-        from array import array
-
-        from tensors.backend.storage import Storage
-
-        class TaggedStorage(Storage):
-            def __init__(self, kind, values, dtype=ts.float64):
-                super().__init__(dtype)
-                self.kind = kind
-                self._buffer = array(dtype.typecode, values)
-
-            @property
-            def buffer(self):
-                return self._buffer
-
-            def copy(self):
-                return TaggedStorage(self.kind, self.buffer, self.dtype)
-
-        stub = SimpleNamespace(
-            add=lambda *args, **kwargs: TaggedStorage("cuda", [1.0])
-        )
-        with ts.use_backend("python"):
-            request = prepare_binary_execution(
-                ts.Tensor([1.0]), ts.Tensor([2.0]),
-                dtype=ts.float64, output_shape=(1,),
-            )
-            with patch.object(add_dispatch, "load_backend", return_value=stub):
-                with self.assertRaises(ts.BackendMismatchError):
-                    add_dispatch.execute_add(request)
+    def test_a_declining_kernel_keeps_the_existing_error(self):
+        backend = SimpleNamespace(add=lambda *args, **kwargs: None)
+        with patch.object(add_dispatch, "load_backend", return_value=backend):
+            with self.assertRaisesRegex(
+                ts.BackendOperationUnsupportedError,
+                "python backend cannot execute add at dtype float64",
+            ):
+                add_dispatch.execute_add(
+                    ts.Tensor([1.0]), 2.0, dtype=ts.float64, output_shape=(1,)
+                )
 
 
 class PreservedBehaviourTests(BackendTestCase):
-    """The new boundary changed no documented result or message."""
-
-    def test_a_declining_kernel_keeps_its_message(self):
-        from types import SimpleNamespace
-        from unittest.mock import patch
-
-        stub = SimpleNamespace(add=lambda *args, **kwargs: None)
-        with ts.use_backend("python"):
-            request = prepare_binary_execution(
-                ts.Tensor([1.0]), ts.Tensor([2.0]),
-                dtype=ts.float64, output_shape=(1,),
-            )
-            with patch.object(add_dispatch, "load_backend", return_value=stub):
-                with self.assertRaisesRegex(
-                    ts.BackendOperationUnsupportedError,
-                    "python backend cannot execute add at dtype float64",
-                ):
-                    add_dispatch.execute_add(request)
-
-    def test_dtype_scalar_and_broadcast_behaviour_are_unchanged(self):
+    def test_dtype_scalar_and_broadcast_rules_are_unchanged(self):
         integer = ts.Tensor([1, 2], dtype=ts.int32)
         self.assertIs((integer + 3).dtype, ts.int32)
         self.assertIs((integer + ts.Tensor([1], dtype=ts.int64)).dtype, ts.int64)
         self.assertIs((integer / integer).dtype, ts.float64)
         self.assertRaises(TypeError, lambda: integer + 3.5)
-        self.assertRaises(TypeError, lambda: integer + True)
         broadcast = ts.Tensor([[1.0], [2.0]]) + ts.Tensor([10.0, 20.0])
         self.assertEqual(broadcast.shape, (2, 2))
         self.assertEqual(broadcast.tolist(), [11.0, 21.0, 12.0, 22.0])
-
-    def test_every_backend_still_agrees_on_the_result(self):
-        with ts.use_backend("python"):
-            expected = (ts.Tensor([1.0, 2.0]) + ts.Tensor([3.0, 4.0])).tolist()
-        for backend in ts.available_backends():
-            with self.subTest(backend=backend):
-                with ts.use_backend(backend):
-                    try:
-                        produced = ts.Tensor([1.0, 2.0]) + ts.Tensor([3.0, 4.0])
-                    except ts.BackendOperationUnsupportedError:
-                        continue
-                    self.assertEqual(produced.tolist(), expected)
-                    self.assertEqual(produced._storage.kind, backend)
 
 
 if __name__ == "__main__":

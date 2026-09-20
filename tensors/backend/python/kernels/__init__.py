@@ -5,9 +5,6 @@ module re-exports them under the flat names the dispatch layer
 resolves by.
 """
 
-from tensors.backend.python.conversion import (
-    prepare_binary_operands as prepare_binary_operands,
-)
 from tensors.backend.python.kernels.arithmetic.add import add as add
 from tensors.backend.python.kernels.arithmetic.divide import divide as divide
 from tensors.backend.python.kernels.arithmetic.multiply import multiply as multiply

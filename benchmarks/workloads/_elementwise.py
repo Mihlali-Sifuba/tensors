@@ -14,6 +14,7 @@ overhead and not a difference of operand, size, or sampling round.
 
 from __future__ import annotations
 
+import importlib
 from typing import Any
 
 import tensors as ts
@@ -100,6 +101,11 @@ def binary_ladder(
     if backend in ACCELERATED:
         provider = provider_module(backend)
         kernels = load_backend(backend)
+        conversion = importlib.import_module(
+            f"tensors.backend.{backend}.conversion"
+        )
+        kernel_left = conversion._arithmetic_operand(left, dtype)
+        kernel_right = conversion._arithmetic_operand(right, dtype)
         raw_left = provider_array(provider, shape, dtype_name=dtype_name, kind="ramp")
         raw_right = provider_array(
             provider, shape, dtype_name=dtype_name, kind="constant", value=2.0
@@ -128,7 +134,10 @@ def binary_ladder(
 
         def run_kernel() -> Any:
             return getattr(kernels, operation)(
-                left, right, dtype=dtype, output_shape=shape
+                kernel_left,
+                kernel_right,
+                dtype=dtype,
+                output_shape=shape,
             )
 
         def validate_kernel() -> None:
@@ -145,7 +154,7 @@ def binary_ladder(
                 run=run_kernel,
                 layer="kernel",
                 validate=validate_kernel,
-                description="internal guarded array kernel over Tensors",
+                description="internal guarded array kernel over native operands",
                 backends=ACCELERATED,
                 **common,
             )

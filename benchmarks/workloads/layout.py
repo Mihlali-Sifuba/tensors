@@ -166,8 +166,12 @@ def _strided_cases(backend: str, side: int) -> list[Case]:
         )
         # Prepared once, outside the timed call: this rung measures the
         # kernel, not the conversion that precedes it.
-        prepared_layout = kernels.prepare_binary_operands(
-            value, value, dtype=ts.float64, output_shape=(side, side)
+        conversion = importlib.import_module(
+            f"tensors.backend.{backend}.conversion"
+        )
+        prepared_layout = (
+            conversion._arithmetic_operand(value, ts.float64),
+            conversion._arithmetic_operand(value, ts.float64),
         )
         cases.append(
             Case(

@@ -1,8 +1,9 @@
 """Apply SGD using Python arithmetic and its intermediate cast semantics."""
 
+from itertools import repeat
+
 from tensors.tensor import Tensor
 from tensors.dtype import result_dtype
-from tensors.backend.python.conversion import prepare_binary_operands
 from tensors.backend.python.kernels.arithmetic.multiply import multiply
 from tensors.backend.python.kernels.arithmetic.subtract import subtract
 
@@ -12,12 +13,8 @@ def sgd_update(parameter, gradient, learning_rate):
     dtype = result_dtype(gradient.dtype, learning_rate)
     scaled = Tensor._from_owned_storage(
         multiply(
-            *prepare_binary_operands(
-                gradient,
-                learning_rate,
-                dtype=dtype,
-                output_shape=gradient.shape,
-            ),
+            gradient._data,
+            repeat(learning_rate),
             dtype=dtype,
             output_shape=gradient.shape,
         ),
@@ -26,12 +23,8 @@ def sgd_update(parameter, gradient, learning_rate):
     )
     difference_dtype = result_dtype(parameter.dtype, scaled)
     return subtract(
-        *prepare_binary_operands(
-            parameter,
-            scaled,
-            dtype=difference_dtype,
-            output_shape=parameter.shape,
-        ),
+        parameter._data,
+        scaled._data,
         dtype=difference_dtype,
         output_shape=parameter.shape,
     )

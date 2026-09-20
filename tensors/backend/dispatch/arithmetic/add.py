@@ -13,28 +13,73 @@ a call arrives the selection names one backend.
 """
 
 from __future__ import annotations
-from typing import Any
+from itertools import repeat
+from typing import TYPE_CHECKING, Any
+
+from tensors.backend import config
 from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.backend.loading import load_backend
-from tensors.backend.storage import Storage
-from tensors.backend.preparation import BinaryExecution
 from tensors.backend.validation import validate_backend_residency
 
+if TYPE_CHECKING:
+    from tensors._typing import Scalar
+    from tensors.backend.storage import Storage
+    from tensors.dtype import DataType
+    from tensors.tensor import Tensor
 
-def execute_add(request: BinaryExecution) -> Storage:
+
+def execute_add(
+    left: Tensor | Scalar,
+    right: Tensor | Scalar,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
     """Run add on the selected backend, or report that it cannot run there."""
-    backend: Any = load_backend(request.backend)
+    selected = config.get_backend()
+    validate_backend_residency((left, right), selected)
+    backend: Any = load_backend(selected)
+
+    if selected == "python":
+        from tensors.tensor import Tensor
+        from tensors.utils.broadcasting import broadcast_to
+
+        left_is_tensor = isinstance(left, Tensor)
+        right_is_tensor = isinstance(right, Tensor)
+        if left_is_tensor and right_is_tensor:
+            lowered_left = broadcast_to(left, output_shape)._data
+            lowered_right = broadcast_to(right, output_shape)._data
+        elif left_is_tensor:
+            lowered_left = left._data
+            lowered_right = repeat(right)
+        elif right_is_tensor:
+            lowered_left = repeat(left)
+            lowered_right = right._data
+        else:
+            lowered_left = (left,)
+            lowered_right = (right,)
+    elif selected == "numpy":
+        from tensors.backend.numpy.conversion import _arithmetic_operand
+
+        lowered_left = _arithmetic_operand(left, dtype)
+        lowered_right = _arithmetic_operand(right, dtype)
+    else:
+        from tensors.backend.cuda.conversion import _arithmetic_operand
+
+        lowered_left = _arithmetic_operand(left, dtype)
+        lowered_right = _arithmetic_operand(right, dtype)
+
     result = backend.add(
-        request.left,
-        request.right,
-        dtype=request.dtype,
-        output_shape=request.output_shape,
+        lowered_left,
+        lowered_right,
+        dtype=dtype,
+        output_shape=output_shape,
     )
     if result is None:
         raise BackendOperationUnsupportedError(
-            f"The {request.backend} backend cannot execute add at dtype "
-            f"{request.dtype.name} conformingly. Arithmetic runs on the selected "
+            f"The {selected} backend cannot execute add at dtype "
+            f"{dtype.name} conformingly. Arithmetic runs on the selected "
             f"backend; select another backend to run it elsewhere."
         )
-    validate_backend_residency((result,), request.backend)
+    validate_backend_residency((result,), selected)
     return result

@@ -10,9 +10,9 @@ provider operation that performs the same expansion or reduction.
 
 from __future__ import annotations
 from collections.abc import Sequence
+import importlib
 from typing import Any
 import tensors as ts
-from tensors.backend.preparation import prepare_binary_execution
 from tensors.backend.loading import load_backend
 from tensors.backend import (
     execute_multiply,
@@ -102,8 +102,12 @@ def _forward_cases(
 
         # Prepared once, outside the timed call: the kernel rung measures
         # the kernel, and operand preparation is a separate boundary.
-        prepared = kernels.prepare_binary_operands(
-            left, right, dtype=ts.float64, output_shape=output_shape
+        conversion = importlib.import_module(
+            f"tensors.backend.{backend}.conversion"
+        )
+        prepared = (
+            conversion._arithmetic_operand(left, ts.float64),
+            conversion._arithmetic_operand(right, ts.float64),
         )
 
         def run_kernel() -> Any:
@@ -131,13 +135,19 @@ def _forward_cases(
         cases.append(
             Case(
                 name=f"dispatch.broadcast_multiply/{pattern}",
-                run=lambda: execute_multiply(prepare_binary_execution(
-                    left, right, dtype=ts.float64, output_shape=output_shape
-                )),
+                run=lambda: execute_multiply(
+                    left,
+                    right,
+                    dtype=ts.float64,
+                    output_shape=output_shape,
+                ),
                 layer="dispatch",
-                validate=lambda: execute_multiply(prepare_binary_execution(
-                    left, right, dtype=ts.float64, output_shape=output_shape
-                )),
+                validate=lambda: execute_multiply(
+                    left,
+                    right,
+                    dtype=ts.float64,
+                    output_shape=output_shape,
+                ),
                 description="execute_multiply over a broadcast",
                 backends=ACCELERATED,
                 **common,

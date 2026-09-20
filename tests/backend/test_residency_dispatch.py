@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import tensors as ts
-from tensors.backend import preparation
 from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.numpy.storage import NumPyStorage
 from tensors.backend.python.storage import PythonStorage
@@ -27,16 +26,6 @@ class TaggedStorage(Storage):
 
     def copy(self):
         return TaggedStorage(self.kind, self.buffer, self.dtype)
-
-
-def prepared(left, right, *, dtype, output_shape):
-    """Stand in for a backend's operand preparation, unchanged.
-
-    These tests are about which package is loaded and what the dispatcher does
-    with the result, not about conversion, so a stub backend declares the
-    identity preparation and the kernel sees exactly what was passed in.
-    """
-    return left, right
 
 
 def tagged_tensor(kind, values):
@@ -80,12 +69,12 @@ class ValidationInterfaceTests(unittest.TestCase):
         result_side = tagged_tensor("numpy", [1.0])
         backend = SimpleNamespace(
             add=lambda *args, **kwargs: TaggedStorage("cuda", [3.0]),
-            prepare_binary_operands=prepared,
         )
         with patch(
             "tensors.backend.config.get_backend", return_value="numpy"
-        ), patch.object(dispatch, "load_backend", return_value=backend), patch.object(
-            preparation, "load_backend", return_value=backend
+        ), patch.object(dispatch, "load_backend", return_value=backend), patch(
+            "tensors.backend.numpy.conversion._arithmetic_operand",
+            side_effect=lambda value, dtype: value,
         ):
             with self.assertRaises(ts.BackendMismatchError) as result:
                 result_side + 1.0
@@ -140,13 +129,13 @@ class ArithmeticResidencyTests(unittest.TestCase):
         left = tagged_tensor("numpy", [1.0])
         backend = SimpleNamespace(
             add=lambda *args, **kwargs: TaggedStorage("numpy", [3.0]),
-            prepare_binary_operands=prepared,
         )
         with patch("tensors.backend.config.get_backend", return_value="numpy"), patch.object(
             dispatch, "load_backend", return_value=backend
-        ), patch.object(
-            preparation, "load_backend", return_value=backend
-        ) as load:
+        ) as load, patch(
+            "tensors.backend.numpy.conversion._arithmetic_operand",
+            side_effect=lambda value, dtype: value,
+        ):
             result = left + 2.0
 
         load.assert_called_once_with("numpy")
@@ -160,12 +149,12 @@ class ArithmeticResidencyTests(unittest.TestCase):
             add=lambda *args, **kwargs: PythonStorage.from_values(
                 [3.0], ts.float64
             ),
-            prepare_binary_operands=prepared,
         )
         with patch("tensors.backend.config.get_backend", return_value="numpy"), patch.object(
             dispatch, "load_backend", return_value=backend
-        ), patch.object(
-            preparation, "load_backend", return_value=backend
+        ), patch(
+            "tensors.backend.numpy.conversion._arithmetic_operand",
+            side_effect=lambda value, dtype: value,
         ):
             with self.assertRaisesRegex(
                 ts.BackendMismatchError,
@@ -178,11 +167,12 @@ class ArithmeticResidencyTests(unittest.TestCase):
         from tensors.backend.dispatch.arithmetic import add as dispatch
 
         left = tagged_tensor("numpy", [1.0])
-        backend = SimpleNamespace(add=lambda *args, **kwargs: None, prepare_binary_operands=prepared)
+        backend = SimpleNamespace(add=lambda *args, **kwargs: None)
         with patch("tensors.backend.config.get_backend", return_value="numpy"), patch.object(
             dispatch, "load_backend", return_value=backend
-        ), patch.object(
-            preparation, "load_backend", return_value=backend
+        ), patch(
+            "tensors.backend.numpy.conversion._arithmetic_operand",
+            side_effect=lambda value, dtype: value,
         ):
             with self.assertRaisesRegex(
                 ts.BackendOperationUnsupportedError,

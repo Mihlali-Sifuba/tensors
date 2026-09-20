@@ -8,7 +8,6 @@ import sys
 import types
 import unittest
 import tensors as ts
-from tensors.backend.preparation import prepare_binary_execution
 import tensors.backend as backend_package
 from tensors.backend import dispatch as dispatch_package
 from tensors.backend.cuda.storage import CudaStorage
@@ -172,9 +171,9 @@ class DispatchFallbackTests(BackendTestCase):
         matrix = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
         with ts.use_backend("python"):
             self.assertIsInstance(
-                dispatch_package.execute_add(prepare_binary_execution(
+                dispatch_package.execute_add(
                     value, value, dtype=ts.float64, output_shape=value.shape
-                )),
+                ),
                 PythonStorage,
             )
             self.assertIsInstance(
@@ -202,24 +201,19 @@ class DispatchFallbackTests(BackendTestCase):
             )
 
     @requires_numpy
-    def test_work_below_the_threshold_still_declines(self):
-        """Non-arithmetic creation keeps the threshold; arithmetic does not.
-
-        Breaking change B15 removed the threshold from ``+``, ``-``, ``*``
-        and ``/`` alone: under explicit selection those must execute on the
-        backend that was named.
-        """
-        tiny = ts.Tensor([1.0, 2.0])
+    def test_small_work_stays_on_the_selected_backend(self):
+        """Strict dispatch applies to small arithmetic and creation alike."""
         with ts.use_backend("numpy"):
+            tiny = ts.Tensor([1.0, 2.0])
             self.assertIsInstance(
-                dispatch_package.execute_add(prepare_binary_execution(
+                dispatch_package.execute_add(
                     tiny, tiny, dtype=ts.float64, output_shape=tiny.shape
-                )),
+                ),
                 NumPyStorage,
             )
             self.assertIsInstance(
                 dispatch_package.execute_full((2,), 1.0, dtype=ts.float64),
-                PythonStorage,
+                NumPyStorage,
             )
 
     def test_python_backend_interprets_a_fused_chain_itself(self):
@@ -243,13 +237,13 @@ class NumPyDispatchTests(BackendTestCase):
 
     @requires_numpy
     def test_each_domain_returns_native_storage(self):
-        value = self._value()
-        matrix = ts.full((64, 64), 1.5)
         with ts.use_backend("numpy"):
+            value = self._value()
+            matrix = ts.full((64, 64), 1.5)
             results = {
-                "arithmetic": dispatch_package.execute_add(prepare_binary_execution(
+                "arithmetic": dispatch_package.execute_add(
                     value, value, dtype=ts.float64, output_shape=value.shape
-                )),
+                ),
                 "creation": dispatch_package.execute_full(
                     (self.LARGE,), 3.0, dtype=ts.float64
                 ),
@@ -271,14 +265,13 @@ class NumPyDispatchTests(BackendTestCase):
 
     @requires_numpy
     def test_dispatch_result_matches_the_python_fallback(self):
-        value = self._value()
         with ts.use_backend("numpy"):
-            storage = dispatch_package.execute_add(prepare_binary_execution(
+            value = self._value()
+            storage = dispatch_package.execute_add(
                 value, value, dtype=ts.float64, output_shape=value.shape
-            ))
+            )
         self.assertEqual(list(storage.buffer)[:4], [4.0, 4.0, 4.0, 4.0])
-        with ts.use_backend("python"):
-            expected = (value + value).tolist()
+        expected = [4.0] * self.LARGE
         self.assertEqual(list(storage.buffer), expected)
 
 
@@ -289,13 +282,13 @@ class CudaDispatchTests(BackendTestCase):
     LARGE = 4_096
 
     def test_each_domain_returns_device_storage(self):
-        value = ts.full((self.LARGE,), 2.0)
-        matrix = ts.full((64, 64), 1.5)
         with ts.use_backend("cuda"):
+            value = ts.full((self.LARGE,), 2.0)
+            matrix = ts.full((64, 64), 1.5)
             results = {
-                "arithmetic": dispatch_package.execute_add(prepare_binary_execution(
+                "arithmetic": dispatch_package.execute_add(
                     value, value, dtype=ts.float64, output_shape=value.shape
-                )),
+                ),
                 "creation": dispatch_package.execute_full(
                     (self.LARGE,), 3.0, dtype=ts.float64
                 ),
@@ -311,13 +304,12 @@ class CudaDispatchTests(BackendTestCase):
                 self.assertIsInstance(storage, CudaStorage)
 
     def test_cuda_dispatch_matches_the_python_backend(self):
-        value = ts.full((self.LARGE,), 2.0)
         with ts.use_backend("cuda"):
-            storage = dispatch_package.execute_add(prepare_binary_execution(
+            value = ts.full((self.LARGE,), 2.0)
+            storage = dispatch_package.execute_add(
                 value, value, dtype=ts.float64, output_shape=value.shape
-            ))
-        with ts.use_backend("python"):
-            expected = (value + value).tolist()
+            )
+        expected = [4.0] * self.LARGE
         self.assertEqual(storage.copy().buffer.get().tolist(), expected)
 
 
