@@ -18,9 +18,10 @@
 > describes the other's subject, so there is one authority per question.
 >
 > Section 8 separates what is decided from what is not. The backend-selection
-> lifecycle (Q1, Q2) is **resolved**, and T7 and T8 state it normatively.
-> Q3 to Q8 remain open design decisions, listed with their alternatives and
-> consequences rather than resolved in passing.
+> lifecycle (Q1, Q2) is **resolved** in T7 and T8, and construction from a
+> `Tensor` (Q3) is **resolved** in 5.1.1. Q4 to Q8 remain open design
+> decisions, listed with their alternatives and consequences rather than
+> resolved in passing.
 
 ## 2. The problem
 
@@ -151,12 +152,52 @@ Tensor(src) under numpy selection   NumPyStorage
 Tensor(src._storage)                NumPyStorage
 ```
 
-The selection has no say; the source's representation is copied — but only
-while the dtype agrees. `Tensor(src, dtype=...)` with a *different* dtype takes
-a separate path that reads the values on the host and builds `PythonStorage`,
-so a dtype-changing construction moves the tensor to the host whatever the
-source and the selection were. Two inputs that differ only in dtype therefore
-produce tensors on different backends.
+The active backend has no say; the source's representation is copied.
+
+`Tensor.__init__` has two branches for a `Tensor` input, chosen by whether the
+requested dtype matches the source's:
+
+```python
+if data.dtype == self.dtype:
+    self._set_storage(data._logical_storage_for(data._storage.kind).copy())
+else:
+    self._set_storage(PythonStorage.from_values(data._data, self.dtype))
+inferred_shape = data.shape
+```
+
+Traced for the three cases that matter, all verified by running them:
+
+| | `a = Tensor([1.0, 2.0], float32)` | `b = Tensor(a)` | `c = Tensor(a, float64)` |
+| --- | --- | --- | --- |
+| Path | list → `PythonStorage.from_values` | same-dtype branch | different-dtype branch |
+| Storage kind | `PythonStorage` under every backend | **the source's kind** | **always `PythonStorage`** |
+| Conversion | none | none — `_logical_storage_for` is called with the source's own kind, so it only gathers | host read via `_data`, then per-element `float()` |
+| Copy | new buffer | `.copy()` — independent buffer | new buffer |
+| Shape | inferred `(2,)` | `data.shape` | `data.shape` |
+| Strides / offset | contiguous / `0` | recomputed contiguous / `0` | recomputed contiguous / `0` |
+| `_version` | `0` | `0` | `0` |
+| Side effect | none | none | populates the source's `python` cache entry |
+
+Two further behaviours, both verified:
+
+- **Layout is normalized.** A non-contiguous source is gathered into logical
+  row-major order, and a source at a non-zero offset yields storage holding
+  only its logical elements: a `shape=(2,)`, `offset=3` source over a 6-element
+  buffer produces a result whose storage size is 2. The result is always
+  contiguous with offset 0.
+- **No aliasing, in either branch.** `a._storage is b._storage` is false and
+  the buffers differ, so mutating `a` leaves `b` and `c` unchanged and does not
+  advance their `_version`.
+
+The dtype branch is where the backend is lost. Two constructions differing only
+in dtype land on different backends, and `clone()`, which is defined as
+`Tensor(self)`, inherits whichever branch applies.
+
+The *numerical* rules of the two dtype paths already agree.
+`Tensor(a, dtype=uint8)` and `a.astype(uint8)` both raise `OverflowError` on an
+out-of-range value, and both give `inf` for a float overflow, exactly as
+[arithmetic-semantics §4.5](arithmetic-semantics.md#45-arithmetic-is-not-construction-or-casting)
+specifies. Only *where* they run differs.
 
 ### 3.6 Display and host access populate the host representation
 
@@ -226,6 +267,11 @@ storage; with CUDA active, device storage. Creation operations follow the same r
 so `zeros`, `full`, `eye`, `arange`, `linspace`, the random samplers and the
 initializers all agree with the selection. The inconsistency in 3.1 disappears
 because there is one rule.
+
+Construction from an input that **already has** a backend is a separate
+question, because there are then two candidate answers. For a `Tensor` input
+5.1.1 settles it: the two must agree, or construction raises. For a `Storage`
+input it is [Q4](#q4--construction-from-a-storage-object), still open.
 
 ### T2 — Each backend uses its own native storage
 
@@ -409,18 +455,149 @@ behaviour below holds.
 
 ### 5.1 Construction
 
+Construction from a `Tensor` is specified in full in 5.1.1.
+
 | input | required behaviour |
 | --- | --- |
 | Python scalar | storage for the active backend, shape `()` |
 | nested list | flattened and stored on the active backend |
 | `array.array` | values read on the host, stored on the active backend |
-| **`Tensor`** | see [Q3](#q3--construction-from-a-tensor-of-another-backend) |
-| **`Storage`** | see [Q4](#q4--construction-from-a-storage-object) |
+| **`Tensor`** | backend must match the active backend; see 5.1.1 ([Q3](#q3--construction-from-a-tensor--resolved), resolved) |
+| **`Storage`** | see [Q4](#q4--construction-from-a-storage-object) — still open |
 
 The scalar, list and `array` cases are unambiguous: they are host inputs with
-no backend of their own, so they take the active backend's. Construction from a
-`Tensor` or a `Storage` is not, because the input already has a backend, and
-both are recorded as open questions rather than decided here.
+no backend of their own, so they take the active backend's. A `Tensor` input
+already has a backend, which 5.1.1 settles. A `Storage` input also already has
+one, and Q4 is deliberately left open.
+
+#### 5.1.1 Construction from a Tensor
+
+`Tensor(source)` and `Tensor(source, dtype=…)` produce a **new, independent
+tensor holding the source's logical values**. `clone()` is defined as
+`Tensor(self)` and is governed by this section entirely.
+
+**R1 — The source's backend must be the active backend.** If it is not,
+construction raises the mismatch error of T6, naming the source's backend, the
+active backend and the constructor. It does not convert, does not copy the
+values to the host, and does not adopt the source's backend in defiance of the
+active one.
+
+```python
+with ts.use_backend("numpy"):
+    a = ts.Tensor([1.0, 2.0])
+
+with ts.use_backend("python"):
+    b = ts.Tensor(a)        # raises: source is numpy, active backend is python
+```
+
+**R2 — The result is on that same backend.** Since the source's backend and
+the active backend are equal whenever construction succeeds, there is only one
+answer and no choice to make. Construction is never a transfer (T5).
+
+**R3 — The result is an independent deep copy.** It owns storage no other
+tensor references. This is not new: it is
+[memory-model.md's existing guarantee](memory-model.md#ownership-and-current-limits)
+that public construction copies and introduces no shared-storage aliasing, and
+this contract keeps it unchanged.
+
+**R4 — The result's layout is normalized.** Its shape is the source's shape,
+its strides are contiguous for that shape, and its offset is zero. Its storage
+holds exactly `shape.size` elements in logical row-major order.
+
+**R5 — A non-contiguous or offset source is gathered on its own backend.**
+Producing logical row-major order from strides and an offset is a layout
+operation, not a transfer (T10). A CUDA source is gathered on the device. The
+resulting values are the source's logical values, in logical order.
+
+**R6 — Without an explicit dtype, the source's dtype is preserved.** With an
+explicit dtype, conversion happens **on the active backend**, and the result is
+that backend's native storage. The converted values are exactly what the
+current host path produces; see R7.
+
+**R7 — dtype conversion changes residency, not numbers.** The numerical rules
+are those already specified in
+[arithmetic-semantics §4.5](arithmetic-semantics.md#45-arithmetic-is-not-construction-or-casting):
+an out-of-range integer target raises, float overflow yields `inf`, and
+float→integer truncates toward zero. This contract does not alter them, add a
+tolerance, or introduce a second casting rule. What changes is only that the
+conversion stops moving the tensor to host storage.
+
+**R8 — Mutation of either tensor never affects the other.** It follows from
+R3: with no shared storage there is no propagation. The result's `_version`
+starts at zero and is independent of the source's, so mutating the result
+cannot invalidate a graph that recorded the source, and mutating the source
+cannot invalidate one that recorded the result.
+
+**R9 — Construction records nothing in the graph and propagates no gradient.**
+`Tensor` is the non-differentiable value type; gradient tracking belongs to
+`Variable`, and `Tensor(variable)` raises `TypeError` today and continues to.
+Constructing a tensor inside a traced region adds no node and creates no edge,
+so **this contract requires no change to the graph or differentiation
+contract**. A `Variable` wrapping a tensor still aliases that tensor rather
+than copying it, which is `Variable`'s existing behaviour and is untouched
+here: R3 is a guarantee about tensor-to-tensor construction, not about what
+`Variable` does with a tensor afterwards.
+
+##### Behavioural matrix
+
+`A` is the active backend. Every row assumes construction succeeds unless it
+says otherwise.
+
+| # | Case | Result backend | Result dtype | Storage | Layout | Values |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Same backend, dtype unchanged | `A` | source's dtype | new, independent | contiguous, offset 0, size = `shape.size` | source's logical values, unchanged |
+| 2 | Same backend, dtype explicitly different | `A` | the requested dtype | new, independent, **native to `A`** | as row 1 | converted per §4.5; raises on out-of-range integer targets |
+| 3 | Source backend ≠ `A` | — | — | — | — | **raises** the T6 mismatch error; nothing is constructed or converted |
+| 4 | Non-contiguous or offset source, same backend | `A` | as rows 1–2 | new, independent, compacted | contiguous, offset 0 | gathered on `A` into logical row-major order (T10) |
+| 5 | Mutation after construction | unchanged | unchanged | disjoint from the source's | unchanged | neither tensor observes the other's writes; `_version` counters are independent |
+
+Row 3 is the resolution of Q3. Rows 1, 2, 4 and 5 hold whenever row 3 does not
+apply.
+
+##### What changes from today
+
+| | Today (3.5) | Under this contract |
+| --- | --- | --- |
+| Cross-backend construction | Silently keeps the source's backend | Raises (R1) |
+| dtype-changing construction | Always produces `PythonStorage` | Produces the active backend's storage (R6) |
+| Same-backend, same-dtype | Independent copy, layout normalized | **Unchanged** (R3, R4) |
+| Converted values | Per §4.5 | **Unchanged** (R7) |
+| Graph and gradients | Not involved | **Unchanged** (R9) |
+
+Two of the five rows are already correct, which is the point: this resolution
+removes two behaviours and preserves everything else.
+
+##### Dependencies discovered while resolving this
+
+Recorded because an implementer will meet them, not decided here.
+
+- **The dtype path depends on the cast dispatching strictly.** R6 requires a
+  dtype-changing construction to produce the active backend's storage. Today
+  the cast path, `execute_cast`, consults the workload policy and runs the
+  Python reference below a size threshold: verified, a 4-element
+  `astype(float64)` under NumPy returns `PythonStorage` while a 5000-element
+  one returns `NumPyStorage`. So R6 cannot be satisfied by routing
+  construction through the cast as it currently dispatches. This is **not a
+  new decision** — T4 already requires any operation to produce the active
+  backend's storage, and [backends.md](backends.md#execution-requirements)
+  already records that operations other than `+ - * /` and `**` still follow
+  the workload policy. R6 simply makes the gap observable at a second call
+  site.
+- **Q4 is genuinely separate.** Resolving Q3 does not resolve construction
+  from a `Storage`, for the reasons given under
+  [Q4](#q4--construction-from-a-storage-object). An implementation of 5.1.1
+  must not quietly settle it by sharing a code path.
+- **Q8 becomes load-bearing.** With R1 in force there is no way to move a
+  tensor between backends. That is intended, and
+  [Q8](#q8--an-explicit-migration-api) remains open; no migration API is
+  introduced here.
+- **No conflict with the existing ownership contract.** R3 and R8 restate
+  guarantees [memory-model.md](memory-model.md#ownership-and-current-limits)
+  already makes. Nothing in this resolution weakens or extends them, and the
+  `Variable`-aliases-its-tensor behaviour noted in R9 is likewise untouched.
+- **No change to the graph contract.** R9 is a statement of existing
+  behaviour, confirmed by `Tensor(variable)` raising `TypeError` and by the
+  construction path never touching graph state.
 
 ### 5.2 Nested backend contexts
 
@@ -456,6 +633,9 @@ cause is legible without a debugger. Three cases:
   operation, whatever the selection.
 - **Operand against a graph.** A recorded computation replayed with operands
   from a different backend — see [Q5](#q5--graph-replay-across-backends).
+- **Source against the active backend.** `Tensor(source)` where the source's
+  backend is not the active one (5.1.1, R1). Construction is not exempt from
+  T6 merely because it produces a new tensor rather than consuming two.
 
 ### 5.4 Mutation
 
@@ -521,7 +701,9 @@ objective is to remove indirection, not to rename it.
 | `tensors/tensor.py` — `_set_storage` | Installs storage, resets the cache | Installs storage. The dtype agreement check it also performs is unrelated and stays. |
 | `tensors/tensor.py` — `_mutable_data` | Converts to host and installs it | **Changed.** Mutation acts on the tensor's own backend (5.4). |
 | `tensors/tensor.py` — `_data` | Gathers host values | Becomes a host-facing read (5.5), not a conversion. |
-| `tensors/tensor.py` — `__init__` | Host storage for scalars/lists; copies a Tensor's or Storage's kind | **Changed.** T1 for host inputs; Q3 and Q4 for the rest. |
+| `tensors/tensor.py` — `__init__` | Host storage for scalars/lists; copies a Tensor's or Storage's kind; a dtype change routes through host values | **Changed.** T1 for host inputs; 5.1.1 for a `Tensor` input, whose two dtype branches collapse into one backend-native path; [Q4](#q4--construction-from-a-storage-object) still open for a `Storage` input. |
+| `tensors/tensor.py` — `clone` | Defined as `Tensor(self)` | **Unchanged in definition**, so 5.1.1 governs it. Same-backend cloning behaves as it does today. |
+| `tensors/backend/dispatch/manipulation/cast.py` — `execute_cast` | Falls back to the Python reference below a workload threshold | **Changed.** 5.1.1 R6 requires a dtype conversion to produce the active backend's storage, which T4 already requires of any operation. See the dependency note in 5.1.1. |
 | `tensors/backend/conversion.py` — `convert_storage` | The only cross-backend conversion | **Gone**, unless a deliberate migration API is added — see [Q8](#q8--an-explicit-migration-api). Its one caller is `_storage_for`. |
 | `tensors/backend/numpy/conversion.py` — `_view`, `_operand`, `_arithmetic_operand` | Each begins by asking for a NumPy representation | **Simplified.** Under T4 the operand already is one; what remains is dtype handling and the logical gather. |
 | `tensors/backend/cuda/conversion.py` — the same three, plus `_widen`, `_narrow`, `_working_values` | As above, plus the PTX-based binary32 widening | As above. The subnormal-preserving widening is numerical (T9) and stays exactly as it is. |
@@ -546,11 +728,11 @@ objective is to remove indirection, not to rename it.
 
 ## 8. Questions
 
-Q1 and Q2 are **resolved**, and the decision is normative in T7 and T8 rather
-than here; the entries are kept so the alternatives that were rejected stay on
-record. Q3 to Q8 remain **open**: each records the alternatives, what follows
-from them, and a recommendation, and none of those recommendations has been
-adopted.
+Q1, Q2 and Q3 are **resolved**. Each decision is normative elsewhere — T7 and
+T8 for the lifecycle, 5.1.1 for construction from a `Tensor` — and the entries
+here are kept so the rejected alternatives stay on record. Q4 to Q8 remain
+**open**: each records the alternatives, what follows from them, and a
+recommendation, and none of those recommendations has been adopted.
 
 ### Q1 — When the process default locks — RESOLVED
 
@@ -601,18 +783,33 @@ The distinction this turns on is the one drawn in 2.1: T7 governs the
 selections, so exempting one from the other's lock is not an exception to the
 model — it is the model.
 
-### Q3 — Construction from a Tensor of another backend
+### Q3 — Construction from a Tensor — RESOLVED
+
+*Resolved in [5.1.1](#511-construction-from-a-tensor), which is normative. The
+entry is kept so the rejected alternatives stay on record.*
 
 `Tensor(other)` where `other` belongs to a different backend.
 
 | Option | Consequence |
 | --- | --- |
-| **A. Raise** | Consistent with T6: construction is not a transfer mechanism. The caller has no way to move data, which makes Q8 pressing. |
+| **A. Raise — ADOPTED** | Consistent with T6: construction is not a transfer mechanism. The caller has no way to move data between backends, which is the intended consequence, not an oversight. |
 | **B. Copy to the active backend** | Convenient, and a natural reading of "construct a tensor here from these values". But it is a cross-backend transfer under an ordinary-looking constructor, which is the pattern T5 removes. |
-| **C. Copy the source's backend** | Today's behaviour (3.5). Construction then ignores the selection, contradicting T1. |
+| **C. Copy the source's backend** | Today's behaviour (3.5). Construction then ignores the active backend, contradicting T1. |
 
-**Recommended: A**, paired with a decision on Q8. B is the same invisible
-transfer in a different place; C contradicts T1.
+**Adopted: A.** B hides the same transfer behind a different spelling; C
+contradicts T1. Under A there is exactly one way a tensor acquires a backend —
+the active backend at its construction — and no expression quietly moves data
+across a bus.
+
+Same-backend construction was specified at the same time, because resolving
+only the cross-backend half would have left the more common case undefined.
+5.1.1 states both, and its matrix row 3 is this decision.
+
+**Relationship to Q8.** A leaves no way to move a tensor between backends, so
+it is A that gives Q8 its force. Q8 remains open and is **not** decided here;
+if a migration API is ever added it will be an explicit, separately named
+operation, never this constructor. No migration API is introduced by this
+resolution.
 
 ### Q4 — Construction from a Storage object
 
@@ -621,7 +818,13 @@ three options as Q3 apply, with one difference: a `Storage` is an internal
 type, so the public surface is narrower and the compatibility cost of raising
 is lower.
 
-**Recommended: A (raise)**, for consistency with Q3.
+**Recommended: A (raise)**, for consistency with Q3. **Not adopted** — Q3's
+resolution does not decide this one. The two are separate because a `Storage`
+has no shape, strides or offset of its own, so the layout and gather rules of
+5.1.1 (R4, R5) have no counterpart here, and `Tensor(Storage)` carries the
+additional ownership guarantee recorded in
+[memory-model.md](memory-model.md#ownership-and-current-limits). Resolving Q3
+constrains the answer but does not supply it.
 
 ### Q5 — Graph replay across backends
 
@@ -671,9 +874,11 @@ backends. Whether one is wanted is a product question, not a structural one.
 | **A. None** | The strictest model. A program uses one backend, or constructs each tensor under the selection it belongs to. Q3 option A becomes hard to work around, which may be right. |
 | **B. An explicit method** | Transfers become visible and greppable, which is the property the current model lacks. Adds one public API, and the "do not invent additional conversion APIs" instruction means it needs a stated requirement first. |
 
-**Recommended: defer.** No concrete requirement for it has been stated. Decide
-after Q3 is settled and the implementation shows whether the strict model is
-usable; adding it later is compatible, removing it later is not.
+**Recommended: defer.** No concrete requirement for it has been stated. Q3 is
+now resolved as A, so this question is live rather than hypothetical: there is
+currently no way to move a tensor between backends, by design. Decide once the
+implementation shows whether the strict model is usable in practice; adding a
+migration API later is compatible, removing one later is not.
 
 ## Related documents
 
