@@ -20,7 +20,8 @@
 > Section 8 separates what is decided from what is not. The backend-selection
 > lifecycle (Q1, Q2) is **resolved** in T7 and T8, and construction from a
 > `Tensor` (Q3) is **resolved** in 5.1.1, and construction from a `Storage`
-> (Q4) is **resolved** in 5.1.3. Q5 to Q8 remain open design
+> (Q4) is **resolved** in 5.1.3. Graph replay (Q5) is **resolved** in
+> 5.7 and 5.8. Q6 to Q8 remain open design
 > decisions, listed with their alternatives and consequences rather than
 > resolved in passing.
 
@@ -263,6 +264,66 @@ A graph built under NumPy and replayed under Python produces `PythonStorage`
 and the same values. Differentiation behaves likewise: a forward pass under
 NumPy differentiated under Python returns host storage. Both work only because
 of the implicit conversion in 3.3.
+
+The absence of a backend field on a graph is real, but it is not the whole
+execution model. Tracing and structural recording create `VariableNode` and
+`OperationNode` identities joined by ordered edges. Compilation turns those
+identities into value slots and immutable `Instruction` objects holding an
+operation plus input and output slot numbers. Neither representation stores a
+backend, kernel object or tensor buffer.
+
+Residency enters through the values bound to leaf slots:
+
+- replay inputs are `Tensor` objects wrapped or rebound to leaf `Variable`s;
+- model parameters and captured `Variable`s remain bound leaves;
+- captured `Tensor` constants are wrapped as non-gradient bound leaves; and
+- scalar operands in an eager trace become zero-dimensional, non-gradient
+  tensor leaves. A structural expression cannot type a bare scalar before
+  values exist, so it falls back to tracing rather than storing an untyped
+  literal in the structural graph.
+
+`Computation.forward()` allocates a fresh local slot buffer, seeds its leaf
+slots from those Variables, and calls each recorded operation's `forward` in
+dependency order. Results replace the data of the already-bound result
+Variables (or materialize them on the first pass), and each result captures
+operand/result mutation state for differentiation. Result storage is produced
+by ordinary backend dispatch and adopted through `_from_owned_storage`; the
+graph layer does not choose a storage kind.
+
+Three replay mechanisms differ in their preparation but converge on that
+same `Computation.forward()` path:
+
+- a structurally built model records and compiles once, then rebinds call
+  `Tensor`s to its input vertices;
+- an explicitly compiled trace stores input-to-Variable bindings, output and
+  computation references, structural metadata and leaf shape/dtype/gradient
+  guards; and
+- direct `Computation.forward()` reads whatever Tensors its bound leaf
+  Variables currently hold.
+
+The guarded trace's call signature currently includes `get_backend()`. A
+backend change therefore causes a cache miss and retrace even though the
+instruction sequence is backend-neutral. Structural replay and direct
+`Computation` replay have no equivalent backend guard. All paths still work
+cross-backend today because kernels obtain converted representations through
+the tensor storage cache.
+
+Fusion does not make the graph itself backend-specific. `_FusionPlan` caches
+shape/dtype-derived ranges and backend-neutral step descriptions beside the
+canonical instructions. Dispatch asks the backend active for that pass to
+execute them or runs the same instructions ordinarily. CUDA `RawKernel`
+objects are compiled and cached inside the CUDA kernel module, keyed by the
+typed expression and shapes; the graph does not own them. Kernel lookup is
+selection-aware and its cache is cleared when selection changes.
+
+Backward first validates saved forward mutation states, builds or validates an
+upstream seed, and traverses the same instructions in reverse. VJPs and fused
+VJPs dispatch under the backend active for the reverse pass; gradients are
+constructed from returned native storage. `backward()` publishes `.grad`
+values only after the complete reverse pass succeeds, while `grad()` returns
+from local gradient buffers without mutating `.grad`. Higher-order
+differentiation records the VJP operations as a new graph through
+`backward_graph`.
 
 ### 3.8 Nested scopes already restore correctly
 
@@ -884,16 +945,20 @@ the scope still reads a device tensor's values, because host-facing access
 
 ### 5.3 Backend mismatch
 
-A mismatch is detected where the operand is consumed and raises there. The
-error names the tensor's backend, the active backend and the operation, so the
-cause is legible without a debugger. Three cases:
+A mismatch is detected no later than the point where an operand would be
+consumed. Public construction checks at its boundary (5.1.1, 5.1.3), and graph
+replay checks its complete known leaf set before rebinding or execution (5.7);
+ordinary eager operations validate at consumption. The error names the
+tensor's backend, active backend and constructor, replay phase or operation,
+so the cause is legible without a debugger. Four cases:
 
 - **Operand against the active backend.** A NumPy tensor used while CUDA is
   active.
 - **Operand against operand.** A NumPy tensor and a CUDA tensor in one
   operation, whatever the selection.
 - **Operand against a graph.** A recorded computation replayed with operands
-  from a different backend — see [Q5](#q5--graph-replay-across-backends).
+  from a different backend — see
+  [Q5](#q5--graph-replay-across-backends--resolved).
 - **Source against the active backend.** `Tensor(source)` where the source's
   backend is not the active one (5.1.1 R1 for a `Tensor`, 5.1.3 S1 for a
   `Storage`). Construction is not exempt from T6 merely because it produces a
@@ -934,12 +999,145 @@ serialization is added, whether a stored tensor records its backend is
 
 ### 5.7 Graph execution
 
-A recorded computation describes operations and operands, not a backend. Under
-the target model its inputs have backends, so replay is constrained by them
-rather than by where the graph was built. Replay under a selection matching
-its inputs produces results on that backend, as it does today (3.7); replay
-against a different one is a mismatch under 5.3, which is a behaviour change
-from 3.7 and is [question Q5](#q5--graph-replay-across-backends).
+A recorded computation describes mathematical operations, graph identities
+and data flow. It does **not** acquire a backend merely because one was active
+while the structure was recorded. Compatibility is decided from the tensors a
+particular pass will read and the backend active for that pass.
+
+**G1 — Recording time does not bind execution.** A backend-neutral graph may
+execute under a different active backend from the one used while recording.
+Recording-time selection is neither stored as graph semantics nor compared at
+replay solely for having been the recording selection. This avoids a redundant
+graph-level selection system beside `get_backend()`.
+
+**G2 — Every tensor read by a pass must be native to the active backend.** For
+a forward replay this set includes new replay inputs plus every bound leaf the
+program retains: parameters, captured Variables, Tensor constants and scalar
+tensor leaves. For a reverse pass it includes the explicit or generated seed,
+the forward inputs and saved intermediate/output values each VJP reads, and
+gradient terms as they are produced. A captured constant is an operand, not an
+exception.
+
+**G3 — Known leaf mismatches are rejected before replay mutates bindings or
+executes an instruction.** Replay validates all incoming Tensor arguments and
+all retained bound leaves against the active backend as one preflight. A
+mismatch raises the T6 error naming the resident backend, active backend and
+the input/capture or replay phase. It does not rebind input Variables, execute
+a prefix of the program, convert anything, or update output Variables.
+Mixed-backend replay inputs necessarily fail this check: at most one kind can
+equal the active backend.
+
+This guarantee is deliberately narrower than transactionality. Once preflight
+succeeds, instructions execute in order and result Variables are updated as
+they are produced. A later unsupported operation, internal invariant failure
+or wrong-kind result may therefore leave already-produced intermediate or
+output Variables updated; replay does not roll them back. Input and captured
+tensors are not mutated by ordinary operations. The implementation must not
+describe the whole replay as atomic.
+
+**G4 — Prior-pass results do not pin a new forward pass.** A bound output or
+intermediate Tensor from an earlier replay is overwritten before its slot is
+read in the new pass, so its old backend alone is not an incompatible capture.
+Any cached value that *is* read as an operand is part of G2 and must match.
+This distinction permits one backend-neutral program to replay with entirely
+new, compatible inputs on another backend without treating stale outputs as
+captures.
+
+**G5 — Dispatch retains its ordinary responsibilities.** After graph-level
+preflight, each instruction calls the same operation entry point as eager
+execution. Operand validation enforces T4–T6 at consumption, dispatch selects
+the active backend's kernel, and `_from_owned_storage` may adopt only the
+native result the valid dispatcher produced. If the selected backend cannot
+execute an operation conformingly, dispatch raises
+`BackendOperationUnsupportedError` naming the operation, dtype and backend.
+Replay must not catch that error to invoke another backend.
+
+Eager `Variable` execution reaches the same rule from the other direction: it
+records one operation node, compiles the new fragment and immediately calls
+the operation. It does not perform a whole-graph replay preflight. A mismatch
+is rejected by ordinary operand validation before that operation's kernel runs
+or result binds, but the already-recorded structural fragment may remain until
+collected. This is harmless graph metadata, not a partially computed tensor,
+and is not a reason to transfer the operands.
+
+**G6 — Execution artifacts are replaceable; tensors are not transferable.**
+The canonical instruction sequence and current fusion-range metadata are
+backend-neutral. A backend-specific compiled or fused artifact, now or in a
+future implementation, is valid only for the backend and capability key it
+was created for. Replay may select, compile, regenerate or cache a compatible
+artifact, because that changes executable code rather than tensor residency.
+It may also decline a fused plan and execute the same instructions ordinarily
+on the same backend. It must never use an artifact mismatch to convert data or
+fall back to another backend. If neither fused nor ordinary execution is
+supported, G5's unsupported-operation error applies.
+
+**G7 — Cache compatibility is not graph compatibility.** The current compiled
+trace signature includes the active backend and retraces on a change. Under
+this contract the recording backend is not a semantic guard. A backend may
+participate in an execution-artifact cache key, but a miss means select or
+regenerate an execution plan; it does not by itself make the mathematical
+graph incompatible. Shape, dtype, static-argument and structural guards remain
+independent validity requirements.
+
+##### Replay compatibility matrix
+
+`A` is the backend active for the pass. A "retained leaf" means a parameter,
+captured Variable, Tensor/scalar constant or any other bound value the pass
+will read.
+
+| Scenario | Required result | Detection and state on failure |
+| --- | --- | --- |
+| Recording and replay both use `A`; all read tensors are native to `A` | replay succeeds; every instruction and result remains on `A` | ordinary operand validation and dispatch still apply |
+| Replay changes to backend `B` but retains an `A`-backed captured tensor | **raises** a T6 mismatch | replay preflight identifies the captured leaf before input rebinding or instruction execution; tensors and result bindings are unchanged |
+| Graph was recorded under `A`, then replayed under `B` with new `B` inputs, no incompatible retained leaf/artifact, and all non-backend guards satisfied | replay is permitted; recording backend is irrelevant | inputs are rebound only after successful preflight; results and intermediates are native to `B` |
+| Replay inputs have different storage kinds, or an input kind differs from `A` | **raises** a T6 mismatch | replay preflight names the offending input and active backend; no input binding changes |
+| A captured constant or parameter is not native to `A` | **raises** exactly as for any tensor operand | replay preflight; capture status grants no conversion privilege |
+| A cached compiled/fused artifact is for another backend | graph remains compatible if a valid `A` plan exists | select/regenerate an `A` artifact or execute ordinary instructions on `A`; artifact-cache state may change, tensor data may not be transferred |
+| Backend `A` lacks a required operation | **raises** `BackendOperationUnsupportedError` | raised by ordinary dispatch at that instruction; earlier results may already have been updated because replay is not transactional |
+| Forward ran on `A`, backward is requested under `B` while saved values remain on `A` | **raises** a T6 mismatch | reverse preflight occurs before seed computation, VJP execution or `.grad` publication; rerun forward with compatible `B` inputs/captures before differentiating on `B` |
+
+Rows two and three are the core Q5 distinction: changing selection is neither
+automatically invalid nor automatically valid. Tensor residency, retained
+state and backend capability decide.
+
+##### What changes from today and implementation dependencies
+
+- **Replay preflight is new.** Structural and compiled replay currently rebind
+  public inputs before `Computation.forward()`, and direct computation replay
+  performs no all-leaf backend check. The check must cover new inputs and
+  `_leaf_variables()` before either action. Ordinary per-operation validation
+  remains defence in depth and covers dynamically produced values.
+- **The compiled trace guard is too broad.** `_call_signature()` stores
+  `get_backend()` with shape, dtype and static arguments, forcing a retrace on
+  every backend change. Backend-neutral instructions can be reused; any truly
+  backend-specific artifact needs its own compatibility key rather than making
+  recording selection graph semantics.
+- **Captured values are already discoverable.** Compiler leaf slots include
+  public boundaries, model parameters and Tensor/scalar leaves, so no new
+  public capture registry or graph API is required. The implementation must
+  distinguish public input bindings from retained captures only to produce a
+  useful error and to avoid mutating bindings before validation.
+- **Scalar graph constants must become backend-native.** Eager Variable
+  arithmetic currently materializes a scalar leaf through `_from_values`,
+  which always creates `PythonStorage`. Under a non-Python active backend that
+  would make the graph incompatible at birth once implicit conversion is
+  removed. Scalar normalization must allocate on the active backend while
+  preserving the existing promotion and conversion rules; this is a T1/T4
+  dependency, not permission to special-case constants during replay.
+- **Backend-native result construction remains internal.** Eager, replayed,
+  fused and backward kernels continue to transfer fresh storage through
+  `_from_owned_storage`. As 5.1.3 requires, that helper does not validate the
+  active selection and therefore cannot legitimize a dispatcher that returned
+  the wrong kind.
+- **Fusion needs no new graph format.** The existing range/step plan is
+  backend-neutral. CUDA's typed `RawKernel` caches remain backend-owned and may
+  compile on demand. A future graph-owned executable must be invalidated or
+  regenerated on incompatibility; retaining one and moving data to suit it is
+  forbidden.
+- **Strict dispatch remains a dependency.** Many non-arithmetic forward and
+  VJP dispatchers still use workload-based Python fallback. A graph cannot
+  satisfy G5 while those paths can return storage from another backend. This
+  is the same T4/T11 implementation gap, not a graph-specific exception.
 
 ### 5.8 Differentiation
 
@@ -949,9 +1147,35 @@ numerical contract — the region tables, accuracy bounds and classification
 rules of [Arithmetic semantics §12.7](arithmetic-semantics.md#127-differentiation-d7)
 — is untouched (T9).
 
-The forward-under-one-backend, backward-under-another case in 3.7 becomes a
-mismatch. That is the intended consequence of T5: it works today only through
-the implicit conversion that this proposal removes.
+The active backend for backward need not equal the historical recording
+backend, but it must equal the residency of every saved forward value and seed
+that reverse execution will read. Forward-under-one-backend,
+backward-under-another therefore raises while the saved pass remains on the
+first backend. That is the intended consequence of T5: it works today only
+through the implicit conversion that this proposal removes. A fresh successful
+forward replay under the second backend, with compatible inputs and captures,
+refreshes saved states and may then be differentiated there.
+
+Reverse compatibility is checked after the existing mutation/version
+validation and before a default seed is allocated or an explicit seed is
+cast. A supplied seed is an operand and must already be native to the active
+backend; seed casting may change dtype on that backend but may not migrate it.
+Saved operand, output and intermediate tensors follow G2 even when a VJP needs
+only a subset of them.
+
+`backward()` retains its existing publication guarantee: no `.grad` field is
+cleared or replaced until the complete reverse pass succeeds. A backend
+mismatch or unsupported VJP therefore leaves published gradients unchanged,
+although local gradient buffers and, for `create_graph=True`, unreachable
+partial structural records may have been created before a later non-preflight
+failure. `grad()` remains functional and never publishes `.grad`.
+
+Higher-order differentiation adds no exception. `backward_graph` records VJP
+operations as backend-neutral graph structure, while the Variables and Tensors
+it reads and produces obey the same active-backend checks. Gradient
+accumulation, shape reduction, dtype restoration, saved-state version checks
+and numerical semantics remain unchanged; only an implicit backend transfer is
+removed.
 
 ## 6. Affected modules
 
@@ -979,7 +1203,9 @@ objective is to remove indirection, not to rename it.
 | `tensors/backend/config.py` — `get_backend` | Override if in scope, else the process default | **Unchanged.** It already answers the active-backend question (2.1). |
 | `tensors/backend/policy.py` | Workload thresholds choose a path | Untouched by this proposal; still governed by [backends.md](backends.md#execution-requirements). |
 | Creation ops and `tensors/init/` | Mixed agreement with the selection (3.1) | **Changed.** T1 makes them uniform. |
-| `tensors/graph/` | Replays under the current selection | **Changed** at the boundary only: operands are checked (5.7). Recording, replay order and differentiation are untouched. |
+| `tensors/graph/graph.py` — structural and compiled replay | Rebinds public Tensor inputs before execution; compiled signatures include `get_backend()` and retrace when it changes | **Changed.** Preflight all incoming and retained leaf tensors before rebinding. Recording backend is removed as a semantic trace guard; backend-specific artifact compatibility remains separate (5.7 G1–G7). |
+| `tensors/graph/computation/computation.py` — forward and backward | Seeds leaves and dispatches instructions without a whole-pass residency check; reverse validation covers mutation state only | **Changed.** Forward validates bound leaves; reverse validates saved values and the seed before VJPs. Instruction order, local buffers, result binding, demand analysis and delayed `.grad` publication stay unchanged. |
+| `tensors/graph/computation/fusion.py` and backend fusion caches | Graph-owned fusion ranges/steps are backend-neutral; CUDA owns typed compiled-kernel caches | **Contract retained.** Same-backend plan fallback remains permitted. Backend artifacts may be selected or regenerated, never used to justify tensor transfer or cross-backend fallback (G6). |
 
 ## 7. What this proposal does not change
 
@@ -995,12 +1221,12 @@ objective is to remove indirection, not to rename it.
 
 ## 8. Questions
 
-Q1, Q2, Q3 and Q4 are **resolved**. Each decision is normative elsewhere — T7
-and T8 for the lifecycle, 5.1.1 for construction from a `Tensor`, and 5.1.3
-for public and internal construction from `Storage` — and the entries here are
-kept so the rejected alternatives stay on record. Q5 to Q8 remain **open**:
-each records the alternatives, what follows from them, and a recommendation,
-and none of those recommendations has been adopted.
+Q1 through Q5 are **resolved**. Each decision is normative elsewhere — T7 and
+T8 for the lifecycle, 5.1.1 for construction from a `Tensor`, 5.1.3 for public
+and internal construction from `Storage`, and 5.7–5.8 for graph replay and
+differentiation. The entries here remain so rejected alternatives stay on
+record. Q6 to Q8 remain **open**: each records the alternatives, consequences
+and an unadopted recommendation.
 
 ### Q1 — When the process default locks — RESOLVED
 
@@ -1113,19 +1339,33 @@ path adopts freshly produced, exclusively owned native storage without copying
 and without applying the public constructor's active-backend check. It is an
 internal ownership transfer, not public construction or migration.
 
-### Q5 — Graph replay across backends
+### Q5 — Graph replay across backends — RESOLVED
+
+*Resolved in [5.7](#57-graph-execution) and
+[5.8](#58-differentiation), which are normative. The entry is kept so the
+rejected alternatives stay on record.*
 
 A computation recorded under one backend, replayed under another.
 
 | Option | Consequence |
 | --- | --- |
-| **A. Mismatch, raises** | Follows from T6 with no special case. Today's behaviour (3.7) breaks, including the forward-here-backward-there pattern in 5.8. |
-| **B. Graphs carry a backend** | Replay checks against the recorded backend rather than the current selection. Adds state to the graph and a second place where a backend is remembered. |
-| **C. Replay rebuilds inputs on the active backend** | Preserves today's behaviour by reintroducing exactly the implicit transfer T5 removes. |
+| **A. Execution-time residency — ADOPTED** | Graph structure carries no recording backend. Replay is valid when every tensor the pass reads is native to the active backend and required kernels/artifacts are available; otherwise it raises. A compatible graph may execute under a different backend from recording. |
+| **B. Recording backend is permanent** | Simple validation, but rejects a backend-neutral graph with wholly new compatible inputs and duplicates the active-backend mechanism in graph state. The current graph and instruction representations do not require it. |
+| **C. Replay converts or rebuilds values for the active backend** | Preserves today's cross-backend convenience by restoring the implicit transfer T5 removes. It also obscures whether captures, seeds and saved forward values were moved. |
 
-**Recommended: A.** B and C both restore the ambiguity elsewhere. The cost is
-that a legitimate pattern — measure on one backend, differentiate on another —
-stops working, and that should be confirmed as acceptable before implementing.
+**Adopted: A.** The graph is mathematical structure; bound and supplied
+tensors carry residency. This is stricter than today's execution because no
+operand, capture, intermediate, saved value or gradient is converted, but less
+restrictive than binding the graph forever to recording time. A graph recorded
+under NumPy may replay under Python with wholly Python-native inputs and no
+incompatible retained leaves. The same replay raises before execution if it
+still captures a NumPy tensor.
+
+Forward on one backend and backward on another is not directly valid, because
+the saved forward values belong to the first backend. It becomes valid only
+after a fresh forward replay on the second backend with compatible values.
+Backend-specific executable artifacts may be regenerated or replaced because
+code is not tensor data; this does not authorize migration or fallback.
 
 ### Q6 — Serialization
 
