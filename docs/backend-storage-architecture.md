@@ -190,8 +190,14 @@ Two further behaviours, both verified:
   advance their `_version`.
 
 The dtype branch is where the backend is lost. Two constructions differing only
-in dtype land on different backends, and `clone()`, which is defined as
-`Tensor(self)`, inherits whichever branch applies.
+in dtype land on different backends.
+
+`clone()` is currently defined as `Tensor(self)`, so today it takes the
+same-dtype branch and returns a tensor on the source's backend — verified: with
+the process default `python`, cloning a NumPy-backed tensor yields a
+NumPy-backed clone and leaves the active backend alone. That is already what
+5.1.2 requires. The delegation nevertheless cannot survive, because the
+constructor gains a backend requirement that cloning must not inherit.
 
 The *numerical* rules of the two dtype paths already agree.
 `Tensor(a, dtype=uint8)` and `a.astype(uint8)` both raise `OverflowError` on an
@@ -453,9 +459,10 @@ What follows is required behaviour. It does not prescribe helper functions —
 how a kernel obtains its operand is an implementation matter, provided the
 behaviour below holds.
 
-### 5.1 Construction
+### 5.1 Construction and cloning
 
-Construction from a `Tensor` is specified in full in 5.1.1.
+Construction from a `Tensor` is specified in full in 5.1.1, and cloning — which
+is **not** construction and follows a different backend rule — in 5.1.2.
 
 | input | required behaviour |
 | --- | --- |
@@ -470,11 +477,19 @@ no backend of their own, so they take the active backend's. A `Tensor` input
 already has a backend, which 5.1.1 settles. A `Storage` input also already has
 one, and Q4 is deliberately left open.
 
+Everything in this table is **construction**, and construction answers to the
+active backend. `source.clone()` is not in the table because it is not
+construction: it answers to the source's backend (5.1.2).
+
 #### 5.1.1 Construction from a Tensor
 
 `Tensor(source)` and `Tensor(source, dtype=…)` produce a **new, independent
-tensor holding the source's logical values**. `clone()` is defined as
-`Tensor(self)` and is governed by this section entirely.
+tensor holding the source's logical values**.
+
+This section governs the **constructor only**. `source.clone()` is an
+operation on an existing tensor, not a construction, and 5.1.2 governs it
+instead. The two differ in exactly one respect — which backend they answer to —
+and in nothing else.
 
 **R1 — The source's backend must be the active backend.** If it is not,
 construction raises the mismatch error of T6, naming the source's backend, the
@@ -599,6 +614,78 @@ Recorded because an implementer will meet them, not decided here.
   behaviour, confirmed by `Tensor(variable)` raising `TypeError` and by the
   construction path never touching graph state.
 
+#### 5.1.2 Cloning
+
+`source.clone()` returns a new, independent tensor with the source's logical
+values, shape and dtype. It is **an operation on an existing tensor, not a
+construction**, and the difference is deliberate.
+
+**C1 — The clone is on the source's backend, whatever the active backend is.**
+Cloning answers to the tensor it is called on, not to the selection in force.
+It is therefore **exempt from the constructor's R1** and never raises a
+mismatch.
+
+```python
+ts.set_backend("python")
+
+with ts.use_backend("numpy"):
+    a = ts.Tensor([1.0, 2.0])   # a is NumPy-backed
+
+b = a.clone()                   # b is NumPy-backed; the default is still python
+```
+
+**C2 — No transfer occurs, in either direction.** The clone does not move to
+the active backend, does not build a host-backed intermediate on the way, and
+does not populate any alternative representation of the source. Reading a
+tensor's own values on its own backend is not a transfer (T10), and there is
+nothing here that crosses a backend boundary at all.
+
+**C3 — Cloning never changes the active backend or the process default.** It
+selects nothing. The example above leaves the process default at `python`
+throughout.
+
+**C4 — Every copying invariant of 5.1.1 applies unchanged.** Independent deep
+copy owning storage nothing else references (R3); shape preserved, strides
+contiguous, offset zero, storage exactly `shape.size` elements (R4); a
+non-contiguous or offset source gathered **on its own backend** into logical
+row-major order (R5); dtype preserved (R6, with no dtype parameter to change
+it); mutation of either tensor invisible to the other, the clone's
+mutation-version counter starting at zero (R8); and no graph node, edge or
+gradient participation (R9).
+
+**C5 — `clone()` remains the only public spelling of this operation.** No new
+API is introduced, and no parameter is added to it. A tensor is cloned onto
+its own backend or not at all.
+
+**This section changes no behaviour.** Verified against the current
+implementation: with the process default `python` and a NumPy-backed `a`,
+`a.clone()` already returns a NumPy-backed tensor with independent storage, an
+untouched active backend, no new entry in the source's representation cache,
+and a version counter of zero — C1 through C4 exactly. What the target contract
+changes is only that `clone()` can no longer be *expressed* as `Tensor(self)`,
+because the constructor will raise where cloning must succeed. The behaviour
+being specified here is the behaviour that exists; an implementation may be
+tested against it before and after the refactor and must produce identical
+results.
+
+##### `Tensor(source)` against `source.clone()`
+
+| | `Tensor(source)` | `source.clone()` |
+| --- | --- | --- |
+| Kind of thing | Constructor (5.1.1) | Operation on an existing tensor (5.1.2) |
+| Backend it answers to | The **active** backend | The **source's** backend |
+| Source backend ≠ active backend | **Raises** (R1) | **Succeeds**, on the source's backend (C1) |
+| Result backend | The active backend | The source's backend |
+| dtype parameter | Accepted; conversion on the active backend (R6, R7) | None |
+| Storage, layout, mutation, graph | R3, R4, R5, R8, R9 | Identical (C4) |
+
+The distinction is narrow on purpose. Only the backend question differs;
+everything about what the copy *is* stays the same. The reason they differ at
+all is that they ask different questions: `Tensor(x)` asks "build me a tensor
+here", where *here* is the active backend, and `x.clone()` asks "give me
+another one of these", where *these* already has a backend and no selection
+is involved.
+
 ### 5.2 Nested backend contexts
 
 Scoped selection behaves as it does today (3.8, 3.9) and T8 requires that it
@@ -636,6 +723,10 @@ cause is legible without a debugger. Three cases:
 - **Source against the active backend.** `Tensor(source)` where the source's
   backend is not the active one (5.1.1, R1). Construction is not exempt from
   T6 merely because it produces a new tensor rather than consuming two.
+
+`source.clone()` is **not** in this list. It names no backend and consumes no
+second operand, so there are never two answers to disagree: it operates on the
+source's backend by definition (5.1.2, C1).
 
 ### 5.4 Mutation
 
@@ -702,7 +793,7 @@ objective is to remove indirection, not to rename it.
 | `tensors/tensor.py` — `_mutable_data` | Converts to host and installs it | **Changed.** Mutation acts on the tensor's own backend (5.4). |
 | `tensors/tensor.py` — `_data` | Gathers host values | Becomes a host-facing read (5.5), not a conversion. |
 | `tensors/tensor.py` — `__init__` | Host storage for scalars/lists; copies a Tensor's or Storage's kind; a dtype change routes through host values | **Changed.** T1 for host inputs; 5.1.1 for a `Tensor` input, whose two dtype branches collapse into one backend-native path; [Q4](#q4--construction-from-a-storage-object) still open for a `Storage` input. |
-| `tensors/tensor.py` — `clone` | Defined as `Tensor(self)` | **Unchanged in definition**, so 5.1.1 governs it. Same-backend cloning behaves as it does today. |
+| `tensors/tensor.py` — `clone` | Defined as `Tensor(self)`; already returns the source's backend whatever the active backend is | **Behaviour unchanged; the definition must change.** 5.1.2 requires exactly what `clone()` already does, but `Tensor(self)` stops expressing it once the constructor gains R1, because it would then raise whenever the source's backend and the active backend differ. |
 | `tensors/backend/dispatch/manipulation/cast.py` — `execute_cast` | Falls back to the Python reference below a workload threshold | **Changed.** 5.1.1 R6 requires a dtype conversion to produce the active backend's storage, which T4 already requires of any operation. See the dependency note in 5.1.1. |
 | `tensors/backend/conversion.py` — `convert_storage` | The only cross-backend conversion | **Gone**, unless a deliberate migration API is added — see [Q8](#q8--an-explicit-migration-api). Its one caller is `_storage_for`. |
 | `tensors/backend/numpy/conversion.py` — `_view`, `_operand`, `_arithmetic_operand` | Each begins by asking for a NumPy representation | **Simplified.** Under T4 the operand already is one; what remains is dtype handling and the logical gather. |
@@ -805,6 +896,11 @@ Same-backend construction was specified at the same time, because resolving
 only the cross-backend half would have left the more common case undefined.
 5.1.1 states both, and its matrix row 3 is this decision.
 
+**Cloning is not covered by A.** `source.clone()` asks a different question and
+gets a different answer: it produces a tensor on the **source's** backend
+whatever the active backend is, and never raises a mismatch. That is 5.1.2, and
+it is the reason `clone()` cannot remain defined as `Tensor(self)`. A applies
+to the constructor, not to every operation that copies a tensor.
 **Relationship to Q8.** A leaves no way to move a tensor between backends, so
 it is A that gives Q8 its force. Q8 remains open and is **not** decided here;
 if a migration API is ever added it will be an explicit, separately named
