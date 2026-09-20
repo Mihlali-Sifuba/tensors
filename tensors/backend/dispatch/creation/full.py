@@ -13,8 +13,4 @@ def execute_full(
     shape: tuple[int, ...], fill_value: int | float, *, dtype: DataType
 ) -> Storage:
     """Create constant-filled storage on the active backend."""
-    from tensors.backend.python.kernels.creation.full import full as reference
-
-    return run_on_selected_backend(
-        "full", reference, shape, fill_value, dtype=dtype
-    )
+    return run_on_selected_backend("full", shape, fill_value, dtype=dtype)

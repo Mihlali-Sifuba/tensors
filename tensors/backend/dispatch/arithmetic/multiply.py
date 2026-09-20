@@ -36,15 +36,6 @@ def execute_multiply(
     """Run multiply on the selected backend, or report that it cannot run there."""
     selected = config.get_backend()
     validate_backend_residency((left, right), selected)
-    if selected == "python":
-        from tensors.backend.python.kernels.arithmetic.multiply import (
-            multiply as reference,
-        )
-
-        result = reference(left, right, dtype=dtype, output_shape=output_shape)
-        validate_backend_residency((result,), selected)
-        return result
-
     backend: Any = load_backend(selected)
     result = backend.multiply(left, right, dtype=dtype, output_shape=output_shape)
     if result is None:

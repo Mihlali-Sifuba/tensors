@@ -13,8 +13,4 @@ def execute_linspace(
     start: int | float, stop: int | float, count: int, *, dtype: DataType
 ) -> Storage:
     """Create evenly spaced storage on the active backend."""
-    from tensors.backend.python.kernels.creation.linspace import linspace as reference
-
-    return run_on_selected_backend(
-        "linspace", reference, start, stop, count, dtype=dtype
-    )
+    return run_on_selected_backend("linspace", start, stop, count, dtype=dtype)

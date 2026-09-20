@@ -23,13 +23,8 @@ def execute_vjp_sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Storag
     not, and which keep the policy and the fallback until that contract
     reaches them. That is the only reason both exist.
     """
-    from tensors.backend.python.kernels.reductions.sum_to_shape import (
-        sum_to_shape as reference,
-    )
-
     return run_on_selected_backend(
         "sum_to_shape",
-        reference,
         gradient,
         shape,
         detail=f"at dtype {gradient.dtype.name}",

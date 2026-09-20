@@ -19,13 +19,8 @@ def execute_sum_products_to_shape(
     execution contract directly: the selection decides where it runs, at
     every size, and a backend that declines is reported rather than replaced.
     """
-    from tensors.backend.python.kernels.reductions.sum_products_to_shape import (
-        sum_products_to_shape as reference,
-    )
-
     return run_on_selected_backend(
         "sum_products_to_shape",
-        reference,
         gradient,
         factor,
         shape,

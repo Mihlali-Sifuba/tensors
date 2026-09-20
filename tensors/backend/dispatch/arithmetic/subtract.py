@@ -36,15 +36,6 @@ def execute_subtract(
     """Run subtract on the selected backend, or report that it cannot run there."""
     selected = config.get_backend()
     validate_backend_residency((left, right), selected)
-    if selected == "python":
-        from tensors.backend.python.kernels.arithmetic.subtract import (
-            subtract as reference,
-        )
-
-        result = reference(left, right, dtype=dtype, output_shape=output_shape)
-        validate_backend_residency((result,), selected)
-        return result
-
     backend: Any = load_backend(selected)
     result = backend.subtract(left, right, dtype=dtype, output_shape=output_shape)
     if result is None:

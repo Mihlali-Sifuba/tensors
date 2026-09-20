@@ -19,11 +19,8 @@ def execute_vjp_negate(value: Tensor, *, dtype: DataType) -> Storage:
     cannot. Forward negation is a separate operation and keeps
     ``execute_negate``, workload policy and reference fallback included.
     """
-    from tensors.backend.python.kernels.elementwise.negate import negate as reference
-
     return run_on_selected_backend(
         "negate",
-        reference,
         value,
         dtype=dtype,
         detail=f"at dtype {dtype.name}",

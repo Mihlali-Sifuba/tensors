@@ -11,10 +11,4 @@ if TYPE_CHECKING:
 
 def execute_one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Storage:
     """Expand class-index targets on the active backend."""
-    from tensors.backend.python.kernels.creation.one_hot_targets import (
-        one_hot_targets as reference,
-    )
-
-    return run_on_selected_backend(
-        "one_hot_targets", reference, logits, targets, axis
-    )
+    return run_on_selected_backend("one_hot_targets", logits, targets, axis)

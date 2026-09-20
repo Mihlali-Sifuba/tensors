@@ -13,8 +13,4 @@ def execute_arange(
     start: int | float, step: int | float, count: int, *, dtype: DataType
 ) -> Storage:
     """Create arithmetic-progression storage on the active backend."""
-    from tensors.backend.python.kernels.creation.arange import arange as reference
-
-    return run_on_selected_backend(
-        "arange", reference, start, step, count, dtype=dtype
-    )
+    return run_on_selected_backend("arange", start, step, count, dtype=dtype)

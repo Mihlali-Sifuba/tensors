@@ -11,8 +11,4 @@ if TYPE_CHECKING:
 
 def execute_eye(rows: int, columns: int, k: int, *, dtype: DataType) -> Storage:
     """Create identity-like matrix storage on the active backend."""
-    from tensors.backend.python.kernels.creation.eye import eye as reference
-
-    return run_on_selected_backend(
-        "eye", reference, rows, columns, k, dtype=dtype
-    )
+    return run_on_selected_backend("eye", rows, columns, k, dtype=dtype)

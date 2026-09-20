@@ -16,16 +16,8 @@ if TYPE_CHECKING:
 
 def execute_cast(value: Tensor, *, dtype: DataType) -> Storage:
     """Convert dtype on the active backend without cross-backend fallback."""
-    from tensors.backend.python.kernels.manipulation.cast_tensor import (
-        cast_tensor as reference,
-    )
-
     active = config.get_backend()
     validate_backend_residency((value,), active)
-    if active == "python":
-        result = reference(value, dtype=dtype)
-        validate_backend_residency((result,), active)
-        return result
     backend: Any = load_backend(active)
     result = backend.cast_tensor(value, dtype=dtype)
     if result is None:
