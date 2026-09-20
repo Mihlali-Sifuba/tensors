@@ -89,12 +89,10 @@ class Tensor:
         self._dtype = dtype
         if isinstance(data, Tensor):
             from tensors.backend.config import get_backend
-            from tensors.backend.validation import validate_operands
+            from tensors.backend.validation import validate_backend_residency
 
             active = get_backend()
-            validate_operands(
-                (data,), active, context="Tensor construction"
-            )
+            validate_backend_residency((data,), active)
             if data.dtype == self.dtype:
                 self._set_storage(data._logical_storage_for(data._storage.kind).copy())
             else:
@@ -104,12 +102,10 @@ class Tensor:
             inferred_shape = data.shape
         elif isinstance(data, Storage):
             from tensors.backend.config import get_backend
-            from tensors.backend.validation import validate_operands
+            from tensors.backend.validation import validate_backend_residency
 
             active = get_backend()
-            validate_operands(
-                (data,), active, context="Tensor construction"
-            )
+            validate_backend_residency((data,), active)
             self._set_storage(data.copy())
             inferred_shape = (data.size,)
         elif isinstance(data, (int, float)):

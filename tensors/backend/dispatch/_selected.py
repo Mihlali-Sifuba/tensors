@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from tensors.backend import config
 from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.backend.loading import _backend_kernel
-from tensors.backend.validation import validate_operands, validate_result
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
     from tensors.backend.storage import Storage
@@ -43,11 +43,11 @@ def run_on_selected_backend(
     answer somewhere else.
     """
     selected = config.get_backend()
-    validate_operands(args, selected, context=operation)
+    validate_backend_residency(args, selected)
     if selected == "python":
-        return validate_result(
-            reference(*args, **kwargs), selected, context=operation
-        )
+        result = reference(*args, **kwargs)
+        validate_backend_residency((result,), selected)
+        return result
 
     result = _backend_kernel(operation)(*args, **kwargs)
     if result is None:
@@ -57,7 +57,8 @@ def run_on_selected_backend(
             f"runs on the selected backend; select another backend to run it "
             f"elsewhere."
         )
-    return validate_result(result, selected, context=operation)
+    validate_backend_residency((result,), selected)
+    return result
 
 
 __all__ = ["run_on_selected_backend"]

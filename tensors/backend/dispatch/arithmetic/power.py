@@ -37,7 +37,7 @@ from tensors.backend import config
 from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
-from tensors.backend.validation import validate_operands, validate_result
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
     from tensors._typing import Scalar
@@ -54,17 +54,15 @@ def execute_power(
 ) -> Storage:
     """Run power on the selected backend, or report that it cannot run there."""
     selected = config.get_backend()
-    validate_operands((left, right), selected, context="power")
+    validate_backend_residency((left, right), selected)
     if selected == "python":
         from tensors.backend.python.kernels.arithmetic.power import (
             power as reference,
         )
 
-        return validate_result(
-            reference(left, right, dtype=dtype, output_shape=output_shape),
-            selected,
-            context="power",
-        )
+        result = reference(left, right, dtype=dtype, output_shape=output_shape)
+        validate_backend_residency((result,), selected)
+        return result
 
     backend: Any = load_backend(selected)
     result = backend.power(left, right, dtype=dtype, output_shape=output_shape)
@@ -74,4 +72,5 @@ def execute_power(
             f"{dtype.name} conformingly. Arithmetic runs on the selected "
             f"backend; select another backend to run it elsewhere."
         )
-    return validate_result(result, selected, context="power")
+    validate_backend_residency((result,), selected)
+    return result

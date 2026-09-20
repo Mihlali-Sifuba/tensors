@@ -7,7 +7,7 @@ from tensors.backend import config
 from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
-from tensors.backend.validation import validate_operands, validate_result
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -21,11 +21,11 @@ def execute_cast(value: Tensor, *, dtype: DataType) -> Storage:
     )
 
     active = config.get_backend()
-    validate_operands((value,), active, context="cast")
+    validate_backend_residency((value,), active)
     if active == "python":
-        return validate_result(
-            reference(value, dtype=dtype), active, context="cast"
-        )
+        result = reference(value, dtype=dtype)
+        validate_backend_residency((result,), active)
+        return result
     backend: Any = load_backend(active)
     result = backend.cast_tensor(value, dtype=dtype)
     if result is None:
@@ -33,4 +33,5 @@ def execute_cast(value: Tensor, *, dtype: DataType) -> Storage:
             f"The {active} backend cannot execute cast from {value.dtype.name} "
             f"to {dtype.name} conformingly"
         )
-    return validate_result(result, active, context="cast")
+    validate_backend_residency((result,), active)
+    return result
