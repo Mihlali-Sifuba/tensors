@@ -19,7 +19,8 @@
 >
 > Section 8 separates what is decided from what is not. The backend-selection
 > lifecycle (Q1, Q2) is **resolved** in T7 and T8, and construction from a
-> `Tensor` (Q3) is **resolved** in 5.1.1. Q4 to Q8 remain open design
+> `Tensor` (Q3) is **resolved** in 5.1.1, and construction from a `Storage`
+> (Q4) is **resolved** in 5.1.3. Q5 to Q8 remain open design
 > decisions, listed with their alternatives and consequences rather than
 > resolved in passing.
 
@@ -205,6 +206,50 @@ out-of-range value, and both give `inf` for a float overflow, exactly as
 [arithmetic-semantics §4.5](arithmetic-semantics.md#45-arithmetic-is-not-construction-or-casting)
 specifies. Only *where* they run differs.
 
+The `Storage` branch is shorter but has a different contract. It calls
+`data.copy()` directly, infers `(data.size,)`, then applies an explicit shape
+if one was supplied. The result is contiguous, has offset zero and starts at
+version zero. The copy is independent: neither the `Storage` object nor its
+mutable backend buffer is shared. Mutation of a tensor already using the
+source storage therefore cannot affect the result, and mutation of the result
+cannot affect the source.
+
+That branch also exposes two behaviours verified separately at `bbd95b8`:
+
+- it never reads the active backend, so a storage whose `kind` differs from
+  the selection is copied successfully and the result keeps the storage's
+  kind; and
+- an explicit dtype different from `storage.dtype` raises `TypeError` in
+  `_set_storage`. No conversion is attempted. An equal explicit dtype is
+  accepted.
+
+With no explicit shape, two stored elements become shape `(2,)`. With an
+explicit shape such as `(2, 1)`, only the element count is carried over:
+strides are recomputed as contiguous and offset is zero. A shape whose size
+does not equal `storage.size` raises `ValueError`. This is not tensor layout
+normalization: `Storage` is flat and carries no shape, strides or offset to
+preserve or gather.
+
+The private construction paths are intentionally different:
+
+- `_from_owned_storage` installs the exact `Storage` object and buffer without
+  copying, checks an optional expected dtype and the requested shape's element
+  count, and initializes contiguous strides, offset zero and version zero. It
+  does not inspect the active backend. Its callers include creation and random
+  functions, eager forward and backward operations, slicing and casting,
+  graph fusion, and optimizer updates; the supplied storage is the newly
+  produced result whose ownership those callers transfer.
+- `_from_metadata` copies its supplied storage because it is the internal
+  layout-construction path, not an ownership transfer. `_from_values` creates
+  fresh `PythonStorage`, and `_replace_owned_storage` adopts a same-size,
+  same-dtype internal result while advancing an existing tensor's version.
+
+These paths all accept or produce `Storage`, but they do not promise the same
+ownership. In particular, `_from_owned_storage` cannot safely replace public
+`Tensor(Storage)`: if its caller retains and mutates the supplied buffer, the
+returned tensor observes that mutation. Exclusivity is a caller precondition,
+not something the current implementation can prove.
+
 ### 3.6 Display and host access populate the host representation
 
 `repr`, `tolist()` and `item()` work from any representation and leave a
@@ -277,7 +322,8 @@ because there is one rule.
 Construction from an input that **already has** a backend is a separate
 question, because there are then two candidate answers. For a `Tensor` input
 5.1.1 settles it: the two must agree, or construction raises. For a `Storage`
-input it is [Q4](#q4--construction-from-a-storage-object), still open.
+input 5.1.3 settles it the same way while retaining its distinct flat-layout
+and public-copying rules.
 
 ### T2 — Each backend uses its own native storage
 
@@ -470,12 +516,13 @@ is **not** construction and follows a different backend rule — in 5.1.2.
 | nested list | flattened and stored on the active backend |
 | `array.array` | values read on the host, stored on the active backend |
 | **`Tensor`** | backend must match the active backend; see 5.1.1 ([Q3](#q3--construction-from-a-tensor--resolved), resolved) |
-| **`Storage`** | see [Q4](#q4--construction-from-a-storage-object) — still open |
+| **`Storage`** | backend must match the active backend; see 5.1.3 ([Q4](#q4--construction-from-a-storage-object--resolved), resolved) |
 
 The scalar, list and `array` cases are unambiguous: they are host inputs with
 no backend of their own, so they take the active backend's. A `Tensor` input
 already has a backend, which 5.1.1 settles. A `Storage` input also already has
-one, and Q4 is deliberately left open.
+one, which 5.1.3 settles without importing tensor-layout rules that a flat
+storage does not possess.
 
 Everything in this table is **construction**, and construction answers to the
 active backend. `source.clone()` is not in the table because it is not
@@ -598,10 +645,11 @@ Recorded because an implementer will meet them, not decided here.
   already records that operations other than `+ - * /` and `**` still follow
   the workload policy. R6 simply makes the gap observable at a second call
   site.
-- **Q4 is genuinely separate.** Resolving Q3 does not resolve construction
-  from a `Storage`, for the reasons given under
-  [Q4](#q4--construction-from-a-storage-object). An implementation of 5.1.1
-  must not quietly settle it by sharing a code path.
+- **Q4 is genuinely separate.** Q4 has now independently resolved construction
+  from a `Storage` in
+  [5.1.3](#513-construction-from-storage). An implementation of 5.1.1 must not
+  collapse the two code paths: storage has no tensor layout to gather, and its
+  public-copy boundary differs from private owned-storage adoption.
 - **Q8 becomes load-bearing.** With R1 in force there is no way to move a
   tensor between backends. That is intended, and
   [Q8](#q8--an-explicit-migration-api) remains open; no migration API is
@@ -686,6 +734,132 @@ here", where *here* is the active backend, and `x.clone()` asks "give me
 another one of these", where *these* already has a backend and no selection
 is involved.
 
+#### 5.1.3 Construction from Storage
+
+`Tensor(storage)` and `Tensor(storage, dtype=…)` are public construction from
+an externally supplied flat buffer. They produce a **new, independently owned
+tensor**. This boundary is deliberately different from the private
+`_from_owned_storage` ownership-transfer path below.
+
+**S1 — The storage backend must be the active backend.** If `storage.kind`
+does not equal the active backend, construction raises the mismatch error of
+T6, naming the storage backend, active backend and constructor. It does not
+convert the storage, adopt its backend against the selection, or fall back to
+Python storage. The check happens before a copy or dtype conversion, so a
+failed construction does not read or alter the source.
+
+**S2 — Public construction deep-copies.** On success, the result owns a new
+backend-native storage object and mutable buffer. It shares neither with the
+supplied `Storage`, nor with any tensor that already uses that storage. The
+constructor does not take ownership away from the caller and does not mutate
+the supplied object.
+
+**S3 — Storage contributes values and dtype, not tensor layout.** When `shape`
+is omitted, the result shape is `(storage.size,)`. When it is supplied, it is
+validated by the existing `Shape` rules and its element count must equal
+`storage.size`; otherwise construction raises. In either case strides are the
+canonical contiguous strides for the result shape, offset is zero, and the
+storage holds exactly those flat elements. There is no source shape, stride or
+offset to preserve or gather.
+
+**S4 — Dtype is inherited or converted on the active backend.** With no dtype
+argument, the result inherits `storage.dtype`. An equal explicit dtype has the
+same effect. A different explicit dtype converts the stored values and leaves
+the result in native storage of the active backend. Conversion follows the
+existing construction and casting rules of
+[arithmetic-semantics §4.5](arithmetic-semantics.md#45-arithmetic-is-not-construction-or-casting):
+out-of-range integer targets raise, float overflow yields `inf`, and
+float-to-integer conversion truncates toward zero. Arithmetic wraparound does
+not apply. No cross-backend conversion is involved because S1 has already
+required the kinds to match.
+
+**S5 — Mutation and versioning are independent.** The result starts at
+version zero. Later mutation of the source buffer or a tensor using it is not
+visible in the result; mutation of the result is not visible through the
+source storage, and advances only the result's version. This follows from S2
+and preserves the public ownership guarantee in
+[memory-model.md](memory-model.md#ownership-and-current-limits).
+
+**S6 — Construction is outside graph recording and gradient propagation.**
+The constructor creates a plain `Tensor`, touches no graph state, creates no
+node or edge and propagates no gradient relationship from a tensor that might
+already use the storage. A later `Variable` wrapper has its existing semantics;
+this constructor does not add any.
+
+##### Public and internal behavioural matrix
+
+`A` is the active backend. Rows 1–6 describe public construction; row 7 is the
+private ownership-transfer boundary.
+
+| # | Case | Outcome | Dtype and backend | Shape and layout | Ownership and mutation |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `storage.kind == A`, dtype omitted or unchanged | succeeds | `storage.dtype`, native to `A` | default `(storage.size,)`; contiguous, offset 0 | deep copy; source and result are independent |
+| 2 | `storage.kind == A`, explicit different dtype | succeeds if values are representable under §4.5 | requested dtype, converted on `A` and still native to `A` | as row 1 | new independent converted buffer |
+| 3 | `storage.kind != A` | **raises** the T6 mismatch error before copying or conversion | no result; no transfer or fallback | no result | source untouched |
+| 4 | Valid explicit shape with `shape.size == storage.size` | succeeds | as rows 1–2 | supplied shape; newly computed contiguous strides; offset 0 | as rows 1–2 |
+| 5 | Invalid shape or `shape.size != storage.size` | raises the existing shape `TypeError`/`ValueError` or size-mismatch `ValueError` | no result | storage has no layout metadata to reinterpret | source untouched |
+| 6 | Either side is mutated after successful construction | succeeds independently | unchanged | unchanged | no shared buffer; only the mutated tensor's version advances |
+| 7 | `_from_owned_storage(new_storage, dtype=…, shape=…)` | adopts a valid freshly produced internal result | supplied storage's dtype and kind; active backend is not consulted | required explicit shape; contiguous strides; offset 0 | **no copy**; ownership is transferred and the producer must not retain a mutable alias |
+
+##### The internal owned-storage boundary
+
+`_from_owned_storage` remains sufficient; Q4 introduces no additional
+abstraction and exposes no new public API. Its contract is:
+
+- the caller supplies storage freshly allocated or otherwise exclusively
+  owned for this result and relinquishes mutable use of it;
+- the returned tensor adopts the exact storage object and buffer without a
+  copy, owns it, uses the required explicit shape, contiguous strides, offset
+  zero and an initial version of zero;
+- `storage.dtype` must equal an explicitly supplied expected dtype, and
+  `storage.size` must equal `shape.size`; disagreement raises rather than
+  converting, reshaping values or truncating them;
+- the storage's kind becomes the result tensor's backend. The helper does not
+  consult the active backend and may be called while another backend is
+  active. That is necessary for a kernel or other internal operation whose
+  contract authorizes production on its own backend; it is adoption, not a
+  transfer. Under T4 and T11, ordinary target-model dispatch must still
+  produce storage on the required executing backend or raise — the helper
+  does not legitimize fallback and does not repair an invalid dispatcher; and
+- the helper itself does not record graph structure or gradients. Eager
+  operations, graph replay, fusion and backward passes construct their result
+  tensors through it, while their surrounding operation/graph layer remains
+  responsible for graph semantics.
+
+The current implementation already performs the no-copy adoption, dtype and
+size checks, and metadata initialization. It cannot enforce exclusive
+ownership: passing storage that another tensor or caller can mutate violates
+the private precondition and creates observable aliasing. That is a caller
+contract, not a reason to weaken S2 or make the private helper copy.
+
+##### What changes from today and implementation dependencies
+
+- **Backend mismatch:** public construction currently copies the source kind
+  without reading the selection. It must instead perform S1's early check.
+- **Explicit dtype:** a differing dtype currently raises in `_set_storage`.
+  It must become an active-backend-native conversion under S4. Like 5.1.1 R6,
+  this depends on strict cast execution: the current workload-based cast
+  dispatcher may return Python storage for a small NumPy workload and cannot
+  be reused unchanged.
+- **Backend-native allocation:** both the unchanged-dtype copy and changed-
+  dtype conversion must allocate through the matching backend without a host
+  intermediate. `Storage.copy()` already supplies the first operation; the
+  second needs a backend-native casting path with §4.5's numerical behaviour.
+- **Internal result construction:** creation, random generation, eager forward
+  and backward kernels, graph fusion and optimizer updates already transfer
+  newly produced buffers through `_from_owned_storage`. Those call sites keep
+  the no-copy path. Their dispatchers remain responsible for T4/T11 and may
+  not use this helper to bless fallback storage.
+- **Ownership:** public construction must keep copying; internal adoption must
+  keep its exclusivity precondition. Shared-storage views and alias-version
+  propagation remain outside this proposal.
+- **Graph execution:** neither constructor path needs a graph-layer change.
+  Graph-produced native storage may be adopted internally; Q5 still governs
+  replay under a mismatched selection.
+- **Q8:** S1 deliberately leaves public construction unable to migrate
+  storage. Any future migration remains an explicit, separately named API;
+  Q4 does not decide or implement it.
+
 ### 5.2 Nested backend contexts
 
 Scoped selection behaves as it does today (3.8, 3.9) and T8 requires that it
@@ -721,8 +895,9 @@ cause is legible without a debugger. Three cases:
 - **Operand against a graph.** A recorded computation replayed with operands
   from a different backend — see [Q5](#q5--graph-replay-across-backends).
 - **Source against the active backend.** `Tensor(source)` where the source's
-  backend is not the active one (5.1.1, R1). Construction is not exempt from
-  T6 merely because it produces a new tensor rather than consuming two.
+  backend is not the active one (5.1.1 R1 for a `Tensor`, 5.1.3 S1 for a
+  `Storage`). Construction is not exempt from T6 merely because it produces a
+  new tensor rather than consuming two.
 
 `source.clone()` is **not** in this list. It names no backend and consumes no
 second operand, so there are never two answers to disagree: it operates on the
@@ -792,7 +967,8 @@ objective is to remove indirection, not to rename it.
 | `tensors/tensor.py` — `_set_storage` | Installs storage, resets the cache | Installs storage. The dtype agreement check it also performs is unrelated and stays. |
 | `tensors/tensor.py` — `_mutable_data` | Converts to host and installs it | **Changed.** Mutation acts on the tensor's own backend (5.4). |
 | `tensors/tensor.py` — `_data` | Gathers host values | Becomes a host-facing read (5.5), not a conversion. |
-| `tensors/tensor.py` — `__init__` | Host storage for scalars/lists; copies a Tensor's or Storage's kind; a dtype change routes through host values | **Changed.** T1 for host inputs; 5.1.1 for a `Tensor` input, whose two dtype branches collapse into one backend-native path; [Q4](#q4--construction-from-a-storage-object) still open for a `Storage` input. |
+| `tensors/tensor.py` — `__init__` | Host storage for scalars/lists; copies a Tensor's or Storage's kind; a Tensor dtype change routes through host values, while a Storage dtype change raises | **Changed.** T1 for host inputs; 5.1.1 for a `Tensor` input; 5.1.3 for a `Storage` input, including the early backend check, public deep copy and backend-native dtype conversion. |
+| `tensors/tensor.py` — `_from_owned_storage` | Adopts the exact supplied internal storage without checking the active backend; validates dtype and size | **Contract retained and made explicit.** 5.1.3 reserves it for exclusive, newly produced internal results. It remains no-copy and selection-independent; dispatch remains responsible for T4/T11. |
 | `tensors/tensor.py` — `clone` | Defined as `Tensor(self)`; already returns the source's backend whatever the active backend is | **Behaviour unchanged; the definition must change.** 5.1.2 requires exactly what `clone()` already does, but `Tensor(self)` stops expressing it once the constructor gains R1, because it would then raise whenever the source's backend and the active backend differ. |
 | `tensors/backend/dispatch/manipulation/cast.py` — `execute_cast` | Falls back to the Python reference below a workload threshold | **Changed.** 5.1.1 R6 requires a dtype conversion to produce the active backend's storage, which T4 already requires of any operation. See the dependency note in 5.1.1. |
 | `tensors/backend/conversion.py` — `convert_storage` | The only cross-backend conversion | **Gone**, unless a deliberate migration API is added — see [Q8](#q8--an-explicit-migration-api). Its one caller is `_storage_for`. |
@@ -819,11 +995,12 @@ objective is to remove indirection, not to rename it.
 
 ## 8. Questions
 
-Q1, Q2 and Q3 are **resolved**. Each decision is normative elsewhere — T7 and
-T8 for the lifecycle, 5.1.1 for construction from a `Tensor` — and the entries
-here are kept so the rejected alternatives stay on record. Q4 to Q8 remain
-**open**: each records the alternatives, what follows from them, and a
-recommendation, and none of those recommendations has been adopted.
+Q1, Q2, Q3 and Q4 are **resolved**. Each decision is normative elsewhere — T7
+and T8 for the lifecycle, 5.1.1 for construction from a `Tensor`, and 5.1.3
+for public and internal construction from `Storage` — and the entries here are
+kept so the rejected alternatives stay on record. Q5 to Q8 remain **open**:
+each records the alternatives, what follows from them, and a recommendation,
+and none of those recommendations has been adopted.
 
 ### Q1 — When the process default locks — RESOLVED
 
@@ -907,20 +1084,34 @@ if a migration API is ever added it will be an explicit, separately named
 operation, never this constructor. No migration API is introduced by this
 resolution.
 
-### Q4 — Construction from a Storage object
+### Q4 — Construction from a Storage object — RESOLVED
+
+*Resolved in [5.1.3](#513-construction-from-storage), which is normative. The
+entry is kept so the rejected alternatives stay on record.*
 
 `Tensor(storage)` where the storage belongs to a different backend. The same
 three options as Q3 apply, with one difference: a `Storage` is an internal
 type, so the public surface is narrower and the compatibility cost of raising
 is lower.
 
-**Recommended: A (raise)**, for consistency with Q3. **Not adopted** — Q3's
-resolution does not decide this one. The two are separate because a `Storage`
-has no shape, strides or offset of its own, so the layout and gather rules of
-5.1.1 (R4, R5) have no counterpart here, and `Tensor(Storage)` carries the
-additional ownership guarantee recorded in
-[memory-model.md](memory-model.md#ownership-and-current-limits). Resolving Q3
-constrains the answer but does not supply it.
+| Option | Consequence |
+| --- | --- |
+| **A. Raise — ADOPTED** | Consistent with Q3 and T6: public construction is not a transfer mechanism. Matching-backend construction deep-copies; internal owned-storage construction remains a separate no-copy boundary. |
+| **B. Copy to the active backend** | Hides a cross-backend migration inside an ordinary constructor and contradicts T5. |
+| **C. Copy the storage's backend** | Today's behaviour. It makes construction ignore the active selection and contradicts T1. |
+
+**Adopted: A.** The public constructor checks `storage.kind` against the active
+backend before copying or casting, and raises on disagreement. On agreement it
+creates independent ownership, inherits or converts dtype on that backend,
+and establishes a one-dimensional default shape or a validated explicit shape
+with contiguous strides and offset zero.
+
+The separation from Q3 remains important. A `Storage` has no shape, strides or
+offset, so tensor gather and layout-preservation rules have no counterpart.
+The separation from `_from_owned_storage` is equally important: that private
+path adopts freshly produced, exclusively owned native storage without copying
+and without applying the public constructor's active-backend check. It is an
+internal ownership transfer, not public construction or migration.
 
 ### Q5 — Graph replay across backends
 
