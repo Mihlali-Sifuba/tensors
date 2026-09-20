@@ -33,6 +33,7 @@ a capability failure.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
+from tensors.backend import config
 from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
@@ -52,16 +53,17 @@ def execute_power(
     output_shape: tuple[int, ...],
 ) -> Storage:
     """Run power on the selected backend, or report that it cannot run there."""
-    selected = validate_operands("power", (left, right))
+    selected = config.get_backend()
+    validate_operands((left, right), selected, context="power")
     if selected == "python":
         from tensors.backend.python.kernels.arithmetic.power import (
             power as reference,
         )
 
         return validate_result(
-            "power",
             reference(left, right, dtype=dtype, output_shape=output_shape),
             selected,
+            context="power",
         )
 
     backend: Any = load_backend(selected)
@@ -72,4 +74,4 @@ def execute_power(
             f"{dtype.name} conformingly. Arithmetic runs on the selected "
             f"backend; select another backend to run it elsewhere."
         )
-    return validate_result("power", result, selected)
+    return validate_result(result, selected, context="power")

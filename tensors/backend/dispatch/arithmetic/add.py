@@ -14,6 +14,7 @@ a call arrives the selection names one backend.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
+from tensors.backend import config
 from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
@@ -33,16 +34,17 @@ def execute_add(
     output_shape: tuple[int, ...],
 ) -> Storage:
     """Run add on the selected backend, or report that it cannot run there."""
-    selected = validate_operands("add", (left, right))
+    selected = config.get_backend()
+    validate_operands((left, right), selected, context="add")
     if selected == "python":
         from tensors.backend.python.kernels.arithmetic.add import (
             add as reference,
         )
 
         return validate_result(
-            "add",
             reference(left, right, dtype=dtype, output_shape=output_shape),
             selected,
+            context="add",
         )
 
     backend: Any = load_backend(selected)
@@ -53,4 +55,4 @@ def execute_add(
             f"{dtype.name} conformingly. Arithmetic runs on the selected "
             f"backend; select another backend to run it elsewhere."
         )
-    return validate_result("add", result, selected)
+    return validate_result(result, selected, context="add")

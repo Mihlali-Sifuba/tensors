@@ -5,35 +5,47 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
-from tensors.backend import config
 from tensors.backend.config import BackendMismatchError
+from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
-    from tensors.backend.storage import Storage
+    from tensors.backend.types import BackendName
 
 
-def validate_operands(operation: str, operands: Iterable[Any]) -> str:
-    """Require every Tensor operand to reside on the active backend."""
+def validate_operands(
+    operands: Iterable[Any],
+    expected_backend: BackendName,
+    *,
+    context: str,
+) -> None:
+    """Require Tensor and Storage operands to reside on the expected backend."""
     from tensors.tensor import Tensor
 
-    active = config.get_backend()
     for index, operand in enumerate(operands):
-        if not isinstance(operand, Tensor):
+        if isinstance(operand, Tensor):
+            resident = operand._storage.kind
+        elif isinstance(operand, Storage):
+            resident = operand.kind
+        else:
             continue
-        resident = operand._storage.kind
-        if resident != active:
+        if resident != expected_backend:
             raise BackendMismatchError(
-                f"The {operation} operation received operand {index} on the "
-                f"{resident} backend while the active backend is {active}"
+                f"The {context} operation received operand {index} on the "
+                f"{resident} backend while the active backend is "
+                f"{expected_backend}"
             )
-    return active
 
 
-def validate_result(operation: str, storage: Storage, active: str) -> Storage:
-    """Require a numerical result to remain native to its active backend."""
-    if storage.kind != active:
-        raise RuntimeError(
-            f"The {operation} operation selected the {active} backend but "
+def validate_result(
+    storage: Storage,
+    expected_backend: BackendName,
+    *,
+    context: str,
+) -> Storage:
+    """Require a numerical result to reside on the expected backend."""
+    if storage.kind != expected_backend:
+        raise BackendMismatchError(
+            f"The {context} operation selected the {expected_backend} backend but "
             f"returned {storage.kind} storage"
         )
     return storage

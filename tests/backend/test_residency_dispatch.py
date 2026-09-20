@@ -8,6 +8,7 @@ from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.numpy.storage import NumPyStorage
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
+from tensors.backend.validation import validate_operands, validate_result
 from tests.backend._support import requires_cuda, requires_numpy
 
 
@@ -31,6 +32,33 @@ def tagged_tensor(kind, values):
     return ts.Tensor._from_owned_storage(
         TaggedStorage(kind, values), dtype=ts.float64, shape=(len(values),)
     )
+
+
+class ValidationInterfaceTests(unittest.TestCase):
+    def test_operand_validation_uses_the_supplied_backend(self):
+        value = tagged_tensor("python", [1.0])
+
+        with patch(
+            "tensors.backend.config.get_backend",
+            side_effect=AssertionError("validation must not select a backend"),
+        ):
+            validated = validate_operands((value,), "python", context="add")
+
+        self.assertIsNone(validated)
+
+    def test_storage_operand_and_result_use_the_same_mismatch_error(self):
+        storage = TaggedStorage("numpy", [1.0])
+
+        with self.assertRaisesRegex(
+            ts.BackendMismatchError,
+            "cast.*operand 0.*numpy backend.*active backend is python",
+        ):
+            validate_operands((storage,), "python", context="cast")
+        with self.assertRaisesRegex(
+            ts.BackendMismatchError,
+            "cast.*selected the python backend.*returned numpy storage",
+        ):
+            validate_result(storage, "python", context="cast")
 
 
 class ArithmeticResidencyTests(unittest.TestCase):
@@ -91,7 +119,8 @@ class ArithmeticResidencyTests(unittest.TestCase):
             dispatch, "load_backend", return_value=backend
         ):
             with self.assertRaisesRegex(
-                RuntimeError, "selected the numpy backend but returned python storage"
+                ts.BackendMismatchError,
+                "selected the numpy backend but returned python storage",
             ):
                 left + 2.0
 
@@ -120,6 +149,15 @@ class ResidencyBoundaryTests(unittest.TestCase):
                 "Tensor construction.*python backend.*active backend is numpy",
             ):
                 ts.Tensor(source)
+
+    def test_storage_construction_rejects_active_backend_mismatch(self):
+        source = TaggedStorage("numpy", [1.0])
+
+        with self.assertRaisesRegex(
+            ts.BackendMismatchError,
+            "Tensor construction.*operand 0.*numpy backend.*active backend is python",
+        ):
+            ts.Tensor(source)
 
     def test_clone_uses_source_backend_under_another_active_backend(self):
         source = ts.Tensor([1.0])

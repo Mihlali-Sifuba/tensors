@@ -87,9 +87,13 @@ class Tensor:
             )
         self._dtype = dtype
         if isinstance(data, Tensor):
+            from tensors.backend.config import get_backend
             from tensors.backend.validation import validate_operands
 
-            validate_operands("Tensor construction", (data,))
+            active = get_backend()
+            validate_operands(
+                (data,), active, context="Tensor construction"
+            )
             if data.dtype == self.dtype:
                 self._set_storage(data._logical_storage_for(data._storage.kind).copy())
             else:
@@ -98,14 +102,13 @@ class Tensor:
                 self._set_storage(execute_cast(data, dtype=self.dtype))
             inferred_shape = data.shape
         elif isinstance(data, Storage):
-            from tensors.backend.config import BackendMismatchError, get_backend
+            from tensors.backend.config import get_backend
+            from tensors.backend.validation import validate_operands
 
             active = get_backend()
-            if data.kind != active:
-                raise BackendMismatchError(
-                    "Tensor construction received storage on the "
-                    f"{data.kind} backend while the active backend is {active}"
-                )
+            validate_operands(
+                (data,), active, context="Tensor construction"
+            )
             self._set_storage(data.copy())
             inferred_shape = (data.size,)
         elif isinstance(data, (int, float)):
