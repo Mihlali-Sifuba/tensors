@@ -21,9 +21,9 @@
 > lifecycle (Q1, Q2) is **resolved** in T7 and T8, and construction from a
 > `Tensor` (Q3) is **resolved** in 5.1.1, and construction from a `Storage`
 > (Q4) is **resolved** in 5.1.3. Graph replay (Q5) is **resolved** in
-> 5.7 and 5.8, and host access (Q7) is **resolved** in 5.5. Q6 and Q8 remain
-> open design decisions, listed with their alternatives and consequences
-> rather than resolved in passing.
+> 5.7 and 5.8, host access (Q7) is **resolved** in 5.5, and explicit migration
+> (Q8) is **resolved** in 5.9. Only serialization (Q6) remains open and
+> deferred.
 
 ## 2. The problem
 
@@ -393,6 +393,28 @@ No `save` or `load` exists in the public API, and `Tensor` is not picklable
 therefore no serialization behaviour to preserve — see
 [question Q6](#q6--serialization).
 
+### 3.11 Conversion exists only as cache machinery
+
+There is no `Tensor.to` method or other public migration API. The sole generic
+cross-backend primitive is `convert_storage`, called only by
+`Tensor._storage_for(kind)`, which retains its result in `_storage_cache`.
+Same-kind conversion returns the original `Storage`, not a copy.
+
+The cross-kind branches are pair-specific: NumPy to Python serializes through
+bytes; CUDA to Python uses `cupy.asnumpy` and then the bytes path; Python to
+NumPy uses `numpy.frombuffer`; CUDA to NumPy uses `cupy.asnumpy`; Python to
+CUDA stages through a NumPy `frombuffer` view before `cupy.asarray`; and NumPy
+to CUDA uses `cupy.asarray`. The Python-to-NumPy result shares memory with the
+source Python buffer, while the other cross-kind paths allocate destination
+storage. All are invoked before `_logical_storage_for` gathers a non-compact
+layout, so they can convert unrelated physical elements and then allocate a
+second compact storage.
+
+These are verified implementation paths, not a supported migration surface.
+The current environment exposes only the Python backend, and the optional
+pair branches were verified from their source and existing backend tests, not
+by claiming that a public transfer operation already exists.
+
 ## 4. The target contract
 
 ### T1 — Selection determines construction and execution
@@ -410,6 +432,10 @@ question, because there are then two candidate answers. For a `Tensor` input
 input 5.1.3 settles it the same way while retaining its distinct flat-layout
 and public-copying rules.
 
+`source.to(backend)` is not unqualified construction: it is the separately
+named explicit transfer in 5.9, and its destination argument replaces the
+active selection only for the new result it deliberately creates.
+
 ### T2 — Each backend uses its own native storage
 
 Python uses `array.array`, NumPy uses `numpy.ndarray`, CUDA uses device-resident
@@ -426,7 +452,8 @@ backend, and it is answerable at any time without qualification.
 backend when the tensor is constructed (T1) and nothing later changes it:
 not a later `set_backend`, not entering or leaving a `use_backend` scope (T8),
 not being used as an operand, and not being mutated (5.4). A tensor is never
-migrated, because there is nothing to migrate it to.
+migrated in place. The explicit `source.to(backend)` operation in 5.9 creates
+a different tensor; the source still keeps its backend and sole storage.
 
 ### T4 — Operations consume matching tensors and produce native storage
 
@@ -440,6 +467,11 @@ not convert them.
 Combining tensors from different backends, or using a tensor while a different
 backend is active, is **not** an operation this contract defines. It is not
 slow, or discouraged: it is outside the contract.
+
+The one explicit transfer contract is `source.to(backend)` (5.9). It is not
+numerical execution, constructor coercion or fallback: its name and argument
+state that a new independently owned tensor is requested at that destination.
+No other operation inherits this exception.
 
 ### T6 — A mismatch is an error
 
@@ -735,10 +767,9 @@ Recorded because an implementer will meet them, not decided here.
   [5.1.3](#513-construction-from-storage). An implementation of 5.1.1 must not
   collapse the two code paths: storage has no tensor layout to gather, and its
   public-copy boundary differs from private owned-storage adoption.
-- **Q8 becomes load-bearing.** With R1 in force there is no way to move a
-  tensor between backends. That is intended, and
-  [Q8](#q8--an-explicit-migration-api) remains open; no migration API is
-  introduced here.
+- **Q8 supplies the deliberate escape hatch.** R1 still forbids construction
+  from moving a tensor, while [Q8](#q8--an-explicit-migration-api--resolved)
+  now assigns that job exclusively to `source.to(backend)` (5.9).
 - **No conflict with the existing ownership contract.** R3 and R8 restate
   guarantees [memory-model.md](memory-model.md#ownership-and-current-limits)
   already makes. Nothing in this resolution weakens or extends them, and the
@@ -942,8 +973,8 @@ contract, not a reason to weaken S2 or make the private helper copy.
   Graph-produced native storage may be adopted internally; Q5 still governs
   replay under a mismatched selection.
 - **Q8:** S1 deliberately leaves public construction unable to migrate
-  storage. Any future migration remains an explicit, separately named API;
-  Q4 does not decide or implement it.
+  storage. Migration belongs exclusively to the separately named
+  `source.to(backend)` contract in 5.9; Q4 does not implement it.
 
 ### 5.2 Nested backend contexts
 
@@ -1263,6 +1294,107 @@ accumulation, shape reduction, dtype restoration, saved-state version checks
 and numerical semantics remain unchanged; only an implicit backend transfer is
 removed.
 
+### 5.9 Explicit backend migration
+
+`source.to(backend)` is the sole public request to copy a tensor to another
+backend. It is the explicit exception to T5, not an exception to T3: the
+source is never changed, and the result is a distinct tensor with one
+authoritative destination-native storage. Constructors, ordinary operations,
+graph replay and fallback do not acquire migration permission from this API.
+
+**M1 — The destination is explicit and concrete.** `backend` names `python`,
+`numpy` or `cuda`, is normalized using the existing backend-name conventions,
+and is checked for availability without changing the active backend or process
+default. `auto` is a selection policy rather than a destination and is not
+accepted by this method. The requested destination need not match the active
+backend or process default.
+
+**M2 — The source is immutable.** Migration does not mutate or replace the
+source's storage, change its backend, shape, strides or offset, advance its
+mutation version, or populate a cache. Its authoritative `Storage` object and
+buffer retain their identity even if the transfer fails.
+
+**M3 — Ownership is independent.** The result owns a new `Storage` object and
+new buffer. This also applies when source and destination backends are equal:
+`.to(source_backend)` returns a copy, never `self` and never a shared view. The
+result starts with mutation version zero, and later writes to either tensor
+cannot affect the other.
+
+**M4 — Logical contents are preserved.** Shape, dtype, numerical values and
+logical row-major element order are unchanged. A non-contiguous or offset
+source is gathered on its resident backend before transfer, so unrelated
+physical elements are not copied. The result is compact and contiguous, with
+offset zero, contiguous strides and storage size equal to `shape.size`.
+
+**M5 — Migration does not cast.** `.to()` has no dtype parameter and performs
+no numerical dtype conversion. The destination must represent the source's
+existing `DataType` exactly or the call fails.
+
+**M6 — No representation is cached.** Source-native gathers and host staging
+buffers may exist for the duration of the call. They are not retained on the
+source or result, placed in graph state, or reusable by a later migration.
+Only the result's destination-native storage survives.
+
+**M7 — Failure is source-atomic.** A non-string destination raises
+`TypeError`; an unknown name or `auto` raises `ValueError` using the existing
+backend-name style; and a recognized but unavailable optional backend raises
+`BackendUnavailableError`. A destination unable to represent the preserved
+dtype raises `TypeError` before transfer where that can be determined.
+Allocation and provider transfer failures propagate their native exception
+with source and destination context. No failure returns a partial tensor or
+changes any source state; partially allocated temporaries are discarded.
+
+#### 5.9.1 Backend-pair behaviour
+
+No row is a public capability today because `.to()` does not exist (3.11).
+The “existing primitive” column records source-verified building blocks; the
+optional NumPy and CUDA branches were not runnable in the current
+Python-only environment.
+
+| Source → destination | Target one-shot path | Existing primitive and required change |
+| --- | --- | --- |
+| Same backend | Gather logical values natively if needed, then `Storage.copy()` or an equivalent independent native copy | `copy()` already supplies independent storage; `convert_storage` cannot be used because its same-kind branch returns the source object |
+| Python → NumPy | Gather into the logical Python buffer, then allocate an independent NumPy array | `numpy.frombuffer` exists but aliases the Python buffer; the destination must copy |
+| Python → CUDA | Gather in Python, then perform one host-to-device copy; an operation-local NumPy view may stage it | The current converter stages through `numpy.frombuffer` and `cupy.asarray`; detach this path from caching and retain only the CUDA allocation |
+| NumPy → Python | Gather with NumPy, then copy the logical bytes/values into `array.array` | The bytes path already creates independent Python storage; it must receive only the logical gather and must not cache it |
+| NumPy → CUDA | Gather with NumPy, then use `cupy.asarray` for one host-to-device copy | The pair primitive exists; give its new CUDA storage exclusive ownership and no cache entry |
+| CUDA → Python | Gather logical values on device, use `cupy.asnumpy` once, then copy into `array.array` | Host staging is necessary; the current path transfers the physical buffer too early and must be reordered |
+| CUDA → NumPy | Gather logical values on device, then use `cupy.asnumpy` for one device-to-host copy | The pair primitive already returns an independent NumPy allocation; remove cache coupling and transfer only logical values |
+
+The package's seven declared dtypes have names understood by the current
+NumPy and CuPy storage constructors, but M5 does not infer universal provider
+support from that fact. Availability and exact representation are validated
+for the requested pair at call time.
+
+#### 5.9.2 Graph and differentiation boundary
+
+`.to()` returns a plain independent `Tensor`. It does not accept or return a
+`Variable`, create an operation node or gradient edge, migrate a parameter or
+published gradient, rewrite a captured constant, copy saved forward values,
+or move an entire graph. Existing Variables, instructions, captures and saved
+states continue to refer to their original tensors.
+
+Calling `variable.data.to(backend)` therefore only produces an untracked
+tensor. Assigning that result back to `variable.data` is a separate explicit
+rebinding under the existing data-generation and stale-state rules; `.to()`
+itself performs no rebinding. A migrated tensor may be supplied as a new graph
+input, but Q5 still requires every input and retained capture to match the
+active backend for that replay. Forward and backward compatibility rules in
+5.7–5.8 are unchanged, and no `Variable.to()` or automatic graph migration is
+introduced.
+
+The public copying operations consequently remain distinct:
+
+| Operation | Backend selection | Ownership |
+| --- | --- | --- |
+| `Tensor(source)` | Active backend must match source | Independent copy |
+| `source.clone()` | Source backend | Independent copy |
+| `source.to(backend)` | Explicit concrete destination | Independent copy |
+
+`_from_owned_storage` remains the private no-copy adoption boundary for a
+fresh exclusive result. It is not a migration API, while `.to()` must first
+create the independently owned destination storage that it may then adopt.
+
 ## 6. Affected modules
 
 Listed as the surface the refactor touches, with what the target contract
@@ -1281,14 +1413,17 @@ objective is to remove indirection, not to rename it.
 | `tensors/tensor.py` — `__init__` | Host storage for scalars/lists; copies a Tensor's or Storage's kind; a Tensor dtype change routes through host values, while a Storage dtype change raises | **Changed.** T1 for host inputs; 5.1.1 for a `Tensor` input; 5.1.3 for a `Storage` input, including the early backend check, public deep copy and backend-native dtype conversion. |
 | `tensors/tensor.py` — `_from_owned_storage` | Adopts the exact supplied internal storage without checking the active backend; validates dtype and size | **Contract retained and made explicit.** 5.1.3 reserves it for exclusive, newly produced internal results. It remains no-copy and selection-independent; dispatch remains responsible for T4/T11. |
 | `tensors/tensor.py` — `clone` | Defined as `Tensor(self)`; already returns the source's backend whatever the active backend is | **Behaviour unchanged; the definition must change.** 5.1.2 requires exactly what `clone()` already does, but `Tensor(self)` stops expressing it once the constructor gains R1, because it would then raise whenever the source's backend and the active backend differ. |
+| `tensors/tensor.py` — `to` | Does not exist | **Added.** Implements M1–M7 as the sole public migration operation; returns a compact, version-zero, independently owned plain Tensor and never changes the source or selection. |
 | `tensors/backend/dispatch/manipulation/cast.py` — `execute_cast` | Falls back to the Python reference below a workload threshold | **Changed.** 5.1.1 R6 requires a dtype conversion to produce the active backend's storage, which T4 already requires of any operation. See the dependency note in 5.1.1. |
-| `tensors/backend/conversion.py` — `convert_storage` | The only cross-backend conversion | **Gone**, unless a deliberate migration API is added — see [Q8](#q8--an-explicit-migration-api). Its one caller is `_storage_for`. |
+| `tensors/backend/conversion.py` — `convert_storage` | The only cross-backend conversion; serves `_storage_cache`, returns the source for same-kind requests and can alias Python storage from NumPy | **Cache-oriented interface gone.** Its pair primitives may be refactored behind `Tensor.to` only, with logical gather before transfer, mandatory independent ownership and no cache (5.9.1). |
 | Python reference kernels and `_data` consumers in `tensors/operations`, `tensors/graph` and `tensors/utils` | Read `_data`, so NumPy/CUDA operands can be materialized and retained on host during internal computation | **Changed.** Python kernels read Python-native operands only after dispatch enforces T4. Other internal consumers use backend-native operations or dispatch; none may use the public host-read permission as fallback (H7). |
 | `tensors/backend/numpy/conversion.py` — `_view`, `_operand`, `_arithmetic_operand` | Each begins by asking for a NumPy representation | **Simplified.** Under T4 the operand already is one; what remains is dtype handling and the logical gather. |
 | `tensors/backend/cuda/conversion.py` — the same three, plus `_widen`, `_narrow`, `_working_values` | As above, plus the PTX-based binary32 widening | As above. The subnormal-preserving widening is numerical (T9) and stays exactly as it is. |
 | `tensors/backend/config.py` — `set_backend` | Reassignable at any time (3.9) | **Changed.** Sets the process default and locks it on first tensor storage; same-backend calls are accepted, a different backend raises (T7). |
 | `tensors/backend/config.py` — `use_backend` | Scoped context-local override, restored in a `finally` | **Unchanged**, and exempt from the lock. T8 makes the existing restore-on-exception behaviour a requirement rather than an implementation detail. |
 | `tensors/backend/config.py` — `get_backend` | Override if in scope, else the process default | **Unchanged.** It already answers the active-backend question (2.1). |
+| `tensors/backend/config.py` — backend-name validation | `_resolve_backend` validates selection names, resolves `auto`, checks optional availability and is private to selection | **Shared internally without selecting.** Migration reuses normalization, errors and availability checks but rejects `auto` as a non-concrete destination (M1, M7); it never reads or writes selection state. |
+| `tensors/backend/{python,numpy,cuda}/storage.py` — `copy` and constructors | Provide native contiguous allocation and independent same-kind copy; constructors can retain an input buffer unless copying is requested | **Reused carefully.** Same-kind migration copies; cross-kind construction receives an exclusively owned buffer or is forced to copy, especially for Python → NumPy. Unsupported representations fail under M7. |
 | `tensors/backend/policy.py` | Workload thresholds choose a path | Untouched by this proposal; still governed by [backends.md](backends.md#execution-requirements). |
 | Creation ops and `tensors/init/` | Mixed agreement with the selection (3.1) | **Changed.** T1 makes them uniform. |
 | `tensors/graph/graph.py` — structural and compiled replay | Rebinds public Tensor inputs before execution; compiled signatures include `get_backend()` and retrace when it changes | **Changed.** Preflight all incoming and retained leaf tensors before rebinding. Recording backend is removed as a semantic trace guard; backend-specific artifact compatibility remains separate (5.7 G1–G7). |
@@ -1309,12 +1444,12 @@ objective is to remove indirection, not to rename it.
 
 ## 8. Questions
 
-Q1 through Q5 and Q7 are **resolved**. Each decision is normative elsewhere —
-T7 and T8 for the lifecycle, 5.1.1 for construction from a `Tensor`, 5.1.3 for
-public and internal construction from `Storage`, 5.7–5.8 for graph replay and
-differentiation, and 5.5 for host access. The entries here remain so rejected
-alternatives stay on record. Q6 and Q8 remain **open**: each records the
-alternatives, consequences and an unadopted recommendation.
+Q1 through Q5, Q7 and Q8 are **resolved**. Each decision is normative
+elsewhere — T7 and T8 for the lifecycle, 5.1.1 for construction from a
+`Tensor`, 5.1.3 for public and internal construction from `Storage`, 5.7–5.8
+for graph replay and differentiation, 5.5 for host access, and 5.9 for
+explicit migration. The entries here remain so rejected alternatives stay on
+record. Only Q6 remains **open** and deferred.
 
 ### Q1 — When the process default locks — RESOLVED
 
@@ -1374,14 +1509,14 @@ entry is kept so the rejected alternatives stay on record.*
 
 | Option | Consequence |
 | --- | --- |
-| **A. Raise — ADOPTED** | Consistent with T6: construction is not a transfer mechanism. The caller has no way to move data between backends, which is the intended consequence, not an oversight. |
+| **A. Raise — ADOPTED** | Consistent with T6: construction is not a transfer mechanism. Deliberate movement uses the separately named `source.to(backend)` operation. |
 | **B. Copy to the active backend** | Convenient, and a natural reading of "construct a tensor here from these values". But it is a cross-backend transfer under an ordinary-looking constructor, which is the pattern T5 removes. |
 | **C. Copy the source's backend** | Today's behaviour (3.5). Construction then ignores the active backend, contradicting T1. |
 
 **Adopted: A.** B hides the same transfer behind a different spelling; C
-contradicts T1. Under A there is exactly one way a tensor acquires a backend —
-the active backend at its construction — and no expression quietly moves data
-across a bus.
+contradicts T1. Under A an ordinary constructor acquires the active backend;
+the explicit migration contract in 5.9 acquires its named destination for a
+new result. No expression quietly moves data across a bus.
 
 Same-backend construction was specified at the same time, because resolving
 only the cross-backend half would have left the more common case undefined.
@@ -1392,11 +1527,10 @@ gets a different answer: it produces a tensor on the **source's** backend
 whatever the active backend is, and never raises a mismatch. That is 5.1.2, and
 it is the reason `clone()` cannot remain defined as `Tensor(self)`. A applies
 to the constructor, not to every operation that copies a tensor.
-**Relationship to Q8.** A leaves no way to move a tensor between backends, so
-it is A that gives Q8 its force. Q8 remains open and is **not** decided here;
-if a migration API is ever added it will be an explicit, separately named
-operation, never this constructor. No migration API is introduced by this
-resolution.
+**Relationship to Q8.** A leaves the constructor unable to move a tensor
+between backends, which gives Q8 its force. Q8 now assigns migration to the
+explicit, separately named `source.to(backend)` operation in 5.9, never to
+this constructor.
 
 ### Q4 — Construction from a Storage object — RESOLVED
 
@@ -1485,21 +1619,24 @@ the same transfer again when repeated. The permission is limited to returning
 a Python value or display representation; internal kernels and graph work
 remain subject to T4–T6 and T11.
 
-### Q8 — An explicit migration API
+### Q8 — An explicit migration API — RESOLVED
 
-With implicit transfer gone, there may be no way to move a tensor between
-backends. Whether one is wanted is a product question, not a structural one.
+*Resolved in [5.9](#59-explicit-backend-migration), which is normative. The
+entry is kept so the rejected alternative stays on record.*
+
+With implicit transfer gone, an ordinary operation or constructor does not
+move a tensor between backends.
 
 | Option | Consequence |
 | --- | --- |
-| **A. None** | The strictest model. A program uses one backend, or constructs each tensor under the selection it belongs to. Q3 option A becomes hard to work around, which may be right. |
-| **B. An explicit method** | Transfers become visible and greppable, which is the property the current model lacks. Adds one public API, and the "do not invent additional conversion APIs" instruction means it needs a stated requirement first. |
+| **A. None** | The strictest model. A program uses one backend, or constructs each tensor under the selection it belongs to. Q3 option A has no direct migration path. |
+| **B. `Tensor.to(backend)` — ADOPTED** | Transfers are visible and greppable. A new independent Tensor is created at the concrete destination without changing the source, selection, graphs or gradients. |
 
-**Recommended: defer.** No concrete requirement for it has been stated. Q3 is
-now resolved as A, so this question is live rather than hypothetical: there is
-currently no way to move a tensor between backends, by design. Decide once the
-implementation shows whether the strict model is usable in practice; adding a
-migration API later is compatible, removing one later is not.
+**Adopted: B.** `source.to(backend)` is the only public migration request. It
+always returns an independently owned compact Tensor, even for a same-backend
+destination, and preserves dtype and logical values. It does not excuse a
+backend mismatch in construction, numerical execution, graph replay or
+differentiation, and it does not restore alternative-representation caching.
 
 ## Related documents
 
