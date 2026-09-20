@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import tensors as ts
+from tensors.backend import preparation
 from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.numpy.storage import NumPyStorage
 from tensors.backend.python.storage import PythonStorage
@@ -83,7 +84,9 @@ class ValidationInterfaceTests(unittest.TestCase):
         )
         with patch(
             "tensors.backend.config.get_backend", return_value="numpy"
-        ), patch.object(dispatch, "load_backend", return_value=backend):
+        ), patch.object(dispatch, "load_backend", return_value=backend), patch.object(
+            preparation, "load_backend", return_value=backend
+        ):
             with self.assertRaises(ts.BackendMismatchError) as result:
                 result_side + 1.0
 
@@ -141,6 +144,8 @@ class ArithmeticResidencyTests(unittest.TestCase):
         )
         with patch("tensors.backend.config.get_backend", return_value="numpy"), patch.object(
             dispatch, "load_backend", return_value=backend
+        ), patch.object(
+            preparation, "load_backend", return_value=backend
         ) as load:
             result = left + 2.0
 
@@ -159,6 +164,8 @@ class ArithmeticResidencyTests(unittest.TestCase):
         )
         with patch("tensors.backend.config.get_backend", return_value="numpy"), patch.object(
             dispatch, "load_backend", return_value=backend
+        ), patch.object(
+            preparation, "load_backend", return_value=backend
         ):
             with self.assertRaisesRegex(
                 ts.BackendMismatchError,
@@ -174,6 +181,8 @@ class ArithmeticResidencyTests(unittest.TestCase):
         backend = SimpleNamespace(add=lambda *args, **kwargs: None, prepare_binary_operands=prepared)
         with patch("tensors.backend.config.get_backend", return_value="numpy"), patch.object(
             dispatch, "load_backend", return_value=backend
+        ), patch.object(
+            preparation, "load_backend", return_value=backend
         ):
             with self.assertRaisesRegex(
                 ts.BackendOperationUnsupportedError,

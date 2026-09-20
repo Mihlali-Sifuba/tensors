@@ -2,6 +2,7 @@
 
 from typing import List, Optional, Union
 from tensors.backend import execute_add
+from tensors.backend.preparation import prepare_binary_execution
 from tensors.dtype import convert_scalar, resolve_result_dtype
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
@@ -30,7 +31,11 @@ class Add(Operation):
             other = convert_scalar(b, a.dtype)
             dtype = a.dtype
             output_shape = a.shape
-        accelerated = execute_add(a, other, dtype=dtype, output_shape=output_shape)
+        accelerated = execute_add(
+            prepare_binary_execution(
+                a, other, dtype=dtype, output_shape=output_shape
+            )
+        )
         return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
 
     def backward(

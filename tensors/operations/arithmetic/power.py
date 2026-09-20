@@ -3,6 +3,7 @@
 from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, List, Optional, Union, overload
+from tensors.backend.preparation import prepare_binary_execution
 from tensors.backend import (
     execute_power,
     execute_power_base_gradient,
@@ -237,7 +238,9 @@ class Pow(Operation):
             else base.shape
         )
         accelerated = execute_power(
-            base, exponent, dtype=dtype, output_shape=output_shape
+            prepare_binary_execution(
+                base, exponent, dtype=dtype, output_shape=output_shape
+            )
         )
         return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
 
@@ -595,7 +598,9 @@ def power_scalar_base(base: Scalar, exponent: Tensor) -> Tensor:
     dtype, base = resolve_power_scalar_base(base, exponent.dtype)
     _reject_negative_exponent(dtype, exponent)
     accelerated = execute_power(
-        base, exponent, dtype=dtype, output_shape=exponent.shape
+        prepare_binary_execution(
+            base, exponent, dtype=dtype, output_shape=exponent.shape
+        )
     )
     return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=exponent.shape)
 

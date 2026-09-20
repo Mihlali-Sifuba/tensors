@@ -2,6 +2,7 @@
 
 from typing import List, Optional, Union
 from tensors.backend import execute_divide, execute_division_denominator_gradient
+from tensors.backend.preparation import prepare_binary_execution
 from tensors.dtype import convert_scalar, resolve_result_dtype, true_division_dtype
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
@@ -112,9 +113,17 @@ class Div(Operation):
                 raise ZeroDivisionError("Division by zero")
         if isinstance(b, Tensor):
             shape = a.shape.broadcast_with(b.shape)
-            accelerated = execute_divide(a, b, dtype=dtype, output_shape=shape)
+            accelerated = execute_divide(
+                prepare_binary_execution(
+                    a, b, dtype=dtype, output_shape=shape
+                )
+            )
             return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
-        accelerated = execute_divide(a, other, dtype=dtype, output_shape=a.shape)
+        accelerated = execute_divide(
+            prepare_binary_execution(
+                a, other, dtype=dtype, output_shape=a.shape
+            )
+        )
         return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
 
     def backward(
@@ -279,6 +288,8 @@ def divide_scalar(numerator: Scalar, denominator: Tensor) -> Tensor:
         raise ZeroDivisionError("Division by zero")
     numerator = converted
     accelerated = execute_divide(
-        numerator, denominator, dtype=dtype, output_shape=denominator.shape
+        prepare_binary_execution(
+            numerator, denominator, dtype=dtype, output_shape=denominator.shape
+        )
     )
     return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=denominator.shape)

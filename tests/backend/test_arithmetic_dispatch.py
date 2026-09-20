@@ -6,6 +6,7 @@ import unittest
 import numpy
 from unittest.mock import patch
 import tensors as ts
+from tensors.backend.preparation import prepare_binary_execution
 import tensors.backend as backend_state
 from tensors.backend import config
 from tensors.backend.dispatch.arithmetic import (
@@ -54,9 +55,9 @@ class ArithmeticDispatchTests(unittest.TestCase):
                         "tensors.backend.config.get_backend",
                         wraps=config.get_backend,
                     ) as selection:
-                        result = execute(
+                        result = execute(prepare_binary_execution(
                             value, 2.0, dtype=ts.float64, output_shape=(32,)
-                        )
+                        ))
                 selection.assert_called_once_with()
                 self.assertIsInstance(result, NumPyStorage)
                 self.assertEqual(result.buffer.tolist(), [expected] * 32)
@@ -71,7 +72,7 @@ class ArithmeticDispatchTests(unittest.TestCase):
                     backend_state._clear_backend_kernel_cache()
                     with ts.use_backend("numpy"):
                         left = ts.Tensor([[2.0, 4.0], [6.0, 8.0]])
-                        execute(left, 2.0, dtype=ts.float32, output_shape=(2, 2))
+                        execute(prepare_binary_execution(left, 2.0, dtype=ts.float32, output_shape=(2, 2)))
                 backend_state._clear_backend_kernel_cache()
                 kernel.assert_called_once()
                 _, keywords = kernel.call_args
@@ -93,7 +94,7 @@ class ArithmeticDispatchTests(unittest.TestCase):
                     backend_state._clear_backend_kernel_cache()
                     with ts.use_backend("numpy"):
                         left = ts.Tensor([[2.0, 4.0], [6.0, 8.0]])
-                        execute(left, 2.0, dtype=ts.float32, output_shape=(2, 2))
+                        execute(prepare_binary_execution(left, 2.0, dtype=ts.float32, output_shape=(2, 2)))
                 backend_state._clear_backend_kernel_cache()
                 arguments, _ = kernel.call_args
                 prepared_left, prepared_right = arguments[:2]
@@ -117,9 +118,9 @@ class ArithmeticDispatchTests(unittest.TestCase):
                     with self.subTest(selection=selection, operation=name, size=size):
                         with ts.use_backend(selection):
                             value = ts.Tensor([2.0] * size)
-                            result = execute(
+                            result = execute(prepare_binary_execution(
                                 value, 2.0, dtype=ts.float64, output_shape=(size,)
-                            )
+                            ))
                         self.assertIsInstance(result, storage)
                         self.assertEqual(list(result.buffer), [expected] * size)
 
@@ -137,7 +138,7 @@ class ArithmeticDispatchTests(unittest.TestCase):
                 ) as reference:
                     with ts.use_backend("numpy"):
                         value = ts.Tensor([2.0] * 4)
-                        execute(value, 2.0, dtype=ts.float64, output_shape=(4,))
+                        execute(prepare_binary_execution(value, 2.0, dtype=ts.float64, output_shape=(4,)))
                 reference.assert_not_called()
 
     def test_each_declining_dispatcher_raises_without_falling_back(self):
@@ -152,7 +153,7 @@ class ArithmeticDispatchTests(unittest.TestCase):
                         with self.assertRaises(
                             ts.BackendOperationUnsupportedError
                         ) as raised:
-                            execute(value, 2.0, dtype=ts.float64, output_shape=(4,))
+                            execute(prepare_binary_execution(value, 2.0, dtype=ts.float64, output_shape=(4,)))
                     backend_state._clear_backend_kernel_cache()
                 message = str(raised.exception)
                 self.assertIn("numpy", message)
@@ -165,7 +166,7 @@ class ArithmeticDispatchTests(unittest.TestCase):
         # where. See docs/backends.md, Execution requirements.
         with ts.use_backend("numpy"):
             value = ts.Tensor([2.0])
-            result = execute_add(value, 3.0, dtype=ts.float64, output_shape=(1,))
+            result = execute_add(prepare_binary_execution(value, 3.0, dtype=ts.float64, output_shape=(1,)))
         self.assertIsInstance(result, NumPyStorage)
         self.assertEqual(list(result.buffer), [5.0])
 
@@ -180,7 +181,7 @@ class ArithmeticDispatchTests(unittest.TestCase):
         with ts.use_backend("auto"):
             value = ts.Tensor([2.0])
             self.assertEqual(ts.get_backend(), "numpy")
-            result = execute_add(value, 3.0, dtype=ts.float64, output_shape=(1,))
+            result = execute_add(prepare_binary_execution(value, 3.0, dtype=ts.float64, output_shape=(1,)))
         self.assertIsInstance(result, NumPyStorage)
         self.assertEqual(list(result.buffer), [5.0])
 
@@ -190,7 +191,7 @@ class ArithmeticDispatchTests(unittest.TestCase):
         with patch.object(config, "numpy_available", return_value=False):
             with ts.use_backend("auto"):
                 self.assertEqual(ts.get_backend(), "python")
-                result = execute_add(value, 3.0, dtype=ts.float64, output_shape=(1,))
+                result = execute_add(prepare_binary_execution(value, 3.0, dtype=ts.float64, output_shape=(1,)))
         self.assertIsInstance(result, PythonStorage)
         self.assertEqual(list(result.buffer), [5.0])
 
@@ -211,12 +212,12 @@ class ArithmeticDispatchTests(unittest.TestCase):
                             execute_multiply,
                             execute_divide,
                         ):
-                            result = execute(
+                            result = execute(prepare_binary_execution(
                                 value,
                                 2.0,
                                 dtype=ts.float64,
                                 output_shape=(size,),
-                            )
+                            ))
                             self.assertIsInstance(result, expected)
 
     def test_a_declining_kernel_raises_rather_than_falling_back(self):
@@ -226,7 +227,7 @@ class ArithmeticDispatchTests(unittest.TestCase):
             value = ts.Tensor([2.0] * 64)
             with patch.object(backend, "add", return_value=None) as declining:
                 with self.assertRaises(ts.BackendOperationUnsupportedError) as raised:
-                    execute_add(value, 3.0, dtype=ts.float64, output_shape=(64,))
+                    execute_add(prepare_binary_execution(value, 3.0, dtype=ts.float64, output_shape=(64,)))
         declining.assert_called_once()
         message = str(raised.exception)
         self.assertIn("numpy", message)
@@ -240,7 +241,7 @@ class ArithmeticDispatchTests(unittest.TestCase):
             value = ts.Tensor([2.0] * 64)
             with patch.object(backend, "multiply", return_value=None):
                 with self.assertRaises(ts.BackendOperationUnsupportedError):
-                    execute_multiply(value, 3.0, dtype=ts.float64, output_shape=(64,))
+                    execute_multiply(prepare_binary_execution(value, 3.0, dtype=ts.float64, output_shape=(64,)))
 
 
 @requires_cuda
@@ -271,9 +272,9 @@ class CudaArithmeticSelectionTests(unittest.TestCase):
                 with self.subTest(operation=name, size=size):
                     with ts.use_backend("cuda"):
                         value = ts.Tensor([2.0] * size)
-                        result = execute(
+                        result = execute(prepare_binary_execution(
                             value, 2.0, dtype=ts.float64, output_shape=(size,)
-                        )
+                        ))
                     self.assertIsInstance(result, CudaStorage)
                     self.assertEqual(result.buffer.tolist(), [expected] * size)
 
@@ -288,7 +289,7 @@ class CudaArithmeticSelectionTests(unittest.TestCase):
                         with self.assertRaises(
                             ts.BackendOperationUnsupportedError
                         ) as raised:
-                            execute(value, 2.0, dtype=ts.float64, output_shape=(64,))
+                            execute(prepare_binary_execution(value, 2.0, dtype=ts.float64, output_shape=(64,)))
                     backend_state._clear_backend_kernel_cache()
                 message = str(raised.exception)
                 self.assertIn("cuda", message)

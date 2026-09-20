@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 import tensors as ts
+from tensors.backend.preparation import prepare_binary_execution
 from tensors.backend.loading import load_backend
 from tensors.backend import (
     execute_multiply,
@@ -130,13 +131,13 @@ def _forward_cases(
         cases.append(
             Case(
                 name=f"dispatch.broadcast_multiply/{pattern}",
-                run=lambda: execute_multiply(
+                run=lambda: execute_multiply(prepare_binary_execution(
                     left, right, dtype=ts.float64, output_shape=output_shape
-                ),
+                )),
                 layer="dispatch",
-                validate=lambda: execute_multiply(
+                validate=lambda: execute_multiply(prepare_binary_execution(
                     left, right, dtype=ts.float64, output_shape=output_shape
-                ),
+                )),
                 description="execute_multiply over a broadcast",
                 backends=ACCELERATED,
                 **common,

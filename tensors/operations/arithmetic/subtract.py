@@ -2,6 +2,7 @@
 
 from typing import List, Optional, Union
 from tensors.backend import execute_subtract
+from tensors.backend.preparation import prepare_binary_execution
 from tensors.dtype import convert_scalar, resolve_result_dtype
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
@@ -33,7 +34,11 @@ class Sub(Operation):
             other = convert_scalar(b, a.dtype)
             dtype = a.dtype
             output_shape = a.shape
-        accelerated = execute_subtract(a, other, dtype=dtype, output_shape=output_shape)
+        accelerated = execute_subtract(
+            prepare_binary_execution(
+                a, other, dtype=dtype, output_shape=output_shape
+            )
+        )
         return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
 
     def backward(
@@ -78,6 +83,8 @@ def subtract_scalar(left: Scalar, right: Tensor) -> Tensor:
     converted = convert_scalar(left, right.dtype)
     dtype = right.dtype
     accelerated = execute_subtract(
-        converted, right, dtype=dtype, output_shape=right.shape
+        prepare_binary_execution(
+            converted, right, dtype=dtype, output_shape=right.shape
+        )
     )
     return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=right.shape)

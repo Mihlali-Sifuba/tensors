@@ -14,11 +14,13 @@ like any other, so the same call checks storage coming back out of a kernel.
 
 import inspect
 import unittest
+from contextlib import ExitStack, contextmanager
 from array import array
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import tensors as ts
+from tensors.backend import preparation
 from tensors.backend import config
 from tensors.backend.storage import Storage
 from tensors.backend.validation import validate_backend_residency
@@ -244,35 +246,49 @@ class NonResidentValueTests(BackendTestCase):
 class ResultResidencyTests(BackendTestCase):
     """Storage returned by a kernel is checked by the same invariant."""
 
+    @contextmanager
     def _dispatch_with(self, kernel):
+        """Select NumPy and stand a fake package in at both load points.
+
+        The package is loaded twice now — once by the preparation boundary and
+        once by the dispatcher — so a stub has to be installed at both.
+        """
         from tensors.backend.dispatch.arithmetic import add as dispatch
 
         backend = SimpleNamespace(add=kernel, prepare_binary_operands=prepared)
-        return patch(
-            "tensors.backend.config.get_backend", return_value="numpy"
-        ), patch.object(dispatch, "load_backend", return_value=backend)
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("tensors.backend.config.get_backend", return_value="numpy")
+            )
+            stack.enter_context(
+                patch.object(dispatch, "load_backend", return_value=backend)
+            )
+            stack.enter_context(
+                patch.object(preparation, "load_backend", return_value=backend)
+            )
+            yield
 
     def test_a_result_on_the_selected_backend_is_accepted(self):
-        selection, loader = self._dispatch_with(
+        dispatching = self._dispatch_with(
             lambda *args, **kwargs: TaggedStorage("numpy", [3.0])
         )
         left = tagged_tensor("numpy", [1.0])
-        with selection, loader:
+        with dispatching:
             result = left + 2.0
         self.assertEqual(result._storage.kind, "numpy")
         self.assertIsInstance(result, ts.Tensor)
 
     def test_a_result_from_another_backend_is_refused(self):
-        selection, loader = self._dispatch_with(
+        dispatching = self._dispatch_with(
             lambda *args, **kwargs: TaggedStorage("python", [3.0])
         )
         left = tagged_tensor("numpy", [1.0])
-        with selection, loader:
+        with dispatching:
             with self.assertRaises(ts.BackendMismatchError):
                 left + 2.0
 
     def test_a_refused_result_is_never_wrapped_in_a_tensor(self):
-        selection, loader = self._dispatch_with(
+        dispatching = self._dispatch_with(
             lambda *args, **kwargs: TaggedStorage("python", [3.0])
         )
         left = tagged_tensor("numpy", [1.0])
@@ -281,16 +297,16 @@ class ResultResidencyTests(BackendTestCase):
             "_from_owned_storage",
             side_effect=AssertionError("a refused result must not be wrapped"),
         ):
-            with selection, loader:
+            with dispatching:
                 with self.assertRaises(ts.BackendMismatchError):
                     left + 2.0
 
     def test_operands_and_results_report_the_same_way(self):
-        selection, loader = self._dispatch_with(
+        dispatching = self._dispatch_with(
             lambda *args, **kwargs: TaggedStorage("cuda", [3.0])
         )
         left = tagged_tensor("numpy", [1.0])
-        with selection, loader:
+        with dispatching:
             with self.assertRaises(ts.BackendMismatchError) as raised:
                 left + 2.0
         self.assertEqual(
@@ -375,7 +391,9 @@ class DispatchBehaviourTests(BackendTestCase):
         backend = SimpleNamespace(add=lambda *args, **kwargs: None, prepare_binary_operands=prepared)
         with patch(
             "tensors.backend.config.get_backend", return_value="numpy"
-        ), patch.object(dispatch, "load_backend", return_value=backend):
+        ), patch.object(dispatch, "load_backend", return_value=backend), patch.object(
+            preparation, "load_backend", return_value=backend
+        ):
             with patch.object(
                 python_add,
                 "add",
@@ -402,7 +420,9 @@ class DispatchBehaviourTests(BackendTestCase):
         backend = SimpleNamespace(add=lambda *args, **kwargs: None, prepare_binary_operands=prepared)
         with patch(
             "tensors.backend.config.get_backend", return_value="numpy"
-        ), patch.object(dispatch, "load_backend", return_value=backend):
+        ), patch.object(dispatch, "load_backend", return_value=backend), patch.object(
+            preparation, "load_backend", return_value=backend
+        ):
             with self.assertRaisesRegex(
                 ts.BackendOperationUnsupportedError,
                 "numpy backend cannot execute add",

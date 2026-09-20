@@ -13,41 +13,28 @@ a call arrives the selection names one backend.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Any
-from tensors.backend import config
+from typing import Any
 from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
+from tensors.backend.preparation import BinaryExecution
 from tensors.backend.validation import validate_backend_residency
 
-if TYPE_CHECKING:
-    from tensors._typing import Scalar
-    from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
-
-def execute_multiply(
-    left: Tensor | Scalar,
-    right: Tensor | Scalar,
-    *,
-    dtype: DataType,
-    output_shape: tuple[int, ...],
-) -> Storage:
+def execute_multiply(request: BinaryExecution) -> Storage:
     """Run multiply on the selected backend, or report that it cannot run there."""
-    selected = config.get_backend()
-    validate_backend_residency((left, right), selected)
-    backend: Any = load_backend(selected)
-    prepared_left, prepared_right = backend.prepare_binary_operands(
-        left, right, dtype=dtype, output_shape=output_shape
-    )
+    backend: Any = load_backend(request.backend)
     result = backend.multiply(
-        prepared_left, prepared_right, dtype=dtype, output_shape=output_shape
+        request.left,
+        request.right,
+        dtype=request.dtype,
+        output_shape=request.output_shape,
     )
     if result is None:
         raise BackendOperationUnsupportedError(
-            f"The {selected} backend cannot execute multiply at dtype "
-            f"{dtype.name} conformingly. Arithmetic runs on the selected "
+            f"The {request.backend} backend cannot execute multiply at dtype "
+            f"{request.dtype.name} conformingly. Arithmetic runs on the selected "
             f"backend; select another backend to run it elsewhere."
         )
-    validate_backend_residency((result,), selected)
+    validate_backend_residency((result,), request.backend)
     return result

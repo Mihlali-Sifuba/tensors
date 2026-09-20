@@ -14,6 +14,7 @@ the case says so.
 from __future__ import annotations
 from typing import Any
 import tensors as ts
+from tensors.backend.preparation import prepare_binary_execution
 from tensors.backend import execute_add, loading
 from tensors.backend.policy import _array_work_is_large_enough, _shape_size
 from tensors.backend.python.storage import PythonStorage
@@ -266,9 +267,9 @@ def _construction_cases(backend: str) -> list[Case]:
         tiny_right = tensor((4,), dtype_name="float64", kind="constant")
 
         def rejected() -> Any:
-            return execute_add(
+            return execute_add(prepare_binary_execution(
                 tiny_left, tiny_right, dtype=ts.float64, output_shape=(4,)
-            )
+            ))
 
         def validate_rejected() -> None:
             if rejected() is not None:
