@@ -2,6 +2,14 @@
 
 Availability detection and the ``TENSORS_BACKEND`` default live here because
 they exist to answer the selection questions this module exposes.
+
+A function here is named for the operation it performs, not for how widely it
+is published: what belongs to the supported API is decided by the package
+facades, ``tensors.backend`` and ``tensors``, which re-export the names they
+intend to support and leave the rest reachable only through this module.
+Selection *state* stays underscore-private, because it is not an operation any
+caller may perform: it is mutated only through :func:`set_backend` and
+:func:`use_backend`, which hold the lock and clear the kernel cache.
 """
 
 from __future__ import annotations
@@ -48,14 +56,15 @@ _backend_override: ContextVar[BackendName | None] = ContextVar(
 )
 
 
-def _numpy_available() -> bool:
+def numpy_available() -> bool:
+    """Return whether NumPy can be imported in this environment."""
     try:
         return importlib.util.find_spec("numpy") is not None
     except (ImportError, ValueError):
         return False
 
 
-def _cuda_available() -> bool:
+def cuda_available() -> bool:
     """Return whether CuPy can access at least one CUDA device."""
     try:
         if importlib.util.find_spec("cupy") is None:
@@ -70,26 +79,31 @@ def _cuda_available() -> bool:
 def available_backends() -> tuple[BackendName, ...]:
     """Return the numerical backends available in this environment."""
     available: list[BackendName] = ["python"]
-    if _numpy_available():
+    if numpy_available():
         available.append("numpy")
-    if _cuda_available():
+    if cuda_available():
         available.append("cuda")
     return tuple(available)
 
 
-def _resolve_backend(backend: str) -> BackendName:
+def resolve_backend(backend: str) -> BackendName:
+    """Return the concrete backend a selection names, or raise.
+
+    ``"auto"`` resolves here rather than at the point of use, so every
+    caller downstream of a selection sees one concrete backend.
+    """
     normalized = backend.strip().lower()
     if normalized not in _VALID_BACKENDS:
         choices = ", ".join(sorted(_VALID_BACKENDS))
         raise ValueError(f"Unknown backend {backend!r}; expected one of: {choices}")
     if normalized == "auto":
-        return "numpy" if _numpy_available() else "python"
-    if normalized == "numpy" and not _numpy_available():
+        return "numpy" if numpy_available() else "python"
+    if normalized == "numpy" and not numpy_available():
         raise BackendUnavailableError(
             "The NumPy backend is unavailable. Install it with "
             '`pip install "ms-tensors[numpy]"`.'
         )
-    if normalized == "cuda" and not _cuda_available():
+    if normalized == "cuda" and not cuda_available():
         raise BackendUnavailableError(
             "The CUDA backend is unavailable. Install the CuPy build matching "
             'your driver with `pip install "ms-tensors[cuda12]"` or '
@@ -98,12 +112,13 @@ def _resolve_backend(backend: str) -> BackendName:
     return cast(BackendName, normalized)
 
 
-def _environment_default() -> BackendName:
+def environment_default() -> BackendName:
+    """Return the backend ``TENSORS_BACKEND`` selects, defaulting to Python."""
     configured = os.environ.get("TENSORS_BACKEND", "python")
-    return _resolve_backend(configured)
+    return resolve_backend(configured)
 
 
-_process_backend = _environment_default()
+_process_backend = environment_default()
 
 
 def get_backend() -> BackendName:
@@ -122,7 +137,7 @@ def set_backend(backend: BackendSelection) -> None:
     overrides created by :func:`use_backend` remain active until their contexts
     exit.
     """
-    selected = _resolve_backend(backend)
+    selected = resolve_backend(backend)
     global _process_backend
     with _backend_lock:
         _process_backend = selected
@@ -132,7 +147,7 @@ def set_backend(backend: BackendSelection) -> None:
 @contextmanager
 def use_backend(backend: BackendSelection) -> Iterator[None]:
     """Temporarily select a backend in the current execution context."""
-    selected = _resolve_backend(backend)
+    selected = resolve_backend(backend)
     # Besides keeping the cache bounded across backend changes, clearing here
     # ensures deliberate runtime replacement of an internal kernel (for
     # instrumentation or tests) is observed on entry to the scoped backend.
@@ -143,3 +158,20 @@ def use_backend(backend: BackendSelection) -> Iterator[None]:
     finally:
         _backend_override.reset(token)
         loading._clear_backend_kernel_cache()
+
+
+#: The operations this module offers. The facades decide which of them the
+#: package supports publicly; the rest stay reachable through this module.
+__all__ = [
+    "BackendMismatchError",
+    "BackendOperationUnsupportedError",
+    "BackendUnavailableError",
+    "available_backends",
+    "cuda_available",
+    "environment_default",
+    "get_backend",
+    "numpy_available",
+    "resolve_backend",
+    "set_backend",
+    "use_backend",
+]

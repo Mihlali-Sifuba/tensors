@@ -160,7 +160,7 @@ class ArithmeticDispatchTests(unittest.TestCase):
     def test_automatic_selection_without_numpy_executes_on_python(self):
         """With no NumPy installed, ``auto`` resolves to Python."""
         value = ts.Tensor([2.0])
-        with patch.object(config, "_numpy_available", return_value=False):
+        with patch.object(config, "numpy_available", return_value=False):
             with ts.use_backend("auto"):
                 self.assertEqual(ts.get_backend(), "python")
                 result = execute_add(value, 3.0, dtype=ts.float64, output_shape=(1,))

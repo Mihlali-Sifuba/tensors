@@ -18,7 +18,7 @@ class BackendSelectionTests(BackendTestCase):
 
         self.assertEqual(ts.get_backend(), "python")
     def test_auto_backend_falls_back_to_python(self):
-        with patch.object(backend_config, "_numpy_available", return_value=False):
+        with patch.object(backend_config, "numpy_available", return_value=False):
             ts.set_backend("auto")
 
         self.assertEqual(ts.get_backend(), "python")
@@ -26,14 +26,14 @@ class BackendSelectionTests(BackendTestCase):
         with self.assertRaisesRegex(ValueError, "Unknown backend"):
             ts.set_backend("missing")  # type: ignore[arg-type]
     def test_unavailable_numpy_backend_has_install_guidance(self):
-        with patch.object(backend_config, "_numpy_available", return_value=False):
+        with patch.object(backend_config, "numpy_available", return_value=False):
             with self.assertRaisesRegex(
                 ts.BackendUnavailableError,
                 r"ms-tensors\[numpy\]",
             ):
                 ts.set_backend("numpy")
     def test_unavailable_cuda_backend_has_install_guidance(self):
-        with patch.object(backend_config, "_cuda_available", return_value=False):
+        with patch.object(backend_config, "cuda_available", return_value=False):
             with self.assertRaisesRegex(
                 ts.BackendUnavailableError,
                 r"ms-tensors\[cuda1[23]\]",

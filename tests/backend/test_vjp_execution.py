@@ -107,7 +107,7 @@ class VjpExecutesOnTheSelectedBackend(unittest.TestCase):
         self._assert_runs_on("auto", expected="numpy")
 
     def test_automatic_selection_without_numpy_executes_on_python(self):
-        with patch.object(config, "_numpy_available", return_value=False):
+        with patch.object(config, "numpy_available", return_value=False):
             with ts.use_backend("auto"):
                 self.assertEqual(ts.get_backend(), "python")
             for symbol, operation in OPERATIONS.items():

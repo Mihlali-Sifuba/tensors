@@ -15,6 +15,12 @@ package as a typed dependency treats them as an explicit part of its
 interface. ``__all__`` stays the user-facing selection API: the ``execute_*``
 functions are re-exported for use inside ``tensors``, not as a second public
 surface.
+
+What is supported is decided here, by what this module re-exports, rather than
+by whether a name in an implementation module begins with an underscore. A
+module names a function for the operation it performs; a helper that is not
+re-exported is reachable through its own module and is not part of the
+supported API. Underscores are kept for state that no caller may touch.
 """
 
 from __future__ import annotations
