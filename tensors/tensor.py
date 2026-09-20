@@ -87,23 +87,48 @@ class Tensor:
             )
         self._dtype = dtype
         if isinstance(data, Tensor):
+            from tensors.backend.validation import validate_operands
+
+            validate_operands("Tensor construction", (data,))
             if data.dtype == self.dtype:
                 self._set_storage(data._logical_storage_for(data._storage.kind).copy())
             else:
-                self._set_storage(PythonStorage.from_values(data._data, self.dtype))
+                from tensors.backend import execute_cast
+
+                self._set_storage(execute_cast(data, dtype=self.dtype))
             inferred_shape = data.shape
         elif isinstance(data, Storage):
+            from tensors.backend.config import BackendMismatchError, get_backend
+
+            active = get_backend()
+            if data.kind != active:
+                raise BackendMismatchError(
+                    "Tensor construction received storage on the "
+                    f"{data.kind} backend while the active backend is {active}"
+                )
             self._set_storage(data.copy())
             inferred_shape = (data.size,)
         elif isinstance(data, (int, float)):
-            self._set_storage(PythonStorage.from_values([data], self.dtype))
+            self._set_storage(
+                self._construction_storage(
+                    PythonStorage.from_values([data], self.dtype)
+                )
+            )
             inferred_shape = ()
         elif isinstance(data, list):
             flat_data = flatten_nested_list(data)
-            self._set_storage(PythonStorage.from_values(flat_data, self.dtype))
+            self._set_storage(
+                self._construction_storage(
+                    PythonStorage.from_values(flat_data, self.dtype)
+                )
+            )
             inferred_shape = infer_nested_list_shape(data)
         elif isinstance(data, array):
-            self._set_storage(PythonStorage.from_values(data, self.dtype))
+            self._set_storage(
+                self._construction_storage(
+                    PythonStorage.from_values(data, self.dtype)
+                )
+            )
             inferred_shape = (len(data),)
         else:
             raise TypeError(f"Unsupported data type: {type(data)}")
@@ -116,6 +141,14 @@ class Tensor:
             raise ValueError(
                 f"Data size {self._storage.size} does not match shape {self.shape} (expected {expected_element_count} elements)"
             )
+
+    @staticmethod
+    def _construction_storage(storage: PythonStorage) -> Storage:
+        """Place host input in the active backend's authoritative storage."""
+        from tensors.backend.config import get_backend
+
+        active = get_backend()
+        return storage if active == "python" else convert_storage(storage, active)
 
     @classmethod
     def _from_owned_storage(
@@ -547,7 +580,8 @@ class Tensor:
 
     def clone(self) -> Tensor:
         """Return a copy with the same data and dtype."""
-        return Tensor(self)
+        storage = self._logical_storage_for(self._storage.kind).copy()
+        return Tensor._from_owned_storage(storage, dtype=self.dtype, shape=self.shape)
 
     def contiguous(self) -> Tensor:
         """Ensure that this tensor has a contiguous logical layout.

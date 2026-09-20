@@ -20,6 +20,7 @@ surface.
 from __future__ import annotations
 
 from tensors.backend.config import (
+    BackendMismatchError as BackendMismatchError,
     BackendOperationUnsupportedError as BackendOperationUnsupportedError,
     BackendUnavailableError as BackendUnavailableError,
     available_backends as available_backends,
@@ -170,6 +171,7 @@ from tensors.backend.types import (
 __all__ = [
     "BackendName",
     "BackendSelection",
+    "BackendMismatchError",
     "BackendOperationUnsupportedError",
     "BackendUnavailableError",
     "available_backends",

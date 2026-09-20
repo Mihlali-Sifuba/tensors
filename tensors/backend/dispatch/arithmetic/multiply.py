@@ -14,9 +14,10 @@ a call arrives the selection names one backend.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Any
-from tensors.backend.config import BackendOperationUnsupportedError, get_backend
+from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
+from tensors.backend.validation import validate_operands, validate_result
 
 if TYPE_CHECKING:
     from tensors._typing import Scalar
@@ -32,13 +33,17 @@ def execute_multiply(
     output_shape: tuple[int, ...],
 ) -> Storage:
     """Run multiply on the selected backend, or report that it cannot run there."""
-    selected = get_backend()
+    selected = validate_operands("multiply", (left, right))
     if selected == "python":
         from tensors.backend.python.kernels.arithmetic.multiply import (
             multiply as reference,
         )
 
-        return reference(left, right, dtype=dtype, output_shape=output_shape)
+        return validate_result(
+            "multiply",
+            reference(left, right, dtype=dtype, output_shape=output_shape),
+            selected,
+        )
 
     backend: Any = load_backend(selected)
     result = backend.multiply(left, right, dtype=dtype, output_shape=output_shape)
@@ -48,4 +53,4 @@ def execute_multiply(
             f"{dtype.name} conformingly. Arithmetic runs on the selected "
             f"backend; select another backend to run it elsewhere."
         )
-    return result
+    return validate_result("multiply", result, selected)

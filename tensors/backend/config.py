@@ -36,6 +36,10 @@ class BackendOperationUnsupportedError(RuntimeError):
     """
 
 
+class BackendMismatchError(RuntimeError):
+    """Raised when an operation receives storage from another backend."""
+
+
 _VALID_BACKENDS = {"python", "numpy", "cuda", "auto"}
 _backend_lock = threading.RLock()
 _backend_override: ContextVar[BackendName | None] = ContextVar(

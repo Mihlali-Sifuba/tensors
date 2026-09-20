@@ -239,7 +239,8 @@ class BackendMetadataTests(unittest.TestCase):
         storage = NumPyStorage(
             numpy.asarray([1.0, 2.0], dtype=numpy.float64), ts.float64
         )
-        tensor = ts.Tensor(storage)
+        with ts.use_backend("numpy"):
+            tensor = ts.Tensor(storage)
         tensor[0] = 9.0
         self.assertEqual(storage.buffer.tolist(), [1.0, 2.0])
         self.assertEqual(tensor.tolist(), [9.0, 2.0])

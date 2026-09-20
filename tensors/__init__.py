@@ -2,6 +2,7 @@ from .tensor import Tensor
 from .shape import Shape
 from .strides import Strides
 from .backend import (
+    BackendMismatchError,
     BackendOperationUnsupportedError,
     BackendUnavailableError,
     available_backends,
@@ -34,7 +35,7 @@ from .operations.arithmetic import add, divide, multiply, subtract
 
 __all__ = [
     "Tensor", "Shape", "Strides", "Variable", "Graph", "GradcheckError",
-    "available_backends", "get_backend", "set_backend", "use_backend",
+    "BackendMismatchError", "available_backends", "get_backend", "set_backend", "use_backend",
     "backward", "grad", "gradcheck", "hessian", "jacobian", "DataType",
     "creation", "graph", "init", "operations", "ops", "linalg", "math", "optim", "random",
     "float64", "float32", "int64", "int32", "int16", "int8", "uint8",
