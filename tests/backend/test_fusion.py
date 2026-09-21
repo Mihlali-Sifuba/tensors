@@ -308,14 +308,30 @@ class CudaFusionTests(unittest.TestCase):
         self.assertEqual(denominator.grad[0], -1.0)
 
     def test_fused_replay_preserves_extended_math_domains(self):
+        """A fused replay still honours the domains that remain errors.
+
+        ``sqrt`` used to appear here; docs/sqrt-semantics.md section 1.4 now
+        specifies a negative operand as a NaN value rather than an error, so
+        ``log`` carries this case instead. Its domain is untouched.
+        """
         with ts.use_backend("cuda"):
             value = ts.Variable(ts.full((4_096,), 1.0), requires_grad=False)
-            root = ts.sqrt(value)
-            output = root + 1.0
+            logarithm = ts.log(value)
+            output = logarithm + 1.0
             computation = ts.graph.Computation(output)
             value.data = ts.full((4_096,), -1.0)
-            with self.assertRaisesRegex(ValueError, "sqrt"):
+            with self.assertRaisesRegex(ValueError, "log"):
                 computation.forward()
+
+    def test_fused_replay_gives_a_negative_square_root_the_specified_nan(self):
+        """docs/sqrt-semantics.md section 4: fused agrees with eager."""
+        with ts.use_backend("cuda"):
+            value = ts.Variable(ts.full((4_096,), 1.0), requires_grad=False)
+            output = ts.sqrt(value) + 1.0
+            computation = ts.graph.Computation(output)
+            value.data = ts.full((4_096,), -1.0)
+            produced = computation.forward().tolist()
+        self.assertTrue(all(math.isnan(item) for item in produced))
 
     def test_integer_graphs_execute_on_the_device_unfused(self):
         """Breaking change B12: integers run natively, not on the host.

@@ -1,47 +1,52 @@
 """CuPy implementation of square root."""
 
 from __future__ import annotations
+import math
 import cupy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
+from typing import TYPE_CHECKING, Any
 from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
+from tensors.backend.cuda.kernels.arithmetic import ieee32
+from tensors.backend.cuda.storage import CudaStorage
+from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
-def sqrt(value: Tensor, *, dtype: DataType) -> Storage | None:
-    """Run an elementwise unary kernel while preserving public domains."""
-    if dtype.kind == "integer":
-        return None
-    try:
-        values = _working_values(value)
-    except (TypeError, ValueError):
-        return None
-    if bool(cupy.any(values < 0.0)):
-        raise ValueError("sqrt is only defined for non-negative values")
-    functions = {
-        "abs": cupy.abs,
-        "sqrt": cupy.sqrt,
-        "exp": cupy.exp,
-        "log": cupy.log,
-        "sin": cupy.sin,
-        "cos": cupy.cos,
-        "tan": cupy.tan,
-        "arcsin": cupy.arcsin,
-        "arccos": cupy.arccos,
-        "arctan": cupy.arctan,
-        "sinh": cupy.sinh,
-        "cosh": cupy.cosh,
-        "arcsinh": cupy.arcsinh,
-        "arccosh": cupy.arccosh,
-        "arctanh": cupy.arctanh,
-        "sign": cupy.sign,
-        "tanh": cupy.tanh,
-    }
+def sqrt(
+    values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Return device storage at the declared dtype.
+
+    ``cupy.sqrt`` reads a binary32 operand with flush-to-zero in force, so a
+    subnormal arrives as zero and its root is reported as zero. Widening
+    through the PTX conversion first keeps the operand, and the root is then
+    taken in binary64.
+
+    Rounding that binary64 root back down is *exact* for square root, so no
+    dedicated binary32 PTX root instruction is needed: binary64 carries 53
+    significand bits and square root needs only ``2p + 2 = 50`` for the
+    second rounding to agree with rounding the true root directly. Unlike
+    abs, the narrowing also cannot lose a subnormal, because the square root
+    of even the smallest binary32 subnormal is a normal number.
+
+    An integer operand is converted to binary64 explicitly before the root is
+    taken, which is the specified conversion rather than a promise about the
+    mathematical integer. A negative operand is a value, not an error: the
+    device returns NaN and nothing here checks for it, so no operand value is
+    read back to the host.
+    """
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        result = functions["sqrt"](values)
-    return _storage(result, dtype=dtype, output_shape=value.shape)
+        if dtype.typecode == "f":
+            result = ieee32.narrow(cupy.sqrt(ieee32.widen(values)))
+        else:
+            if values.dtype.kind in "iu":
+                values = values.astype(cupy.float64, copy=False)
+            result = cupy.sqrt(values)
+    storage = CudaStorage(result, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("Sqrt kernel returned an unexpected result size")
+    return storage

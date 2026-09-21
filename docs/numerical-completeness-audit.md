@@ -17,18 +17,19 @@ established and are listed as work, not as findings.
 
 ### The headline
 
-**The package has three numerical specifications, and together they govern
-seven of its sixty public numerical operations.**
+**The package has four numerical specifications, and together they govern
+eight of its sixty public numerical operations.**
 
 ```
 public operation functions:                60
-governed by a numerical specification:      7   (+, -, *, /, **, sign, abs)
-ungoverned:                                53
+governed by a numerical specification:      8   (+, -, *, /, **, sign, abs, sqrt)
+ungoverned:                                52
 ```
 
-`sign` and `abs` are governed for their **forward** results only
+`sign`, `abs` and `sqrt` are governed for their **forward** results only
 ([sign-semantics.md](sign-semantics.md),
-[abs-semantics.md](abs-semantics.md)); their differentiation is still
+[abs-semantics.md](abs-semantics.md),
+[sqrt-semantics.md](sqrt-semantics.md)); their differentiation is still
 ungoverned, and they are counted here as governed on that basis. The audit
 was originally written at five governed and fifty-five ungoverned; only the
 counts have been restated, not the findings that rest on them.
@@ -39,7 +40,7 @@ references, and the full suite passes (1,782 tests, 0 failures, 0 expected
 failures, on `python`, `numpy` and `cuda`). Nothing in this audit reopens
 them.
 
-Outside that scope there is no numerical contract at all. Fifty-three public
+Outside that scope there is no numerical contract at all. Fifty-two public
 operations have no stated accuracy bound, no exceptional-value table, no
 signed-zero requirement, no subnormal requirement, and no rule about whether
 fused and eager execution must agree. Their tests establish that the backends
@@ -133,11 +134,11 @@ Discovered from `tensors.__all__` and the submodules, not assumed.
 | `/` `divide` | `operations/arithmetic/divide.py` | R, C |
 | `**` `pow` | `operations/arithmetic/power.py` | E (integer), A (2/4 ULP), C |
 
-### 3.2 Ungoverned — 53 operations
+### 3.2 Ungoverned — 52 operations
 
 | Family | Operations | Location |
 | --- | --- | --- |
-| Elementary | `exp` `log` `sqrt` | `operations/elementary/` |
+| Elementary | `exp` `log` | `operations/elementary/` |
 | Trigonometric | `sin` `cos` `tan` `arcsin` `arccos` `arctan` | `operations/trigonometric/` |
 | Hyperbolic | `sinh` `cosh` `tanh` `arcsinh` `arccosh` `arctanh` | `operations/hyperbolic/` |
 | Activations | `relu` `sigmoid` `softplus` | `operations/activations/` |
@@ -201,7 +202,7 @@ tests; **Fus** is a fused-vs-eager requirement.
 | `**` gradients | §12.7 | detection only | §12.7.2 | yes | yes | yes | **Verified** |
 | Elementary `sign` (forward) | [sign-semantics.md](sign-semantics.md) | n/a (class E) | n/a | §1.5 | yes | yes | **Governed.** Forward only; `sign`'s differentiation remains ungoverned |
 | Elementary `abs` (forward) | [abs-semantics.md](abs-semantics.md) | n/a (class E) | §1.7 | §1.6 | yes | yes | **Governed.** Forward only; `abs`'s differentiation remains ungoverned |
-| Elementary `sqrt` | — | n/a (class R) | traps | — | no | no | **Spec missing** |
+| Elementary `sqrt` (forward) | [sqrt-semantics.md](sqrt-semantics.md) | correctly rounded (§1.2) | §1.4 **no longer traps** | §1.7 | yes | yes | **Governed.** Forward only; `sqrt`'s differentiation remains ungoverned and still traps at zero |
 | Elementary `exp` `log` | — | — | traps | — | no | no | **Spec missing** |
 | Trigonometric | — | — | traps | — | no | no | **Spec missing** |
 | Hyperbolic | — | — | traps | — | no | no | **Spec missing** |
@@ -343,6 +344,29 @@ ieee32.widen / ieee32.narrow            -> [±1.401298464324817e-45]
 unlike `sign` it needs the PTX conversion on the way out as well. The
 migrated kernel uses both, and [abs-semantics.md](abs-semantics.md) §1.6
 pins the requirement with a test.
+
+**`sqrt` re-measured during its own migration (2026-09-21).** The same cause
+is present on the operand side, and measuring it against an independent
+reference showed a second, separate shortfall the subnormal reproducer does
+not reach:
+
+```
+cupy.sqrt(native binary32 [smallest subnormal]) -> 0.0
+cupy.sqrt(native binary32), 400 random operands -> 2 not correctly rounded
+ieee32.widen -> binary64 sqrt -> ieee32.narrow -> correctly rounded, 3666/3666
+```
+
+The 3,666 cases include operands chosen so that their true roots sit as close
+as possible to a binary32 rounding boundary — the cases a root computed in a
+wider format and rounded down would get wrong. None failed, so **no dedicated
+binary32 PTX square-root instruction was needed**: binary64's 53 significand
+bits exceed the `2p + 2 = 50` that square root requires for the second
+rounding to agree with rounding the true root directly. This is the first
+finding in this audit measured against a reference for *correct rounding*
+rather than for subnormal survival, and the second row above is a defect the
+D-1 reproducer would never have surfaced.
+
+`cupy.sqrt` on binary64 was correctly rounded on all 2,002 operands measured.
 
 ### D-2 — Two promotion authorities disagree
 
@@ -743,7 +767,7 @@ single one is sufficient, and a passing test suite is not among them.
 
 ### Current position against these criteria
 
-| Criterion | `+ - * /` | `**` | Other 53 |
+| Criterion | `+ - * /` | `**` | Other 52 |
 | --- | --- | --- | --- |
 | 1 Classified | met | met | not met |
 | 2 Error bound + reference | n/a (class R) | met | not met |

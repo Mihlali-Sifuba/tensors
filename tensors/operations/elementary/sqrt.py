@@ -21,9 +21,20 @@ class Sqrt(Operation):
     name = "sqrt"
 
     def forward(self, a: Tensor) -> Tensor:
+        """Take each element's square root, converting an integer operand.
+
+        Sqrt keeps the shape and, alone among the migrated elementary
+        operations so far, can change the dtype: a floating operand keeps its
+        format and an integer operand is answered in ``float64``. Those are
+        the Tensor semantics this operation owns; `execute_sqrt` owns where
+        the root is taken. See docs/sqrt-semantics.md.
+        """
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
+        output_shape = a.shape
         return Tensor._from_owned_storage(
-            backend_dispatch.execute_sqrt(a, dtype=dtype), dtype=dtype, shape=a.shape
+            backend_dispatch.execute_sqrt(a, dtype=dtype, output_shape=output_shape),
+            dtype=dtype,
+            shape=output_shape,
         )
 
     def backward(
