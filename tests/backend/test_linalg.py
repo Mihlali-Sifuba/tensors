@@ -17,7 +17,7 @@ class CudaMatmulTests(unittest.TestCase):
             expected = (left @ right).tolist()
         with ts.use_backend("cuda"):
             actual = left @ right
-        self.assertIsInstance(actual._storage, CudaStorage)
+        self.assertIsInstance(actual.backend_storage, CudaStorage)
         self.assertEqual(actual.tolist(), expected)
 
 

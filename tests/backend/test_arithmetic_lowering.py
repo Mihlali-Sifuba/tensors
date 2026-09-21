@@ -136,7 +136,7 @@ class PreservedBehaviourTests(BackendTestCase):
                             continue
                         self.assertEqual(produced.shape, shape)
                         self.assertEqual(produced.tolist(), expected)
-                        self.assertEqual(produced._storage.kind, backend)
+                        self.assertEqual(produced.backend_storage.kind, backend)
 
     def test_a_scalar_is_lowered_to_the_declared_dtype(self):
         """A bare Python number would let the array API widen the result."""

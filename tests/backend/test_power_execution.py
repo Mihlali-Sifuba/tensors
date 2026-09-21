@@ -34,7 +34,7 @@ SIZES = (1, 4, 31, 32, 64, 1000)
 
 
 def storage_name(tensor) -> str:
-    return type(tensor._storage).__name__
+    return type(tensor.backend_storage).__name__
 
 
 def python_reference():
@@ -278,7 +278,7 @@ class ExecutionLocationHarness(unittest.TestCase):
             f"{context}: expected {calls} {selection} power calls, "
             f"got {accelerated.call_count}",
         )
-        if result is not None and hasattr(result, "_storage"):
+        if result is not None and hasattr(result, "backend_storage"):
             self.assertEqual(storage_name(result), STORAGE_FOR[selection], context)
         return result
 

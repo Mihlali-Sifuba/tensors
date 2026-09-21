@@ -61,9 +61,9 @@ class CudaGroupedOptimizerTests(unittest.TestCase):
             second_moment = state["v"]
             self.assertIsInstance(moment, ts.Tensor)
             self.assertIsInstance(second_moment, ts.Tensor)
-            self.assertIsInstance(parameter.data._storage, CudaStorage)
-            self.assertIsInstance(moment._storage, CudaStorage)
-            self.assertIsInstance(second_moment._storage, CudaStorage)
+            self.assertIsInstance(parameter.data.backend_storage, CudaStorage)
+            self.assertIsInstance(moment.backend_storage, CudaStorage)
+            self.assertIsInstance(second_moment.backend_storage, CudaStorage)
             for actual, reference in zip(
                 (parameter.data.tolist(), moment.tolist(), second_moment.tolist()),
                 expected_values,
@@ -167,7 +167,7 @@ class CudaGroupedOptimizerTests(unittest.TestCase):
                 self.assertTrue(
                     all(
                         (
-                            isinstance(parameter.data._storage, CudaStorage)
+                            isinstance(parameter.data.backend_storage, CudaStorage)
                             for parameter in parameters
                         )
                     )
@@ -198,7 +198,7 @@ class CudaGroupedOptimizerTests(unittest.TestCase):
         self.assertTrue(
             all(
                 (
-                    isinstance(parameter.data._storage, CudaStorage)
+                    isinstance(parameter.data.backend_storage, CudaStorage)
                     for parameter in parameters
                 )
             )
@@ -235,7 +235,7 @@ class NumPyGroupedOptimizerTests(NumPyParityTestCase):
                 self.assertTrue(
                     all(
                         (
-                            isinstance(parameter.data._storage, NumPyStorage)
+                            isinstance(parameter.data.backend_storage, NumPyStorage)
                             for parameter in parameters
                         )
                     )
@@ -331,9 +331,9 @@ class NumPyGroupedOptimizerTests(NumPyParityTestCase):
                     second_moment = state["v"]
                     self.assertIsInstance(moment, ts.Tensor)
                     self.assertIsInstance(second_moment, ts.Tensor)
-                    self.assertIsInstance(parameter.data._storage, NumPyStorage)
-                    self.assertIsInstance(moment._storage, NumPyStorage)
-                    self.assertIsInstance(second_moment._storage, NumPyStorage)
+                    self.assertIsInstance(parameter.data.backend_storage, NumPyStorage)
+                    self.assertIsInstance(moment.backend_storage, NumPyStorage)
+                    self.assertIsInstance(second_moment.backend_storage, NumPyStorage)
                     for actual, reference in zip(
                         (
                             parameter.data.tolist(),
@@ -465,7 +465,7 @@ class NumPyGroupedOptimizerTests(NumPyParityTestCase):
                 self.assertTrue(
                     all(
                         (
-                            isinstance(parameter.data._storage, NumPyStorage)
+                            isinstance(parameter.data.backend_storage, NumPyStorage)
                             for parameter in parameters
                         )
                     )

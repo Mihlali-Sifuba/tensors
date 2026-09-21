@@ -199,7 +199,7 @@ class Variable:
         # re-checked on each replay and differentiation pass.
         return (
             self._data_generation,
-            self._data._version,
+            self._data.mutation_version,
             self._requires_grad,
         )
 

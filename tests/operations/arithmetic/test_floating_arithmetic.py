@@ -128,7 +128,7 @@ class DeclaredPrecisionTests(ArithmeticTestCase):
     def test_a_float32_result_is_stored_as_float32(self):
         """Section 3.4: declared dtype is the stored dtype."""
         result = tensor("float32", [1.5]) + tensor("float32", [2.5])
-        buffer = getattr(result._storage, "buffer", None)
+        buffer = getattr(result.backend_storage, "buffer", None)
         itemsize = getattr(buffer, "itemsize", None)
         if itemsize is not None:
             self.assertEqual(itemsize, 4)

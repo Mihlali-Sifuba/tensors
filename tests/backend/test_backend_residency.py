@@ -65,7 +65,7 @@ class NotResident:
     """
 
     kind = "numpy"
-    _storage = "numpy"
+    backend_storage = "numpy"
 
 
 class InterfaceTests(unittest.TestCase):
@@ -259,7 +259,7 @@ class ResultResidencyTests(BackendTestCase):
         left = tagged_tensor("numpy", [1.0])
         with selection, loader:
             result = left + 2.0
-        self.assertEqual(result._storage.kind, "numpy")
+        self.assertEqual(result.backend_storage.kind, "numpy")
         self.assertIsInstance(result, ts.Tensor)
 
     def test_a_result_from_another_backend_is_refused(self):
@@ -321,7 +321,7 @@ class DispatchBehaviourTests(BackendTestCase):
                             result = operation(left, right)
                         except ts.BackendOperationUnsupportedError:
                             continue
-                        self.assertEqual(result._storage.kind, backend)
+                        self.assertEqual(result.backend_storage.kind, backend)
 
     def test_each_dispatcher_reads_the_selection_once(self):
         for name, operation in self.OPERATIONS.items():
@@ -393,7 +393,7 @@ class DispatchBehaviourTests(BackendTestCase):
                         result = one + one
                     except ts.BackendOperationUnsupportedError:
                         continue
-                    self.assertEqual(result._storage.kind, backend)
+                    self.assertEqual(result.backend_storage.kind, backend)
 
     def test_unsupported_operation_errors_are_unchanged(self):
         from tensors.backend.dispatch.arithmetic import add as dispatch

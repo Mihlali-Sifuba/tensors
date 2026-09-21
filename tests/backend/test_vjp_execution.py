@@ -49,7 +49,7 @@ OPERATIONS = {
 
 
 def storage_name(tensor) -> str:
-    return type(tensor._storage).__name__
+    return type(tensor.backend_storage).__name__
 
 
 def resident_seed(shape, value=1.0):

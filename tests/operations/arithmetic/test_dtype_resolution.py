@@ -427,8 +427,8 @@ class BackendInvarianceTests(ArithmeticTestCase):
                             result = BINARY[operation](left, right)
                         except ts.BackendOperationUnsupportedError:
                             continue
-                        self.assertEqual(left._storage.kind, backend)
-                        self.assertEqual(result._storage.kind, backend)
+                        self.assertEqual(left.backend_storage.kind, backend)
+                        self.assertEqual(result.backend_storage.kind, backend)
 
     def test_division_stays_resident_on_the_selected_backend(self):
         for backend in BACKENDS:
@@ -440,7 +440,7 @@ class BackendInvarianceTests(ArithmeticTestCase):
                         )
                     except ts.BackendOperationUnsupportedError:
                         continue
-                    self.assertEqual(result._storage.kind, backend)
+                    self.assertEqual(result.backend_storage.kind, backend)
                     self.assertIs(result.dtype, ts.float64)
 
     def test_an_operand_from_another_backend_is_still_refused(self):

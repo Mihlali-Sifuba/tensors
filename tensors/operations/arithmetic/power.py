@@ -42,7 +42,7 @@ def _has_negative_exponent(exponent: Tensor) -> bool:
     the tensor. A view is resolved to its logical values first, so elements the
     exponent does not address cannot make it raise.
     """
-    storage = exponent._logical_storage_for(exponent._storage.kind)
+    storage = exponent._logical_storage_for(exponent.backend_storage.kind)
     buffer = storage.buffer
     if getattr(buffer, "any", None) is None:
         return any(value < 0 for value in buffer)

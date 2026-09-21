@@ -14,25 +14,25 @@ class NumPyStorageTests(unittest.TestCase):
     def test_numpy_results_retain_native_storage(self):
         with ts.use_backend("numpy"):
             result = ts.full((64,), 2.0) + 3.0
-        self.assertIsInstance(result._storage, NumPyStorage)
+        self.assertIsInstance(result.backend_storage, NumPyStorage)
         self.assertEqual(result.tolist(), [5.0] * 64)
 
     def test_backend_views_are_cached_until_mutation(self):
         import numpy
 
         value = ts.Tensor([1.0, 2.0, 3.0])
-        original = value._storage
+        original = value.backend_storage
         first = value._storage_for("numpy")
         second = value._storage_for("numpy")
         self.assertIs(first, second)
-        self.assertIs(value._storage, original)
+        self.assertIs(value.backend_storage, original)
         host_view = numpy.frombuffer(
             original.buffer, dtype=numpy.dtype(value.dtype.name)
         )
         self.assertTrue(numpy.shares_memory(first.buffer, host_view))
         value[0] = 4.0
-        self.assertIsInstance(value._storage, PythonStorage)
-        self.assertEqual(set(value._storage_cache), {"python"})
+        self.assertIsInstance(value.backend_storage, PythonStorage)
+        self.assertEqual(set(value.backend_storage_cache), {"python"})
 
 
 @requires_cuda
@@ -48,8 +48,8 @@ class CudaResidencyTests(unittest.TestCase):
             with patch.object(backend, "add", wraps=backend.add) as kernel:
                 result = value * 3.0 + 1.0
         self.assertGreaterEqual(kernel.call_count, 1)
-        self.assertIsInstance(value._storage, CudaStorage)
-        self.assertIsInstance(result._storage, CudaStorage)
+        self.assertIsInstance(value.backend_storage, CudaStorage)
+        self.assertIsInstance(result.backend_storage, CudaStorage)
         self.assertEqual(result.tolist(), [7.0] * 64)
 
     def test_integer_operations_stay_device_resident(self):
@@ -57,7 +57,7 @@ class CudaResidencyTests(unittest.TestCase):
         # keeps its declared dtype instead of falling back to the host.
         with ts.use_backend("cuda"):
             result = ts.full((64,), 2, dtype=ts.int32) + 3
-        self.assertIsInstance(result._storage, CudaStorage)
+        self.assertIsInstance(result.backend_storage, CudaStorage)
         self.assertIs(result.dtype, ts.int32)
         self.assertEqual(result.tolist(), [5] * 64)
 
@@ -66,7 +66,7 @@ class CudaResidencyTests(unittest.TestCase):
             parameter = ts.Variable(ts.full((64,), 1.0))
             parameter.grad = ts.full((64,), 0.5)
             ts.optim.SGD([parameter], learning_rate=0.1).step()
-        self.assertIsInstance(parameter.data._storage, CudaStorage)
+        self.assertIsInstance(parameter.data.backend_storage, CudaStorage)
         self.assertAlmostEqual(parameter.data[0], 0.95)
 
 
@@ -107,7 +107,7 @@ class BatchedOptimizerStorageTests(unittest.TestCase):
                     parameters = self._stepped_parameters(backend, name)
                     for index, parameter in enumerate(parameters):
                         self.assertIsInstance(
-                            parameter.data._storage,
+                            parameter.data.backend_storage,
                             storage_type,
                             f"parameter {index} left the {backend} backend",
                         )
@@ -119,7 +119,7 @@ class BatchedOptimizerStorageTests(unittest.TestCase):
             for name in self.OPTIMIZERS:
                 with self.subTest(backend=backend, optimizer=name):
                     parameters = self._stepped_parameters(backend, name)
-                    buffers = [p.data._storage.buffer for p in parameters]
+                    buffers = [p.data.backend_storage.buffer for p in parameters]
                     for index, buffer in enumerate(buffers):
                         for other_index, other in enumerate(buffers[index + 1 :]):
                             self.assertIsNot(

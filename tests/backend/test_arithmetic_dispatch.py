@@ -260,7 +260,9 @@ class CudaArithmeticSelectionTests(unittest.TestCase):
                             lambda a: a - a,
                             lambda a: a * a,
                         ):
-                            self.assertIsInstance(operation(left)._storage, CudaStorage)
+                            self.assertIsInstance(
+                                operation(left).backend_storage, CudaStorage
+                            )
 
     def test_every_dispatcher_executes_on_cuda_including_small_work(self):
         """All four entry points, at sizes the old threshold sent away."""
@@ -297,8 +299,8 @@ class CudaArithmeticSelectionTests(unittest.TestCase):
     def test_nested_context_restores_arithmetic_provider(self):
         with ts.use_backend("numpy"):
             value = ts.Tensor([2.0] * 32)
-            self.assertIsInstance((value + 1.0)._storage, NumPyStorage)
+            self.assertIsInstance((value + 1.0).backend_storage, NumPyStorage)
             with ts.use_backend("python"):
                 with self.assertRaises(ts.BackendMismatchError):
                     value + 1.0
-            self.assertIsInstance((value + 1.0)._storage, NumPyStorage)
+            self.assertIsInstance((value + 1.0).backend_storage, NumPyStorage)

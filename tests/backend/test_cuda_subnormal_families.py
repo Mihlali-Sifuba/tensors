@@ -202,7 +202,7 @@ class Reductions(CudaTestCase):
                     with ts.use_backend("cuda"):
                         produced = getattr(ts, name)(tensor32([SMALLEST] * size))
                         self.assertEqual(
-                            type(produced._storage).__name__, "CudaStorage"
+                            type(produced.backend_storage).__name__, "CudaStorage"
                         )
 
 
@@ -238,7 +238,7 @@ class LinearAlgebra(CudaTestCase):
                 ts.Tensor([[SMALLEST] * 64] * 64, dtype=ts.float32),
                 ts.Tensor([[1.0] * 64] * 64, dtype=ts.float32),
             )
-            self.assertEqual(type(produced._storage).__name__, "CudaStorage")
+            self.assertEqual(type(produced.backend_storage).__name__, "CudaStorage")
 
 
 class SelectionAndComparison(CudaTestCase):
@@ -326,7 +326,7 @@ class Casting(CudaTestCase):
     def test_residency_and_dtype(self):
         with ts.use_backend("cuda"):
             produced = tensor32([SMALLEST] * 64).astype(ts.float64)
-            self.assertEqual(type(produced._storage).__name__, "CudaStorage")
+            self.assertEqual(type(produced.backend_storage).__name__, "CudaStorage")
             self.assertIs(produced.dtype, ts.float64)
 
 
@@ -385,7 +385,7 @@ class ElementwiseGradients(CudaTestCase):
         for name in ("sin", "tanh", "exp", "sigmoid"):
             with self.subTest(operation=name):
                 produced = self.gradient(getattr(ts, name), SMALLEST, 1.0)
-                self.assertEqual(type(produced._storage).__name__, "CudaStorage")
+                self.assertEqual(type(produced.backend_storage).__name__, "CudaStorage")
 
 
 class NeuralNetworkFamilies(CudaTestCase):
@@ -419,7 +419,7 @@ class NeuralNetworkFamilies(CudaTestCase):
     def test_residency(self):
         with ts.use_backend("cuda"):
             produced = ts.softmax(tensor32([SMALLEST] * 64))
-            self.assertEqual(type(produced._storage).__name__, "CudaStorage")
+            self.assertEqual(type(produced.backend_storage).__name__, "CudaStorage")
 
 
 class ExecutionAndResidency(CudaTestCase):
@@ -468,7 +468,7 @@ class ExecutionAndResidency(CudaTestCase):
                     with self._counting_device_reads() as reads:
                         produced = build(operand)
                         self.assertEqual(
-                            type(produced._storage).__name__, "CudaStorage"
+                            type(produced.backend_storage).__name__, "CudaStorage"
                         )
                 self.assertEqual(
                     reads.count, 0, f"{name} materialised an operand on the host"

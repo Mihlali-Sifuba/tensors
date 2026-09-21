@@ -24,7 +24,7 @@ class CudaFusionTests(unittest.TestCase):
             ) as fused:
                 result = computation.forward()
         fused.assert_called_once()
-        self.assertIsInstance(result._storage, CudaStorage)
+        self.assertIsInstance(result.backend_storage, CudaStorage)
         self.assertEqual(intermediate.data.tolist(), [8.0] * 4_096)
         self.assertEqual(result.tolist(), [11.0] * 4_096)
 
@@ -42,7 +42,7 @@ class CudaFusionTests(unittest.TestCase):
                 backend_state._clear_backend_kernel_cache()
                 computation.backward(ts.full((4_096,), 1.0))
         fused.assert_called_once()
-        self.assertIsInstance(value.grad._storage, CudaStorage)
+        self.assertIsInstance(value.grad.backend_storage, CudaStorage)
         self.assertEqual(intermediate.grad.tolist(), [3.0] * 4_096)
         self.assertEqual(value.grad.tolist(), [6.0] * 4_096)
 
@@ -83,8 +83,8 @@ class CudaFusionTests(unittest.TestCase):
                 forward_fusion.assert_called_once()
                 backward_fusion.assert_called_once()
                 self.assertEqual(result.dtype, dtype)
-                self.assertIsInstance(result._storage, CudaStorage)
-                self.assertIsInstance(value.grad._storage, CudaStorage)
+                self.assertIsInstance(result.backend_storage, CudaStorage)
+                self.assertIsInstance(value.grad.backend_storage, CudaStorage)
                 self.assertAlmostEqual(
                     float(result[0]), expected, places=5 if dtype == ts.float32 else 12
                 )
@@ -132,7 +132,7 @@ class CudaFusionTests(unittest.TestCase):
                 backend_state._clear_backend_kernel_cache()
                 result = computation.forward()
         fused.assert_called_once()
-        self.assertIsInstance(result._storage, CudaStorage)
+        self.assertIsInstance(result.backend_storage, CudaStorage)
         self.assertAlmostEqual(float(result[0, 0]), 64.5)
         self.assertAlmostEqual(float(shifted.data[0, 0]), 64.5)
 
@@ -185,8 +185,8 @@ class CudaFusionTests(unittest.TestCase):
                 computation.backward(ts.ones((4_096,)))
         forward_fusion.assert_called_once()
         backward_fusion.assert_called_once()
-        self.assertIsInstance(result._storage, CudaStorage)
-        self.assertIsInstance(value.grad._storage, CudaStorage)
+        self.assertIsInstance(result.backend_storage, CudaStorage)
+        self.assertIsInstance(value.grad.backend_storage, CudaStorage)
         self.assertAlmostEqual(result[0], reference_output.data[0], places=12)
         self.assertAlmostEqual(value.grad[0], reference_gradient[0], places=12)
 
@@ -251,8 +251,8 @@ class CudaFusionTests(unittest.TestCase):
                 backend_state._clear_backend_kernel_cache()
                 computation.backward(ts.ones(output.shape))
         fused.assert_called_once()
-        self.assertIsInstance(numerator.grad._storage, CudaStorage)
-        self.assertIsInstance(denominator.grad._storage, CudaStorage)
+        self.assertIsInstance(numerator.grad.backend_storage, CudaStorage)
+        self.assertIsInstance(denominator.grad.backend_storage, CudaStorage)
         expected_numerator = 1.0 + 0.5 + 0.25 + 0.125
         self.assertAlmostEqual(numerator.grad[0, 0], expected_numerator)
         expected_denominator = [-8192.0, -2048.0, -512.0, -128.0]
@@ -272,7 +272,7 @@ class CudaFusionTests(unittest.TestCase):
                 backend_state._clear_backend_kernel_cache()
                 computation.backward(ts.ones((4_096,)))
         fused.assert_called_once()
-        self.assertIsInstance(value.grad._storage, CudaStorage)
+        self.assertIsInstance(value.grad.backend_storage, CudaStorage)
         self.assertEqual(value.grad.tolist(), [-0.125] * 4_096)
 
     def test_fused_extreme_power_and_division_vjps_retain_range(self):
@@ -302,8 +302,8 @@ class CudaFusionTests(unittest.TestCase):
                 division_computation.backward(ts.full((4_096,), 1e308))
         power_fusion.assert_called_once()
         division_fusion.assert_called_once()
-        self.assertIsInstance(base.grad._storage, CudaStorage)
-        self.assertIsInstance(denominator.grad._storage, CudaStorage)
+        self.assertIsInstance(base.grad.backend_storage, CudaStorage)
+        self.assertIsInstance(denominator.grad.backend_storage, CudaStorage)
         self.assertTrue(math.isclose(base.grad[0], 3e-92, rel_tol=1e-12, abs_tol=0.0))
         self.assertEqual(denominator.grad[0], -1.0)
 
@@ -341,7 +341,7 @@ class CudaFusionTests(unittest.TestCase):
                     backend_state._clear_backend_kernel_cache()
                     result = computation.forward()
                 fused.assert_not_called()
-                self.assertIsInstance(result._storage, CudaStorage)
+                self.assertIsInstance(result.backend_storage, CudaStorage)
                 self.assertIs(result.dtype, dtype)
                 self.assertEqual(result[0], 6)
 

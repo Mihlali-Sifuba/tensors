@@ -105,7 +105,7 @@ class ArithmeticResidencyTests(unittest.TestCase):
 
         result = left + right
 
-        self.assertIsInstance(result._storage, PythonStorage)
+        self.assertIsInstance(result.backend_storage, PythonStorage)
         self.assertIs(result.dtype, ts.int16)
         self.assertEqual(result.tolist(), [4, 6])
 
@@ -143,7 +143,7 @@ class ArithmeticResidencyTests(unittest.TestCase):
             result = left + 2.0
 
         load.assert_called_once_with("numpy")
-        self.assertEqual(result._storage.kind, "numpy")
+        self.assertEqual(result.backend_storage.kind, "numpy")
 
     def test_wrong_backend_result_is_rejected(self):
         from tensors.backend.dispatch.arithmetic import add as dispatch
@@ -207,8 +207,8 @@ class ResidencyBoundaryTests(unittest.TestCase):
         with patch("tensors.backend.config.get_backend", return_value="numpy"):
             cloned = source.clone()
 
-        self.assertEqual(cloned._storage.kind, "python")
-        self.assertIsNot(cloned._storage, source._storage)
+        self.assertEqual(cloned.backend_storage.kind, "python")
+        self.assertIsNot(cloned.backend_storage, source.backend_storage)
         self.assertEqual(cloned.tolist(), [1.0])
 
     def test_host_inspection_uses_resident_storage_under_another_backend(self):
@@ -218,7 +218,7 @@ class ResidencyBoundaryTests(unittest.TestCase):
             values = source.tolist()
 
         self.assertEqual(values, [1.0, 2.0])
-        self.assertEqual(source._storage.kind, "python")
+        self.assertEqual(source.backend_storage.kind, "python")
 
 
 @requires_numpy
@@ -228,8 +228,8 @@ class NumPyConstructionResidencyTests(unittest.TestCase):
             literal = ts.Tensor([1.0])
             created = ts.full((1,), 2.0)
 
-        self.assertIsInstance(literal._storage, NumPyStorage)
-        self.assertIsInstance(created._storage, NumPyStorage)
+        self.assertIsInstance(literal.backend_storage, NumPyStorage)
+        self.assertIsInstance(created.backend_storage, NumPyStorage)
 
     def test_literal_construction_does_not_create_python_storage(self):
         with patch.object(
@@ -240,7 +240,7 @@ class NumPyConstructionResidencyTests(unittest.TestCase):
             with ts.use_backend("numpy"):
                 value = ts.Tensor([1, 2], dtype=ts.int32)
 
-        self.assertIsInstance(value._storage, NumPyStorage)
+        self.assertIsInstance(value.backend_storage, NumPyStorage)
         self.assertEqual(value.tolist(), [1, 2])
 
     def test_internal_scalar_construction_is_numpy_native(self):
@@ -249,7 +249,7 @@ class NumPyConstructionResidencyTests(unittest.TestCase):
         with ts.use_backend("numpy"):
             value = ts.Tensor._from_values((3,), ts.int32, Shape())
 
-        self.assertIsInstance(value._storage, NumPyStorage)
+        self.assertIsInstance(value.backend_storage, NumPyStorage)
         self.assertEqual(value.item(), 3)
 
 
@@ -260,8 +260,8 @@ class CudaConstructionResidencyTests(unittest.TestCase):
             literal = ts.Tensor([1.0])
             created = ts.full((1,), 2.0)
 
-        self.assertIsInstance(literal._storage, CudaStorage)
-        self.assertIsInstance(created._storage, CudaStorage)
+        self.assertIsInstance(literal.backend_storage, CudaStorage)
+        self.assertIsInstance(created.backend_storage, CudaStorage)
 
 
 if __name__ == "__main__":

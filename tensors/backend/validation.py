@@ -46,7 +46,7 @@ def validate_backend_residency(
 
     for index, value in enumerate(values):
         if isinstance(value, Tensor):
-            resident = value._storage.kind
+            resident = value.backend_storage.kind
         elif isinstance(value, Storage):
             resident = value.kind
         else:

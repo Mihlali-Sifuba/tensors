@@ -409,7 +409,7 @@ class ResidencyAndHostTransfers(unittest.TestCase):
                         operand = ts.Tensor([SMALLEST] * size, dtype=ts.float32)
                         produced = function(operand)
                         self.assertEqual(
-                            type(produced._storage).__name__, "CudaStorage"
+                            type(produced.backend_storage).__name__, "CudaStorage"
                         )
                         self.assertIs(produced.dtype, ts.float32)
 
@@ -421,7 +421,7 @@ class ResidencyAndHostTransfers(unittest.TestCase):
                     with self._counting_device_reads() as reads:
                         produced = function(operand)
                         self.assertEqual(
-                            type(produced._storage).__name__, "CudaStorage"
+                            type(produced.backend_storage).__name__, "CudaStorage"
                         )
                 self.assertEqual(
                     reads.count, 0, f"{name} materialised an operand on the host"
@@ -696,7 +696,7 @@ class TheOtherFiveConversions(unittest.TestCase):
                             ts.Tensor([operand] * size, dtype=ts.float32)
                         )
                         self.assertEqual(
-                            type(produced._storage).__name__, "CudaStorage"
+                            type(produced.backend_storage).__name__, "CudaStorage"
                         )
                         self.assertIs(produced.dtype, ts.float32)
 
@@ -728,7 +728,7 @@ class TheOtherFiveConversions(unittest.TestCase):
                     with counting() as reads:
                         produced = function(values)
                         self.assertEqual(
-                            type(produced._storage).__name__, "CudaStorage"
+                            type(produced.backend_storage).__name__, "CudaStorage"
                         )
                 self.assertEqual(
                     len(reads), 0, f"{name} materialised an operand on the host"
@@ -1058,7 +1058,7 @@ class GradientExecution(unittest.TestCase):
                             requires_grad=True,
                         )
                         (produced,) = ts.grad(function(variable), [variable])
-                        residency = type(produced._storage).__name__
+                        residency = type(produced.backend_storage).__name__
                 self.assertTrue(calls, f"{name} never ran")
                 self.assertTrue(all(calls), f"{name} declined to the reference")
                 self.assertEqual(residency, "CudaStorage")
@@ -1073,7 +1073,9 @@ class GradientExecution(unittest.TestCase):
                             requires_grad=True,
                         )
                         (produced,) = ts.grad(function(variable), [variable])
-                    self.assertEqual(type(produced._storage).__name__, "CudaStorage")
+                    self.assertEqual(
+                        type(produced.backend_storage).__name__, "CudaStorage"
+                    )
                     self.assertIs(produced.dtype, ts.float32)
 
     def test_no_operand_is_read_back_to_the_host(self):
@@ -1107,7 +1109,7 @@ class GradientExecution(unittest.TestCase):
                     with counting() as reads:
                         (produced,) = ts.grad(output, [variable])
                         self.assertEqual(
-                            type(produced._storage).__name__, "CudaStorage"
+                            type(produced.backend_storage).__name__, "CudaStorage"
                         )
                 self.assertEqual(
                     len(reads), 0, f"{name} materialised a tensor on the host"

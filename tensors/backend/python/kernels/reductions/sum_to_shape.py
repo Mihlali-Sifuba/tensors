@@ -21,7 +21,7 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Storage | None:
             total = stable_float_sum([float(value) for value in gradient._data])
         else:
             total = sum(gradient._data)
-        return Tensor._from_values([total], gradient.dtype, target)._storage
+        return Tensor._from_values([total], gradient.dtype, target).backend_storage
     padded_shape = (1,) * (gradient.ndim - len(shape)) + shape
     groups: list[list[int | float]] = [[] for _ in range(target.size)]
     padding = gradient.ndim - len(shape)

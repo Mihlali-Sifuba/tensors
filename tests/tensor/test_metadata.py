@@ -74,7 +74,7 @@ class TensorMetadataTests(unittest.TestCase):
         result = tensor.contiguous()
         self.assertIs(result, tensor)
         self.assertEqual(result.offset, 1)
-        self.assertEqual(result._storage.size, 3)
+        self.assertEqual(result.backend_storage.size, 3)
 
     def test_storage_helpers_distinguish_physical_and_logical_order(self):
         tensor = synthetic_tensor(
@@ -281,11 +281,11 @@ class BackendMetadataTests(unittest.TestCase):
             float(row * 5 + column + 1) for row in range(8) for column in range(4)
         ]
         result = tensor.contiguous()
-        self.assertEqual(result._storage.kind, "numpy")
+        self.assertEqual(result.backend_storage.kind, "numpy")
         self.assertEqual(result.tolist(), expected)
         with ts.use_backend("numpy"):
             calculated = tensor + 1.0
-        self.assertEqual(calculated._storage.kind, "numpy")
+        self.assertEqual(calculated.backend_storage.kind, "numpy")
         self.assertEqual(calculated.tolist(), [value + 1.0 for value in expected])
 
     def test_cuda_contiguous_materialization_stays_device_native(self):
@@ -297,11 +297,11 @@ class BackendMetadataTests(unittest.TestCase):
             storage, shape=ts.Shape(2, 2), strides=ts.Strides(3, 1), offset=1
         )
         result = tensor.contiguous()
-        self.assertEqual(result._storage.kind, "cuda")
+        self.assertEqual(result.backend_storage.kind, "cuda")
         self.assertEqual(result.tolist(), [1.0, 2.0, 4.0, 5.0])
         with ts.use_backend("cuda"):
             calculated = tensor + 1.0
-        self.assertEqual(calculated._storage.kind, "cuda")
+        self.assertEqual(calculated.backend_storage.kind, "cuda")
         self.assertEqual(calculated.tolist(), [2.0, 3.0, 5.0, 6.0])
 
 

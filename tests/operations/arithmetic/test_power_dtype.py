@@ -410,13 +410,13 @@ class NegativeIntegerExponents(ArithmeticTestCase):
         with ts.use_backend("cuda"):
             # Arithmetic is bound to the selection, so this is device-resident.
             exponent = ts.full((4096,), 2, dtype=ts.int32) + 0
-            self.assertEqual(type(exponent._storage).__name__, "CudaStorage")
+            self.assertEqual(type(exponent.backend_storage).__name__, "CudaStorage")
             with counting() as reads:
                 self.assertFalse(_has_negative_exponent(exponent))
             self.assertEqual(reads.count, 0)
 
             negative = ts.full((4096,), 2, dtype=ts.int32) - 3
-            self.assertEqual(type(negative._storage).__name__, "CudaStorage")
+            self.assertEqual(type(negative.backend_storage).__name__, "CudaStorage")
             with counting() as reads:
                 with self.assertRaises(ValueError):
                     _ = (ts.full((4096,), 2, dtype=ts.int32) + 0) ** negative

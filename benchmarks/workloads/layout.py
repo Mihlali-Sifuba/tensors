@@ -39,7 +39,7 @@ def _view_tensor(
     only way to measure what the kernels do with a strided layout.
     """
     return ts.Tensor._from_metadata(
-        source._storage, shape=shape, strides=strides, offset=offset
+        source.backend_storage, shape=shape, strides=strides, offset=offset
     )
 
 

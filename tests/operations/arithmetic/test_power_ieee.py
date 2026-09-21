@@ -544,7 +544,9 @@ class SubnormalExternalTensorOperands(SpecifiedComparison):
             ("fused replay", fused),
         ):
             self.assertIs(result.dtype, DTYPE["float32"], label)
-            self.assertEqual(type(result._storage).__name__, "CudaStorage", label)
+            self.assertEqual(
+                type(result.backend_storage).__name__, "CudaStorage", label
+            )
             self.assertBitsEqual(result.tolist()[0], 0.0, "float32", label)
 
     def test_a_flushed_exponent_would_have_given_one(self):
@@ -784,7 +786,9 @@ class CudaDoesNotTransferOrSynchronise(ArithmeticTestCase):
                     base = ts.full((4096,), base_value, dtype=ts.float64) + 0.0
                     with self._counting_device_reads() as reads:
                         result = base**exponent
-                    self.assertEqual(type(result._storage).__name__, "CudaStorage")
+                    self.assertEqual(
+                        type(result.backend_storage).__name__, "CudaStorage"
+                    )
                 self.assertEqual(
                     reads.count, 0, f"{label} materialised the tensor on the host"
                 )
@@ -815,7 +819,7 @@ class CudaDoesNotTransferOrSynchronise(ArithmeticTestCase):
                 with self._counting_device_reads() as reads:
                     result = program.forward()
             self.assertTrue(fused.called, "the fused kernel was not reached")
-            self.assertEqual(type(result._storage).__name__, "CudaStorage")
+            self.assertEqual(type(result.backend_storage).__name__, "CudaStorage")
         self.assertEqual(reads.count, 0, "the fused plan materialised on the host")
 
     def test_the_kernel_answers_every_exceptional_case(self):

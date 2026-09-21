@@ -338,7 +338,7 @@ class CudaExecutesIntegerPowerNatively(ArithmeticTestCase):
                         reference, "power", wraps=reference.power
                     ) as fallback:
                         result = base**5
-                self.assertEqual(type(result._storage).__name__, "CudaStorage")
+                self.assertEqual(type(result.backend_storage).__name__, "CudaStorage")
                 self.assertFalse(
                     fallback.called,
                     "integer power fell back to the Python reference",
@@ -350,7 +350,7 @@ class CudaExecutesIntegerPowerNatively(ArithmeticTestCase):
             with self.subTest(dtype=name), ts.use_backend("cuda"):
                 base = tensor(name, [2, 3]) + 0
                 result = base**5
-                self.assertEqual(type(result._storage).__name__, "CudaStorage")
+                self.assertEqual(type(result.backend_storage).__name__, "CudaStorage")
                 self.assertEqual(
                     [int(v) for v in result.tolist()],
                     [exact(2, 5, name), exact(3, 5, name)],

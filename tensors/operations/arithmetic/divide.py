@@ -66,7 +66,7 @@ def _denominator_has_zero(denominator: Tensor) -> bool:
     resolved to its logical values first, so elements the denominator does not
     address cannot make it raise.
     """
-    storage = denominator._logical_storage_for(denominator._storage.kind)
+    storage = denominator._logical_storage_for(denominator.backend_storage.kind)
     buffer = storage.buffer
     if getattr(buffer, "any", None) is None:
         return any(value == 0 for value in buffer)

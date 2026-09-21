@@ -144,7 +144,7 @@ class ResultDtypeTests(ArithmeticTestCase):
         for dtype_name in INTEGERS:
             with self.subTest(dtype=dtype_name):
                 result = tensor(dtype_name, [3]) + tensor(dtype_name, [4])
-                buffer = getattr(result._storage, "buffer", None)
+                buffer = getattr(result.backend_storage, "buffer", None)
                 itemsize = getattr(buffer, "itemsize", None)
                 if itemsize is not None:
                     expected = _spec.INTEGER_DTYPES[dtype_name][0] // 8

@@ -172,7 +172,9 @@ class TheRegionTable(GradientTestCase):
                         )
                         for gradient in (got_base, got_exponent):
                             self.assertEqual(
-                                type(gradient._storage).__name__, "CudaStorage", label
+                                type(gradient.backend_storage).__name__,
+                                "CudaStorage",
+                                label,
                             )
 
 
@@ -507,10 +509,10 @@ class CudaExecutesAndStaysResident(GradientTestCase):
                     with self._counting_device_reads() as reads:
                         got_base, got_exponent = ts.grad(output, [base, exponent])
                         self.assertEqual(
-                            type(got_base._storage).__name__, "CudaStorage"
+                            type(got_base.backend_storage).__name__, "CudaStorage"
                         )
                         self.assertEqual(
-                            type(got_exponent._storage).__name__, "CudaStorage"
+                            type(got_exponent.backend_storage).__name__, "CudaStorage"
                         )
                 self.assertEqual(
                     reads.count, 0, f"size {size} materialised a tensor on the host"
@@ -536,8 +538,8 @@ class CudaExecutesAndStaysResident(GradientTestCase):
                                 base**exponent, [base, exponent]
                             )
                             residency = (
-                                type(got_base._storage).__name__,
-                                type(got_exponent._storage).__name__,
+                                type(got_base.backend_storage).__name__,
+                                type(got_exponent.backend_storage).__name__,
                             )
                     self.assertEqual(
                         calls, [], f"{label} at size {size} fell back to Python"
@@ -704,7 +706,7 @@ class ANanExponentPropagates(GradientTestCase):
                             (produced,) = ts.grad((base**exponent) * 1.0, [base])
                             reached = fused.called
                         value = produced.tolist()[0]
-                        residency = type(produced._storage).__name__
+                        residency = type(produced.backend_storage).__name__
                         dtype = produced.dtype
                         shape = produced.shape
 
@@ -767,7 +769,7 @@ class ANanExponentPropagates(GradientTestCase):
                         with counting() as reads:
                             (produced,) = ts.grad(program, [base])
                             self.assertEqual(
-                                type(produced._storage).__name__, "CudaStorage"
+                                type(produced.backend_storage).__name__, "CudaStorage"
                             )
                         self.assertTrue(fused.called)
                 self.assertEqual(reads, [], "a tensor was materialised on the host")
