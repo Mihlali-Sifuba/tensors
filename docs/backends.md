@@ -103,6 +103,45 @@ Calling `ts.random.seed` resets independent backend streams without changing
 the provider-global RNGs. See [Parameter initialization](initialization.md) for
 the mathematical definitions and reproducibility contract.
 
+## Naming and the public API boundary
+
+Whether a name is supported and whether a name is well chosen are two
+questions, and a leading underscore is not a good answer to either.
+
+**The re-export surface decides what is public.**
+`tensors/backend/__init__.py` is the facade the rest of the package imports
+from: what it re-exports is what is supported, and its `__all__` narrows that
+further to the user-facing selection API. The root facade and `ts.ops`,
+`ts.linalg` and `ts.math` do the same job for operations, as described in
+[Package structure](package-structure.md). A helper no facade re-exports is
+internal — reachable through its own module, not part of the supported
+API — whatever it is called.
+
+**A leading underscore must not be what makes that decision.** It is a weak
+convention, and nothing here relies on it to mark the boundary. Underscores
+are kept for state no caller may touch.
+
+From those two statements:
+
+- **Internal functions and methods still get clear, descriptive names**, to
+  the same standard as public ones.
+- **An underscore is not a substitute for a precise name.** `_view` said only
+  "not yours"; `tensor_to_logical_array` — the Tensor-to-native-array
+  boundary in the NumPy and CUDA `conversion` modules — says what the call
+  returns.
+- **Say in the docstring when a function or method is internal.** Someone
+  reading the function is not reading the facade and cannot see the re-export
+  surface, so the constraint has to be stated where they are.
+- **Renaming an internal helper does not widen the API.** The facades decide
+  the surface and a rename does not change what they export, so clarity costs
+  nothing.
+- **Do not re-export an internal helper** unless the project intends to
+  support it as public API. A re-export is a commitment to the name, the
+  signature and the behaviour.
+
+Helpers that still begin with an underscore keep their names; the rule governs
+what an underscore is allowed to mean, not a renaming sweep.
+
 ## Execution requirements
 
 > **Status: implemented for `+`, `-`, `*`, `/` and `**`, and for `**`'s two
