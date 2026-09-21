@@ -26,10 +26,11 @@ def sqrt(
     through the PTX conversion first keeps the operand, and the root is then
     taken in binary64.
 
-    Rounding that binary64 root back down is *exact* for square root, so no
-    dedicated binary32 PTX root instruction is needed: binary64 carries 53
-    significand bits and square root needs only ``2p + 2 = 50`` for the
-    second rounding to agree with rounding the true root directly. Unlike
+    Narrowing that binary64 root back down yields the *correctly rounded*
+    binary32 result. The conversion still rounds; what it does not do is
+    disagree with rounding the true root directly, because binary64 carries
+    53 significand bits and square root needs only ``2p + 2 = 50`` for the
+    two roundings to agree. No binary32 PTX root instruction is needed. Unlike
     abs, the narrowing also cannot lose a subnormal, because the square root
     of even the smallest binary32 subnormal is a normal number.
 

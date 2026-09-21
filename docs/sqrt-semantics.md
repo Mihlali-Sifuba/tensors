@@ -116,14 +116,15 @@ subnormal.
 That asymmetry decides the CUDA implementation. `cupy.sqrt` reads a binary32
 operand with flush-to-zero in force and reports the root of a subnormal as
 zero, so the operand is widened through the PTX conversion in
-`ieee32.py` first and the root is taken in binary64. Rounding that binary64
-root back down is then **exact**, and no dedicated binary32 PTX square-root
-instruction is needed: binary64 carries 53 significand bits, and square root
-needs only `2p + 2 = 50` of them for the second rounding to agree with
-rounding the true root directly. This was not assumed — it was measured
-against the independent reference of §5 over adversarial operands chosen so
-that their true roots sit as close as possible to a `float32` rounding
-boundary.
+`ieee32.py` first and the root is taken in binary64. Narrowing that binary64
+root back down then yields the **correctly rounded binary32 result** — the
+conversion itself still rounds; what it does not do is disagree with
+rounding the true root directly. No dedicated binary32 PTX square-root
+instruction is therefore needed: binary64 carries 53 significand bits, and
+square root needs only `2p + 2 = 50` of them for those two roundings to
+agree. This was not assumed — it was measured against the independent
+reference of §5 over adversarial operands chosen so that their true roots sit
+as close as possible to a `float32` rounding boundary.
 
 ## 2. Where it executes
 

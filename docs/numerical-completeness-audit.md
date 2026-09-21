@@ -467,8 +467,15 @@ Domain violations in the elementary functions **raise**, identically on all
 three backends:
 
 ```
-log(0) log(-1) sqrt(-1) arcsin(2) arccosh(0) arctanh(1) sin(inf)  -> ValueError
+log(0) log(-1) arcsin(2) arccosh(0) arctanh(1) sin(inf)  -> ValueError
 ```
+
+**Corrected 2026-09-21.** `sqrt(-1)` was in that list when this finding was
+written and is no longer: forward `sqrt` now returns `nan`, and
+[sqrt-semantics.md](sqrt-semantics.md) §1.4 specifies it as a value rather
+than a domain error. That settles the question for `sqrt` alone and **leaves
+this finding open** for every function still listed above — the package-wide
+trapping policy is still unstated, which is what S-3 is about.
 
 Arithmetic and exponentiation went the other way: D2 made every exceptional
 value a **result**, explicitly so that no host synchronisation is needed to
@@ -484,9 +491,21 @@ currently **0 disagreements** — a good baseline to specify against.
 
 ### S-4 — Signed zero is unspecified outside arithmetic
 
-`ts.sign(-0.0)` returns `0.0` on all three backends. Whether that should be
-`-0.0`, `+0.0` or `0` is a specification question that has not been asked.
-The same applies to `abs(-0.0)`, `max(-0.0, 0.0)` and `sum([-0.0, -0.0])`.
+**Corrected 2026-09-21; narrowed, not closed.** When this finding was written
+nothing outside arithmetic said what a signed zero should produce. Three
+operations have since been specified and are no longer examples of it:
+
+- `sign(-0.0)` and `abs(-0.0)` return canonical `+0.0`, required by
+  [sign-semantics.md](sign-semantics.md) §1.3 and
+  [abs-semantics.md](abs-semantics.md) §1.3.
+- `sqrt(-0.0)` returns `-0.0`, required by
+  [sqrt-semantics.md](sqrt-semantics.md) §1.3, which keeps the sign
+  deliberately because IEEE 754 defines it that way for a root.
+
+That those three do not agree with each other is the point: each was decided
+on its own operation's terms. **The finding stands for everything else** —
+`max(-0.0, 0.0)`, `sum([-0.0, -0.0])`, the reductions and the comparison and
+selection families still have no stated rule.
 
 ### S-5 — No specification for the adjacent surface
 
