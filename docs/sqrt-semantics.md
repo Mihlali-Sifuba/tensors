@@ -5,11 +5,20 @@ The forward numerical contract for `ts.sqrt`. It follows
 as the third operation migrated off "whatever the Python backend happens to
 do" and onto a written specification that every backend must meet exactly.
 
-Scope is deliberately narrow: **forward `sqrt` only**. Differentiation — the
-`sqrt_gradient` path, `execute_sqrt_gradient`, `Sqrt.backward` and
-`Sqrt.backward_graph` — is outside this milestone and unchanged. Nothing here
-states a derivative rule, and the derivative's own domain error at zero is
-untouched.
+Scope, stated exactly. This document governs:
+
+- the **forward** result (sections 1 to 5);
+- the **first-order VJP**, `Sqrt.backward` and `execute_sqrt_gradient`
+  (section 6);
+- the **graph-built first-order VJP**, `Sqrt.backward_graph` and the
+  internal `SqrtVJP` operation, which must agree with section 6 in every
+  respect (section 7);
+- the **higher-order regions and boundaries** named in section 8, and only
+  those.
+
+It does not govern any other operation's gradient, and it does not claim
+that autodiff through `sqrt` is specified beyond the regions section 8
+names.
 
 ## 1. The contract
 
@@ -189,3 +198,131 @@ rational rather than through an intermediate format. The result is accepted
 only when both endpoints round to the same representable value; otherwise the
 bracket is tightened and the evaluation repeats. No Python, NumPy or CUDA
 square root takes part in producing an expected value.
+
+## 6. The first-order VJP
+
+For an upstream gradient `g` and the primal input `x`, the VJP is
+`g / (2 * sqrt(x))`. Unlike [sign](sign-semantics.md#6-the-first-order-vjp)
+and [abs](abs-semantics.md#6-the-first-order-vjp) this is arithmetic rather
+than routing, so the contract has to say **in what order and in what
+precision** it is evaluated.
+
+### 6.1 The evaluation order is part of the contract
+
+Elementwise, in the **declared dtype**:
+
+```
+root        = correctly_rounded_sqrt(x)
+denominator = correctly_rounded_multiply(2, root)
+result      = correctly_rounded_divide(g, denominator)
+```
+
+Each of those three steps rounds in the declared dtype. A `float32` VJP is
+**not** evaluated in binary64 and narrowed once at the end: that would give
+a different, more accurate answer than the specified sequence, and a
+specification that does not say which is meant is not a specification.
+
+`correctly_rounded_sqrt` is [section 1.2](#12-correct-rounding) of this
+document; the multiplication and the division are the correctly rounded
+operations of [arithmetic-semantics.md](arithmetic-semantics.md).
+
+### 6.2 Exceptional primals
+
+| `x` | result |
+| --- | --- |
+| `> 0` | the three steps above |
+| `+0.0` or `-0.0` | **raises** `ValueError: sqrt derivative is undefined at zero` |
+| negative | `nan` |
+| `nan` | `nan` |
+
+A negative primal is a **value**, consistent with
+[section 1.4](#14-negative-operands-do-not-raise): the root is NaN and NaN
+carries through the remaining two steps, so no backend inspects operand
+values to find it and no host synchronisation is needed for it.
+
+Only the zero primal raises, and both signed zeros do.
+
+### 6.3 Subnormals
+
+A subnormal primal is nonzero, so it takes the ordinary path rather than
+raising — the same distinction [sign's VJP](sign-semantics.md#63-the-one-permitted-device-synchronisation)
+has to make, and for the same reason: on CUDA a binary32 subnormal compares
+equal to zero natively, so the zero test runs on the widened operand.
+
+A subnormal **upstream gradient** reaches the division intact, and the
+result of the division may itself be subnormal. On CUDA the doubling and
+the division therefore use `ieee32.apply`, the same round-to-nearest PTX
+instructions the arithmetic contract uses; ordinary CuPy binary32
+operations would flush at both points.
+
+### 6.4 Shape, dtype and residency
+
+- `grad.shape` must equal `value.shape`, and `grad.dtype` must equal
+  `value.dtype`; both are checked in `Sqrt.backward` and raise `ValueError`.
+- The result has `value`'s shape and dtype.
+- Only `float32` and `float64` reach here, because only those may require
+  gradients. No integer differentiation is defined.
+- Both operands and the result are validated resident on the selected
+  backend. No workload threshold applies and there is no Python-reference
+  fallback; a declining kernel raises `BackendOperationUnsupportedError`.
+
+## 7. The graph-built VJP
+
+`Sqrt.backward_graph` records the VJP as a graph vertex through the internal
+`SqrtVJP` operation. For the same operands,
+
+```python
+ts.grad(output, value, create_graph=False)
+ts.grad(output, value, create_graph=True).data
+```
+
+agree in value, NaN classification, signed zero, dtype, shape,
+selected-backend residency and domain errors.
+
+The previous implementation read the materialised host values to decide the
+zero domain and then built `grad / (2 * sqrt(x))` from public operations.
+The expression was differentiable, but the **domain check was not part of
+it**: it was taken once, at graph-build time, from the values present then.
+A graph built over positive values and replayed onto a zero primal would not
+have raised. Recording `SqrtVJP` carries the check into the replay.
+
+`SqrtVJP` is internal. No facade re-exports it, and it is not public API.
+
+## 8. Higher-order regions
+
+| region | rule |
+| --- | --- |
+| `x > 0` | the VJP is genuinely differentiable, and higher derivatives follow from the graph |
+| `x` is zero | the first VJP raises, so no higher derivative exists to take |
+| negative `x` and NaN `x` | the first VJP is NaN and NaN propagates; nothing falls back to Python |
+
+The two partial derivatives of the first VJP are kept apart. With respect to
+the **upstream gradient** the VJP is linear, so that partial is
+`1 / (2 * sqrt(x))` scaled by the outer gradient — this operation applied
+again. With respect to the **primal** it is `-g / (4 * x * sqrt(x))`, built
+from the governed operations so that any further derivative follows from the
+graph rather than from another hand-written rule.
+
+One implementation note that is easy to get wrong: the minus sign in that
+second partial is carried by the scalar rather than by negating the
+numerator. `negate` has not been migrated, so it still applies a
+workload threshold and answers a small tensor with Python storage, which the
+following division then rejects as a residency mismatch. A higher-order rule
+may only be built from operations whose execution is already governed.
+
+### 8.1 A limit on third and higher order, measured here
+
+The **second** derivative is available on every backend. **Third** order and
+beyond currently work on the Python backend only, and the cause is outside
+this operation: differentiating that far reaches `multiply`'s own VJP, which
+routes through `sum_products_to_shape` with an operand that a
+still-unmigrated operation answered with Python storage, and the residency
+check rejects it.
+
+This was measured, not inferred, and it is not a `sqrt` defect: a plain
+``v * v * v`` third derivative fails identically on NumPy with no `sqrt`
+anywhere in the expression. It is the same class of defect as the
+creation-kernel declines — a strict dispatcher paired with an unmigrated
+kernel — and it resolves when the arithmetic VJP path's remaining operations
+are migrated. Until then this document claims third order for the Python
+backend only.
