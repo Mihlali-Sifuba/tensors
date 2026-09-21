@@ -5,7 +5,7 @@ from tensors.backend import dispatch as backend_dispatch
 import math
 from typing import TYPE_CHECKING, Any, overload
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
-from tensors.operations.base import Operation
+from tensors.operations.base import Operation, UNARY_DEMAND
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
 
@@ -37,42 +37,138 @@ class Abs(Operation):
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Tensor]:
+        """Route the upstream gradient by the sign of the primal.
+
+        Shape and dtype agreement are Tensor semantics and are settled here;
+        `execute_abs_gradient` owns where the routing runs. See
+        docs/abs-semantics.md section 6.
+        """
         value = inputs[0]
+        _validate_vjp_operands(grad, value)
+        dtype = value.dtype
+        output_shape = value.shape
         return [
             Tensor._from_owned_storage(
-                backend_dispatch.execute_abs_gradient(grad, value),
-                dtype=grad.dtype,
-                shape=value.shape,
+                backend_dispatch.execute_abs_gradient(
+                    grad, value, dtype=dtype, output_shape=output_shape
+                ),
+                dtype=dtype,
+                shape=output_shape,
             )
         ]
 
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP using the chosen zero subgradient."""
-        from tensors.operations._gradient_shaping import (
-            masked_value_graph,
-            zero_like_graph,
-        )
+        """Build the same VJP as a graph vertex, not a frozen host mask.
+
+        The previous implementation read the materialised host values to
+        build two Python masks and combined them arithmetically. That pulled
+        device values to Python, froze the branch decision at the values the
+        graph was built with, and let the arithmetic carry an upstream sign
+        or NaN into the kink. :class:`AbsVJP` records the routing instead
+        and re-executes it.
+        """
+        from tensors.variable import Variable
 
         value = inputs[0]
-        if any(
-            (isinstance(item, float) and math.isnan(item) for item in value.data._data)
-        ):
-            raise ValueError("Higher-order derivatives of abs are undefined at NaN")
-        positive_mask = Tensor(
-            [1.0 if item > 0 else 0.0 for item in value.data._data],
-            dtype=grad.dtype,
-            shape=value.shape,
+        return [Variable._apply_operation(AbsVJP(), (grad, value))]
+
+
+class AbsVJP(Operation):
+    """Internal graph-building first-order VJP for :class:`Abs`.
+
+    This is not public API. No facade re-exports it, and it exists so that
+    `Abs.backward_graph` can record the VJP as a graph vertex rather than
+    materialise masks from host values.
+    """
+
+    __slots__ = ()
+    name = "abs_vjp"
+
+    def forward(self, grad: Tensor, value: Tensor) -> Tensor:
+        """Evaluate the first-order VJP through the ordinary eager path."""
+        return Abs().backward(grad, value, needs_input_grad=UNARY_DEMAND)[0]
+
+    def backward(
+        self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
+    ) -> list[Tensor]:
+        """Differentiate the routed VJP.
+
+        With respect to the **upstream gradient** the VJP is the same
+        routing again: it passes the outer gradient through where the primal
+        is positive and negates it where the primal is negative. So it is
+        evaluated with this same operation.
+
+        With respect to the **primal** the VJP is locally constant away from
+        the kink, so that partial is zero, NaN where the primal is NaN, and
+        undefined exactly at zero. That is the shape of the sign VJP, so it
+        is evaluated by it rather than reasoned about a second time, and its
+        zero error is restated in this operation's terms.
+
+        The kink check belongs only to the primal partial, so when that
+        partial is not requested it is not computed and a gradient with
+        respect to the upstream alone is still returned at a zero primal.
+        """
+        from tensors.operations.elementary.sign import Sign
+
+        need_grad, need_value = needs_input_grad
+        value = inputs[1]
+
+        upstream_partial = None
+        if need_grad:
+            upstream_partial = Abs().backward(
+                outer_grad, value, needs_input_grad=UNARY_DEMAND
+            )[0]
+
+        primal_partial = None
+        if need_value:
+            try:
+                primal_partial = Sign().backward(
+                    outer_grad, value, needs_input_grad=UNARY_DEMAND
+                )[0]
+            except ValueError as error:
+                raise ValueError(
+                    "abs second derivative is undefined at zero"
+                ) from error
+
+        return [upstream_partial, primal_partial]
+
+    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        """Build that higher-order rule as graph vertices."""
+        from tensors.operations.elementary.sign import SignVJP
+        from tensors.variable import Variable
+
+        need_grad, need_value = needs_input_grad
+        value = inputs[1]
+
+        upstream_partial = None
+        if need_grad:
+            upstream_partial = Variable._apply_operation(AbsVJP(), (outer_grad, value))
+
+        primal_partial = None
+        if need_value:
+            try:
+                primal_partial = Variable._apply_operation(
+                    SignVJP(), (outer_grad, value)
+                )
+            except ValueError as error:
+                raise ValueError(
+                    "abs second derivative is undefined at zero"
+                ) from error
+
+        return [upstream_partial, primal_partial]
+
+
+def _validate_vjp_operands(grad: Tensor, value: Tensor) -> None:
+    """Hold the upstream gradient to the primal's shape and dtype."""
+    if grad.shape != value.shape:
+        raise ValueError(
+            f"Gradient shape {grad.shape} does not match value shape {value.shape}"
         )
-        negative_mask = Tensor(
-            [1.0 if item < 0 else 0.0 for item in value.data._data],
-            dtype=grad.dtype,
-            shape=value.shape,
+    if grad.dtype is not value.dtype:
+        raise ValueError(
+            f"Gradient dtype {grad.dtype.name} does not match value dtype "
+            f"{value.dtype.name}"
         )
-        return [
-            masked_value_graph(grad, positive_mask)
-            - masked_value_graph(grad, negative_mask)
-            + zero_like_graph(value)
-        ]
 
 
 @overload

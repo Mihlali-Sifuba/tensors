@@ -415,13 +415,37 @@ class AbsoluteValueTests(unittest.TestCase):
         self.assertEqual(result.tolist(), [2.0, 0.0, 3.0, 4.0])
 
     def test_abs_uses_zero_subgradient_at_zero(self):
+        """docs/abs-semantics.md section 6: the kink routes to +0.0."""
         value = ts.Variable([-2.0, 0.0, 3.0])
+
+        first = ts.grad(ts.sum(ts.abs(value)), value, create_graph=True)
+
+        self.assertEqual(first.data.tolist(), [-1.0, 0.0, 1.0])
+
+    def test_abs_second_derivative_is_zero_away_from_the_kink(self):
+        """docs/abs-semantics.md section 8."""
+        value = ts.Variable([-2.0, 3.0])
 
         first = ts.grad(ts.sum(ts.abs(value)), value, create_graph=True)
         second = ts.grad(ts.sum(first), value)
 
-        self.assertEqual(first.data.tolist(), [-1.0, 0.0, 1.0])
-        self.assertEqual(second.tolist(), [0.0, 0.0, 0.0])
+        self.assertEqual(second.tolist(), [0.0, 0.0])
+
+    def test_abs_second_derivative_raises_at_the_kink(self):
+        """docs/abs-semantics.md section 8.
+
+        The subgradient chosen at zero is a choice, not a limit, so it has
+        no derivative there. Asking for one raises rather than reporting a
+        zero that the chosen subgradient does not justify.
+        """
+        value = ts.Variable([-2.0, 0.0, 3.0])
+
+        first = ts.grad(ts.sum(ts.abs(value)), value, create_graph=True)
+
+        with self.assertRaisesRegex(
+            ValueError, "abs second derivative is undefined at zero"
+        ):
+            ts.grad(ts.sum(first), value)
 
     def test_abs_propagates_nan_to_value_and_gradient(self):
         value = ts.Variable([math.nan])
@@ -432,11 +456,18 @@ class AbsoluteValueTests(unittest.TestCase):
         self.assertTrue(math.isnan(result.data.item()))
         self.assertTrue(math.isnan(value.grad.item()))
 
-    def test_abs_rejects_higher_derivative_at_nan(self):
+    def test_abs_propagates_nan_through_the_graph_built_first_vjp(self):
+        """docs/abs-semantics.md section 6: NaN propagates, it does not raise.
+
+        The graph-built first VJP used to reject a NaN primal outright. The
+        specification makes NaN a classification that flows through, and
+        keeps a raise only for the second derivative at the kink.
+        """
         value = ts.Variable([math.nan])
 
-        with self.assertRaisesRegex(ValueError, "undefined at NaN"):
-            ts.grad(ts.abs(value), value, create_graph=True)
+        produced = ts.grad(ts.abs(value), value, create_graph=True)
+
+        self.assertTrue(math.isnan(produced.data.item()))
 
 
 if __name__ == "__main__":

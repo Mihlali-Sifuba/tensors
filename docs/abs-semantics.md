@@ -5,9 +5,19 @@ The forward numerical contract for `ts.abs`. It follows
 "whatever the Python backend happens to do" and onto a written specification
 that every backend must meet exactly.
 
-Scope is deliberately narrow: **forward `abs` only**. Differentiation — the
-`abs_gradient` path, `Abs.backward` and `Abs.backward_graph` — is outside this
-milestone and unchanged. Nothing here states a derivative rule.
+Scope, stated exactly. This document governs:
+
+- the **forward** result (sections 1 to 5);
+- the **first-order VJP**, `Abs.backward` and `execute_abs_gradient`
+  (section 6);
+- the **graph-built first-order VJP**, `Abs.backward_graph` and the internal
+  `AbsVJP` operation, which must agree with section 6 in every respect
+  (section 7);
+- the **higher-order regions and boundaries** named in section 8, and only
+  those.
+
+It does not govern any other operation's gradient, and it does not claim that
+autodiff through `abs` is specified beyond the regions section 8 names.
 
 ## 1. The contract
 
@@ -182,3 +192,105 @@ The specification is testable from the tables alone. Expectations in the test
 suite are literal, derived from this document, and are never obtained by
 running the Python, NumPy or CUDA backend and recording what it returned. No
 backend is a reference implementation for `abs`.
+
+## 6. The first-order VJP
+
+For an upstream gradient `g` and the primal input `x`, elementwise:
+
+| `x` | result |
+| --- | --- |
+| `> 0` | `g` |
+| `< 0` | `-g` |
+| `+0.0` or `-0.0` | canonical `+0.0` |
+| `nan` | `nan` |
+
+Unlike [sign](sign-semantics.md#6-the-first-order-vjp), **no input raises**.
+The kink uses a chosen subgradient of zero, so there is no domain error, no
+reduction and no device synchronisation anywhere in this VJP.
+
+### 6.1 The kink does not depend on the upstream gradient
+
+This is **routing, not multiplication**. At `x == 0` the result is canonical
+`+0.0` whatever `g` is:
+
+| `g` at `x == 0` | result |
+| --- | --- |
+| negative | `+0.0`, never `-0.0` |
+| `±inf` | `+0.0`, never `nan` |
+| `nan` | `+0.0`, never `nan` |
+
+Materialising a derivative and multiplying — which the array backends used
+to do — gives `-0.0` for a negative upstream and NaN for an infinite or NaN
+one, neither of which the Python reference produced. Selecting a literal
+zero is what makes the three backends agree.
+
+### 6.2 Subnormals
+
+A subnormal primal is nonzero and selects its branch normally: a positive
+subnormal takes the `g` branch and a negative subnormal takes the `-g`
+branch.
+
+A subnormal **upstream** survives the active branch unchanged, or negated on
+the negative branch. That second case is the one with teeth on CUDA, and the
+measurement is narrower than it looks: a `where` selection preserves a
+binary32 subnormal, because selecting is not arithmetic, but **negating**
+one does not — `-g` on a native binary32 subnormal was measured returning
+`∓0.0`. The negative branch is exactly where this VJP negates, so the CUDA
+kernel widens through `ieee32.widen`, routes in binary64, and narrows back
+through `ieee32.narrow`.
+
+### 6.3 Shape, dtype and residency
+
+- `grad.shape` must equal `value.shape`, and `grad.dtype` must equal
+  `value.dtype`; both are checked in `Abs.backward` and raise `ValueError`.
+- The result has `value`'s shape and dtype.
+- Only `float32` and `float64` reach here, because only those may require
+  gradients. No integer differentiation is defined.
+- Both operands and the result are validated resident on the selected
+  backend. No workload threshold applies and there is no Python-reference
+  fallback; a declining kernel raises `BackendOperationUnsupportedError`.
+
+## 7. The graph-built VJP
+
+`Abs.backward_graph` records the VJP as a graph vertex through the internal
+`AbsVJP` operation. For the same operands,
+
+```python
+ts.grad(output, value, create_graph=False)
+ts.grad(output, value, create_graph=True).data
+```
+
+agree in value, NaN classification, signed zero, dtype, shape,
+selected-backend residency and domain behaviour.
+
+`backward_graph` reads no host values. The previous implementation built two
+Python masks from `value.data._data` and combined them arithmetically; that
+pulled device values to Python, froze the branch decision at the values the
+graph was built with, and let the arithmetic carry an upstream sign or NaN
+into the kink. A graph built over positive values and replayed over
+negative, zero or subnormal values must answer for the values it is replayed
+with.
+
+`AbsVJP` is internal. No facade re-exports it, and it is not public API.
+
+## 8. Higher-order regions
+
+| region | rule |
+| --- | --- |
+| `x > 0` and `x < 0` | the second derivative with respect to `x` is zero |
+| `x` is zero | the first VJP is the chosen subgradient `+0.0`; a **derivative of that choice** with respect to `x` does not exist and **raises** `ValueError: abs second derivative is undefined at zero` |
+| `x` is NaN | the first VJP is NaN, and NaN propagates rather than becoming a finite derivative |
+
+The subgradient at the kink is a choice rather than a limit, so it has no
+derivative there; reporting zero would claim more than the choice justifies.
+
+The two partial derivatives of the first VJP behave differently, and
+`AbsVJP` keeps them apart. With respect to the **upstream gradient** the VJP
+is the same routing again, so `AbsVJP` differentiates into itself. With
+respect to the **primal** it is locally constant, which is the shape of the
+sign VJP, so that partial is evaluated by it — including its undefinedness
+at zero, restated in this operation's terms.
+
+That kink check belongs only to the primal partial. `needs_input_grad` is
+respected, so a gradient requested with respect to the upstream alone is
+still returned at a zero primal.
