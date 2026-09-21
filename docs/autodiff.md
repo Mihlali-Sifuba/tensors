@@ -441,16 +441,33 @@ Production behavior includes explicit domain rules:
   real derivative is undefined there.
 - `arctanh(x)` requires `-1 < x < 1`.
 - `sign(x)` has a zero derivative away from zero and raises when differentiated
-  at zero, where the function is discontinuous.
+  at zero, where the function is discontinuous. Its VJP is **routed**: the
+  result is canonical `+0.0` whatever the upstream gradient is, so a negative
+  upstream does not make it `-0.0` and an infinite or NaN upstream does not
+  make it NaN. A NaN primal gives a NaN derivative.
+  ([sign-semantics.md](sign-semantics.md) section 6.)
+- `abs(x)` uses a zero subgradient at the kink, and its VJP is likewise
+  routed rather than multiplied, so the kink is canonical `+0.0` for any
+  upstream. The second derivative is zero away from the kink and raises at
+  it, because the subgradient there is a choice rather than a limit.
+  ([abs-semantics.md](abs-semantics.md) sections 6 and 8.)
 - `sqrt(x)` accepts `x >= 0`, but its derivative raises at `x == 0` because the
-  finite real derivative is undefined there.
+  finite real derivative is undefined there. A **negative** primal is not an
+  error in the VJP: it gives NaN, matching the forward rule. The VJP's
+  evaluation order is specified — root, then doubling, then division, each
+  rounding in the declared dtype.
+  ([sqrt-semantics.md](sqrt-semantics.md) section 6.)
 - A differentiable tensor exponent in `base ** exponent` requires a positive
   base. A constant integer-valued exponent can differentiate negative bases.
 - `norm` and `std` use a zero first-order subgradient at a zero-magnitude
   reduction group. Their higher derivatives raise there.
 - `variance` is the population variance. It remains smooth at zero variance,
   where both its value and first derivative are zero.
-- `relu` uses the conventional zero subgradient at zero.
+- `relu` uses the conventional zero subgradient at zero. Its VJP is routed
+  rather than multiplied, so an infinite or NaN upstream on the inactive
+  side gives canonical `+0.0` rather than NaN. The second derivative is zero
+  away from the kink and raises at it.
+  ([relu-semantics.md](relu-semantics.md) sections 6 and 8.)
 - `min` and `max` divide the first-order gradient equally among tied extrema.
   Higher-order derivatives are not provided because selection changes are
   nondifferentiable.
@@ -465,6 +482,21 @@ Production behavior includes explicit domain rules:
 These boundaries are part of the API. Returning an explicit error is safer
 than manufacturing a gradient at a point where the mathematics does not define
 one.
+
+Four of them — `sign`, `abs`, `sqrt` and `relu` — now have their VJPs
+specified in their own semantics documents, which govern the first-order
+VJP, the graph-built VJP and the named higher-order regions. Two properties
+those documents share are worth stating once here, because they were
+previously inconsistent between backends:
+
+- **A VJP that discards its upstream gradient routes rather than
+  multiplies.** Multiplying by a materialised zero lets a negative upstream
+  leave `-0.0` and an infinite or NaN upstream leave NaN on a branch the
+  derivative says contributes nothing. Selecting a literal zero does not.
+- **`backward_graph` records the VJP rather than freezing it.** None of the
+  four reads host values to build a mask, so a compiled graph replayed with
+  values that change branch answers for the values it is replayed with, and
+  a domain error that the replayed values deserve is still raised.
 
 ## Mutation and recomputation
 

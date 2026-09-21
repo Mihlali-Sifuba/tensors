@@ -26,14 +26,30 @@ governed by a numerical specification:      9   (+, -, *, /, **, sign, abs, sqrt
 ungoverned:                                51
 ```
 
-`sign`, `abs`, `sqrt` and `relu` are governed for their **forward** results
-only ([sign-semantics.md](sign-semantics.md),
+`sign`, `abs`, `sqrt` and `relu` are governed by their own documents
+([sign-semantics.md](sign-semantics.md),
 [abs-semantics.md](abs-semantics.md),
 [sqrt-semantics.md](sqrt-semantics.md),
-[relu-semantics.md](relu-semantics.md)); their differentiation is still
-ungoverned, and they are counted here as governed on that basis. The audit
+[relu-semantics.md](relu-semantics.md)). The audit
 was originally written at five governed and fifty-five ungoverned; only the
 counts have been restated, not the findings that rest on them.
+
+**Forward and differentiation coverage are counted separately**, because
+they are separate contracts and a count that merges them would hide which
+one is missing. These four now have both; the other five governed
+operations have forward coverage only. Migrating a VJP adds no public
+operation function, so the count of sixty is unchanged by it.
+
+```
+public operation functions:                60
+forward governed:                           9   (+, -, *, /, **, sign, abs, sqrt, relu)
+first-order VJP governed:                   4   (sign, abs, sqrt, relu)
+```
+
+For those four, "VJP governed" means the first-order VJP, the graph-built
+VJP and the higher-order regions each document names — not that autodiff
+through them is specified without limit. `sqrt` records one measured limit
+of its own in [section 8.1](sqrt-semantics.md#81-a-limit-on-third-and-higher-order-measured-here).
 
 Within its scope the specification is in good order: the D1–D7 and S3
 milestones are implemented, tested against validated high-precision
@@ -369,6 +385,41 @@ rather than for subnormal survival, and the second row above is a defect the
 D-1 reproducer would never have surfaced.
 
 `cupy.sqrt` on binary64 was correctly rounded on all 2,002 operands measured.
+
+**The four VJPs re-measured during their own migration (2026-09-21).** Two
+findings, neither of which the forward reproducers could reach.
+
+*A cross-backend disagreement in the VJPs themselves.* The Python kernels
+routed and returned a literal zero where the array kernels materialised a
+derivative and multiplied. At a finite nonzero primal the sign VJP gave:
+
+```
+g = -2.0   ->  python +0.0   numpy -0.0   cuda -0.0
+g = ±inf   ->  python +0.0   numpy  nan   cuda  nan
+g = nan    ->  python +0.0   numpy  nan   cuda  nan
+```
+
+`abs` and `relu` disagreed the same way on their inactive branches. All four
+specifications settle it in favour of routing, and the three backends now
+agree.
+
+*Flush-to-zero reaches comparisons, not only arithmetic.* This is the part
+D-1's reproducer could not show, because it only ever measured values. On
+native binary32:
+
+```
+subnormal == 0.0   ->  True     (so the sign and sqrt VJPs would raise
+                                 "undefined at zero" for a nonzero primal)
+subnormal >  0.0   ->  False    (so the whole positive subnormal band would
+                                 be routed to ReLU's inactive branch)
+-g for subnormal g ->  ∓0.0     (so abs would lose a subnormal upstream on
+                                 its negation branch, but not on the other)
+```
+
+Each is corrected by widening the operand that the *predicate* or the
+negation reads. Selection itself needs no protection: a `where` preserves a
+subnormal, which is why ReLU's VJP widens only its primal and leaves the
+upstream native.
 
 **`relu` re-measured during its own migration (2026-09-21).** The same cause
 again, on both sides of the format boundary, and it reaches further than the

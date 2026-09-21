@@ -6,11 +6,20 @@ and [sqrt-semantics.md](sqrt-semantics.md) as the fourth operation migrated
 off "whatever the Python backend happens to do" and onto a written
 specification that every backend must meet exactly.
 
-Scope is deliberately narrow: **forward `relu` only**. Differentiation — the
-`relu_gradient` kernels, `execute_relu_gradient`, `ReLU.backward` and
-`ReLU.backward_graph` — is outside this milestone and unchanged. In
-particular this document says nothing about the derivative at zero or about
-the gradient's NaN behaviour; both remain as they were and ungoverned.
+Scope, stated exactly. This document governs:
+
+- the **forward** result (sections 1 to 5);
+- the **first-order VJP**, `ReLU.backward` and `execute_relu_gradient`
+  (section 6);
+- the **graph-built first-order VJP**, `ReLU.backward_graph` and the
+  internal `ReLUVJP` operation, which must agree with section 6 in every
+  respect (section 7);
+- the **higher-order regions and boundaries** named in section 8, and only
+  those.
+
+It does not govern any other operation's gradient, and it does not claim
+that autodiff through `relu` is specified beyond the regions section 8
+names.
 
 ## 1. The contract
 
@@ -160,3 +169,107 @@ the Python, NumPy or CUDA backend and recording what it returned. No backend
 is a reference implementation for `relu`, and the fused path is checked
 against the specification rather than only against the eager path, so a
 defect shared by both cannot pass.
+
+## 6. The first-order VJP
+
+For an upstream gradient `g` and the primal input `x`, elementwise:
+
+| `x` | result |
+| --- | --- |
+| `> 0` | `g` |
+| `<= 0`, including `+0.0`, `-0.0` and `-inf` | canonical `+0.0` |
+| `nan` | `nan` |
+
+This is the conventional zero subgradient at the kink. Like
+[abs](abs-semantics.md#6-the-first-order-vjp) and unlike
+[sign](sign-semantics.md#6-the-first-order-vjp) and
+[sqrt](sqrt-semantics.md#62-exceptional-primals), **no input raises**, so
+there is no reduction and no device synchronisation anywhere in this VJP.
+
+### 6.1 The inactive side does not depend on the upstream gradient
+
+This is **routing, not multiplication**. Where the primal is not positive
+the result is canonical `+0.0` whatever `g` is:
+
+| `g` on the inactive side | result |
+| --- | --- |
+| negative | `+0.0`, never `-0.0` |
+| `±inf` | `+0.0`, never `nan` |
+| `nan` | `+0.0`, never `nan` |
+
+Multiplying by a materialised zero derivative — which the array backends
+and the old graph path both did — turns an infinite or NaN upstream into
+NaN on a branch the derivative says contributes nothing. Selecting a
+literal zero is what makes the three backends agree.
+
+### 6.2 Subnormals
+
+A positive subnormal primal is positive, so it is **active** and passes `g`
+through. A negative subnormal is inactive and gives `+0.0`.
+
+That first rule is the one with teeth on CUDA, and it is the predicate
+rather than the arithmetic that needs protecting. Measured on this
+toolchain, `x > 0` is false for *every* positive binary32 subnormal — the
+whole band, not just its lower edge — because flush-to-zero reaches the
+comparison's operand. The CUDA kernel therefore widens the primal through
+`ieee32.widen` before comparing.
+
+The upstream gradient is deliberately **not** widened. This VJP only ever
+selects it, and a selection is not arithmetic, so a subnormal upstream
+passes through a native `where` unchanged. That is what separates this
+kernel from the abs VJP, which negates on one branch and so must route in
+binary64.
+
+### 6.3 Shape, dtype and residency
+
+- `grad.shape` must equal `value.shape`, and `grad.dtype` must equal
+  `value.dtype`; both are checked in `ReLU.backward` and raise `ValueError`.
+- The result has `value`'s shape and dtype.
+- Only `float32` and `float64` reach here, because only those may require
+  gradients. No integer differentiation is defined.
+- Both operands and the result are validated resident on the selected
+  backend. No workload threshold applies and there is no Python-reference
+  fallback; a declining kernel raises `BackendOperationUnsupportedError`.
+
+## 7. The graph-built VJP
+
+`ReLU.backward_graph` records the VJP as a graph vertex through the
+internal `ReLUVJP` operation. For the same operands,
+
+```python
+ts.grad(output, value, create_graph=False)
+ts.grad(output, value, create_graph=True).data
+```
+
+agree in value, NaN classification, signed zero, dtype, shape,
+selected-backend residency and domain behaviour.
+
+`backward_graph` reads no host values. The previous implementation built a
+Python mask from the materialised values and multiplied by it, which pulled
+device values to Python, froze the branch decision at the values the graph
+was built with, and carried an infinity or a NaN into the inactive side. A
+graph built over positive values and replayed over negative, zero or
+subnormal values must answer for the values it is replayed with.
+
+`ReLUVJP` is internal. No facade re-exports it, and it is not public API.
+
+## 8. Higher-order regions
+
+| region | rule |
+| --- | --- |
+| `x > 0` and `x < 0` | the second derivative with respect to `x` is zero |
+| `x` is zero | the first VJP is the chosen subgradient `+0.0`; a **derivative of that choice** with respect to `x` does not exist and **raises** `ValueError: relu second derivative is undefined at zero` |
+| `x` is NaN | the first VJP is NaN, and NaN propagates rather than becoming a finite derivative |
+
+The subgradient at the kink is a choice rather than a limit, so it has no
+derivative there.
+
+`ReLUVJP` keeps the two partials apart. With respect to the **upstream
+gradient** the VJP is the same routing again, so it differentiates into
+itself. With respect to the **primal** it is locally constant, which is the
+shape of the sign VJP, so that partial is evaluated by it — including its
+undefinedness at zero, restated in this operation's terms.
+
+That kink check belongs only to the primal partial. `needs_input_grad` is
+respected, so a gradient requested with respect to the upstream alone is
+still returned at a zero primal.

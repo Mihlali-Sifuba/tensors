@@ -993,19 +993,19 @@ class GradientBoundariesAndExistingConventions(unittest.TestCase):
                                     bits32(got), bits32(reference), backend
                                 )
 
-    def test_a_zero_gradients_sign_differs_across_backends(self):
-        """An open question, recorded rather than decided.
+    def test_a_zero_gradients_sign_now_agrees_across_backends(self):
+        """The open question this test recorded has since been decided.
 
-        ``relu'(x)`` is zero for ``x < 0``, and CUDA forms the VJP as
-        ``upstream * derivative``. With a negative upstream gradient that
-        product is ``-2.0 * 0.0``, which IEEE gives as ``-0.0``. The Python
-        reference returns ``+0.0``.
+        It used to assert the divergence: ``relu'(x)`` is zero for
+        ``x < 0``, CUDA formed the VJP as ``upstream * derivative``, and
+        ``-2.0 * 0.0`` is ``-0.0`` by IEEE while the Python reference
+        returned ``+0.0``. Which sign was correct was audit finding
+        **S-4**, signed zero being unspecified outside arithmetic.
 
-        This predates the conversion fix — it is identical before and after,
-        and neither operand is subnormal — and which sign is correct is
-        audit finding **S-4**, signed zero being unspecified outside
-        arithmetic. The test asserts the magnitude, which is agreed, and
-        records the divergence so it is not mistaken for a regression.
+        docs/relu-semantics.md section 6.1 decides it: the VJP **routes**
+        rather than multiplies, so the inactive side is canonical ``+0.0``
+        on every backend whatever the upstream is. The test now asserts the
+        agreement it once recorded the absence of.
         """
         produced = {}
         for backend in ts.available_backends():
@@ -1016,13 +1016,11 @@ class GradientBoundariesAndExistingConventions(unittest.TestCase):
         for backend, got in produced.items():
             with self.subTest(backend=backend):
                 self.assertEqual(got, 0.0, f"{backend} gave {got!r}")
-
-        signs = {backend: math.copysign(1.0, got) for backend, got in produced.items()}
-        self.assertEqual(signs["python"], 1.0, "the reference returns +0.0")
-        if "cuda" in signs:
-            self.assertEqual(
-                signs["cuda"], -1.0, "CUDA returns -0.0; S-4 has not decided which"
-            )
+                self.assertEqual(
+                    math.copysign(1.0, got),
+                    1.0,
+                    f"{backend} must give canonical +0.0, not -0.0",
+                )
 
 
 @requires_cuda
