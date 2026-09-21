@@ -1,45 +1,40 @@
 """CuPy implementation of the sign function."""
 
 from __future__ import annotations
+import math
 import cupy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
+from typing import TYPE_CHECKING, Any
 from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
+from tensors.backend.cuda.kernels.arithmetic import ieee32
+from tensors.backend.cuda.storage import CudaStorage
+from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
-def sign(value: Tensor, *, dtype: DataType) -> Storage | None:
-    """Run an elementwise unary kernel while preserving public domains."""
-    if dtype.kind == "integer":
-        return None
-    try:
-        values = _working_values(value)
-    except (TypeError, ValueError):
-        return None
-    functions = {
-        "abs": cupy.abs,
-        "sqrt": cupy.sqrt,
-        "exp": cupy.exp,
-        "log": cupy.log,
-        "sin": cupy.sin,
-        "cos": cupy.cos,
-        "tan": cupy.tan,
-        "arcsin": cupy.arcsin,
-        "arccos": cupy.arccos,
-        "arctan": cupy.arctan,
-        "sinh": cupy.sinh,
-        "cosh": cupy.cosh,
-        "arcsinh": cupy.arcsinh,
-        "arccosh": cupy.arccosh,
-        "arctanh": cupy.arctanh,
-        "sign": cupy.sign,
-        "tanh": cupy.tanh,
-    }
+def sign(
+    values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Return device storage at the declared dtype.
+
+    ``cupy.sign`` reads a binary32 operand with flush-to-zero in force, so a
+    subnormal arrives as zero and is classified as zero rather than as ±1.
+    Widening through the PTX conversion first keeps the operand, and the
+    classification then runs in binary64. Narrowing the result back is exact
+    whatever the operand was, because sign only ever produces -1, 0, 1 or NaN.
+    ``float64`` already underflows gradually on the device, and an integer
+    dtype classifies in its own width so a large ``int64`` keeps its value.
+    """
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        result = functions["sign"](values)
-    return _storage(result, dtype=dtype, output_shape=value.shape)
+        if dtype.typecode == "f":
+            result = cupy.sign(ieee32.widen(values))
+        else:
+            result = cupy.sign(values)
+    storage = CudaStorage(result, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("Sign kernel returned an unexpected result size")
+    return storage

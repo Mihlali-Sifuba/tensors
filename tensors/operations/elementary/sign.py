@@ -20,10 +20,20 @@ class Sign(Operation):
     name = "sign"
 
     def forward(self, value: Tensor) -> Tensor:
+        """Classify each element, preserving the operand's dtype and shape.
+
+        The Tensor semantics are settled here — sign changes neither — and
+        `execute_sign` owns where the classification runs. See
+        docs/sign-semantics.md.
+        """
+        dtype = value.dtype
+        output_shape = value.shape
         return Tensor._from_owned_storage(
-            backend_dispatch.execute_sign(value, dtype=value.dtype),
-            dtype=value.dtype,
-            shape=value.shape,
+            backend_dispatch.execute_sign(
+                value, dtype=dtype, output_shape=output_shape
+            ),
+            dtype=dtype,
+            shape=output_shape,
         )
 
     def backward(
