@@ -7,7 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _finite_operands
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 from tensors.backend.numpy.kernels.reductions.stability import _stable_sum_candidate
 
 if TYPE_CHECKING:
@@ -22,9 +22,9 @@ def outer_gradient(
     needs_input_grad: tuple[bool, ...] = (True, True),
 ) -> tuple[Storage | None, Storage | None] | None:
     """Run the requested stable native outer-product VJPs."""
-    upstream = _view(grad).astype(numpy.float64, copy=False)
-    left_values = _view(left).astype(numpy.float64, copy=False)
-    right_values = _view(right).astype(numpy.float64, copy=False)
+    upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
+    left_values = tensor_to_logical_array(left).astype(numpy.float64, copy=False)
+    right_values = tensor_to_logical_array(right).astype(numpy.float64, copy=False)
     if not _finite_operands(upstream, left_values, right_values):
         return None
     need_left, need_right = needs_input_grad

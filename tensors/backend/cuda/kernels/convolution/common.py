@@ -9,7 +9,7 @@ from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _finite_operands
 from tensors.backend.cuda.conversion import _shape_size
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -101,8 +101,12 @@ def _convolution_operands(
     """Return finite convolution operands in the requested working dtype."""
     provider_dtype = cupy.dtype(dtype.name)
     try:
-        input_values = _view(inputs).astype(provider_dtype, copy=False)
-        kernel_values = _view(kernel).astype(provider_dtype, copy=False)
+        input_values = tensor_to_logical_array(inputs).astype(
+            provider_dtype, copy=False
+        )
+        kernel_values = tensor_to_logical_array(kernel).astype(
+            provider_dtype, copy=False
+        )
     except (TypeError, ValueError):
         return None
     if not _finite_operands(input_values, kernel_values):

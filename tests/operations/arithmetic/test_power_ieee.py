@@ -822,7 +822,7 @@ class CudaDoesNotTransferOrSynchronise(ArithmeticTestCase):
         from tensors.backend.loading import _backend_kernel
         import cupy
 
-        from tensors.backend.cuda.conversion import _view
+        from tensors.backend.cuda.conversion import tensor_to_logical_array
 
         for label, base_value, exponent in (
             ("invalid", -2.0, 0.5),
@@ -834,7 +834,7 @@ class CudaDoesNotTransferOrSynchronise(ArithmeticTestCase):
                     base = ts.full((64,), base_value, dtype=ts.float64) + 0.0
                     native = cupy.dtype("float64")
                     storage = _backend_kernel("power")(
-                        _view(base).astype(native, copy=False),
+                        tensor_to_logical_array(base).astype(native, copy=False),
                         native.type(exponent),
                         dtype=ts.float64,
                         output_shape=(64,),

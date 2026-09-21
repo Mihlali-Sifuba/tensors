@@ -5,7 +5,7 @@ import numpy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -21,10 +21,12 @@ def minimum_gradient(
     """Split an elementwise-extremum VJP for the requested operands."""
     need_left, need_right = needs_input_grad
     try:
-        left_values, right_values = numpy.broadcast_arrays(_view(left), _view(right))
+        left_values, right_values = numpy.broadcast_arrays(
+            tensor_to_logical_array(left), tensor_to_logical_array(right)
+        )
     except ValueError:
         return None
-    upstream = _view(grad).astype(numpy.float64, copy=False)
+    upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
     has_nan = numpy.isnan(left_values) | numpy.isnan(right_values)
     ties = left_values == right_values
     left_selected = left_values < right_values

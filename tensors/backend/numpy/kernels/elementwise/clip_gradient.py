@@ -5,7 +5,7 @@ import numpy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -18,8 +18,8 @@ def clip_gradient(
     max_value: int | float | None,
 ) -> Storage | None:
     """Run the clipping VJP with zero boundary subgradients."""
-    values = _view(value).astype(numpy.float64, copy=False)
-    upstream = _view(grad).astype(numpy.float64, copy=False)
+    values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
+    upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
     mask = numpy.ones(value.shape, dtype=bool)
     if min_value is not None:
         mask &= values > min_value

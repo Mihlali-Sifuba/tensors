@@ -5,7 +5,7 @@ import cupy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import tensor_to_logical_array
 from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
@@ -22,7 +22,9 @@ def maximum_gradient(
     """Split an elementwise-extremum VJP for the requested operands."""
     need_left, need_right = needs_input_grad
     try:
-        left_values, right_values = cupy.broadcast_arrays(_view(left), _view(right))
+        left_values, right_values = cupy.broadcast_arrays(
+            tensor_to_logical_array(left), tensor_to_logical_array(right)
+        )
     except ValueError:
         return None
     upstream = _working_values(grad)

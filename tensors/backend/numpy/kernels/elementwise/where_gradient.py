@@ -5,7 +5,7 @@ import numpy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -20,10 +20,12 @@ def where_gradient(
     """Split a selection VJP into the requested left and right terms."""
     need_left, need_right = needs_input_grad
     try:
-        selected = numpy.broadcast_to(_view(condition), grad.shape) != 0
+        selected = (
+            numpy.broadcast_to(tensor_to_logical_array(condition), grad.shape) != 0
+        )
     except ValueError:
         return None
-    upstream = _view(grad).astype(numpy.float64, copy=False)
+    upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
     left = None
     if need_left:
         left = _storage(

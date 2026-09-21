@@ -5,7 +5,7 @@ import cupy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import tensor_to_logical_array
 from tensors.backend.cuda.conversion import _widen
 
 if TYPE_CHECKING:
@@ -18,7 +18,7 @@ def cast_tensor(value: Tensor, *, dtype: DataType) -> Storage | None:
     if dtype.kind == "integer":
         return None
     try:
-        source = _view(value).reshape(-1)
+        source = tensor_to_logical_array(value).reshape(-1)
     except ValueError:
         return None
     if dtype.kind == "integer":

@@ -572,11 +572,11 @@ class TheProviderNoLongerDeclines(unittest.TestCase):
                     base = ts.Tensor(values * 64, dtype=dtype)
                     import numpy
 
-                    from tensors.backend.numpy.conversion import _view
+                    from tensors.backend.numpy.conversion import tensor_to_logical_array
 
                     native = numpy.dtype(dtype.name)
                     storage = numpy_kernels.power(
-                        _view(base).astype(native, copy=False),
+                        tensor_to_logical_array(base).astype(native, copy=False),
                         native.type(exponent),
                         dtype=dtype,
                         output_shape=(64,),

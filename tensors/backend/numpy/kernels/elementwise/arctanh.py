@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -18,7 +18,7 @@ def arctanh(value: Tensor, *, dtype: DataType) -> Storage | None:
     if dtype.kind == "integer":
         return None
     try:
-        values = _view(value).astype(numpy.float64, copy=False)
+        values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
     except (TypeError, ValueError):
         return None
     outside = ~numpy.isnan(values) & ((values <= -1.0) | (values >= 1.0))

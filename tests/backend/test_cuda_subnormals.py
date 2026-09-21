@@ -656,9 +656,11 @@ class TheOtherFiveConversions(unittest.TestCase):
 
         with ts.use_backend("cuda"):
             tensor = ts.Tensor([SMALLEST], dtype=ts.float32)
-            from tensors.backend.cuda.conversion import _view
+            from tensors.backend.cuda.conversion import tensor_to_logical_array
 
-            flushed = cupy.asnumpy(_view(tensor).astype(cupy.float64, copy=False))
+            flushed = cupy.asnumpy(
+                tensor_to_logical_array(tensor).astype(cupy.float64, copy=False)
+            )
         self.assertEqual(
             float(flushed[0]), 0.0, "astype no longer flushes; this test is obsolete"
         )

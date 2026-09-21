@@ -7,7 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _finite_operands
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -25,9 +25,9 @@ def binary_cross_entropy_gradient(
 ) -> tuple[Storage | None, Storage | None] | None:
     """Run the requested binary cross-entropy VJPs."""
     need_prediction, need_target = needs_input_grad
-    values = _view(prediction).astype(numpy.float64, copy=False)
-    targets = _view(target).astype(numpy.float64, copy=False)
-    upstream = _view(grad).astype(numpy.float64, copy=False)
+    values = tensor_to_logical_array(prediction).astype(numpy.float64, copy=False)
+    targets = tensor_to_logical_array(target).astype(numpy.float64, copy=False)
+    upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
     if values.shape != targets.shape:
         return None
     if reduction == "none":

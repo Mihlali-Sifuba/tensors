@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -16,8 +16,8 @@ def reduce_min_gradient(
     grad: Tensor, value: Tensor, axes: tuple[int, ...], *, keepdims: bool
 ) -> Storage | None:
     """Run fused VJPs for reductions with regular native fast paths."""
-    values = _view(value).astype(numpy.float64, copy=False)
-    upstream = _view(grad).astype(numpy.float64, copy=False)
+    values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
+    upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
     expanded_shape = tuple(
         (1 if dimension in axes else size for dimension, size in enumerate(value.shape))
     )

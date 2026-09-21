@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _shape_size
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -23,7 +23,9 @@ def slice_scatter(
     )
     result = cupy.zeros(_shape_size(output_shape), dtype=working_dtype)
     try:
-        values = _view(value).reshape(-1).astype(working_dtype, copy=False)
+        values = (
+            tensor_to_logical_array(value).reshape(-1).astype(working_dtype, copy=False)
+        )
     except ValueError:
         return None
     cupy.add.at(result, indices, values)

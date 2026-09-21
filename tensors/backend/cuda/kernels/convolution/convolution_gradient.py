@@ -9,7 +9,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _finite_operands
 from tensors.backend.cuda.conversion import _shape_size
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import tensor_to_logical_array
 from tensors.backend.cuda.kernels.convolution.common import _convolution_columns
 from tensors.backend.cuda.kernels.convolution.common import _convolution_operands
 from tensors.backend.cuda.kernels.convolution.common import _convolution_storage
@@ -50,7 +50,9 @@ def convolution_gradient(
     if not batched:
         input_values = input_values.reshape((1,) + tuple(input_values.shape))
     try:
-        upstream = _view(grad).astype(cupy.dtype(grad.dtype.name), copy=False)
+        upstream = tensor_to_logical_array(grad).astype(
+            cupy.dtype(grad.dtype.name), copy=False
+        )
     except (TypeError, ValueError):
         return None
     if not batched:

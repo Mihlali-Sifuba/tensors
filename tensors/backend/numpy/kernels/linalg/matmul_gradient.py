@@ -7,7 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _finite_operands
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -31,9 +31,9 @@ def matmul_gradient(
     left_vector = left.ndim == 1
     right_vector = right.ndim == 1
     try:
-        upstream = _view(grad).astype(numpy.float64, copy=False)
-        left_values = _view(left).astype(numpy.float64, copy=False)
-        right_values = _view(right).astype(numpy.float64, copy=False)
+        upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
+        left_values = tensor_to_logical_array(left).astype(numpy.float64, copy=False)
+        right_values = tensor_to_logical_array(right).astype(numpy.float64, copy=False)
     except ValueError:
         return None
     if not _finite_operands(upstream, left_values, right_values):

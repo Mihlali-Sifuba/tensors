@@ -312,13 +312,13 @@ class CudaExecutesIntegerPowerNatively(ArithmeticTestCase):
         from tensors.backend.loading import _backend_kernel
         import cupy
 
-        from tensors.backend.cuda.conversion import _view
+        from tensors.backend.cuda.conversion import tensor_to_logical_array
 
         with ts.use_backend("cuda"):
             base = tensor("int32", [2, 3, 4, 5])
             native = cupy.dtype("int32")
             storage = _backend_kernel("power")(
-                _view(base).astype(native, copy=False),
+                tensor_to_logical_array(base).astype(native, copy=False),
                 native.type(5),
                 dtype=ts.int32,
                 output_shape=(4,),

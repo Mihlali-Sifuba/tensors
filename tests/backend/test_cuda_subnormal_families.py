@@ -4,8 +4,8 @@ The eighteen forward kernels and the ``abs``/``relu`` gradients were corrected
 first. This module covers the rest of the CUDA surface, where the same
 flushing conversion appeared in three further shapes:
 
-* ``_view(t).astype(cupy.float64, copy=False)`` — the dominant idiom, in
-  ninety-seven call sites across fifty-seven files;
+* ``tensor_to_logical_array(t).astype(cupy.float64, copy=False)`` — the
+  dominant idiom, in ninety-seven call sites across fifty-seven files;
 * ``_operand``, a second conversion helper reaching ``cupy.asarray`` with a
   ``float64`` dtype, used by ``outer`` and ``negate``;
 * no widening at all, in ``maximum`` and ``minimum``, which passed binary32
@@ -123,11 +123,13 @@ class TheConversionBoundary(CudaTestCase):
         """Pins the mechanism, so the helpers are shown to be necessary."""
         import cupy
 
-        from tensors.backend.cuda.conversion import _view
+        from tensors.backend.cuda.conversion import tensor_to_logical_array
 
         with ts.use_backend("cuda"):
             flushed = cupy.asnumpy(
-                _view(tensor32([SMALLEST])).astype(cupy.float64, copy=False)
+                tensor_to_logical_array(tensor32([SMALLEST])).astype(
+                    cupy.float64, copy=False
+                )
             )
         self.assertEqual(
             float(flushed[0]), 0.0, "astype no longer flushes; this test is obsolete"

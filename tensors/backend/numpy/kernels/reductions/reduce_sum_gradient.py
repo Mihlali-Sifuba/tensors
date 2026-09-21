@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -16,7 +16,7 @@ def reduce_sum_gradient(
     grad: Tensor, value: Tensor, axes: tuple[int, ...], *, keepdims: bool
 ) -> Storage | None:
     """Broadcast the upstream gradient back over the reduced axes."""
-    upstream = _view(grad).astype(numpy.float64, copy=False)
+    upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
     expanded_shape = tuple(
         (1 if dimension in axes else size for dimension, size in enumerate(value.shape))
     )

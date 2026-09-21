@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -25,7 +25,7 @@ def reduce_norm(
     if value.size == 0:
         return None
     axis = axes
-    values = _view(value).astype(numpy.float64, copy=False)
+    values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
         absolute = numpy.abs(values)
         scale = numpy.max(absolute, axis=axis, keepdims=True)

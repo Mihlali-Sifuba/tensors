@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _finite_operands
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 from tensors.backend.numpy.kernels.reductions.logsumexp_ops import _normalization_terms
 
 if TYPE_CHECKING:
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 def softmax(value: Tensor, axis: int, *, dtype: DataType) -> Storage | None:
     """Run fused softmax or log-softmax on finite values."""
-    values = _view(value).astype(numpy.float64, copy=False)
+    values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
     maximum, correction, probabilities = _normalization_terms(values, axis)
     result = probabilities
     if not _finite_operands(values, probabilities, result):

@@ -5,7 +5,7 @@ import cupy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -22,7 +22,11 @@ def where(
 ) -> Storage | None:
     """Run broadcasting elementwise selection."""
     try:
-        result = cupy.where(_view(condition) != 0, _view(left), _view(right))
+        result = cupy.where(
+            tensor_to_logical_array(condition) != 0,
+            tensor_to_logical_array(left),
+            tensor_to_logical_array(right),
+        )
     except (TypeError, ValueError):
         return None
     return _storage(result, dtype=dtype, output_shape=output_shape)

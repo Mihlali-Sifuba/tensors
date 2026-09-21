@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from tensors.tensor import Tensor
 
 
-def _view(tensor: Tensor) -> Any:
+def tensor_to_logical_array(tensor: Tensor) -> Any:
     """Return compact logical values as a device array.
 
     Kernels operate on compact arrays. Tensor metadata remains the source of
@@ -64,7 +64,7 @@ def _working_values(tensor: Tensor) -> Any:
     this is the first of the two format crossings; :func:`_storage` performs
     the second.
     """
-    return _widen(_view(tensor))
+    return _widen(tensor_to_logical_array(tensor))
 
 
 def _errstate(**settings: str) -> Any:
@@ -86,7 +86,7 @@ def _operand(value: Tensor | Scalar, dtype: DataType) -> Any:
 
     if dtype.kind == "integer":
         raise TypeError("CUDA integer kernels require the Python fallback")
-    result = _view(value) if isinstance(value, Tensor) else value
+    result = tensor_to_logical_array(value) if isinstance(value, Tensor) else value
     # The same crossing as _working_values, reached through a second helper.
     # cupy.asarray widens with astype, which flushes a binary32 subnormal.
     return _widen(cupy.asarray(result))

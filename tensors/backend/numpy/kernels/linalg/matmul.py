@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -22,8 +22,8 @@ def matmul(
     if dtype.kind != "floating":
         return None
     try:
-        left_array = _view(left).astype(numpy.float64, copy=False)
-        right_array = _view(right).astype(numpy.float64, copy=False)
+        left_array = tensor_to_logical_array(left).astype(numpy.float64, copy=False)
+        right_array = tensor_to_logical_array(right).astype(numpy.float64, copy=False)
     except ValueError:
         return None
     with _errstate(over="ignore", under="ignore", invalid="ignore"):

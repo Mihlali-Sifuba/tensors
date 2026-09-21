@@ -5,7 +5,7 @@ import cupy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import tensor_to_logical_array
 from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
@@ -21,7 +21,9 @@ def where_gradient(
     """Split a selection VJP into the requested left and right terms."""
     need_left, need_right = needs_input_grad
     try:
-        selected = cupy.broadcast_to(_view(condition), grad.shape) != 0
+        selected = (
+            cupy.broadcast_to(tensor_to_logical_array(condition), grad.shape) != 0
+        )
     except ValueError:
         return None
     upstream = _working_values(grad)

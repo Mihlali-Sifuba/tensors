@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 def cosh_gradient(grad: Tensor, value: Tensor) -> Storage | None:
     """Run the vector-Jacobian product for an elementwise unary operation."""
     try:
-        upstream = _view(grad).astype(numpy.float64, copy=False)
-        values = _view(value).astype(numpy.float64, copy=False)
+        upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
+        values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
     except (TypeError, ValueError):
         return None
     if upstream.shape != values.shape:

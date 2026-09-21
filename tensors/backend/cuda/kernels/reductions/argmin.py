@@ -5,7 +5,7 @@ import cupy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -19,7 +19,7 @@ def argmin(
         return None
     from tensors.dtype import int64
 
-    values = _view(value)
+    values = tensor_to_logical_array(value)
     function = cupy.argmin
     result = function(values, axis=axis, keepdims=keepdims)
     return _storage(result, dtype=int64, output_shape=output_shape)

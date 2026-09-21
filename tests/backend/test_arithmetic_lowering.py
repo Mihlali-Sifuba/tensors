@@ -6,10 +6,10 @@ indirection is gone: each arithmetic dispatcher now lowers in its own
 ``selected ==`` branch, so the boundary between a Tensor and a native array is
 readable in the one place it happens.
 
-``_view`` is deliberately still there. It is not an arithmetic helper — it is
-the Tensor-to-native-array boundary that around a hundred NumPy kernels and
-thirty CUDA kernels use — so these tests pin that arithmetic no longer depends
-on it while everything else still may.
+``tensor_to_logical_array`` is deliberately still there. It is not an
+arithmetic helper — it is the Tensor-to-native-array boundary that around a
+hundred NumPy kernels and thirty CUDA kernels use — so these tests pin that
+arithmetic no longer depends on it while everything else still may.
 """
 
 import inspect
@@ -45,13 +45,15 @@ class HelperRemovalTests(unittest.TestCase):
                 self.assertFalse(hasattr(module, "_arithmetic_operand"))
 
     def test_the_general_view_boundary_is_retained(self):
-        """``_view`` serves every kernel family, so it is not arithmetic's to remove."""
+        """``tensor_to_logical_array`` serves every kernel family, so it is
+        not arithmetic's to remove.
+        """
         for backend in ARRAY_BACKENDS:
             with self.subTest(backend=backend):
                 module = __import__(
                     f"tensors.backend.{backend}.conversion", fromlist=["conversion"]
                 )
-                self.assertTrue(hasattr(module, "_view"))
+                self.assertTrue(hasattr(module, "tensor_to_logical_array"))
                 self.assertTrue(hasattr(module, "_arithmetic_storage"))
 
     def test_no_dispatcher_imports_an_operand_helper(self):
@@ -59,7 +61,7 @@ class HelperRemovalTests(unittest.TestCase):
             with self.subTest(operation=name):
                 source = inspect.getsource(module)
                 self.assertNotIn("_arithmetic_operand", source)
-                self.assertNotIn("_view", source)
+                self.assertNotIn("tensor_to_logical_array", source)
 
 
 class InlineLoweringTests(BackendTestCase):
@@ -77,14 +79,14 @@ class InlineLoweringTests(BackendTestCase):
 
     @requires_numpy
     def test_arithmetic_no_longer_routes_through_the_view_helper(self):
-        """Patching ``_view`` must not disturb arithmetic any more."""
+        """Patching ``tensor_to_logical_array`` must not disturb arithmetic any more."""
         from unittest.mock import patch
 
         from tensors.backend.numpy import conversion
 
         with patch.object(
             conversion,
-            "_view",
+            "tensor_to_logical_array",
             side_effect=AssertionError("arithmetic must lower inline"),
         ):
             with ts.use_backend("numpy"):
@@ -101,7 +103,7 @@ class InlineLoweringTests(BackendTestCase):
 
         with patch.object(
             conversion,
-            "_view",
+            "tensor_to_logical_array",
             side_effect=AssertionError("arithmetic must lower inline"),
         ):
             with ts.use_backend("cuda"):

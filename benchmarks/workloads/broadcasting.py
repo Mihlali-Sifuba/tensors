@@ -110,8 +110,8 @@ def _forward_cases(
         )
         native = array_module.dtype(ts.float64.name)
         prepared = (
-            conversion._view(left).astype(native, copy=False),
-            conversion._view(right).astype(native, copy=False),
+            conversion.tensor_to_logical_array(left).astype(native, copy=False),
+            conversion.tensor_to_logical_array(right).astype(native, copy=False),
         )
 
         def run_kernel() -> Any:

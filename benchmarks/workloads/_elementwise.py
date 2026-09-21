@@ -108,8 +108,12 @@ def binary_ladder(
             "numpy" if backend == "numpy" else "cupy"
         )
         native = array_module.dtype(dtype.name)
-        kernel_left = conversion._view(left).astype(native, copy=False)
-        kernel_right = conversion._view(right).astype(native, copy=False)
+        kernel_left = conversion.tensor_to_logical_array(left).astype(
+            native, copy=False
+        )
+        kernel_right = conversion.tensor_to_logical_array(right).astype(
+            native, copy=False
+        )
         raw_left = provider_array(provider, shape, dtype_name=dtype_name, kind="ramp")
         raw_right = provider_array(
             provider, shape, dtype_name=dtype_name, kind="constant", value=2.0

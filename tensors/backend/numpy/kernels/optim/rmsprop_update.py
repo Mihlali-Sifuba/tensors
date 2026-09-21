@@ -8,7 +8,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _finite_operands
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -26,7 +26,10 @@ def rmsprop_update(
 ) -> tuple[Storage, Storage, Storage] | None:
     """Apply one fused RMSprop update on finite optimizer state."""
     tensors = (parameter, gradient, scale, scaled)
-    values = [_view(item).astype(numpy.float64, copy=False) for item in tensors]
+    values = [
+        tensor_to_logical_array(item).astype(numpy.float64, copy=False)
+        for item in tensors
+    ]
     parameter_values, gradients, scales, scaled_values = values
     if not _finite_operands(*values):
         return None

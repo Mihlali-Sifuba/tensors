@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy
 from typing import TYPE_CHECKING
 
-from tensors.backend.numpy.conversion import _errstate, _view
+from tensors.backend.numpy.conversion import _errstate, tensor_to_logical_array
 from tensors.backend.numpy.storage import NumPyStorage
 from tensors.backend.storage import Storage
 
@@ -36,7 +36,10 @@ def fused_elementwise(
     ):
         return None
     provider_dtype = numpy.dtype(dtype.name)
-    sources = tuple(_view(value).astype(provider_dtype, copy=False) for value in values)
+    sources = tuple(
+        tensor_to_logical_array(value).astype(provider_dtype, copy=False)
+        for value in values
+    )
     current = sources[0]
     storages: list[Storage] = []
     functions = {

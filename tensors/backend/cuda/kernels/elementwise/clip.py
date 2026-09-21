@@ -5,7 +5,7 @@ import cupy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -20,6 +20,6 @@ def clip(
     dtype: DataType,
 ) -> Storage | None:
     """Clip tensor values to optional scalar bounds."""
-    values = _view(value)
+    values = tensor_to_logical_array(value)
     result = cupy.clip(values, min_value, max_value)
     return _storage(result, dtype=dtype, output_shape=value.shape)

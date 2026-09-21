@@ -7,7 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _finite_operands
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -24,7 +24,7 @@ def logsumexp(
     output_shape: tuple[int, ...],
 ) -> Storage | None:
     """Run a stable log-sum-exp reduction on finite values."""
-    values = _view(value).astype(numpy.float64, copy=False)
+    values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
     maximum, correction, probabilities = _normalization_terms(values, axes)
     with _errstate(over="ignore", invalid="ignore"):
         result = maximum + correction

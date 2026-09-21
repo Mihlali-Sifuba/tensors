@@ -5,7 +5,7 @@ import numpy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -26,7 +26,9 @@ def equal(
         "greater_equal": numpy.greater_equal,
     }
     try:
-        result = functions["equal"](_view(left), _view(right))
+        result = functions["equal"](
+            tensor_to_logical_array(left), tensor_to_logical_array(right)
+        )
     except (TypeError, ValueError):
         return None
     return _storage(result, dtype=uint8, output_shape=output_shape)

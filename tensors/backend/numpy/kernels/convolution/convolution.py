@@ -7,7 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _finite_operands
 from tensors.backend.numpy.conversion import _shape_size
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 from tensors.backend.numpy.kernels.convolution.common import _convolution_columns
 from tensors.backend.numpy.kernels.convolution.common import _convolution_operands
 from tensors.backend.numpy.kernels.convolution.common import _convolution_storage
@@ -45,7 +45,9 @@ def convolution(
     bias_values = None
     if bias is not None:
         try:
-            bias_values = _view(bias).astype(numpy.dtype(dtype.name), copy=False)
+            bias_values = tensor_to_logical_array(bias).astype(
+                numpy.dtype(dtype.name), copy=False
+            )
         except (TypeError, ValueError):
             return None
         if not _finite_operands(bias_values):

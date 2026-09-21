@@ -5,7 +5,7 @@ import numpy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -18,7 +18,7 @@ def minimum(
     """Run a broadcasting elementwise minimum or maximum."""
     function = numpy.minimum
     try:
-        result = function(_view(left), _view(right))
+        result = function(tensor_to_logical_array(left), tensor_to_logical_array(right))
     except (TypeError, ValueError):
         return None
     return _storage(result, dtype=dtype, output_shape=output_shape)

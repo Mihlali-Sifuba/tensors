@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.numpy.storage import NumPyStorage
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -40,7 +40,9 @@ def _optimizer_batch_values(tensors: Sequence[Tensor], *, slot: str) -> Any | No
         return None
     arrays = tuple(
         (
-            _view(tensor).astype(numpy.float64, copy=False).reshape(-1)
+            tensor_to_logical_array(tensor)
+            .astype(numpy.float64, copy=False)
+            .reshape(-1)
             for tensor in tensors
         )
     )

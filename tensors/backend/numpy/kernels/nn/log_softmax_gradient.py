@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 from tensors.backend.numpy.kernels.reductions.logsumexp_ops import _normalization_terms
 
 if TYPE_CHECKING:
@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 
 def log_softmax_gradient(grad: Tensor, value: Tensor, axis: int) -> Storage | None:
     """Run a softmax-family VJP away from dominant cancellation."""
-    upstream = _view(grad).astype(numpy.float64, copy=False)
-    values = _view(value).astype(numpy.float64, copy=False)
+    upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
+    values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
     if upstream.shape != values.shape:
         return None
     _, _, probabilities = _normalization_terms(values, axis)

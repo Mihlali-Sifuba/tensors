@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 from tensors.backend.numpy.kernels.reductions.stability import _scaled_sum
 from tensors.backend.numpy.kernels.reductions.stability import _summation_guard
 
@@ -28,7 +28,7 @@ def reduce_mean(
     if value.size == 0:
         return None
     axis = axes
-    values = _view(value).astype(numpy.float64, copy=False)
+    values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
         direct = numpy.sum(values, axis=axis, keepdims=True)
         count = math.prod((value.shape[item] for item in axis))

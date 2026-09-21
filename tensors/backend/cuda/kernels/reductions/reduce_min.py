@@ -5,7 +5,7 @@ import cupy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -24,7 +24,7 @@ def reduce_min(
     if value.size == 0:
         return None
     axis = axes
-    values = _view(value)
+    values = tensor_to_logical_array(value)
     function = cupy.min
     result = function(values, axis=axis, keepdims=keepdims)
     return _storage(result, dtype=dtype, output_shape=output_shape)

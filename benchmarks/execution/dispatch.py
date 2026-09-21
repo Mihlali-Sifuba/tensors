@@ -248,8 +248,8 @@ def _construction_cases(backend: str) -> list[Case]:
         left = tensor(shape, dtype_name="float64", kind="ramp")
         right = tensor(shape, dtype_name="float64", kind="constant", value=2.0)
         prepared = (
-            conversion._view(left).astype(native, copy=False),
-            conversion._view(right).astype(native, copy=False),
+            conversion.tensor_to_logical_array(left).astype(native, copy=False),
+            conversion.tensor_to_logical_array(right).astype(native, copy=False),
         )
         storage = kernels.add(*prepared, dtype=ts.float64, output_shape=shape)
         if storage is None:
