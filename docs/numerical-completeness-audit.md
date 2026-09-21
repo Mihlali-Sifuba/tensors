@@ -17,19 +17,20 @@ established and are listed as work, not as findings.
 
 ### The headline
 
-**The package has two numerical specifications, and together they govern six
-of its sixty public numerical operations.**
+**The package has three numerical specifications, and together they govern
+seven of its sixty public numerical operations.**
 
 ```
 public operation functions:                60
-governed by a numerical specification:      6   (+, -, *, /, **, sign)
-ungoverned:                                54
+governed by a numerical specification:      7   (+, -, *, /, **, sign, abs)
+ungoverned:                                53
 ```
 
-`sign` is governed for its **forward** result only
-([sign-semantics.md](sign-semantics.md)); its differentiation is still
-ungoverned, and it is counted here as governed on that basis. The audit was
-originally written at five governed and fifty-five ungoverned; only the
+`sign` and `abs` are governed for their **forward** results only
+([sign-semantics.md](sign-semantics.md),
+[abs-semantics.md](abs-semantics.md)); their differentiation is still
+ungoverned, and they are counted here as governed on that basis. The audit
+was originally written at five governed and fifty-five ungoverned; only the
 counts have been restated, not the findings that rest on them.
 
 Within its scope the specification is in good order: the D1–D7 and S3
@@ -38,7 +39,7 @@ references, and the full suite passes (1,782 tests, 0 failures, 0 expected
 failures, on `python`, `numpy` and `cuda`). Nothing in this audit reopens
 them.
 
-Outside that scope there is no numerical contract at all. Fifty-four public
+Outside that scope there is no numerical contract at all. Fifty-three public
 operations have no stated accuracy bound, no exceptional-value table, no
 signed-zero requirement, no subnormal requirement, and no rule about whether
 fused and eager execution must agree. Their tests establish that the backends
@@ -132,11 +133,11 @@ Discovered from `tensors.__all__` and the submodules, not assumed.
 | `/` `divide` | `operations/arithmetic/divide.py` | R, C |
 | `**` `pow` | `operations/arithmetic/power.py` | E (integer), A (2/4 ULP), C |
 
-### 3.2 Ungoverned — 54 operations
+### 3.2 Ungoverned — 53 operations
 
 | Family | Operations | Location |
 | --- | --- | --- |
-| Elementary | `abs` `exp` `log` `sqrt` | `operations/elementary/` |
+| Elementary | `exp` `log` `sqrt` | `operations/elementary/` |
 | Trigonometric | `sin` `cos` `tan` `arcsin` `arccos` `arctan` | `operations/trigonometric/` |
 | Hyperbolic | `sinh` `cosh` `tanh` `arcsinh` `arccosh` `arctanh` | `operations/hyperbolic/` |
 | Activations | `relu` `sigmoid` `softplus` | `operations/activations/` |
@@ -199,7 +200,7 @@ tests; **Fus** is a fused-vs-eager requirement.
 | `**` | §12 | 2/4 ULP | §12.3.3 | §5.4 | yes | yes | **Verified** |
 | `**` gradients | §12.7 | detection only | §12.7.2 | yes | yes | yes | **Verified** |
 | Elementary `sign` (forward) | [sign-semantics.md](sign-semantics.md) | n/a (class E) | n/a | §1.5 | yes | yes | **Governed.** Forward only; `sign`'s differentiation remains ungoverned |
-| Elementary `abs` | — | n/a (class E) | — | — | no | no | **Spec missing**; for the CUDA subnormal result see the D-1 re-measurement |
+| Elementary `abs` (forward) | [abs-semantics.md](abs-semantics.md) | n/a (class E) | §1.7 | §1.6 | yes | yes | **Governed.** Forward only; `abs`'s differentiation remains ungoverned |
 | Elementary `sqrt` | — | n/a (class R) | traps | — | no | no | **Spec missing** |
 | Elementary `exp` `log` | — | — | traps | — | no | no | **Spec missing** |
 | Trigonometric | — | — | traps | — | no | no | **Spec missing** |
@@ -325,6 +326,23 @@ requirement with a test.
 This re-measurement covers the reproducer only. It does not revisit the
 accuracy findings (S-1 to S-3) or the coverage findings (T-1, T-2), which
 were not rerun.
+
+**`abs` re-measured again during its own migration (2026-09-21).** Before the
+migration, `ts.abs` of the smallest binary32 subnormal returned
+`1.401298464324817e-45` on all three backends, and eager agreed with fused;
+after it, the same. Measuring the provider directly showed the finding's
+cause intact in *both* directions for `abs`, not just on the way in:
+
+```
+cupy.abs(native binary32 [±smallest])   -> [0.0, 0.0]
+binary64 magnitude, CuPy-converted down -> [0.0, -0.0]
+ieee32.widen / ieee32.narrow            -> [±1.401298464324817e-45]
+```
+
+`abs` returns the operand's magnitude, which can itself be subnormal, so
+unlike `sign` it needs the PTX conversion on the way out as well. The
+migrated kernel uses both, and [abs-semantics.md](abs-semantics.md) §1.6
+pins the requirement with a test.
 
 ### D-2 — Two promotion authorities disagree
 
@@ -725,7 +743,7 @@ single one is sufficient, and a passing test suite is not among them.
 
 ### Current position against these criteria
 
-| Criterion | `+ - * /` | `**` | Other 54 |
+| Criterion | `+ - * /` | `**` | Other 53 |
 | --- | --- | --- | --- |
 | 1 Classified | met | met | not met |
 | 2 Error bound + reference | n/a (class R) | met | not met |

@@ -20,10 +20,18 @@ class Abs(Operation):
     name = "abs"
 
     def forward(self, value: Tensor) -> Tensor:
+        """Take each element's magnitude, preserving dtype and shape.
+
+        The Tensor semantics are settled here — abs changes neither — and
+        `execute_abs` owns where the magnitude is taken and which inputs it
+        refuses. See docs/abs-semantics.md.
+        """
+        dtype = value.dtype
+        output_shape = value.shape
         return Tensor._from_owned_storage(
-            backend_dispatch.execute_abs(value, dtype=value.dtype),
-            dtype=value.dtype,
-            shape=value.shape,
+            backend_dispatch.execute_abs(value, dtype=dtype, output_shape=output_shape),
+            dtype=dtype,
+            shape=output_shape,
         )
 
     def backward(
