@@ -17,19 +17,20 @@ established and are listed as work, not as findings.
 
 ### The headline
 
-**The package has four numerical specifications, and together they govern
-eight of its sixty public numerical operations.**
+**The package has five numerical specifications, and together they govern
+nine of its sixty public numerical operations.**
 
 ```
 public operation functions:                60
-governed by a numerical specification:      8   (+, -, *, /, **, sign, abs, sqrt)
-ungoverned:                                52
+governed by a numerical specification:      9   (+, -, *, /, **, sign, abs, sqrt, relu)
+ungoverned:                                51
 ```
 
-`sign`, `abs` and `sqrt` are governed for their **forward** results only
-([sign-semantics.md](sign-semantics.md),
+`sign`, `abs`, `sqrt` and `relu` are governed for their **forward** results
+only ([sign-semantics.md](sign-semantics.md),
 [abs-semantics.md](abs-semantics.md),
-[sqrt-semantics.md](sqrt-semantics.md)); their differentiation is still
+[sqrt-semantics.md](sqrt-semantics.md),
+[relu-semantics.md](relu-semantics.md)); their differentiation is still
 ungoverned, and they are counted here as governed on that basis. The audit
 was originally written at five governed and fifty-five ungoverned; only the
 counts have been restated, not the findings that rest on them.
@@ -40,7 +41,7 @@ references, and the full suite passes (1,782 tests, 0 failures, 0 expected
 failures, on `python`, `numpy` and `cuda`). Nothing in this audit reopens
 them.
 
-Outside that scope there is no numerical contract at all. Fifty-two public
+Outside that scope there is no numerical contract at all. Fifty-one public
 operations have no stated accuracy bound, no exceptional-value table, no
 signed-zero requirement, no subnormal requirement, and no rule about whether
 fused and eager execution must agree. Their tests establish that the backends
@@ -134,14 +135,14 @@ Discovered from `tensors.__all__` and the submodules, not assumed.
 | `/` `divide` | `operations/arithmetic/divide.py` | R, C |
 | `**` `pow` | `operations/arithmetic/power.py` | E (integer), A (2/4 ULP), C |
 
-### 3.2 Ungoverned — 52 operations
+### 3.2 Ungoverned — 51 operations
 
 | Family | Operations | Location |
 | --- | --- | --- |
 | Elementary | `exp` `log` | `operations/elementary/` |
 | Trigonometric | `sin` `cos` `tan` `arcsin` `arccos` `arctan` | `operations/trigonometric/` |
 | Hyperbolic | `sinh` `cosh` `tanh` `arcsinh` `arccosh` `arctanh` | `operations/hyperbolic/` |
-| Activations | `relu` `sigmoid` `softplus` | `operations/activations/` |
+| Activations | `sigmoid` `softplus` | `operations/activations/` |
 | Comparison | `equal` `not_equal` `less` `less_equal` `greater` `greater_equal` | `operations/comparison/` |
 | Selection | `where` `clip` `maximum` `minimum` | `operations/selection/` |
 | Reductions | `sum` `mean` `prod` `max` `min` `std` `variance` `norm` `logsumexp` `argmax` `argmin` | `operations/reductions/` |
@@ -206,7 +207,8 @@ tests; **Fus** is a fused-vs-eager requirement.
 | Elementary `exp` `log` | — | — | traps | — | no | no | **Spec missing** |
 | Trigonometric | — | — | traps | — | no | no | **Spec missing** |
 | Hyperbolic | — | — | traps | — | no | no | **Spec missing** |
-| Activations | — | — | — | — | no | no | **Spec missing** |
+| Activations `relu` (forward) | [relu-semantics.md](relu-semantics.md) | n/a (class E) | n/a (§1.6) | §1.4 | yes | yes | **Governed.** Forward only; `relu`'s differentiation remains ungoverned |
+| Activations `sigmoid` `softplus` | — | — | — | — | no | no | **Spec missing** |
 | Comparison | — | n/a | — | n/a | no | n/a | **Spec missing** |
 | Selection | — | n/a | — | n/a | no | n/a | **Spec missing**, see D-2 |
 | Reductions | — | — | — | — | no | n/a | **Spec missing** |
@@ -367,6 +369,29 @@ rather than for subnormal survival, and the second row above is a defect the
 D-1 reproducer would never have surfaced.
 
 `cupy.sqrt` on binary64 was correctly rounded on all 2,002 operands measured.
+
+**`relu` re-measured during its own migration (2026-09-21).** The same cause
+again, on both sides of the format boundary, and it reaches further than the
+D-1 reproducer's single smallest-subnormal probe:
+
+```
+cupy.maximum(native binary32 [smallest subnormal], 0) -> 0.0
+cupy.maximum(native binary32 [largest  subnormal], 0) -> 0.0
+ieee32.widen -> maximum in binary64 -> ieee32.narrow -> both preserved
+```
+
+The **largest** binary32 subnormal flushes as readily as the smallest, so the
+affected input range is the whole subnormal band rather than its lower edge.
+`relu` returns its operand, so like `abs` the result can itself be subnormal
+and the PTX conversion is needed in both directions; the migrated kernel uses
+both, and [relu-semantics.md](relu-semantics.md) §1.4 pins it with a test.
+
+Two further behaviours were measured while choosing the implementation, and
+neither is a defect: `cupy.maximum` and `numpy.maximum` both propagate NaN
+and both return canonical positive zero for `-0.0`. A `where(x > 0, x, 0)`
+selection does neither for NaN — it sends NaN to the zero branch — which is
+why the maximum form was chosen. Eager and fused CUDA `relu` agree, with the
+fused kernel executing rather than declining.
 
 ### D-2 — Two promotion authorities disagree
 
@@ -786,7 +811,7 @@ single one is sufficient, and a passing test suite is not among them.
 
 ### Current position against these criteria
 
-| Criterion | `+ - * /` | `**` | Other 52 |
+| Criterion | `+ - * /` | `**` | Other 51 |
 | --- | --- | --- | --- |
 | 1 Classified | met | met | not met |
 | 2 Error bound + reference | n/a (class R) | met | not met |

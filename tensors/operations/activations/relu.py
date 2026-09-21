@@ -19,11 +19,21 @@ class ReLU(Operation):
     __slots__ = ()
     name = "relu"
 
-    def forward(self, a: Tensor) -> Tensor:
+    def forward(self, value: Tensor) -> Tensor:
+        """Rectify each element, preserving the operand's dtype and shape.
+
+        The Tensor semantics are settled here — ReLU changes neither — and
+        `execute_relu` owns where the rectification runs. See
+        docs/relu-semantics.md.
+        """
+        dtype = value.dtype
+        output_shape = value.shape
         return Tensor._from_owned_storage(
-            backend_dispatch.execute_relu(a, dtype=a.dtype),
-            dtype=a.dtype,
-            shape=a.shape,
+            backend_dispatch.execute_relu(
+                value, dtype=dtype, output_shape=output_shape
+            ),
+            dtype=dtype,
+            shape=output_shape,
         )
 
     def backward(

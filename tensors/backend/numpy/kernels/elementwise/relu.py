@@ -1,26 +1,36 @@
 """NumPy implementation of the rectified linear unit."""
 
 from __future__ import annotations
+import math
 import numpy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
+from typing import TYPE_CHECKING, Any
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import tensor_to_logical_array
+from tensors.backend.numpy.storage import NumPyStorage
+from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
-def relu(value: Tensor, *, dtype: DataType) -> Storage | None:
-    """Rectify elementwise, leaving NaN in place."""
-    if dtype.kind == "integer":
-        return None
-    try:
-        values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
-    except (TypeError, ValueError):
-        return None
+def relu(
+    values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Return native storage at the declared dtype.
+
+    ``numpy.maximum`` is chosen over a ``where(values > 0, ...)`` selection
+    for two measured reasons, not for brevity: it **propagates NaN**, where a
+    comparison would send NaN to the zero branch and lose it, and it returns
+    canonical positive zero for ``-0.0``. It also computes in the dtype it is
+    given, so an integer array stays integral and a large ``int64`` is never
+    routed through ``float64``. Host arithmetic has no flush-to-zero, so a
+    positive subnormal is returned unchanged.
+    """
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        result = numpy.where(numpy.isnan(values), values, numpy.maximum(values, 0.0))
-    return _storage(result, dtype=dtype, output_shape=value.shape)
+        result = numpy.maximum(values, 0)
+    storage = NumPyStorage(result, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("ReLU kernel returned an unexpected result size")
+    return storage
