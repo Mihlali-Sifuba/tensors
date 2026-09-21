@@ -6,7 +6,7 @@ from tensors.dtype import convert_scalar, resolve_result_dtype, true_division_dt
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.utils.broadcasting import broadcast_to, broadcast_tensors
-from tensors.operations._gradient_shaping import sum_to_shape
+from tensors.operations._gradient_shaping import sum_to_shape_on_selected_backend
 
 Scalar = Union[int, float]
 
@@ -124,19 +124,38 @@ class Div(Operation):
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Optional[Tensor]]:
+        """Route the upstream gradient to both operands.
+
+        Both broadcast reductions use the selected-backend reduction. The
+        older `sum_to_shape` applies a workload threshold and answers a
+        small gradient with Python storage, which under an explicit NumPy
+        or CUDA selection is a residency violation rather than a
+        performance choice.
+        """
         a, b = inputs
         need_numerator, need_denominator = needs_input_grad
         numerator_gradient = (
-            sum_to_shape(self.forward(grad, b), a.shape) if need_numerator else None
+            sum_to_shape_on_selected_backend(self.forward(grad, b), a.shape)
+            if need_numerator
+            else None
         )
         if not need_denominator:
             return [numerator_gradient, None]
         expanded_a, expanded_b = broadcast_tensors(a, b)
-        storage = execute_division_denominator_gradient(grad, expanded_a, expanded_b)
+        storage = execute_division_denominator_gradient(
+            grad,
+            expanded_a,
+            expanded_b,
+            dtype=grad.dtype,
+            output_shape=grad.shape,
+        )
         denominator_gradient = Tensor._from_owned_storage(
             storage, dtype=grad.dtype, shape=grad.shape
         )
-        return [numerator_gradient, sum_to_shape(denominator_gradient, b.shape)]
+        return [
+            numerator_gradient,
+            sum_to_shape_on_selected_backend(denominator_gradient, b.shape),
+        ]
 
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable VJP for division."""
@@ -154,6 +173,11 @@ class Div(Operation):
                 else None
             ),
         ]
+
+    # ``sum_to_shape_graph`` builds the reduction from ``sum`` and
+    # ``reshape`` graph operations rather than calling the legacy reduction
+    # dispatcher, so the replayed graph executes wherever those operations
+    # execute and no value is materialised on the host to shape it.
 
 
 def _expanded_division_inputs(
@@ -174,13 +198,25 @@ class DivisionDenominatorGradient(Operation):
     name = "division_denominator_gradient"
 
     def forward(self, grad: Tensor, numerator: Tensor, denominator: Tensor) -> Tensor:
+        """Evaluate ``-grad * numerator / denominator ** 2``.
+
+        A zero denominator is **not** refused here. Section 7.2 gives
+        floating division a signed infinity or a NaN, the eager backward
+        pass has always delivered that, and the kernels deliver it here
+        too. The host scan that used to raise ``ZeroDivisionError`` read
+        every denominator value into Python and settled the question once,
+        when this operation was recorded, which made it disagree with the
+        eager pass it is supposed to reproduce.
+        """
         grad, numerator, denominator = _expanded_division_inputs(
             grad, numerator, denominator
         )
-        if any((value == 0 for value in denominator._data)):
-            raise ZeroDivisionError("Division by zero")
         accelerated = execute_division_denominator_gradient(
-            grad, numerator, denominator
+            grad,
+            numerator,
+            denominator,
+            dtype=grad.dtype,
+            output_shape=grad.shape,
         )
         return Tensor._from_owned_storage(
             accelerated, dtype=grad.dtype, shape=grad.shape
@@ -189,48 +225,70 @@ class DivisionDenominatorGradient(Operation):
     def backward(
         self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Optional[Tensor]]:
+        """Differentiate the denominator VJP on the selected backend.
+
+        This used to iterate over the operands' host values in Python and
+        build Python lists, so higher-order division was evaluated by the
+        Python reference whatever backend was selected. Each partial is now
+        an expression over operations that execute where the selection says.
+
+        Writing ``r = -g * a / b ** 2``, the three partials are
+
+        ``dr/dg = -outer * a / b ** 2``   — this operation, on ``a``
+        ``dr/da = -outer * g / b ** 2``   — this operation, on ``g``
+        ``dr/db = 2 * outer * g * a / b ** 3``
+
+        The first two reuse the range-safe primitive exactly, so the
+        behaviour the range-safe path exists for is preserved where the
+        contract names it. The third is factored through that same
+        primitive rather than forming ``b ** 3`` — ``2 * o * g * a / b**3``
+        is ``-2 * (a / b) * (-o * g / b**2)`` — which keeps the cubed
+        denominator from overflowing on its own. This is a deliberate
+        change of floating-point behaviour from the exact-rational loop it
+        replaces, and it makes this path agree with `backward_graph`, which
+        already evaluated the third partial as ordinary arithmetic.
+        """
         grad, numerator, denominator = inputs
         need_grad, need_numerator, need_denominator = needs_input_grad
         expanded_grad, expanded_numerator, expanded_denominator = (
             _expanded_division_inputs(grad, numerator, denominator)
         )
         expanded_outer = broadcast_to(outer_grad, expanded_grad.shape)
-        grad_values = []
-        numerator_values = []
-        denominator_values = []
-        for outer, upstream, value, divisor in zip(
-            expanded_outer._data,
-            expanded_grad._data,
-            expanded_numerator._data,
-            expanded_denominator._data,
-        ):
-            if need_grad:
-                grad_values.append(_negative_product_over_square(outer, value, divisor))
-            if need_numerator:
-                numerator_values.append(
-                    _negative_product_over_square(outer, upstream, divisor)
-                )
-            if not need_denominator:
-                continue
-            denominator_values.append(
-                _product_over_denominator_power(
-                    [2.0, float(outer), float(upstream), float(value)],
-                    float(divisor),
-                    3,
-                )
-            )
-        shape = expanded_grad.shape
 
-        def reduced(values: list[float], target: Tensor) -> Tensor:
-            return sum_to_shape(
-                Tensor(values, dtype=outer_grad.dtype, shape=shape), target.shape
+        def denominator_vjp(upstream: Tensor, value: Tensor) -> Tensor:
+            storage = execute_division_denominator_gradient(
+                upstream,
+                value,
+                expanded_denominator,
+                dtype=outer_grad.dtype,
+                output_shape=expanded_grad.shape,
+            )
+            return Tensor._from_owned_storage(
+                storage, dtype=outer_grad.dtype, shape=expanded_grad.shape
             )
 
-        return [
-            reduced(grad_values, grad) if need_grad else None,
-            reduced(numerator_values, numerator) if need_numerator else None,
-            reduced(denominator_values, denominator) if need_denominator else None,
-        ]
+        def reduced(value: Tensor, target: Tensor) -> Tensor:
+            return sum_to_shape_on_selected_backend(value, target.shape)
+
+        grad_partial = None
+        if need_grad:
+            grad_partial = reduced(
+                denominator_vjp(expanded_outer, expanded_numerator), grad
+            )
+
+        numerator_partial = None
+        if need_numerator:
+            numerator_partial = reduced(
+                denominator_vjp(expanded_outer, expanded_grad), numerator
+            )
+
+        denominator_partial = None
+        if need_denominator:
+            inner = denominator_vjp(expanded_outer, expanded_grad)
+            scaled = inner * (expanded_numerator / expanded_denominator) * -2.0
+            denominator_partial = reduced(scaled, denominator)
+
+        return [grad_partial, numerator_partial, denominator_partial]
 
     def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
         from tensors.operations._gradient_shaping import sum_to_shape_graph

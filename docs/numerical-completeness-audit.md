@@ -43,8 +43,16 @@ operation function, so the count of sixty is unchanged by it.
 ```
 public operation functions:                60
 forward governed:                           9   (+, -, *, /, **, sign, abs, sqrt, relu)
-first-order VJP governed:                   4   (sign, abs, sqrt, relu)
+first-order VJP governed:                   5   (sign, abs, sqrt, relu, /)
 ```
+
+Division's VJP joined that second list on 2026-09-21, to the extent its
+tests establish: both first-order gradients, the broadcast reductions that
+shape them, the zero-denominator rule of section 7.2 in eager and replayed
+form, range safety, and the second-order partials — all on the selected
+backend with no fallback. Third and higher order are **not** claimed for
+it. `docs/arithmetic-semantics.md` section 7.5 states the contract and
+names the one deliberate change of floating-point behaviour it required.
 
 For those four, "VJP governed" means the first-order VJP, the graph-built
 VJP and the higher-order regions each document names — not that autodiff

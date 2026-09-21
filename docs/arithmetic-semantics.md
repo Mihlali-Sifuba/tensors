@@ -862,6 +862,56 @@ result, now by rule rather than by accident) and the second raises.
 The rule means integer true division never silently converts `int64` to
 `float64`, which is precisely the conversion that loses integer precision.
 
+### 7.5 The division VJPs
+
+For `y = a / b` with upstream gradient `g`, elementwise:
+
+```
+dy/da  ->   g / b
+dy/db  ->  -g * a / b ** 2
+```
+
+**Execution.** Both follow [Execution requirements](backends.md#execution-requirements)
+in full: the selection decides where they run, no workload-size policy
+applies, there is no Python-reference fallback, and a declining kernel
+raises `BackendOperationUnsupportedError`. The broadcast reductions that
+shape each gradient back to its operand use the selected-backend reduction,
+so a *broadcast* backward pass is as resident as a non-broadcast one — it
+was not, before this was written.
+
+**A zero denominator is a value, not an error.** The VJPs deliver
+[section 7.2](#72-division-by-zero)'s result rather than raising:
+`-g * a / b**2` at `b == 0` is the signed infinity the sign of `-g * a`
+gives, and NaN when that product is zero. Nothing reads a denominator back
+to the host to discover this, so there is no synchronisation on a device.
+The graph-built VJP agrees with the eager one here; it used to raise
+`ZeroDivisionError` because it scanned the denominator's host values once,
+when the operation was recorded.
+
+**Range safety.** `-g * a / b ** 2` is not evaluated as written when
+`b ** 2` would overflow or underflow although the quotient is
+representable. The kernels select a logarithmic form for exactly those
+elements, decided elementwise on the device. `1e300 / 1e200` differentiates
+to `-1e-100`, where forming `b ** 2` first gives zero.
+
+**Higher order.** Writing `r = -g * a / b**2`, the second-order partials are
+
+```
+dr/dg  =  -outer * a / b ** 2
+dr/da  =  -outer * g / b ** 2
+dr/db  =   2 * outer * g * a / b ** 3
+```
+
+The first two reuse the range-safe primitive directly. The third is
+factored through it as `-2 * (a / b) * (-outer * g / b**2)` rather than
+forming `b ** 3`, which keeps the cubed denominator from overflowing on its
+own. That is a change of floating-point behaviour from the exact-rational
+host loop it replaces — the loop evaluated the whole product as one
+rational — and it is the price of the partials executing where the
+selection says instead of in Python. The eager and graph-built paths now
+agree, which they did not while one was exact-rational and the other was
+ordinary arithmetic.
+
 ### 7.4 Floor division is a separate operation
 
 Floor division, and any other integer-valued division, is a **separate
@@ -1188,7 +1238,7 @@ explicitly and give the outcome.
 | `tensors/backend/cuda/kernels/fusion/fused_elementwise.py`, `fused_elementwise_backward.py` | `cupy.RawKernel(source, name)` with no options permits FMA contraction (B14). Now compiled with `--fmad=false`, and the forward kernel no longer rejects a zero denominator. |
 | `tensors/backend/config.py`, `types.py` | Backend selection; strict mode has no representation today. `"auto"` resolves once, to NumPy when available and Python otherwise, and is then indistinguishable from naming that backend. |
 | `tests/backend/_support.py` — `NumPyParityTestCase` | Encodes Python-as-reference ([section 9.5](#95-the-existing-parity-helper)). **Not changed.** The conformance tests in `tests/operations/arithmetic/` compare against specified values instead, so the parity helper is no longer the only check; re-casting it is separate work. |
-| `tensors/backend/{python,numpy,cuda}/kernels/elementwise/division_denominator_gradient.py` | The division VJP raised, or declined and let the Python reference raise, where the forward pass returns an infinity. Its zero-denominator and finiteness tests also read device memory back to the host on every backward pass. **Re-audited at Phase 0:** the numerical behaviour was corrected with the division work and the finiteness read is gone, but its *dispatcher* still applies the workload threshold and falls back to the Python reference, so its execution location is not yet guaranteed. Numerical correctness and execution location are separate requirements and only the first is met here. |
+| `tensors/backend/{python,numpy,cuda}/kernels/elementwise/division_denominator_gradient.py` | The division VJP raised, or declined and let the Python reference raise, where the forward pass returns an infinity. Its zero-denominator and finiteness tests also read device memory back to the host on every backward pass. **Re-audited at Phase 0:** the numerical behaviour was corrected with the division work and the finiteness read is gone, but its *dispatcher* still applied the workload threshold and fell back to the Python reference. **Closed:** the dispatcher is now strict, the three kernels take prepared native operands, and both broadcast reductions use the selected-backend reduction. See [section 7.5](#75-the-division-vjps). |
 | `tensors/backend/dispatch/reductions/`, `tensors/backend/dispatch/elementwise/`, `tensors/operations/_gradient_shaping.py` | The `+`, `-` and `*` VJPs reduced and negated through entry points that applied the workload threshold, so a small backward pass under explicit NumPy returned `PythonStorage`. They now dispatch through `execute_vjp_sum_to_shape`, `execute_vjp_negate` and `execute_sum_products_to_shape`, which honour the selection at every size. **Re-audited at Phase 0:** power's two gradient dispatchers are strict as well, so **2 of the 27 gradient dispatchers** meet the execution-location requirement. The other 25 — including the division VJP, which this table lists separately — still apply the workload threshold and fall back to the Python reference. Power is not fully closed either: `sum_to_shape` in `_gradient_shaping.py` still uses `execute_sum_to_shape`, so a broadcast power backward pass under explicit NumPy returns `PythonStorage` below the threshold while the same pass without broadcasting returns `NumPyStorage`. Extending strict dispatch past the arithmetic four is separate work. |
 | `tensors/operations/arithmetic/power.py` — `_power_dtype`, `_scalar_base_power_dtype` | Value-dependent result dtype, contradicting [section 6.4](#64-what-is-not-promoted); read `exponent._data`, a host transfer. **Done (D6).** Both functions are gone; `resolve_power` and `resolve_power_scalar_base` in `tensors/dtype.py` resolve from declared dtypes alone. |
 | `tensors/backend/python/kernels/elementwise/power_base_gradient.py` | Contained a **second copy** of `_power_dtype` with the same defect. **Done (D6).** No copy remains anywhere in `tensors/`. |

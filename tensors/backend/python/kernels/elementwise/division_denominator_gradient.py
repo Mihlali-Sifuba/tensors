@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 import math
+from collections.abc import Iterable
 from tensors.backend.python.storage import PythonStorage
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.backend.storage import Storage
-    from tensors.tensor import Tensor
+from tensors.backend.storage import Storage
+from tensors.dtype import DataType
 
 _INFINITY = float("inf")
 _NAN = float("nan")
@@ -74,13 +72,27 @@ def _product_over_denominator_power(
 
 
 def division_denominator_gradient(
-    grad: Tensor, numerator: Tensor, denominator: Tensor
-) -> Storage | None:
-    """Scale the upstream gradient by ``-numerator / denominator**2``."""
-    values = [
+    grad_values: Iterable[float],
+    numerator_values: Iterable[float],
+    denominator_values: Iterable[float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Scale the upstream gradient by ``-numerator / denominator**2``.
+
+    The operands arrive prepared and already broadcast to one shape. A zero
+    divisor is answered numerically, not refused: section 7.2 specifies the
+    signed infinity or the NaN, and the range-safe helper above delivers it.
+    """
+    result = [
         _negative_product_over_square(upstream, value, divisor)
         for upstream, value, divisor in zip(
-            grad._data, numerator._data, denominator._data
+            grad_values, numerator_values, denominator_values
         )
     ]
-    return PythonStorage.from_arithmetic(values, grad.dtype)
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError(
+            "Division denominator VJP kernel returned an unexpected result size"
+        )
+    return PythonStorage.from_arithmetic(result, dtype)
