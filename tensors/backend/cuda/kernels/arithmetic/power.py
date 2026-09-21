@@ -5,7 +5,7 @@ import cupy
 from typing import TYPE_CHECKING, Any
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.kernels.arithmetic import _ieee32
+from tensors.backend.cuda.kernels.arithmetic import ieee32
 from tensors.backend.cuda.conversion import _arithmetic_storage
 
 if TYPE_CHECKING:
@@ -105,7 +105,7 @@ def power(
         # untouched: an ElementwiseKernel broadcasts them itself, and routing a
         # scalar through cupy.asarray first would lose the sign of a negative
         # zero, which section 12.3.3 specifies.
-        result = _ieee32.apply("power", left, right)
+        result = ieee32.apply("power", left, right)
         return _arithmetic_storage(result, dtype=dtype, output_shape=output_shape)
 
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):

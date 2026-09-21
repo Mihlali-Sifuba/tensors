@@ -7,7 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _arithmetic_storage
 from tensors.backend.cuda.conversion import _operand
-from tensors.backend.cuda.kernels.arithmetic import _ieee32
+from tensors.backend.cuda.kernels.arithmetic import ieee32
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -97,6 +97,6 @@ def power_base_gradient(grad: Tensor, base: Tensor, exponent: Tensor) -> Storage
 
     if base.dtype.typecode == "f":
         # Narrow through PTX: astype flushes a binary32 subnormal,
-        # which section 5.4 forbids. See _ieee32._build_narrow.
-        result = _ieee32.narrow(cupy.asarray(result, dtype=cupy.float64))
+        # which section 5.4 forbids. See ieee32._build_narrow.
+        result = ieee32.narrow(cupy.asarray(result, dtype=cupy.float64))
     return _arithmetic_storage(result, dtype=base.dtype, output_shape=grad.shape)

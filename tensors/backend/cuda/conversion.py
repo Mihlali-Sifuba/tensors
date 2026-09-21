@@ -43,18 +43,18 @@ def _widen(values: Any) -> Any:
     """
     if values.dtype != cupy.float32:
         return cupy.asarray(values, dtype=cupy.float64)
-    from tensors.backend.cuda.kernels.arithmetic import _ieee32
+    from tensors.backend.cuda.kernels.arithmetic import ieee32
 
-    return _ieee32.widen(values)
+    return ieee32.widen(values)
 
 
 def _narrow(values: Any, target: Any) -> Any:
     """Round a binary64 array to ``target``, keeping binary32 subnormals."""
     if target != cupy.float32:
         return cupy.asarray(values, dtype=target)
-    from tensors.backend.cuda.kernels.arithmetic import _ieee32
+    from tensors.backend.cuda.kernels.arithmetic import ieee32
 
-    return _ieee32.narrow(values)
+    return ieee32.narrow(values)
 
 
 def _working_values(tensor: Tensor) -> Any:

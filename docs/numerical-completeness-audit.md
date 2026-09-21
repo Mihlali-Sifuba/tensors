@@ -269,7 +269,7 @@ itself depending on whether the planner fused it:
 behaviour corrected for `+ - * /` under D2 and for `**` under the CUDA
 gradual-underflow work — NVRTC applies FTZ to binary32 instructions and
 ignores `--ftz=false`. The eager elementwise kernels were never given the
-inline-PTX treatment that `_ieee32.py` applies to arithmetic, and the fused
+inline-PTX treatment that `ieee32.py` applies to arithmetic, and the fused
 generator was corrected separately. This should be confirmed against each
 kernel before implementation.
 
@@ -573,7 +573,7 @@ operation.
 **P2.1 Fix D-1.** Confirm the FTZ hypothesis per kernel, then apply the
 established inline-PTX remedy to the twelve eager CUDA binary32 elementwise
 kernels. Depends on P1.3 for the requirement, not for the technique — the
-technique already exists in `_ieee32.py`.
+technique already exists in `ieee32.py`.
 
 *D-1 is the audit's demonstrated **implementation** defect: one backend
 computes results its own package says are wrong. It produces incorrect
