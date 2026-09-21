@@ -41,28 +41,22 @@ def execute_sign(
     if selected == "python":
         lowered = value._data
     elif selected == "numpy":
-        import numpy
-
         # Storage owns a flat native buffer and the Tensor owns the layout, so
         # lowering is: take the logical values and give them the Tensor's
         # shape. Sign is unary, so there is no scalar or broadcasting case.
-        # Sign also preserves dtype, so the logical buffer already carries the
-        # declared one; the cast below is a guard, not a conversion.
-        native = numpy.dtype(dtype.name)
+        #
+        # No cast belongs here. Sign preserves dtype, `_set_storage` holds a
+        # Tensor's storage dtype equal to its own, and `_logical_storage_for`
+        # preserves it, so the buffer already carries the declared dtype.
         storage = value._logical_storage_for("numpy")
         lowered = storage.buffer.reshape(value.shape)
-        if lowered.dtype != native:
-            lowered = lowered.astype(native, copy=False)
     else:
-        import cupy
-
-        # The same lowering on the device. Nothing is read back to the host:
-        # reshape and astype both stay in device memory.
-        native = cupy.dtype(dtype.name)
+        # The same lowering on the device, and nothing is read back to the
+        # host: the reshape stays in device memory. A cast would be worse than
+        # redundant here — converting to binary32 flushes subnormals on this
+        # toolchain, which is exactly what the kernel's widening prevents.
         storage = value._logical_storage_for("cuda")
         lowered = storage.buffer.reshape(value.shape)
-        if lowered.dtype != native:
-            lowered = lowered.astype(native, copy=False)
 
     result = backend.sign(lowered, dtype=dtype, output_shape=output_shape)
     if result is None:
