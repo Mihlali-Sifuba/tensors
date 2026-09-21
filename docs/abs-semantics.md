@@ -294,3 +294,15 @@ at zero, restated in this operation's terms.
 That kink check belongs only to the primal partial. `needs_input_grad` is
 respected, so a gradient requested with respect to the upstream alone is
 still returned at a zero primal.
+
+The error above is `abs`'s, **including on replay**, and that costs a
+dedicated node to guarantee. The primal partial borrows its numbers from
+the sign VJP, but it is recorded as the internal `AbsPrimalVJP` rather
+than as the sign VJP itself. A recorded vertex is executed again every time
+a compiled graph is replayed, and an error raised then comes from that
+vertex's own `forward` — not from the `backward_graph` call that recorded
+it, which returned long before. Recording the sign VJP directly therefore
+produced the right number and the *wrong error*: a second-derivative graph
+built over a nonzero value and replayed onto zero reported `sign derivative
+is undefined at zero`. `AbsPrimalVJP` is internal and no facade
+re-exports it.

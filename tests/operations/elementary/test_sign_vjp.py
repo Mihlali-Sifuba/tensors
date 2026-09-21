@@ -377,30 +377,59 @@ class SignGraphVjpTests(unittest.TestCase):
         )
         self.assertEqual(host_reads, [], "backward_graph must not read host values")
 
-    def test_a_compiled_graph_replays_with_values_that_change_branch(self):
-        """Section 7: a frozen mask would answer for the build-time values."""
+    def test_a_compiled_first_vjp_graph_replays_with_changed_values(self):
+        """Section 7: the recorded VJP is re-executed, not re-derived.
+
+        The gradient itself is compiled and replayed. An earlier version of
+        this test compiled only the forward operation and then took a fresh
+        gradient after each replacement; a fresh gradient re-enters
+        `backward_graph`, so it would have passed even if the recorded
+        graph had frozen its answer.
+        """
         smallest = SMALLEST_FLOAT32_SUBNORMAL
         for backend in available_backends():
             with self.subTest(backend=backend):
                 with ts.use_backend(backend):
                     value = ts.Variable(ts.Tensor([2.0, 3.0], dtype=ts.float32))
-                    computation = ts.graph.Computation(ts.sign(value))
-                    computation.forward()
+                    first = ts.grad(ts.sign(value), value, create_graph=True)
+                    computation = ts.graph.Computation(first)
+                    self.assertEqual(computation.forward().tolist(), [0.0, 0.0])
 
                     for replacement in ([-2.0, -3.0], [smallest, -smallest]):
                         value.data = ts.Tensor(replacement, dtype=ts.float32)
-                        computation.forward()
-                        produced = ts.grad(ts.sign(value), value).tolist()
-                        for item in produced:
+                        produced = computation.forward()
+                        for item in produced.tolist():
                             self.assertTrue(is_positive_zero(item))
+                        self.assertIs(produced.dtype, ts.float32)
+                        self.assertEqual(produced.backend_storage.kind, backend)
 
-                    # Replaying onto a zero must raise, which a frozen mask
+                    # Replaying onto a zero must raise, which a frozen graph
                     # built over positive values could not know to do.
                     value.data = ts.Tensor([0.0, 1.0], dtype=ts.float32)
-                    computation.forward()
-                    with self.assertRaisesRegex(ValueError, "undefined at zero"):
-                        ts.grad(ts.sign(value), value)
+                    with self.assertRaisesRegex(
+                        ValueError, "sign derivative is undefined at zero"
+                    ):
+                        computation.forward()
 
+    def test_a_compiled_second_derivative_graph_replays(self):
+        """Section 8, through a replayed graph rather than a fresh one."""
+        for backend in available_backends():
+            with self.subTest(backend=backend):
+                with ts.use_backend(backend):
+                    value = ts.Variable(ts.Tensor([2.0], dtype=ts.float64))
+                    first = ts.grad(ts.sign(value), value, create_graph=True)
+                    second = ts.grad(first, value, create_graph=True)
+                    computation = ts.graph.Computation(second)
+                    self.assertEqual(computation.forward().tolist(), [0.0])
 
-if __name__ == "__main__":
-    unittest.main()
+                    value.data = ts.Tensor([-5.0], dtype=ts.float64)
+                    self.assertEqual(computation.forward().tolist(), [0.0])
+
+                    value.data = ts.Tensor([math.nan], dtype=ts.float64)
+                    self.assertTrue(math.isnan(computation.forward().tolist()[0]))
+
+                    value.data = ts.Tensor([0.0], dtype=ts.float64)
+                    with self.assertRaisesRegex(
+                        ValueError, "sign derivative is undefined at zero"
+                    ):
+                        computation.forward()

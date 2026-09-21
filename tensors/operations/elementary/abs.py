@@ -100,9 +100,10 @@ class AbsVJP(Operation):
 
         With respect to the **primal** the VJP is locally constant away from
         the kink, so that partial is zero, NaN where the primal is NaN, and
-        undefined exactly at zero. That is the shape of the sign VJP, so it
-        is evaluated by it rather than reasoned about a second time, and its
-        zero error is restated in this operation's terms.
+        undefined exactly at zero. That is the shape of the sign VJP, so
+        :class:`AbsPrimalVJP` evaluates it by that rather than reasoning
+        about it a second time, while restating the zero error in this
+        operation's terms.
 
         The kink check belongs only to the primal partial, so when that
         partial is not requested it is not computed and a gradient with
@@ -121,20 +122,21 @@ class AbsVJP(Operation):
 
         primal_partial = None
         if need_value:
-            try:
-                primal_partial = Sign().backward(
-                    outer_grad, value, needs_input_grad=UNARY_DEMAND
-                )[0]
-            except ValueError as error:
-                raise ValueError(
-                    "abs second derivative is undefined at zero"
-                ) from error
+            primal_partial = AbsPrimalVJP().forward(outer_grad, value)
 
         return [upstream_partial, primal_partial]
 
     def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build that higher-order rule as graph vertices."""
-        from tensors.operations.elementary.sign import SignVJP
+        """Build that higher-order rule as graph vertices.
+
+        The primal partial is recorded as :class:`AbsPrimalVJP` rather than
+        as the sign VJP it borrows its numbers from. The distinction only
+        shows up on replay: a graph built here runs again later, and an
+        error raised then comes from the recorded operation's own
+        ``forward``, long after any ``try`` around the construction has
+        returned. Recording the sign VJP directly would therefore report
+        the sign function's error for a second derivative of abs.
+        """
         from tensors.variable import Variable
 
         need_grad, need_value = needs_input_grad
@@ -146,16 +148,56 @@ class AbsVJP(Operation):
 
         primal_partial = None
         if need_value:
-            try:
-                primal_partial = Variable._apply_operation(
-                    SignVJP(), (outer_grad, value)
-                )
-            except ValueError as error:
-                raise ValueError(
-                    "abs second derivative is undefined at zero"
-                ) from error
+            primal_partial = Variable._apply_operation(
+                AbsPrimalVJP(), (outer_grad, value)
+            )
 
         return [upstream_partial, primal_partial]
+
+
+class AbsPrimalVJP(Operation):
+    """Internal node for the primal partial of :class:`AbsVJP`.
+
+    This is not public API. No facade re-exports it.
+
+    Numerically it is the sign VJP: zero away from the kink, NaN where the
+    primal is NaN, undefined exactly at zero. It exists so that the
+    *identity* of the operation survives into a compiled graph. A recorded
+    vertex is executed again on every replay, and an error raised then is
+    raised by the recorded operation's own ``forward`` — not inside the
+    ``backward_graph`` call that recorded it. Recording the sign VJP
+    directly would therefore make a replayed second derivative of abs report
+    the sign function's error, so the translation has to live here, where
+    replay will run it.
+    """
+
+    __slots__ = ()
+    name = "abs_primal_vjp"
+
+    def forward(self, grad: Tensor, value: Tensor) -> Tensor:
+        """Evaluate the sign VJP, restating its zero error for abs."""
+        from tensors.operations.elementary.sign import Sign
+
+        try:
+            return Sign().backward(grad, value, needs_input_grad=UNARY_DEMAND)[0]
+        except ValueError as error:
+            raise ValueError("abs second derivative is undefined at zero") from error
+
+    def backward(
+        self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
+    ) -> list[Tensor]:
+        """Differentiate a partial that is itself locally constant."""
+        value = inputs[1]
+        pattern = AbsPrimalVJP().forward(outer_grad, value)
+        return [pattern if needed else None for needed in needs_input_grad]
+
+    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        """Build that rule as graph vertices, keeping this operation's error."""
+        from tensors.variable import Variable
+
+        value = inputs[1]
+        pattern = Variable._apply_operation(AbsPrimalVJP(), (outer_grad, value))
+        return [pattern if needed else None for needed in needs_input_grad]
 
 
 def _validate_vjp_operands(grad: Tensor, value: Tensor) -> None:

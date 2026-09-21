@@ -412,15 +412,23 @@ class AbsGraphVjpTests(unittest.TestCase):
         )
         self.assertEqual(host_reads, [], "backward_graph must not read host values")
 
-    def test_a_compiled_graph_replays_with_values_that_change_branch(self):
-        """Section 7: a frozen mask would answer for the build-time values."""
+    def test_a_compiled_first_vjp_graph_replays_with_changed_values(self):
+        """Section 7: the recorded VJP is re-executed, not re-derived.
+
+        The gradient itself is compiled and replayed. An earlier version of
+        this test compiled only the forward operation and then took a fresh
+        gradient after each replacement; a fresh gradient re-enters
+        `backward_graph`, so it would have passed even if the recorded
+        graph had frozen its branch decision.
+        """
         smallest = SMALLEST_FLOAT32_SUBNORMAL
         for backend in available_backends():
             with self.subTest(backend=backend):
                 with ts.use_backend(backend):
                     value = ts.Variable(ts.Tensor([2.0, 3.0], dtype=ts.float32))
-                    computation = ts.graph.Computation(ts.abs(value))
-                    computation.forward()
+                    first = ts.grad(ts.abs(value), value, create_graph=True)
+                    computation = ts.graph.Computation(first)
+                    self.assertEqual(computation.forward().tolist(), [1.0, 1.0])
 
                     expectations = (
                         ([-2.0, -3.0], [-1.0, -1.0]),
@@ -429,10 +437,47 @@ class AbsGraphVjpTests(unittest.TestCase):
                     )
                     for replacement, expected in expectations:
                         value.data = ts.Tensor(replacement, dtype=ts.float32)
-                        computation.forward()
-                        produced = ts.grad(ts.abs(value), value).tolist()
-                        self.assertEqual(produced, expected)
+                        produced = computation.forward()
+                        self.assertEqual(produced.tolist(), expected)
+                        self.assertIs(produced.dtype, ts.float32)
+                        self.assertEqual(produced.backend_storage.kind, backend)
 
+    def test_a_compiled_second_derivative_graph_keeps_this_operations_error(self):
+        """Section 8, through a replayed graph rather than a fresh one.
 
-if __name__ == "__main__":
-    unittest.main()
+        This is the case that exposed the defect the internal
+        `AbsPrimalVJP` node fixes. The second derivative's primal partial
+        borrows its numbers from the sign VJP, and recording the sign VJP
+        directly made a *replayed* kink report ``sign derivative is
+        undefined at zero``. The error has to be raised by the recorded
+        operation's own forward, which is what this replays.
+        """
+        for backend in available_backends():
+            for dtype in GRADIENT_DTYPES:
+                with self.subTest(backend=backend, dtype=dtype.name):
+                    with ts.use_backend(backend):
+                        value = ts.Variable(ts.Tensor([2.0], dtype=dtype))
+                        first = ts.grad(ts.abs(value), value, create_graph=True)
+                        second = ts.grad(first, value, create_graph=True)
+                        computation = ts.graph.Computation(second)
+
+                        produced = computation.forward()
+                        self.assertEqual(produced.tolist(), [0.0])
+                        self.assertIs(produced.dtype, dtype)
+                        self.assertEqual(produced.backend_storage.kind, backend)
+
+                        value.data = ts.Tensor([-5.0], dtype=dtype)
+                        produced = computation.forward()
+                        self.assertEqual(produced.tolist(), [0.0])
+                        self.assertEqual(produced.backend_storage.kind, backend)
+
+                        value.data = ts.Tensor([math.nan], dtype=dtype)
+                        self.assertTrue(math.isnan(computation.forward().tolist()[0]))
+
+                        value.data = ts.Tensor([0.0], dtype=dtype)
+                        with self.assertRaises(ValueError) as caught:
+                            computation.forward()
+                        self.assertEqual(
+                            str(caught.exception),
+                            "abs second derivative is undefined at zero",
+                        )

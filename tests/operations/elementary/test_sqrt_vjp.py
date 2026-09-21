@@ -449,41 +449,103 @@ class SqrtGraphVjpTests(unittest.TestCase):
         self.assertEqual(comprehensions, [], "no host-built check")
         self.assertEqual(host_reads, [], "no host value reads")
 
-    def test_a_compiled_graph_replays_onto_a_zero_primal_and_raises(self):
-        """Section 7: the decisive replay.
+    def test_a_compiled_first_vjp_graph_replays_onto_a_zero_primal(self):
+        """Section 7: the decisive replay, on the gradient itself.
 
-        The previous implementation took the zero check once, from the
-        values present when the graph was built. Built over positive values
-        and replayed onto a zero, it would have returned an infinity
-        instead of raising.
+        The gradient is compiled and replayed. An earlier version of this
+        test compiled only the forward operation and took a fresh gradient
+        afterwards, which re-enters `backward_graph` every time and so
+        could not have detected a frozen domain check.
         """
         for backend in available_backends():
             with self.subTest(backend=backend):
                 with ts.use_backend(backend):
                     value = ts.Variable(ts.Tensor([4.0, 9.0], dtype=ts.float32))
-                    computation = ts.graph.Computation(ts.sqrt(value))
-                    computation.forward()
+                    first = ts.grad(ts.sqrt(value), value, create_graph=True)
+                    computation = ts.graph.Computation(first)
+                    self.assertEqual(
+                        computation.forward().tolist(),
+                        [
+                            specified_vjp(1.0, 4.0, ts.float32),
+                            specified_vjp(1.0, 9.0, ts.float32),
+                        ],
+                    )
 
                     value.data = ts.Tensor([16.0, 25.0], dtype=ts.float32)
-                    computation.forward()
+                    produced = computation.forward()
                     self.assertEqual(
-                        ts.grad(ts.sqrt(value), value).tolist(),
+                        produced.tolist(),
                         [
                             specified_vjp(1.0, 16.0, ts.float32),
                             specified_vjp(1.0, 25.0, ts.float32),
                         ],
                     )
+                    self.assertIs(produced.dtype, ts.float32)
+                    self.assertEqual(produced.backend_storage.kind, backend)
 
                     value.data = ts.Tensor([-4.0, 9.0], dtype=ts.float32)
-                    computation.forward()
-                    replayed = ts.grad(ts.sqrt(value), value).tolist()
-                    self.assertTrue(math.isnan(replayed[0]))
+                    self.assertTrue(math.isnan(computation.forward().tolist()[0]))
 
                     value.data = ts.Tensor([0.0, 9.0], dtype=ts.float32)
+                    with self.assertRaisesRegex(
+                        ValueError, "sqrt derivative is undefined at zero"
+                    ):
+                        computation.forward()
+
+    def test_a_compiled_second_derivative_graph_replays(self):
+        """Section 8, through a replayed graph rather than a fresh one."""
+        for backend in available_backends():
+            with self.subTest(backend=backend):
+                with ts.use_backend(backend):
+                    value = ts.Variable(ts.Tensor([4.0], dtype=ts.float64))
+                    first = ts.grad(ts.sqrt(value), value, create_graph=True)
+                    second = ts.grad(first, value, create_graph=True)
+                    computation = ts.graph.Computation(second)
+
+                    produced = computation.forward()
+                    self.assertAlmostEqual(
+                        produced.tolist()[0], -1.0 / (4.0 * 4.0**1.5), places=12
+                    )
+                    self.assertEqual(produced.backend_storage.kind, backend)
+
+                    value.data = ts.Tensor([9.0], dtype=ts.float64)
+                    self.assertAlmostEqual(
+                        computation.forward().tolist()[0],
+                        -1.0 / (4.0 * 9.0**1.5),
+                        places=12,
+                    )
+
+    def test_a_replayed_second_derivative_at_zero_does_not_yet_raise(self):
+        """A gap this suite records rather than endorses.
+
+        Section 8 reasons that no higher derivative exists at zero
+        *because the first VJP raises there*. That holds for the first VJP
+        and for a replayed first-VJP graph, both of which raise. It does
+        **not** hold for a replayed second-derivative graph: the primal
+        partial is built as arithmetic —
+        ``(outer * grad) / (-4 * x * sqrt(x))`` — so the `SqrtVJP` node
+        that carries the domain check is not on the path the second
+        derivative needs, and replaying onto a zero yields an infinity
+        instead.
+
+        That is the same family of defect the internal `AbsPrimalVJP` and
+        `ReLUPrimalVJP` nodes fix for abs and relu, where the primal
+        partial *is* an operation node. Closing it for sqrt means giving
+        its primal partial the same treatment, which is a change to sqrt's
+        differentiation and is deliberately not made here. The test pins
+        the present behaviour so the gap is visible and a fix is seen as a
+        change.
+        """
+        for backend in available_backends():
+            with self.subTest(backend=backend):
+                with ts.use_backend(backend):
+                    value = ts.Variable(ts.Tensor([4.0], dtype=ts.float64))
+                    first = ts.grad(ts.sqrt(value), value, create_graph=True)
+                    second = ts.grad(first, value, create_graph=True)
+                    computation = ts.graph.Computation(second)
                     computation.forward()
-                    with self.assertRaisesRegex(ValueError, "undefined at zero"):
-                        ts.grad(ts.sqrt(value), value)
 
-
-if __name__ == "__main__":
-    unittest.main()
+                    value.data = ts.Tensor([0.0], dtype=ts.float64)
+                    produced = computation.forward()
+                self.assertEqual(produced.tolist(), [-math.inf])
+                self.assertEqual(produced.backend_storage.kind, backend)
