@@ -5,7 +5,7 @@ from tensors.backend import dispatch as backend_dispatch
 import math
 from typing import TYPE_CHECKING, Any, overload
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
-from tensors.operations.base import Operation
+from tensors.operations.base import Operation, UNARY_DEMAND
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
 
@@ -39,27 +39,97 @@ class Sign(Operation):
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Tensor]:
+        """Route the upstream gradient to zero away from zero.
+
+        Shape and dtype agreement are Tensor semantics and are settled here;
+        `execute_sign_gradient` owns where the routing runs. See
+        docs/sign-semantics.md §6.
+        """
         value = inputs[0]
+        _validate_vjp_operands(grad, value)
+        dtype = value.dtype
+        output_shape = value.shape
         return [
             Tensor._from_owned_storage(
-                backend_dispatch.execute_sign_gradient(grad, value),
-                dtype=grad.dtype,
-                shape=value.shape,
+                backend_dispatch.execute_sign_gradient(
+                    grad, value, dtype=dtype, output_shape=output_shape
+                ),
+                dtype=dtype,
+                shape=output_shape,
             )
         ]
 
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build the zero VJP on intervals where sign is constant."""
-        from tensors.operations._gradient_shaping import zero_like_graph
+        """Build the same VJP as a graph vertex, not a frozen host mask.
+
+        The previous implementation read ``value.data._data`` to decide the
+        domain and to build a constant. That pulled device values to Python
+        and froze the decision at the values present when the graph was
+        built, so a replay with different data reused the old answer.
+        :class:`SignVJP` records the operation instead and re-executes it.
+        """
+        from tensors.variable import Variable
 
         value = inputs[0]
-        if any((item == 0 for item in value.data._data)):
-            raise ValueError("sign derivative is undefined at zero")
-        if any(
-            (isinstance(item, float) and math.isnan(item) for item in value.data._data)
-        ):
-            raise ValueError("Higher-order derivatives of sign are undefined at NaN")
-        return [zero_like_graph(value)]
+        return [Variable._apply_operation(SignVJP(), (grad, value))]
+
+
+class SignVJP(Operation):
+    """Internal graph-building first-order VJP for :class:`Sign`.
+
+    This is not public API. No facade re-exports it, and it exists so that
+    `Sign.backward_graph` can record the VJP as a graph vertex rather than
+    materialise a constant from host values. Its own ``backward`` supplies
+    the higher-order rule.
+    """
+
+    __slots__ = ()
+    name = "sign_vjp"
+
+    def forward(self, grad: Tensor, value: Tensor) -> Tensor:
+        """Evaluate the first-order VJP through the ordinary eager path."""
+        return Sign().backward(grad, value, needs_input_grad=UNARY_DEMAND)[0]
+
+    def backward(
+        self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
+    ) -> list[Tensor]:
+        """Differentiate a locally constant VJP.
+
+        Away from zero the first VJP is constant in both operands, so both
+        partial derivatives are zero; where the primal is NaN the VJP is NaN
+        and so is its derivative. That is the same routing the first VJP
+        performs, so it is evaluated the same way rather than reasoned about
+        twice. A zero primal cannot reach here: the forward VJP raised.
+        """
+        grad, value = inputs
+        pattern = Sign().backward(outer_grad, value, needs_input_grad=UNARY_DEMAND)[0]
+        return [pattern if needed else None for needed in needs_input_grad]
+
+    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        """Build that higher-order rule as a graph vertex.
+
+        The derivative of the first VJP has the same shape as the first VJP
+        itself — zero away from NaN, NaN at NaN — so the rule is
+        self-similar and recorded with this same operation.
+        """
+        from tensors.variable import Variable
+
+        grad, value = inputs
+        pattern = Variable._apply_operation(SignVJP(), (outer_grad, value))
+        return [pattern if needed else None for needed in needs_input_grad]
+
+
+def _validate_vjp_operands(grad: Tensor, value: Tensor) -> None:
+    """Hold the upstream gradient to the primal's shape and dtype."""
+    if grad.shape != value.shape:
+        raise ValueError(
+            f"Gradient shape {grad.shape} does not match value shape {value.shape}"
+        )
+    if grad.dtype is not value.dtype:
+        raise ValueError(
+            f"Gradient dtype {grad.dtype.name} does not match value dtype "
+            f"{value.dtype.name}"
+        )
 
 
 @overload

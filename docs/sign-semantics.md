@@ -4,9 +4,17 @@ The forward numerical contract for `ts.sign`. This is the first operation
 migrated off "whatever the Python backend happens to do" and onto a written
 specification that every backend must meet exactly.
 
-Scope is deliberately narrow: **forward `sign` only**. Differentiation — the
-`sign_gradient` path, `Sign.backward` and `Sign.backward_graph` — is outside
-this milestone and unchanged. Nothing here states a derivative rule.
+Scope, stated exactly. This document governs:
+
+- the **forward** result (§1–§5);
+- the **first-order VJP**, `Sign.backward` and `execute_sign_gradient` (§6);
+- the **graph-built first-order VJP**, `Sign.backward_graph` and the
+  internal `SignVJP` operation, which must agree with §6 in every respect
+  (§7);
+- the **higher-order regions and boundaries** named in §8, and only those.
+
+It does not govern any other operation's gradient, and it does not claim
+that autodiff through `sign` is specified beyond the regions §8 names.
 
 ## 1. The contract
 
@@ -133,3 +141,98 @@ The specification is testable from the table alone. Expectations in the test
 suite are literal, derived from this document, and are never obtained by
 running the Python, NumPy or CUDA backend and recording what it returned. No
 backend is a reference implementation for `sign`.
+
+## 6. The first-order VJP
+
+For an upstream gradient `g` and the primal input `x`, elementwise:
+
+| `x` | result |
+| --- | --- |
+| finite and nonzero | canonical `+0.0` |
+| `+0.0` or `-0.0` | **raises** `ValueError: sign derivative is undefined at zero` |
+| `nan` | `nan` |
+
+`sign` is piecewise constant, so its derivative is zero wherever it exists.
+
+### 6.1 The result does not depend on the upstream gradient
+
+This is **routing, not multiplication**. The result is canonical `+0.0`
+whatever `g` is:
+
+| `g` at a finite nonzero `x` | result |
+| --- | --- |
+| negative | `+0.0`, never `-0.0` |
+| `±inf` | `+0.0`, never `nan` |
+| `nan` | `+0.0`, never `nan` |
+
+Implementing this as `g * 0` is forbidden, and the reason is measured rather
+than theoretical. Before this specification the Python backend routed and
+returned a literal zero while NumPy and CUDA materialised a derivative and
+multiplied, so the same call gave:
+
+```
+x = 2.0, g = -2.0   ->  python +0.0   numpy -0.0   cuda -0.0
+x = 2.0, g = ±inf   ->  python +0.0   numpy  nan   cuda  nan
+x = 2.0, g = nan    ->  python +0.0   numpy  nan   cuda  nan
+```
+
+The specification settles that disagreement in favour of routing, because a
+piecewise-constant function's VJP carries no information from upstream.
+
+### 6.2 Shape, dtype and residency
+
+- `grad.shape` must equal `value.shape`, and `grad.dtype` must equal
+  `value.dtype`; both are checked in `Sign.backward` and raise `ValueError`.
+- The result has `value`'s shape and dtype.
+- Only `float32` and `float64` reach here, because only those may require
+  gradients. No integer differentiation is defined.
+- Both operands and the result are validated resident on the selected
+  backend. No workload threshold applies and there is no Python-reference
+  fallback; a declining kernel raises `BackendOperationUnsupportedError`.
+
+### 6.3 The one permitted device synchronisation
+
+Enforcing the zero domain error on CUDA needs one on-device comparison and
+reduction, whose single resulting boolean is read back so the `ValueError`
+can be raised. No operand value is transferred.
+
+That test runs on the **widened** operand, and the reason is measured: on
+this toolchain a binary32 subnormal compares equal to zero natively, because
+flush-to-zero reaches the comparison's operand. Testing natively would raise
+"undefined at zero" for a subnormal, which §1.5 defines as an ordinary
+nonzero value. The CUDA kernel widens through `ieee32.widen` before
+comparing.
+
+## 7. The graph-built VJP
+
+`Sign.backward_graph` records the VJP as a graph vertex through the internal
+`SignVJP` operation. For the same operands,
+
+```python
+ts.grad(output, value, create_graph=False)
+ts.grad(output, value, create_graph=True).data
+```
+
+agree in value, NaN classification, signed zero, dtype, shape,
+selected-backend residency and domain errors.
+
+`backward_graph` reads no host values. It does not inspect `value.data._data`
+and builds no Python list-comprehension mask. That matters for replay: a
+compiled graph built over positive values and replayed over negative, zero or
+subnormal values must answer for the values it is replayed with, including
+raising the §6 zero error on replay. A frozen mask would answer for the
+values the graph was built with.
+
+`SignVJP` is internal. No facade re-exports it, and it is not public API.
+
+## 8. Higher-order regions
+
+| region | rule |
+| --- | --- |
+| finite nonzero `x` | the first VJP and **every** higher derivative are zero |
+| `x` is zero | the first VJP raises, so no higher derivative exists to take |
+| `x` is NaN | the first VJP is NaN, and so is its derivative — it is not silently turned into zero |
+
+The derivative of the first VJP has the same form as the first VJP, so
+`SignVJP` differentiates into itself. Nothing beyond these three regions is
+specified.
