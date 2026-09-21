@@ -820,7 +820,9 @@ class CudaDoesNotTransferOrSynchronise(ArithmeticTestCase):
 
     def test_the_kernel_answers_every_exceptional_case(self):
         from tensors.backend.loading import _backend_kernel
-        from tensors.backend.cuda.conversion import _arithmetic_operand
+        import cupy
+
+        from tensors.backend.cuda.conversion import _view
 
         for label, base_value, exponent in (
             ("invalid", -2.0, 0.5),
@@ -830,9 +832,10 @@ class CudaDoesNotTransferOrSynchronise(ArithmeticTestCase):
             with self.subTest(case=label):
                 with ts.use_backend("cuda"):
                     base = ts.full((64,), base_value, dtype=ts.float64) + 0.0
+                    native = cupy.dtype("float64")
                     storage = _backend_kernel("power")(
-                        _arithmetic_operand(base, ts.float64),
-                        _arithmetic_operand(exponent, ts.float64),
+                        _view(base).astype(native, copy=False),
+                        native.type(exponent),
                         dtype=ts.float64,
                         output_shape=(64,),
                     )

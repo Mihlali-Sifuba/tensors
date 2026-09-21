@@ -570,11 +570,14 @@ class TheProviderNoLongerDeclines(unittest.TestCase):
             with self.subTest(case=label):
                 with ts.use_backend("numpy"):
                     base = ts.Tensor(values * 64, dtype=dtype)
-                    from tensors.backend.numpy.conversion import _arithmetic_operand
+                    import numpy
 
+                    from tensors.backend.numpy.conversion import _view
+
+                    native = numpy.dtype(dtype.name)
                     storage = numpy_kernels.power(
-                        _arithmetic_operand(base, dtype),
-                        _arithmetic_operand(exponent, dtype),
+                        _view(base).astype(native, copy=False),
+                        native.type(exponent),
                         dtype=dtype,
                         output_shape=(64,),
                     )

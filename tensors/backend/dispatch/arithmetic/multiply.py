@@ -60,15 +60,52 @@ def execute_multiply(
             lowered_left = (left,)
             lowered_right = (right,)
     elif selected == "numpy":
-        from tensors.backend.numpy.conversion import _arithmetic_operand
+        import numpy
 
-        lowered_left = _arithmetic_operand(left, dtype)
-        lowered_right = _arithmetic_operand(right, dtype)
+        from tensors.tensor import Tensor
+
+        # Storage owns a flat native buffer and the Tensor owns the layout, so
+        # lowering is: take the logical values, give them the Tensor's shape,
+        # and place them in the declared dtype. A scalar becomes a typed
+        # zero-dimensional value rather than a Python number, so NumPy cannot
+        # widen the result on its account.
+        native = numpy.dtype(dtype.name)
+        if isinstance(left, Tensor):
+            storage = left._logical_storage_for("numpy")
+            lowered_left = storage.buffer.reshape(left.shape)
+            if lowered_left.dtype != native:
+                lowered_left = lowered_left.astype(native, copy=False)
+        else:
+            lowered_left = native.type(left)
+        if isinstance(right, Tensor):
+            storage = right._logical_storage_for("numpy")
+            lowered_right = storage.buffer.reshape(right.shape)
+            if lowered_right.dtype != native:
+                lowered_right = lowered_right.astype(native, copy=False)
+        else:
+            lowered_right = native.type(right)
     else:
-        from tensors.backend.cuda.conversion import _arithmetic_operand
+        import cupy
 
-        lowered_left = _arithmetic_operand(left, dtype)
-        lowered_right = _arithmetic_operand(right, dtype)
+        from tensors.tensor import Tensor
+
+        # The same lowering on the device. Nothing is read back to the host:
+        # reshape and astype both stay in device memory.
+        native = cupy.dtype(dtype.name)
+        if isinstance(left, Tensor):
+            storage = left._logical_storage_for("cuda")
+            lowered_left = storage.buffer.reshape(left.shape)
+            if lowered_left.dtype != native:
+                lowered_left = lowered_left.astype(native, copy=False)
+        else:
+            lowered_left = native.type(left)
+        if isinstance(right, Tensor):
+            storage = right._logical_storage_for("cuda")
+            lowered_right = storage.buffer.reshape(right.shape)
+            if lowered_right.dtype != native:
+                lowered_right = lowered_right.astype(native, copy=False)
+        else:
+            lowered_right = native.type(right)
 
     result = backend.multiply(
         lowered_left,

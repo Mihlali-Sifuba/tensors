@@ -149,23 +149,6 @@ def _shape_size(shape: tuple[int, ...]) -> int:
 # ----------------------------------------------------------------------
 
 
-def _arithmetic_operand(value: Tensor | Scalar, dtype: DataType) -> Any:
-    """Return an operand already in the declared dtype.
-
-    A scalar becomes a zero-dimensional array of that dtype rather than a
-    Python number, so NumPy cannot widen the result on its account.
-    """
-    from tensors.tensor import Tensor
-
-    native = cupy.dtype(dtype.name)
-    if isinstance(value, Tensor):
-        array = _view(value)
-        if array.dtype != native:
-            array = array.astype(native, copy=False)
-        return array
-    return native.type(value)
-
-
 def _arithmetic_storage(
     result: Any,
     *,

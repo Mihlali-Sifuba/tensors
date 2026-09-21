@@ -241,11 +241,15 @@ def _construction_cases(backend: str) -> list[Case]:
         conversion = importlib.import_module(
             f"tensors.backend.{backend}.conversion"
         )
+        array_module = importlib.import_module(
+            "numpy" if backend == "numpy" else "cupy"
+        )
+        native = array_module.dtype(ts.float64.name)
         left = tensor(shape, dtype_name="float64", kind="ramp")
         right = tensor(shape, dtype_name="float64", kind="constant", value=2.0)
         prepared = (
-            conversion._arithmetic_operand(left, ts.float64),
-            conversion._arithmetic_operand(right, ts.float64),
+            conversion._view(left).astype(native, copy=False),
+            conversion._view(right).astype(native, copy=False),
         )
         storage = kernels.add(*prepared, dtype=ts.float64, output_shape=shape)
         if storage is None:

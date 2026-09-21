@@ -5,7 +5,7 @@ import numpy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _arithmetic_operand
+from tensors.backend.numpy.conversion import _view
 from tensors.backend.numpy.conversion import _arithmetic_storage
 
 if TYPE_CHECKING:
@@ -27,9 +27,10 @@ def division_denominator_gradient(
     operands are never read back to the host: the choice is made elementwise
     on the device.
     """
-    upstream = _arithmetic_operand(grad, grad.dtype)
-    values = _arithmetic_operand(numerator, grad.dtype)
-    divisors = _arithmetic_operand(denominator, grad.dtype)
+    native = numpy.dtype(grad.dtype.name)
+    upstream = _view(grad).astype(native, copy=False)
+    values = _view(numerator).astype(native, copy=False)
+    divisors = _view(denominator).astype(native, copy=False)
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
         squares = numpy.square(divisors)
         direct = -upstream * values / squares

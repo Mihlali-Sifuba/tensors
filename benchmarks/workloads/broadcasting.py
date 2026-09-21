@@ -105,9 +105,13 @@ def _forward_cases(
         conversion = importlib.import_module(
             f"tensors.backend.{backend}.conversion"
         )
+        array_module = importlib.import_module(
+            "numpy" if backend == "numpy" else "cupy"
+        )
+        native = array_module.dtype(ts.float64.name)
         prepared = (
-            conversion._arithmetic_operand(left, ts.float64),
-            conversion._arithmetic_operand(right, ts.float64),
+            conversion._view(left).astype(native, copy=False),
+            conversion._view(right).astype(native, copy=False),
         )
 
         def run_kernel() -> Any:

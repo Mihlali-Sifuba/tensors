@@ -42,12 +42,22 @@ ARITHMETIC = (
 
 
 class TaggedStorage(Storage):
-    """Dependency-free storage that claims a chosen backend."""
+    """Storage that claims a chosen backend.
+
+    An array backend's buffer is a native array, because the dispatcher lowers
+    a resident Tensor by reshaping and casting that buffer directly. A Python
+    claim keeps the dependency-free ``array``.
+    """
 
     def __init__(self, kind, values, dtype=ts.float64):
         super().__init__(dtype)
         self.kind = kind
-        self._buffer = array(dtype.typecode, values)
+        if kind == "python":
+            self._buffer = array(dtype.typecode, values)
+        else:
+            import numpy
+
+            self._buffer = numpy.asarray(list(values), dtype=numpy.dtype(dtype.name))
 
     @property
     def buffer(self):

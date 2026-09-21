@@ -310,13 +310,16 @@ class CudaExecutesIntegerPowerNatively(ArithmeticTestCase):
 
     def test_the_provider_kernel_no_longer_declines(self):
         from tensors.backend.loading import _backend_kernel
-        from tensors.backend.cuda.conversion import _arithmetic_operand
+        import cupy
+
+        from tensors.backend.cuda.conversion import _view
 
         with ts.use_backend("cuda"):
             base = tensor("int32", [2, 3, 4, 5])
+            native = cupy.dtype("int32")
             storage = _backend_kernel("power")(
-                _arithmetic_operand(base, ts.int32),
-                _arithmetic_operand(5, ts.int32),
+                _view(base).astype(native, copy=False),
+                native.type(5),
                 dtype=ts.int32,
                 output_shape=(4,),
             )

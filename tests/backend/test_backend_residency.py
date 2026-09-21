@@ -26,12 +26,22 @@ from tests.backend._support import BackendTestCase, requires_cuda, requires_nump
 
 
 class TaggedStorage(Storage):
-    """Dependency-free storage that claims a chosen backend."""
+    """Storage that claims a chosen backend.
+
+    An array backend's buffer is a native array, because the dispatcher lowers
+    a resident Tensor by reshaping and casting that buffer directly. A Python
+    claim keeps the dependency-free ``array``.
+    """
 
     def __init__(self, kind, values, dtype=ts.float64):
         super().__init__(dtype)
         self.kind = kind
-        self._buffer = array(dtype.typecode, values)
+        if kind == "python":
+            self._buffer = array(dtype.typecode, values)
+        else:
+            import numpy
+
+            self._buffer = numpy.asarray(list(values), dtype=numpy.dtype(dtype.name))
 
     @property
     def buffer(self):
@@ -240,32 +250,29 @@ class ResultResidencyTests(BackendTestCase):
         backend = SimpleNamespace(add=kernel)
         return patch(
             "tensors.backend.config.get_backend", return_value="numpy"
-        ), patch.object(dispatch, "load_backend", return_value=backend), patch(
-            "tensors.backend.numpy.conversion._arithmetic_operand",
-            side_effect=lambda value, dtype: value,
-        )
+        ), patch.object(dispatch, "load_backend", return_value=backend)
 
     def test_a_result_on_the_selected_backend_is_accepted(self):
-        selection, loader, lowering = self._dispatch_with(
+        selection, loader = self._dispatch_with(
             lambda *args, **kwargs: TaggedStorage("numpy", [3.0])
         )
         left = tagged_tensor("numpy", [1.0])
-        with selection, loader, lowering:
+        with selection, loader:
             result = left + 2.0
         self.assertEqual(result._storage.kind, "numpy")
         self.assertIsInstance(result, ts.Tensor)
 
     def test_a_result_from_another_backend_is_refused(self):
-        selection, loader, lowering = self._dispatch_with(
+        selection, loader = self._dispatch_with(
             lambda *args, **kwargs: TaggedStorage("python", [3.0])
         )
         left = tagged_tensor("numpy", [1.0])
-        with selection, loader, lowering:
+        with selection, loader:
             with self.assertRaises(ts.BackendMismatchError):
                 left + 2.0
 
     def test_a_refused_result_is_never_wrapped_in_a_tensor(self):
-        selection, loader, lowering = self._dispatch_with(
+        selection, loader = self._dispatch_with(
             lambda *args, **kwargs: TaggedStorage("python", [3.0])
         )
         left = tagged_tensor("numpy", [1.0])
@@ -274,16 +281,16 @@ class ResultResidencyTests(BackendTestCase):
             "_from_owned_storage",
             side_effect=AssertionError("a refused result must not be wrapped"),
         ):
-            with selection, loader, lowering:
+            with selection, loader:
                 with self.assertRaises(ts.BackendMismatchError):
                     left + 2.0
 
     def test_operands_and_results_report_the_same_way(self):
-        selection, loader, lowering = self._dispatch_with(
+        selection, loader = self._dispatch_with(
             lambda *args, **kwargs: TaggedStorage("cuda", [3.0])
         )
         left = tagged_tensor("numpy", [1.0])
-        with selection, loader, lowering:
+        with selection, loader:
             with self.assertRaises(ts.BackendMismatchError) as raised:
                 left + 2.0
         self.assertEqual(
@@ -368,10 +375,7 @@ class DispatchBehaviourTests(BackendTestCase):
         backend = SimpleNamespace(add=lambda *args, **kwargs: None)
         with patch(
             "tensors.backend.config.get_backend", return_value="numpy"
-        ), patch.object(dispatch, "load_backend", return_value=backend), patch(
-            "tensors.backend.numpy.conversion._arithmetic_operand",
-            side_effect=lambda value, dtype: value,
-        ):
+        ), patch.object(dispatch, "load_backend", return_value=backend):
             with patch.object(
                 python_add,
                 "add",
@@ -398,10 +402,7 @@ class DispatchBehaviourTests(BackendTestCase):
         backend = SimpleNamespace(add=lambda *args, **kwargs: None)
         with patch(
             "tensors.backend.config.get_backend", return_value="numpy"
-        ), patch.object(dispatch, "load_backend", return_value=backend), patch(
-            "tensors.backend.numpy.conversion._arithmetic_operand",
-            side_effect=lambda value, dtype: value,
-        ):
+        ), patch.object(dispatch, "load_backend", return_value=backend):
             with self.assertRaisesRegex(
                 ts.BackendOperationUnsupportedError,
                 "numpy backend cannot execute add",

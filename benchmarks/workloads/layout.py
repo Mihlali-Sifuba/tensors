@@ -169,10 +169,12 @@ def _strided_cases(backend: str, side: int) -> list[Case]:
         conversion = importlib.import_module(
             f"tensors.backend.{backend}.conversion"
         )
-        prepared_layout = (
-            conversion._arithmetic_operand(value, ts.float64),
-            conversion._arithmetic_operand(value, ts.float64),
+        array_module = importlib.import_module(
+            "numpy" if backend == "numpy" else "cupy"
         )
+        native = array_module.dtype(ts.float64.name)
+        lowered_value = conversion._view(value).astype(native, copy=False)
+        prepared_layout = (lowered_value, lowered_value)
         cases.append(
             Case(
                 name=f"kernel.add/{name}/{side}x{side}",

@@ -13,12 +13,22 @@ from tests.backend._support import requires_cuda, requires_numpy
 
 
 class TaggedStorage(Storage):
-    """Dependency-free storage used to exercise dispatch validation."""
+    """Storage that claims a chosen backend, for dispatch validation.
+
+    An array backend's buffer is a native array, because the dispatcher lowers
+    a resident Tensor by reshaping and casting that buffer directly. A Python
+    claim keeps the dependency-free ``array``.
+    """
 
     def __init__(self, kind, values, dtype=ts.float64):
         super().__init__(dtype)
         self.kind = kind
-        self._buffer = array(dtype.typecode, values)
+        if kind == "python":
+            self._buffer = array(dtype.typecode, values)
+        else:
+            import numpy
+
+            self._buffer = numpy.asarray(list(values), dtype=numpy.dtype(dtype.name))
 
     @property
     def buffer(self):
@@ -72,10 +82,7 @@ class ValidationInterfaceTests(unittest.TestCase):
         )
         with patch(
             "tensors.backend.config.get_backend", return_value="numpy"
-        ), patch.object(dispatch, "load_backend", return_value=backend), patch(
-            "tensors.backend.numpy.conversion._arithmetic_operand",
-            side_effect=lambda value, dtype: value,
-        ):
+        ), patch.object(dispatch, "load_backend", return_value=backend):
             with self.assertRaises(ts.BackendMismatchError) as result:
                 result_side + 1.0
 
@@ -132,10 +139,7 @@ class ArithmeticResidencyTests(unittest.TestCase):
         )
         with patch("tensors.backend.config.get_backend", return_value="numpy"), patch.object(
             dispatch, "load_backend", return_value=backend
-        ) as load, patch(
-            "tensors.backend.numpy.conversion._arithmetic_operand",
-            side_effect=lambda value, dtype: value,
-        ):
+        ) as load:
             result = left + 2.0
 
         load.assert_called_once_with("numpy")
@@ -152,9 +156,6 @@ class ArithmeticResidencyTests(unittest.TestCase):
         )
         with patch("tensors.backend.config.get_backend", return_value="numpy"), patch.object(
             dispatch, "load_backend", return_value=backend
-        ), patch(
-            "tensors.backend.numpy.conversion._arithmetic_operand",
-            side_effect=lambda value, dtype: value,
         ):
             with self.assertRaisesRegex(
                 ts.BackendMismatchError,
@@ -170,9 +171,6 @@ class ArithmeticResidencyTests(unittest.TestCase):
         backend = SimpleNamespace(add=lambda *args, **kwargs: None)
         with patch("tensors.backend.config.get_backend", return_value="numpy"), patch.object(
             dispatch, "load_backend", return_value=backend
-        ), patch(
-            "tensors.backend.numpy.conversion._arithmetic_operand",
-            side_effect=lambda value, dtype: value,
         ):
             with self.assertRaisesRegex(
                 ts.BackendOperationUnsupportedError,
