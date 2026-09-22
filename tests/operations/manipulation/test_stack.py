@@ -85,5 +85,124 @@ class StackTests(unittest.TestCase):
         self.assertEqual(right.grad.tolist(), [6.0, 8.0])
 
 
+class StackExecutionTests(unittest.TestCase):
+    """Where stacking runs, now that its size no longer decides.
+
+    Stacking arranges values; it does not calculate one. So the question each
+    case asks is whether the arrangement is the specified one and whether it
+    happened on the backend that was selected — at sizes far below the
+    workload threshold this path used to branch on.
+    """
+
+    BACKENDS = ("python", "numpy", "cuda")
+
+    def _require(self, backend):
+        if backend not in ts.available_backends():
+            self.skipTest(f"the {backend} backend is not available here")
+
+    def test_a_small_stack_stays_on_the_selected_backend(self):
+        """Four elements: well under the policy this path used to apply."""
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                with ts.use_backend(backend):
+                    produced = ts.stack(
+                        [
+                            ts.Tensor([1.0, 2.0], dtype=ts.float64),
+                            ts.Tensor([3.0, 4.0], dtype=ts.float64),
+                        ]
+                    )
+                self.assertEqual(produced.tolist(), [1.0, 2.0, 3.0, 4.0])
+                self.assertEqual(tuple(produced.shape), (2, 2))
+                self.assertIs(produced.dtype, ts.float64)
+                self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_axis_handling_is_unchanged_on_every_backend(self):
+        """Axis 0 interleaves rows; axis 1 and -1 interleave columns."""
+        expectations = {
+            0: ([1.0, 2.0, 3.0, 4.0], (2, 2)),
+            1: ([1.0, 3.0, 2.0, 4.0], (2, 2)),
+            -1: ([1.0, 3.0, 2.0, 4.0], (2, 2)),
+        }
+        for backend in self.BACKENDS:
+            for axis, (values, shape) in expectations.items():
+                with self.subTest(backend=backend, axis=axis):
+                    self._require(backend)
+                    with ts.use_backend(backend):
+                        produced = ts.stack(
+                            [
+                                ts.Tensor([1.0, 2.0], dtype=ts.float64),
+                                ts.Tensor([3.0, 4.0], dtype=ts.float64),
+                            ],
+                            axis=axis,
+                        )
+                    self.assertEqual(produced.tolist(), values)
+                    self.assertEqual(tuple(produced.shape), shape)
+                    self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_a_non_contiguous_input_is_read_in_logical_order(self):
+        """A transposed view stacks by what it addresses, not by its buffer."""
+        rows = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                with ts.use_backend(backend):
+                    transposed = ts.transpose(ts.Tensor(rows, dtype=ts.float64))
+                    self.assertEqual(tuple(transposed.shape), (3, 2))
+                    produced = ts.stack([transposed, transposed], axis=0)
+                self.assertEqual(tuple(produced.shape), (2, 3, 2))
+                # Each copy is the transpose read row by row.
+                self.assertEqual(
+                    produced.tolist(),
+                    [1.0, 4.0, 2.0, 5.0, 3.0, 6.0] * 2,
+                )
+                self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_a_backend_that_cannot_stack_a_dtype_says_so(self):
+        """CUDA keeps integers off the device, and now reports it.
+
+        Its result conversion declines an integer dtype, which used to send
+        the work to the Python reference. Removing that fallback makes the
+        decline visible instead of silently relocating the computation.
+        """
+        from tensors.backend.config import BackendOperationUnsupportedError
+
+        integers = ([1, 2, 3], [4, 5, 6])
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                with ts.use_backend(backend):
+                    operands = [ts.Tensor(v, dtype=ts.int64) for v in integers]
+                    if backend == "cuda":
+                        with self.assertRaises(
+                            BackendOperationUnsupportedError
+                        ) as raised:
+                            ts.stack(operands)
+                        message = str(raised.exception)
+                        self.assertIn("cuda", message)
+                        self.assertIn("stack", message)
+                        return
+                    produced = ts.stack(operands)
+                self.assertEqual(produced.tolist(), [1, 2, 3, 4, 5, 6])
+                self.assertIs(produced.dtype, ts.int64)
+                self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_the_dispatcher_carries_no_threshold_or_fallback(self):
+        import inspect
+
+        from tensors.backend.dispatch.manipulation import stack as module
+
+        source = inspect.getsource(module.execute_stack)
+        for forbidden in (
+            "_array_work_is_large_enough",
+            "_NUMPY_ELEMENTWISE_MIN_SIZE",
+            "_backend_kernel",
+            "python.kernels",
+            "as reference",
+        ):
+            self.assertNotIn(forbidden, source)
+        self.assertIn("run_on_selected_backend", source)
+
+
 if __name__ == "__main__":
     unittest.main()

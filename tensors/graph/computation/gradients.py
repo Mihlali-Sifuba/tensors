@@ -104,9 +104,17 @@ def sum_gradient_graph(gradients: list[Variable]) -> Variable:
         return gradients[0]
 
     from ...operations.manipulation.stack import stack
-    from ...operations.reductions.sum import sum
+    from ...operations.reductions.sum import Sum
+    from ..expression import apply_operation
 
-    return sum(stack(gradients, axis=0), axis=0)
+    # The reduction that follows the stack is part of the reverse pass, so it
+    # runs where the selection says at every size. Left to the ordinary
+    # summation policy it answered in Python for a small accumulation, and the
+    # combined gradient then reached the next strict boundary residing on the
+    # wrong backend.
+    return apply_operation(
+        Sum(axis=0, on_selected_backend=True), (stack(gradients, axis=0),)
+    )
 
 
 def validate_gradients(
