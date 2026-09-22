@@ -1,7 +1,7 @@
 from __future__ import annotations
 from array import array
 from itertools import product
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from typing import TYPE_CHECKING, Any, Union, overload
 from tensors import dtype as _dtype
 from tensors._typing import Scalar, TensorData, TensorIndex, TensorLike
@@ -332,13 +332,37 @@ class Tensor:
             return NumPyStorage(selected, self.dtype)
         return CudaStorage(selected, self.dtype)
 
-    def _mutable_data(self) -> array:
-        """Return the mutable authoritative physical host Storage buffer."""
-        storage = self._storage_for("python")
-        if not isinstance(storage, PythonStorage):
-            raise TypeError("Python storage conversion returned an invalid buffer")
-        self._set_storage(storage)
-        return storage.buffer
+    def _write_storage_indices(
+        self,
+        indices: Sequence[int],
+        values: Storage | Scalar,
+        source_indices: Sequence[int] | None = None,
+    ) -> None:
+        """Write values into this tensor's own storage and record the mutation.
+
+        Every in-place write passes through here, so the three things a
+        successful mutation owes are owed once: the values reach the
+        authoritative storage on the backend that already holds it, the
+        representations converted from it before the write are dropped
+        because they now describe the values it used to have, and the
+        mutation version advances so a reader that recorded this tensor
+        earlier can tell that it has changed.
+
+        None of that happens for a write that fails. The positions and the
+        values are resolved before this is called and the storage is reached
+        once, so a rejected assignment leaves the tensor exactly as it was:
+        its values, its version and its backend.
+
+        This is internal. Callers address physical storage positions, not
+        logical coordinates.
+        """
+        from tensors.backend import execute_assign_indices
+
+        execute_assign_indices(
+            self.backend_storage, indices, values, source_indices=source_indices
+        )
+        self.backend_storage_cache = {self.backend_storage.kind: self.backend_storage}
+        self.mutation_version += 1
 
     @property
     def _data(self) -> array:
@@ -385,27 +409,53 @@ class Tensor:
 
     def _slice_assignment_values(
         self, value: TensorData, selection_shape: tuple[int, ...]
-    ) -> array:
-        """Validate and materialize values for an in-place slice assignment."""
-        selection_size = Shape.from_iterable(selection_shape).size
+    ) -> tuple[Storage | Scalar, Sequence[int] | None]:
+        """Validate assignment values and place them on this tensor's backend.
+
+        Returns the values to write and, when a broadcast decides it, the
+        source position each written position reads. ``None`` in that second
+        place means the values are already in selection order.
+
+        A number is returned as one converted value rather than one copy per
+        written position. It carries no backend, so the kernel repeats it
+        where the tensor lives, and that single host value crossing to the
+        tensor's backend is the host-facing write of
+        `docs/backend-storage-architecture.md` section 5.4.
+
+        Anything else is a tensor of values, and it reaches the tensor's
+        backend as backend-native storage. Returning the broadcast as a
+        mapping rather than as materialized values is what keeps it there: a
+        stretched axis is several written positions naming one source
+        position, which the backend resolves for itself instead of the host
+        reading the values out in order to repeat them.
+
+        Conversion is unchanged. The values are converted by constructing a
+        tensor of this tensor's dtype, so an assignment casts exactly as
+        construction casts and refuses exactly what construction refuses.
+        """
         if isinstance(value, (int, float)):
-            return PythonStorage.from_values(
-                [value] * selection_size, self.dtype
-            ).buffer
+            return PythonStorage.from_values([value], self.dtype).buffer[0], None
         if not isinstance(value, (Tensor, list, array)):
             raise TypeError(
                 f"Slice assignment value must be a number, list, array or Tensor, got {type(value)}"
             )
         assignment = Tensor(value, dtype=self.dtype)
-        from tensors.utils.broadcasting import broadcast_to
+        selection = Shape.from_iterable(selection_shape)
+        if assignment.shape == selection:
+            source_indices: Sequence[int] | None = None
+        else:
+            from tensors.utils.broadcasting import broadcast_source_indices
 
-        try:
-            assignment = broadcast_to(assignment, selection_shape)
-        except ValueError as exc:
-            raise ValueError(
-                f"Cannot assign shape {assignment.shape} to slice shape {selection_shape}"
-            ) from exc
-        return PythonStorage.from_values(assignment._data, self.dtype).buffer
+            try:
+                source_indices = broadcast_source_indices(assignment.shape, selection)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Cannot assign shape {assignment.shape} to slice shape {selection_shape}"
+                ) from exc
+        return (
+            assignment._logical_storage_for(self.backend_storage.kind),
+            source_indices,
+        )
 
     def _assign_slice_from_key(
         self, key: tuple[int | slice, ...], value: TensorData
@@ -415,17 +465,17 @@ class Tensor:
         physical_indices = storage_indices_from_ranges(
             ranges, self.shape, self.strides, self.offset
         )
-        assignment_values = self._slice_assignment_values(value, selection_shape)
-        if len(assignment_values) != len(physical_indices):
+        assignment_values, source_indices = self._slice_assignment_values(
+            value, selection_shape
+        )
+        written = (
+            len(physical_indices) if source_indices is None else len(source_indices)
+        )
+        if written != len(physical_indices):
             raise ValueError(
-                f"Slice assignment has {len(assignment_values)} values; expected {len(physical_indices)}"
+                f"Slice assignment has {written} values; expected {len(physical_indices)}"
             )
-        mutable_data = self._mutable_data()
-        for physical_index, assignment_value in zip(
-            physical_indices, assignment_values
-        ):
-            mutable_data[physical_index] = assignment_value
-        self.mutation_version += 1
+        self._write_storage_indices(physical_indices, assignment_values, source_indices)
 
     def __setitem__(self, key: TensorIndex, value: TensorData) -> None:
         """Support item assignment for N-dimensional tensors."""
@@ -442,8 +492,7 @@ class Tensor:
             idx = tensor_indices_to_storage_index(
                 (key,), self.shape, self.strides, self.offset
             )
-            self._mutable_data()[idx] = self._assignment_scalar(value)
-            self.mutation_version += 1
+            self._write_storage_indices((idx,), self._assignment_scalar(value))
             return
         if isinstance(key, tuple):
             if any((isinstance(part, bool) for part in key)):
@@ -454,8 +503,7 @@ class Tensor:
             idx = tensor_indices_to_storage_index(
                 key, self.shape, self.strides, self.offset
             )
-            self._mutable_data()[idx] = self._assignment_scalar(value)
-            self.mutation_version += 1
+            self._write_storage_indices((idx,), self._assignment_scalar(value))
             return
         raise TypeError(f"Unsupported index type: {type(key)}")
 

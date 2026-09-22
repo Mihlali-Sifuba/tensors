@@ -150,6 +150,9 @@ from tensors.backend.numpy.kernels.linalg.outer import outer as outer
 from tensors.backend.numpy.kernels.linalg.outer_gradient import (
     outer_gradient as outer_gradient,
 )
+from tensors.backend.numpy.kernels.manipulation.assign_indices import (
+    assign_indices as assign_indices,
+)
 from tensors.backend.numpy.kernels.manipulation.cast_tensor import (
     cast_tensor as cast_tensor,
 )

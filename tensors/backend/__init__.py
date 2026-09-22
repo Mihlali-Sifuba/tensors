@@ -53,6 +53,7 @@ from tensors.backend.dispatch import (
     execute_arctan_gradient as execute_arctan_gradient,
     execute_arctanh as execute_arctanh,
     execute_arctanh_gradient as execute_arctanh_gradient,
+    execute_assign_indices as execute_assign_indices,
     execute_argmax as execute_argmax,
     execute_argmin as execute_argmin,
     execute_binary_cross_entropy as execute_binary_cross_entropy,

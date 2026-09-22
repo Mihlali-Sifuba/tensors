@@ -156,6 +156,14 @@ what an underscore is allowed to mean, not a renaming sweep.
 > again. A gradient that met one of those below its former size threshold
 > used to come back in `PythonStorage`.
 >
+> **Also implemented for in-place assignment**, which answers to the tensor
+> rather than to the selection: a write goes to the backend the destination
+> already lives on, at any size, and never migrates it to the host. See
+> [backend-storage-architecture.md §5.4](backend-storage-architecture.md#54-mutation).
+> `ts.gradcheck` perturbs its inputs by assignment, so under an explicit
+> NumPy or CUDA selection it used to hand the next operation a host-resident
+> tensor and fail residency validation before comparing any derivative.
+>
 > **Every other operation still follows the workload policy** described
 > further down, and may still run the Python reference under an explicit
 > selection. That includes every other operation's vector-Jacobian products.

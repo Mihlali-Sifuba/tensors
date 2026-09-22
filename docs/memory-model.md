@@ -186,9 +186,17 @@ row-major values:
   containing only logical Tensor values in canonical row-major order.
 - `_data` exposes those logical row-major values through host/Python storage
   for reference kernels.
-- `_mutable_data()` returns the mutable authoritative physical host Storage
-  buffer, so callers must address it with storage indices rather than logical
-  linear indices.
+- `_write_storage_indices(indices, values, source_indices)` writes into the
+  authoritative Storage through `execute_assign_indices`, so callers address
+  it with physical storage indices rather than logical linear indices. It
+  replaced `_mutable_data()`, which returned a mutable **host** buffer and
+  installed it as authoritative, migrating a NumPy- or CUDA-resident tensor
+  to the host on any in-place write. A write now happens on the backend the
+  tensor already lives on; see
+  [backend-storage-architecture.md §5.4](backend-storage-architecture.md#54-mutation).
+  It is the single place a successful mutation invalidates the
+  representations converted before it and advances the mutation version, and
+  a write that fails does neither.
 
 Backend kernels are not stride-aware. The array-backend boundary uses
 `_logical_storage_for(kind)` and reshapes the resulting compact logical values.

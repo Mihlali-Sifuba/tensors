@@ -2,13 +2,19 @@
 
 ## 1. Status
 
-> **Status: proposed target contract. None of it is implemented.**
+> **Status: proposed target contract, with one section implemented.**
 >
-> This document states where the backend and storage model is going. It is not
-> a description of the package as it stands, and nothing in it may be cited as
-> evidence that a behaviour exists. Section 3 records what the package does
-> today, measured by running it; section 4 states what is proposed instead;
-> every difference between them is unimplemented work.
+> This document states where the backend and storage model is going. Apart
+> from 5.4, it is not a description of the package as it stands, and nothing
+> in it may be cited as evidence that a behaviour exists. Section 3 records
+> what the package does today, measured by running it; section 4 states what
+> is proposed instead; every difference between them is unimplemented work.
+>
+> **5.4, mutation, is implemented**, and 3.4 records it among the measured
+> behaviours. It was separable from the rest because it asks only where a
+> tensor already lives, never where it should live, so it needed neither the
+> selection lifecycle of T7 nor the single-representation rule of T3. No
+> other section of 5 may be read as implemented on the strength of it.
 >
 > The implemented contracts remain [Numerical backends](backends.md) for
 > selection and execution, [Tensor memory model](memory-model.md) for layout
@@ -41,9 +47,11 @@ returns a cached representation or converts and caches one, and leaves
 `_storage` untouched; a tensor used as an operand on another backend keeps the
 backend it had. Only `_set_storage` replaces the authoritative storage — it
 holds the package's single assignment to `_storage` — and it resets the cache
-when it does. The mutation path is what calls it: `_data` reads without
-replacing anything, while `_mutable_data` takes the host representation and
-installs it, so an in-place write migrates the tensor to the host (3.4).
+when it does. The mutation path used to call it: `_data` reads without
+replacing anything, while `_mutable_data` took the host representation and
+installed it, so an in-place write migrated the tensor to the host. That path
+is gone, and mutation now writes the authoritative storage where it already
+lives (3.4).
 
 So a tensor's backend is well defined at every moment, and it is stable unless
 one of those specific paths changes it. The cost is elsewhere:
@@ -135,15 +143,29 @@ under python selection  a + b -> PythonStorage [4.0, 5.0]
 
 Neither raises. The operand that does not match is converted.
 
-### 3.4 Mutation migrates a tensor to the host
+### 3.4 Mutation preserves a tensor's backend — implemented
+
+> **This is the one part of section 5 that is implemented.** It is recorded
+> here, among the measured behaviours, because it now *is* the measured
+> behaviour. Everything else in section 5 remains proposed.
 
 ```
 before  t[0] = 5.0   NumPyStorage
-after   t[0] = 5.0   PythonStorage
+after   t[0] = 5.0   NumPyStorage
 ```
 
-`_mutable_data` converts to host storage and installs it as authoritative, so
-an in-place write moves a device or NumPy tensor to the host permanently.
+An in-place write updates the tensor's own storage, on its own backend, as
+5.4 requires. `_mutable_data` — which converted to host storage and installed
+it as authoritative, so that a single element write moved a NumPy or device
+tensor to the host permanently — no longer exists. The write is dispatched to
+the backend the destination storage already belongs to, and only the cache of
+representations converted from it is discarded afterwards, leaving the
+authoritative storage in place.
+
+A value that comes from the host still reaches the tensor's backend: `t[0] =
+5.0` transfers that one scalar, which is the host-facing write 5.4 allows.
+The tensor is not transferred in the other direction, and a tensor supplying
+the values is not read out to the host to supply them.
 
 ### 3.5 Construction from a Tensor or Storage keeps the source's backend
 
@@ -1024,13 +1046,29 @@ source's backend by definition (5.1.2, C1).
 
 ### 5.4 Mutation
 
+> **Status: implemented.** Unlike the rest of section 5, this section
+> describes the package as it stands; 3.4 records the same behaviour among
+> the measured ones. It does not depend on T3 or T7 being implemented,
+> because it never asks where a tensor *should* live — only where it
+> already does.
+
 An in-place write updates the tensor's own storage, on its own backend. It does
-**not** migrate the tensor to the host, which is the behaviour in 3.4. Mutation
-versioning and stale-autograd detection are unchanged (T9).
+**not** migrate the tensor to the host. Mutation versioning and
+stale-autograd detection are unchanged (T9).
 
 A write whose value comes from the host — `t[0] = 5.0` — transfers one scalar
 to the tensor's backend. That is a host-facing write, the mirror of a
-host-facing read (5.5), and is intended.
+host-facing read (5.5), and is intended. A tensor supplying the values is not
+a host value and is not read out to the host: it reaches the destination's
+backend as native storage, and a broadcast among the values is applied there
+as the mapping it is rather than by materializing repeated values on the host.
+
+Mutation is the one boundary that answers to the tensor rather than to the
+selection. Every other execution boundary runs where the active backend says,
+because it is producing a new value; this one changes a value that already
+exists and already has a backend. Dispatching a write on the selection would
+either migrate the tensor, which T3 forbids, or refuse a write to a tensor
+built under a different selection, which nothing here requires.
 
 ### 5.5 Display and host access
 
@@ -1406,7 +1444,7 @@ objective is to remove indirection, not to rename it.
 | `tensors/tensor.py` — `_storage_for(kind)` | Converts and caches | **Gone.** Asking for a tensor in another backend is the request T5 removes. |
 | `tensors/tensor.py` — `_logical_storage_for(kind)` | Converts, then gathers | **Split.** The gather survives as a within-backend layout operation (T10); the conversion does not. |
 | `tensors/tensor.py` — `_set_storage` | Installs storage, resets the cache | Installs storage. The dtype agreement check it also performs is unrelated and stays. |
-| `tensors/tensor.py` — `_mutable_data` | Converts to host and installs it | **Changed.** Mutation acts on the tensor's own backend (5.4). |
+| `tensors/tensor.py` — `_mutable_data` | Converted to host and installed it | **Done.** Gone. Mutation acts on the tensor's own backend (5.4), through `execute_assign_indices`, which dispatches on the destination storage's kind. |
 | `tensors/tensor.py` — `_data` | Converts through `_storage_for("python")`, retains a full physical host representation, then gathers logical values; also serves internal numerical code | **Restricted or replaced.** Public inspection gets an uncached logical host-read path governed by H1–H6. Internal numerical consumers do not get access to it (H7). |
 | `tensors/tensor.py` — `tolist`, `item`, display/formatting, equality and scalar `__getitem__` | Share `_data`; display can request it repeatedly, equality materializes two lists, and scalar indexing dispatches a slice before `item()` | **Changed.** Each top-level observation follows H1–H8, materializes at most operation-local host state and returns independent Python values. Elementwise comparison remains ordinary backend execution. |
 | `tensors/tensor.py` — `__init__` | Host storage for scalars/lists; copies a Tensor's or Storage's kind; a Tensor dtype change routes through host values, while a Storage dtype change raises | **Changed.** T1 for host inputs; 5.1.1 for a `Tensor` input; 5.1.3 for a `Storage` input, including the early backend check, public deep copy and backend-native dtype conversion. |

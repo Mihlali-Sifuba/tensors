@@ -82,6 +82,7 @@ from tensors.backend.dispatch.creation import (
     execute_one_hot_targets as execute_one_hot_targets,
 )
 from tensors.backend.dispatch.manipulation import (
+    execute_assign_indices as execute_assign_indices,
     execute_cast as execute_cast,
     execute_concat as execute_concat,
     execute_slice as execute_slice,
