@@ -60,8 +60,6 @@ class Add(Operation):
         than calculated and discarded, and no zero is manufactured in its
         place, because addition's derivative does not depend on its inputs.
         """
-        from tensors.graph.expression import apply_operation, is_graph_operand
-
         gradients = []
         for operand, requested in zip(inputs, needs_input_grad):
             if not requested:
