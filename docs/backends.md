@@ -150,6 +150,12 @@ what an underscore is allowed to mean, not a renaming sweep.
 > workload-size threshold applies to them under any selection, and none of
 > them declines by reading operand values.
 >
+> **Also implemented for `negate`, `stack` and tensor indexing**, which a
+> reverse pass reaches: negation is the gradient of `a - b` by `b`, and a
+> repeated operand's contributions are stacked, reduced and sliced apart
+> again. A gradient that met one of those below its former size threshold
+> used to come back in `PythonStorage`.
+>
 > **Every other operation still follows the workload policy** described
 > further down, and may still run the Python reference under an explicit
 > selection. That includes every other operation's vector-Jacobian products.
@@ -355,10 +361,11 @@ and the kernel being called are visible in one place rather than named by a
 string handed to a shared helper.
 Where a VJP's computation shares an entry point with something outside the
 contract — the broadcast reduction is also used by `power`, `where` and the
-losses, and negation is also a forward operation — a second entry point named
-`execute_vjp_*` carries the strict policy and the original keeps the old one.
-Both call the same kernel; they differ only in what they do when the workload
-is small or the kernel declines. Operations therefore receive a result, not a decision: the
+losses — a second entry point named `execute_vjp_*` carries the strict policy
+and the original keeps the old one. Both call the same kernel; they differ only
+in what they do when the workload is small or the kernel declines. A duplicate
+disappears once the shared entry point is itself strict, as negation's did:
+`-x` and the gradient of `a - b` by `b` are one operation under one contract. Operations therefore receive a result, not a decision: the
 choice of fallback belongs to dispatch. An array kernel declines for edge cases
 needing stable reference algorithms or exact Python integer intermediates. CuPy
 has no Python object dtype, so exact integer operations use the Python path;

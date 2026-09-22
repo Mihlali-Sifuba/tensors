@@ -805,9 +805,9 @@ class AdditionVjpBoundaryTests(unittest.TestCase):
         from tensors.operations._gradient_shaping import ProductSumToShape
         from tensors.operations.manipulation.reshape import Reshape
         from tensors.operations.reductions.sum import Sum
-        from tensors.ops import Add, Mul
+        from tensors.ops import Add, Mul, Neg, Sub
 
-        for operation in (Add, Sum, Reshape, Mul, ProductSumToShape):
+        for operation in (Add, Sum, Reshape, Mul, ProductSumToShape, Sub, Neg):
             with self.subTest(operation=operation.name):
                 self.assertIs(operation.backward_graph, Operation.backward_graph)
                 self.assertNotIn("backward_graph", vars(operation))
@@ -1224,6 +1224,392 @@ class MultiplicationVjpTests(unittest.TestCase):
                 self.assertProduced(
                     other, values=[1.0, 2.0], shape=(2,), backend=backend
                 )
+
+
+class SubtractionVjpTests(unittest.TestCase):
+    """Subtraction's single ``backward``, on every backend.
+
+    Expected values are the derivative rules: d(a - b)/da is one and
+    d(a - b)/db is minus one, so each VJP is the upstream gradient — negated
+    for the right operand — summed back over the axes the forward broadcast
+    stretched. Nothing here reads one backend's answer to judge another's.
+    """
+
+    BACKENDS = ("python", "numpy", "cuda")
+    SIZES = (1, 2, 3, 31, 32, 64)
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def _require(self, backend):
+        if backend not in ts.available_backends():
+            self.skipTest(f"the {backend} backend is not available here")
+
+    def assertProduced(self, produced, *, values, shape, backend, dtype=ts.float64):
+        self.assertEqual(produced.tolist(), values)
+        self.assertEqual(tuple(produced.shape), shape)
+        self.assertEqual(produced.dtype, dtype)
+        self.assertEqual(produced.backend_storage.kind, backend)
+
+    def _assertBothVjps(self, left, right, seed, expected, shapes, dtype=ts.float64):
+        """Both VJPs, in both reverse modes, on every available backend."""
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    with ts.use_backend(backend):
+                        a = ts.Variable(ts.Tensor(left, dtype=dtype), name="a")
+                        b = ts.Variable(ts.Tensor(right, dtype=dtype), name="b")
+                        produced = ts.grad(
+                            a - b,
+                            [a, b],
+                            grad_outputs=ts.Tensor(seed, dtype=dtype),
+                            create_graph=create_graph,
+                        )
+                        if create_graph:
+                            produced = [item.data for item in produced]
+                    for index, item in enumerate(produced):
+                        with self.subTest(input=index):
+                            self.assertProduced(
+                                item,
+                                values=expected[index],
+                                shape=shapes[index],
+                                backend=backend,
+                                dtype=dtype,
+                            )
+
+    def test_equal_shapes_pass_the_gradient_and_its_negation(self):
+        self._assertBothVjps(
+            [[1.5, -2.5], [3.0, 4.0]],
+            [[0.5, 2.0], [-1.0, 8.0]],
+            [[1.0, 2.0], [3.0, 4.0]],
+            expected=[[1.0, 2.0, 3.0, 4.0], [-1.0, -2.0, -3.0, -4.0]],
+            shapes=[(2, 2), (2, 2)],
+        )
+
+    def test_a_stretched_singleton_axis_sums_the_positions_it_fed(self):
+        """``(1, 3) - (2, 1)``: each operand reduces a different axis."""
+        self._assertBothVjps(
+            [[1.5, -2.5, 3.0]],
+            [[2.0], [-4.0]],
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            expected=[[5.0, 7.0, 9.0], [-6.0, -15.0]],
+            shapes=[(1, 3), (2, 1)],
+        )
+
+    def test_an_added_leading_axis_is_summed_away(self):
+        """``(2, 3) - (3,)``: the rank the broadcast added is reduced out."""
+        self._assertBothVjps(
+            [[1.5, -2.5, 3.0], [2.0, 4.0, 6.0]],
+            [0.5, 2.0, -1.0],
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            expected=[[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [-5.0, -7.0, -9.0]],
+            shapes=[(2, 3), (3,)],
+        )
+
+    def test_float32_gradients_keep_their_dtype(self):
+        self._assertBothVjps(
+            [[1.5, -2.5, 3.0]],
+            [[2.0], [-4.0]],
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            expected=[[5.0, 7.0, 9.0], [-6.0, -15.0]],
+            shapes=[(1, 3), (2, 1)],
+            dtype=ts.float32,
+        )
+
+    def test_both_scalar_forms_keep_their_sign(self):
+        """``x - 3`` differentiates to one; ``3 - x`` to minus one."""
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    with ts.use_backend(backend):
+                        seed = ts.Tensor([1.0, 2.0])
+                        x = ts.Variable(ts.Tensor([1.5, -2.5]))
+                        forward = ts.grad(
+                            x - 3.0, x, grad_outputs=seed, create_graph=create_graph
+                        )
+                        y = ts.Variable(ts.Tensor([1.5, -2.5]))
+                        reflected = ts.grad(
+                            3.0 - y, y, grad_outputs=seed, create_graph=create_graph
+                        )
+                        if create_graph:
+                            forward, reflected = forward.data, reflected.data
+                    self.assertProduced(
+                        forward, values=[1.0, 2.0], shape=(2,), backend=backend
+                    )
+                    self.assertProduced(
+                        reflected, values=[-1.0, -2.0], shape=(2,), backend=backend
+                    )
+
+    def test_only_one_operand_may_be_requested(self):
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                for wanted in (0, 1):
+                    with self.subTest(
+                        backend=backend, create_graph=create_graph, input=wanted
+                    ):
+                        self._require(backend)
+                        reset_graph_state()
+                        with ts.use_backend(backend):
+                            operands = [
+                                ts.Variable(ts.Tensor([[1.5, -2.5, 3.0]])),
+                                ts.Variable(ts.Tensor([[2.0], [-4.0]])),
+                            ]
+                            operands[1 - wanted].requires_grad = False
+                            result = ts.grad(
+                                operands[0] - operands[1],
+                                operands[wanted],
+                                grad_outputs=ts.Tensor(
+                                    [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+                                ),
+                                create_graph=create_graph,
+                            )
+                            produced = result.data if create_graph else result
+                        expected = [[5.0, 7.0, 9.0], [-6.0, -15.0]][wanted]
+                        shape = [(1, 3), (2, 1)][wanted]
+                        self.assertProduced(
+                            produced, values=expected, shape=shape, backend=backend
+                        )
+
+    def test_a_repeated_operand_cancels_to_a_real_zero(self):
+        """``(x - y) - x`` is ``-y``, so the gradient by ``x`` is zero.
+
+        The two contributions reach the same Variable with opposite signs and
+        must be accumulated, not dropped: a requested derivative whose value
+        is mathematically zero is a zero, never a missing gradient.
+        """
+        for backend in self.BACKENDS:
+            for size in self.SIZES:
+                for create_graph in (False, True):
+                    with self.subTest(
+                        backend=backend, size=size, create_graph=create_graph
+                    ):
+                        self._require(backend)
+                        reset_graph_state()
+                        with ts.use_backend(backend):
+                            x = ts.Variable(ts.full((size,), 2.0, dtype=ts.float64))
+                            y = ts.Variable(ts.full((2, 1), 5.0, dtype=ts.float64))
+                            seed = ts.full((2, size), 1.0, dtype=ts.float64)
+                            result = ts.grad(
+                                (x - y) - x,
+                                x,
+                                grad_outputs=seed,
+                                create_graph=create_graph,
+                            )
+                            produced = result.data if create_graph else result
+                        self.assertIsNotNone(produced)
+                        self.assertProduced(
+                            produced,
+                            values=[0.0] * size,
+                            shape=(size,),
+                            backend=backend,
+                        )
+
+    def test_the_recorded_gradient_differentiates_by_its_upstream_seed(self):
+        """The right operand's VJP is linear and negative in the seed.
+
+        ``gb`` sums the seed along axis 1 and negates it, so differentiating
+        it back with a cotangent spreads that cotangent, negated, over every
+        position each sum consumed.
+        """
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    a = ts.Variable(ts.Tensor([[1.5, -2.5, 3.0]]))
+                    b = ts.Variable(ts.Tensor([[2.0], [-4.0]]))
+                    seed = ts.Variable(
+                        ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+                    )
+                    _, right = ts.grad(
+                        a - b, [a, b], grad_outputs=seed, create_graph=True
+                    )
+                    self.assertProduced(
+                        right.data,
+                        values=[-6.0, -15.0],
+                        shape=(2, 1),
+                        backend=backend,
+                    )
+
+                    by_seed = ts.grad(
+                        right, seed, grad_outputs=ts.Tensor([[2.0], [3.0]])
+                    )
+                self.assertProduced(
+                    by_seed,
+                    values=[-2.0, -2.0, -2.0, -3.0, -3.0, -3.0],
+                    shape=(2, 3),
+                    backend=backend,
+                )
+
+    def test_the_recorded_gradient_replays_with_a_changed_seed(self):
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    a = ts.Variable(ts.Tensor([[1.5, -2.5, 3.0]]))
+                    b = ts.Variable(ts.Tensor([[2.0], [-4.0]]))
+                    seed = ts.Variable(
+                        ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+                    )
+                    _, right = ts.grad(
+                        a - b, [a, b], grad_outputs=seed, create_graph=True
+                    )
+                    program = Computation(right)
+                    self.assertProduced(
+                        program.forward(),
+                        values=[-6.0, -15.0],
+                        shape=(2, 1),
+                        backend=backend,
+                    )
+
+                    seed.data = ts.Tensor([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]])
+                    replayed = program.forward()
+                self.assertProduced(
+                    replayed,
+                    values=[-60.0, -150.0],
+                    shape=(2, 1),
+                    backend=backend,
+                )
+
+    def test_signed_zero_and_infinity_survive_the_negation(self):
+        """Negation is exact, so the specified signs reach the gradient."""
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    a = ts.Variable(ts.Tensor([1.0, 2.0, 3.0]))
+                    b = ts.Variable(ts.Tensor([1.0, 2.0, 3.0]))
+                    seed = ts.Tensor([0.0, -0.0, math.inf])
+                    produced = ts.grad(a - b, b, grad_outputs=seed)
+                values = produced.tolist()
+                self.assertEqual(math.copysign(1.0, values[0]), -1.0, "-0.0")
+                self.assertEqual(math.copysign(1.0, values[1]), 1.0, "+0.0")
+                self.assertEqual(values[2], -math.inf)
+                self.assertEqual(produced.backend_storage.kind, backend)
+
+
+class NegationVjpTests(unittest.TestCase):
+    """Negation's single ``backward``, and where it runs.
+
+    ``-x`` and the gradient of ``a - b`` with respect to ``b`` are the same
+    operation, so one derivative and one execution contract serve both.
+    """
+
+    BACKENDS = ("python", "numpy", "cuda")
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def _require(self, backend):
+        if backend not in ts.available_backends():
+            self.skipTest(f"the {backend} backend is not available here")
+
+    def test_a_small_negation_stays_on_the_selected_backend(self):
+        """Two elements: under the policy this path used to apply."""
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                with ts.use_backend(backend):
+                    produced = -ts.Tensor([1.5, -2.5], dtype=ts.float64)
+                self.assertEqual(produced.tolist(), [-1.5, 2.5])
+                self.assertIs(produced.dtype, ts.float64)
+                self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_the_vjp_negates_the_upstream_gradient(self):
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    with ts.use_backend(backend):
+                        x = ts.Variable(ts.Tensor([1.5, -2.5]))
+                        result = ts.grad(
+                            -x,
+                            x,
+                            grad_outputs=ts.Tensor([1.0, 2.0]),
+                            create_graph=create_graph,
+                        )
+                        produced = result.data if create_graph else result
+                    self.assertEqual(produced.tolist(), [-1.0, -2.0])
+                    self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_a_recorded_negation_differentiates_by_its_seed(self):
+        """d(-seed)/d(seed) applied to a cotangent is that cotangent negated."""
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    x = ts.Variable(ts.Tensor([1.5, -2.5]))
+                    seed = ts.Variable(ts.Tensor([1.0, 2.0]))
+                    first = ts.grad(-x, x, grad_outputs=seed, create_graph=True)
+                    self.assertEqual(first.data.tolist(), [-1.0, -2.0])
+
+                    by_seed = ts.grad(
+                        first, seed, grad_outputs=ts.Tensor([3.0, 5.0])
+                    )
+                self.assertEqual(by_seed.tolist(), [-3.0, -5.0])
+                self.assertEqual(by_seed.backend_storage.kind, backend)
+
+    def test_a_backend_that_cannot_negate_a_dtype_says_so(self):
+        """CUDA keeps integers off the device, and now reports it.
+
+        Its result conversion declines an integer dtype, which used to send
+        the work to the Python reference. Removing that fallback makes the
+        decline visible instead of silently relocating the computation.
+        """
+        from tensors.backend.config import BackendOperationUnsupportedError
+
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                with ts.use_backend(backend):
+                    values = ts.Tensor([1, -2, 3], dtype=ts.int64)
+                    if backend == "cuda":
+                        with self.assertRaises(
+                            BackendOperationUnsupportedError
+                        ) as raised:
+                            -values
+                        self.assertIn("cuda", str(raised.exception))
+                        self.assertIn("negate", str(raised.exception))
+                        return
+                    produced = -values
+                self.assertEqual(produced.tolist(), [-1, 2, -3])
+                self.assertIs(produced.dtype, ts.int64)
+                self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_one_strict_entry_point_serves_both_uses(self):
+        """The duplicate the subtraction VJP needed is gone."""
+        import inspect
+
+        import tensors.backend as backend_package
+        from tensors.backend.dispatch.elementwise import negate as module
+
+        self.assertFalse(hasattr(backend_package, "execute_vjp_negate"))
+        source = inspect.getsource(module.execute_negate)
+        for forbidden in (
+            "_array_work_is_large_enough",
+            "_NUMPY_ELEMENTWISE_MIN_SIZE",
+            "_backend_kernel",
+            "python.kernels",
+            "as reference",
+        ):
+            self.assertNotIn(forbidden, source)
+        self.assertIn("validate_backend_residency", source)
+        self.assertIn("load_backend", source)
+        self.assertIn("BackendOperationUnsupportedError", source)
 
 
 if __name__ == "__main__":

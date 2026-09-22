@@ -97,7 +97,6 @@ from tensors.backend.dispatch import (
     execute_minimum_gradient as execute_minimum_gradient,
     execute_multiply as execute_multiply,
     execute_negate as execute_negate,
-    execute_vjp_negate as execute_vjp_negate,
     execute_not_equal as execute_not_equal,
     execute_one_hot_targets as execute_one_hot_targets,
     execute_outer as execute_outer,

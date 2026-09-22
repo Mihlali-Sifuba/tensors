@@ -79,9 +79,6 @@ from tensors.backend.dispatch.elementwise.minimum_gradient import (
     execute_minimum_gradient as execute_minimum_gradient,
 )
 from tensors.backend.dispatch.elementwise.negate import execute_negate as execute_negate
-from tensors.backend.dispatch.elementwise.vjp_negate import (
-    execute_vjp_negate as execute_vjp_negate,
-)
 from tensors.backend.dispatch.elementwise.not_equal import (
     execute_not_equal as execute_not_equal,
 )

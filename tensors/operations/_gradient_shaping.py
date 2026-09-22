@@ -67,21 +67,6 @@ def sum_to_shape_on_selected_backend(
     return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
 
 
-def negate_on_selected_backend(gradient: Tensor) -> Tensor:
-    """Negate a gradient on the backend that was selected.
-
-    The subtraction VJP negates the upstream gradient for its right operand,
-    which puts that negation inside the arithmetic contract. Forward negation
-    is a different operation and keeps its own dispatch.
-    """
-    from tensors.backend import execute_vjp_negate
-    from tensors.dtype import negation_dtype
-
-    dtype = negation_dtype(gradient.dtype)
-    accelerated = execute_vjp_negate(gradient, dtype=dtype)
-    return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=gradient.shape)
-
-
 def sum_products_to_shape(
     gradient: Tensor, factor: Tensor, shape: tuple[int, ...]
 ) -> Tensor:
