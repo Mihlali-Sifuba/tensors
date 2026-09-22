@@ -35,8 +35,9 @@ class ArithmeticDispatchTests(unittest.TestCase):
         backend = load_backend("numpy")
         with ts.use_backend("numpy"):
             value = ts.Tensor([2.0])
+            lowered = value._logical_storage_for("numpy").buffer
         with ts.use_backend("python"):
-            result = backend.add(value, 3.0, dtype=ts.float64, output_shape=(1,))
+            result = backend.add(lowered, 3.0, dtype=ts.float64, output_shape=(1,))
         self.assertIsInstance(result, NumPyStorage)
         self.assertEqual(result.buffer.tolist(), [5.0])
 

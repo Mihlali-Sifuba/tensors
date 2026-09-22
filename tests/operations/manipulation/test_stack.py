@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import patch
 
 import tensors as ts
+import tensors.backend as backend_state
 
 
 class StackTests(unittest.TestCase):
@@ -141,22 +143,68 @@ class StackExecutionTests(unittest.TestCase):
                     self.assertEqual(produced.backend_storage.kind, backend)
 
     def test_a_non_contiguous_input_is_read_in_logical_order(self):
-        """A transposed view stacks by what it addresses, not by its buffer."""
-        rows = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+        """A transposed view stacks by what it addresses, not by its buffer.
+
+        The source is deliberately larger than ``transpose`` needs to stay on
+        the selected backend. ``execute_transpose`` still carries a
+        workload-size policy, so a smaller view would arrive here residing in
+        Python and be rejected — which is that dispatcher's remaining
+        fallback, not something about stacking.
+        """
+        columns = 8
+        rows = [[float(column) for column in range(columns)] for _ in range(4)]
+        expected_transpose = [
+            float(column) for column in range(columns) for _ in range(4)
+        ]
         for backend in self.BACKENDS:
             with self.subTest(backend=backend):
                 self._require(backend)
                 with ts.use_backend(backend):
                     transposed = ts.transpose(ts.Tensor(rows, dtype=ts.float64))
-                    self.assertEqual(tuple(transposed.shape), (3, 2))
+                    self.assertEqual(tuple(transposed.shape), (columns, 4))
+                    self.assertEqual(transposed.backend_storage.kind, backend)
                     produced = ts.stack([transposed, transposed], axis=0)
-                self.assertEqual(tuple(produced.shape), (2, 3, 2))
+                self.assertEqual(tuple(produced.shape), (2, columns, 4))
                 # Each copy is the transpose read row by row.
-                self.assertEqual(
-                    produced.tolist(),
-                    [1.0, 4.0, 2.0, 5.0, 3.0, 6.0] * 2,
-                )
+                self.assertEqual(produced.tolist(), expected_transpose * 2)
                 self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_a_foreign_resident_operand_is_rejected_before_the_kernel(self):
+        """The mismatch is reported, not quietly converted on the way in.
+
+        The operands reach the boundary inside one sequence, which the
+        residency check reads as a single value carrying no residency. Were
+        they not checked separately, the kernel would lower them and the
+        stack would silently move backends.
+        """
+        if "numpy" not in ts.available_backends():
+            self.skipTest("the numpy backend is not available here")
+        import tensors.backend.numpy.kernels as numpy_kernels
+
+        with ts.use_backend("python"):
+            foreign = ts.Tensor([1.0, 2.0], dtype=ts.float64)
+        with ts.use_backend("numpy"):
+            resident = ts.Tensor([3.0, 4.0], dtype=ts.float64)
+
+            original = numpy_kernels.stack
+            with patch.object(numpy_kernels, "stack", wraps=original) as kernel:
+                backend_state._clear_backend_kernel_cache()
+                with self.assertRaises(ts.BackendMismatchError) as raised:
+                    ts.stack([foreign, resident])
+                backend_state._clear_backend_kernel_cache()
+                self.assertEqual(kernel.call_count, 0, "rejected before the kernel")
+
+                # The position of the offending operand is what is reported.
+                self.assertIn("python", str(raised.exception))
+                self.assertIn("numpy", str(raised.exception))
+
+                # A resident pair goes through and reaches that same kernel.
+                backend_state._clear_backend_kernel_cache()
+                produced = ts.stack([resident, resident])
+                backend_state._clear_backend_kernel_cache()
+            self.assertEqual(kernel.call_count, 1)
+        self.assertEqual(produced.tolist(), [3.0, 4.0, 3.0, 4.0])
+        self.assertEqual(produced.backend_storage.kind, "numpy")
 
     def test_a_backend_that_cannot_stack_a_dtype_says_so(self):
         """CUDA keeps integers off the device, and now reports it.

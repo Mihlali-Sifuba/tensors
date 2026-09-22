@@ -208,5 +208,122 @@ class TensorIndexingTests(unittest.TestCase):
             ts.Tensor([1, 2])[0, 0] = 99
 
 
+class IndexingExecutionTests(unittest.TestCase):
+    """Where a selection runs, now that its size no longer decides.
+
+    Splitting a stacked gradient back to the contributions it came from is a
+    slice, so a reverse pass runs one, and a small selection that came back
+    in Python storage left the accumulated gradient residing off the selected
+    backend. Selecting elements copies them; it calculates nothing, so the
+    only questions are which elements and where.
+    """
+
+    BACKENDS = ("python", "numpy", "cuda")
+
+    #: Every selection below produces fewer elements than the workload policy
+    #: this path used to apply, so each one took the Python reference before.
+    SMALL = 4
+
+    def _require(self, backend):
+        if backend not in ts.available_backends():
+            self.skipTest(f"the {backend} backend is not available here")
+
+    def assertSelected(self, produced, *, values, shape, backend):
+        self.assertEqual(produced.tolist(), values)
+        self.assertEqual(tuple(produced.shape), shape)
+        self.assertIs(produced.dtype, ts.float64)
+        self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_small_selections_stay_on_the_selected_backend(self):
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                with ts.use_backend(backend):
+                    tensor = ts.Tensor(
+                        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=ts.float64
+                    )
+                    row = tensor[1]
+                    column = tensor[:, 2]
+                    span = tensor[0, 0:2]
+                    strided = tensor[0, ::2]
+                    reversed_row = tensor[0, ::-1]
+                self.assertSelected(
+                    row, values=[4.0, 5.0, 6.0], shape=(3,), backend=backend
+                )
+                self.assertSelected(
+                    column, values=[3.0, 6.0], shape=(2,), backend=backend
+                )
+                self.assertSelected(
+                    span, values=[1.0, 2.0], shape=(2,), backend=backend
+                )
+                self.assertSelected(
+                    strided, values=[1.0, 3.0], shape=(2,), backend=backend
+                )
+                self.assertSelected(
+                    reversed_row, values=[3.0, 2.0, 1.0], shape=(3,), backend=backend
+                )
+
+    def test_a_non_contiguous_source_is_selected_in_logical_order(self):
+        """A selection out of a transposed view addresses logical positions.
+
+        The source is sized past ``execute_transpose``'s workload policy,
+        which still answers small permutations from the Python reference; a
+        smaller view would arrive here residing elsewhere, which is that
+        dispatcher's remaining fallback rather than anything about selecting.
+        """
+        rows = [[float(10 * row + column) for column in range(8)] for row in range(4)]
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                with ts.use_backend(backend):
+                    transposed = ts.transpose(ts.Tensor(rows, dtype=ts.float64))
+                    self.assertEqual(transposed.backend_storage.kind, backend)
+                    selected = transposed[2]
+                self.assertSelected(
+                    selected,
+                    values=[2.0, 12.0, 22.0, 32.0],
+                    shape=(4,),
+                    backend=backend,
+                )
+
+    def test_a_backend_that_cannot_select_a_dtype_says_so(self):
+        """CUDA keeps integers off the device, and now reports it."""
+        from tensors.backend.config import BackendOperationUnsupportedError
+
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                with ts.use_backend(backend):
+                    tensor = ts.Tensor([1, 2, 3, 4], dtype=ts.int64)
+                    if backend == "cuda":
+                        with self.assertRaises(
+                            BackendOperationUnsupportedError
+                        ) as raised:
+                            tensor[1:3]
+                        self.assertIn("cuda", str(raised.exception))
+                        self.assertIn("slice_tensor", str(raised.exception))
+                        return
+                    produced = tensor[1:3]
+                self.assertEqual(produced.tolist(), [2, 3])
+                self.assertIs(produced.dtype, ts.int64)
+                self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_the_dispatcher_carries_no_threshold_or_fallback(self):
+        import inspect
+
+        from tensors.backend.dispatch.manipulation import slice as module
+
+        source = inspect.getsource(module.execute_slice)
+        for forbidden in (
+            "_array_work_is_large_enough",
+            "_NUMPY_ELEMENTWISE_MIN_SIZE",
+            "_backend_kernel",
+            "python.kernels",
+            "as reference",
+        ):
+            self.assertNotIn(forbidden, source)
+        self.assertIn("run_on_selected_backend", source)
+
+
 if __name__ == "__main__":
     unittest.main()

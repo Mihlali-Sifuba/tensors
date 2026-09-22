@@ -67,7 +67,7 @@ class CudaResidencyTests(unittest.TestCase):
             parameter.grad = ts.full((64,), 0.5)
             ts.optim.SGD([parameter], learning_rate=0.1).step()
         self.assertIsInstance(parameter.data.backend_storage, CudaStorage)
-        self.assertAlmostEqual(parameter.data[0], 0.95)
+        self.assertAlmostEqual(parameter.data.tolist()[0], 0.95)
 
 
 class BatchedOptimizerStorageTests(unittest.TestCase):

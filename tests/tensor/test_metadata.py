@@ -249,8 +249,8 @@ class BackendMetadataTests(unittest.TestCase):
         if "numpy" not in ts.available_backends():
             self.skipTest("NumPy backend is unavailable")
         numpy = importlib.import_module("numpy")
-        source = ts.Tensor([float(value) for value in range(64)])
         with ts.use_backend("numpy"):
+            source = ts.Tensor([float(value) for value in range(64)])
             result = source[8:56]
         source_storage = source._storage_for("numpy")
         result_storage = result._storage_for("numpy")

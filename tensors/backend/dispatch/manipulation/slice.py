@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_ELEMENTWISE_MIN_SIZE,
-    _array_work_is_large_enough,
-    _shape_size,
-)
+from tensors.backend.dispatch._selected import run_on_selected_backend
 from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
@@ -18,17 +13,25 @@ if TYPE_CHECKING:
 def execute_slice(
     value: Tensor, key: TensorIndex, *, output_shape: tuple[int, ...]
 ) -> Storage:
-    """Run accelerated tensor slicing, or the Python reference."""
-    from tensors.backend.python.kernels.manipulation.slice_tensor import (
-        slice_tensor as reference,
-    )
+    """Select elements on the selected backend, whatever the selection size.
 
-    if not _array_work_is_large_enough(
-        _shape_size(output_shape), _NUMPY_ELEMENTWISE_MIN_SIZE
-    ):
-        return reference(value, key, output_shape=output_shape)
-    slice_tensor = _backend_kernel("slice_tensor")
-    result = slice_tensor(value, key, output_shape=output_shape)
-    if result is not None:
-        return result
-    return reference(value, key, output_shape=output_shape)
+    Splitting a stacked gradient back to the contributions it came from is a
+    slice, so a reverse pass runs this, and it carries the execution contract
+    of `docs/backends.md`: the selection decides where it runs and a backend
+    that cannot select conformingly reports that rather than letting the
+    Python reference answer. Under the workload-size policy this carried, a
+    small selection came back in Python storage, and the accumulated gradient
+    built from it then met the next strict boundary residing elsewhere.
+
+    Nothing is calculated here. The key is validated and the output shape
+    resolved by the caller, and each backend's kernel copies the same
+    selected elements in the same logical order, so no numerical decision
+    depends on where this runs.
+    """
+    return run_on_selected_backend(
+        "slice_tensor",
+        value,
+        key,
+        output_shape=output_shape,
+        detail=f"at dtype {value.dtype.name}",
+    )

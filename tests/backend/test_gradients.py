@@ -49,11 +49,11 @@ class CudaExtremeGradientTests(unittest.TestCase):
             matrix_gradient,
         ):
             self.assertIsInstance(gradient.backend_storage, CudaStorage)
-        self.assertEqual(division_gradient[0], -1.0)
-        self.assertAlmostEqual(base_gradient[0], 2.0, places=12)
+        self.assertEqual(division_gradient.tolist()[0], -1.0)
+        self.assertAlmostEqual(base_gradient.tolist()[0], 2.0, places=12)
         self.assertTrue(
             math.isclose(
-                exponent_gradient[0],
+                exponent_gradient.tolist()[0],
                 -4.605170185988183e-290,
                 rel_tol=1e-12,
                 abs_tol=0.0,

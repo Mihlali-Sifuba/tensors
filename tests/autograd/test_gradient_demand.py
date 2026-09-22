@@ -486,10 +486,12 @@ class FusionDemandTests(unittest.TestCase):
                 ts.ones((4_096,)),
             )
 
-        self.assertAlmostEqual(actual_base[0], expected_base[0], places=10)
         self.assertAlmostEqual(
-            actual_exponent[0],
-            expected_exponent[0],
+            actual_base.tolist()[0], expected_base.tolist()[0], places=10
+        )
+        self.assertAlmostEqual(
+            actual_exponent.tolist()[0],
+            expected_exponent.tolist()[0],
             places=10,
         )
 
@@ -511,7 +513,7 @@ class FusionDemandTests(unittest.TestCase):
             output = ts.sin(value**2.0) * 2.0 + 1.0
             actual = ts.grad(output, value, ts.ones((4_096,)))
 
-        self.assertAlmostEqual(actual[0], expected[0], places=10)
+        self.assertAlmostEqual(actual.tolist()[0], expected.tolist()[0], places=10)
 
 
 if __name__ == "__main__":

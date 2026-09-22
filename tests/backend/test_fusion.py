@@ -133,8 +133,8 @@ class CudaFusionTests(unittest.TestCase):
                 result = computation.forward()
         fused.assert_called_once()
         self.assertIsInstance(result.backend_storage, CudaStorage)
-        self.assertAlmostEqual(float(result[0, 0]), 64.5)
-        self.assertAlmostEqual(float(shifted.data[0, 0]), 64.5)
+        self.assertAlmostEqual(result.tolist()[0], 64.5)
+        self.assertAlmostEqual(shifted.data.tolist()[0], 64.5)
 
     def test_fused_tensor_division_by_zero_gives_the_unfused_result(self):
         """Breaking change B3, inside a fused plan.
@@ -187,8 +187,12 @@ class CudaFusionTests(unittest.TestCase):
         backward_fusion.assert_called_once()
         self.assertIsInstance(result.backend_storage, CudaStorage)
         self.assertIsInstance(value.grad.backend_storage, CudaStorage)
-        self.assertAlmostEqual(result[0], reference_output.data[0], places=12)
-        self.assertAlmostEqual(value.grad[0], reference_gradient[0], places=12)
+        self.assertAlmostEqual(
+            result.tolist()[0], reference_output.data.tolist()[0], places=12
+        )
+        self.assertAlmostEqual(
+            value.grad.tolist()[0], reference_gradient.tolist()[0], places=12
+        )
 
     def test_every_extended_unary_operation_fuses(self):
         cases = (
@@ -233,8 +237,16 @@ class CudaFusionTests(unittest.TestCase):
                         computation.backward(ts.ones((4_096,)))
                 forward_fusion.assert_called_once()
                 backward_fusion.assert_called_once()
-                self.assertAlmostEqual(result[0], reference_output.data[0], places=12)
-                self.assertAlmostEqual(value.grad[0], reference_gradient[0], places=12)
+                self.assertAlmostEqual(
+                    result.tolist()[0],
+                    reference_output.data.tolist()[0],
+                    places=12,
+                )
+                self.assertAlmostEqual(
+                    value.grad.tolist()[0],
+                    reference_gradient.tolist()[0],
+                    places=12,
+                )
 
     def test_fused_backward_reduces_broadcast_tensor_division_vjps(self):
         with ts.use_backend("cuda"):
@@ -254,7 +266,7 @@ class CudaFusionTests(unittest.TestCase):
         self.assertIsInstance(numerator.grad.backend_storage, CudaStorage)
         self.assertIsInstance(denominator.grad.backend_storage, CudaStorage)
         expected_numerator = 1.0 + 0.5 + 0.25 + 0.125
-        self.assertAlmostEqual(numerator.grad[0, 0], expected_numerator)
+        self.assertAlmostEqual(numerator.grad.tolist()[0], expected_numerator)
         expected_denominator = [-8192.0, -2048.0, -512.0, -128.0]
         self.assertEqual(denominator.grad.tolist(), expected_denominator)
 
@@ -304,8 +316,10 @@ class CudaFusionTests(unittest.TestCase):
         division_fusion.assert_called_once()
         self.assertIsInstance(base.grad.backend_storage, CudaStorage)
         self.assertIsInstance(denominator.grad.backend_storage, CudaStorage)
-        self.assertTrue(math.isclose(base.grad[0], 3e-92, rel_tol=1e-12, abs_tol=0.0))
-        self.assertEqual(denominator.grad[0], -1.0)
+        self.assertTrue(
+            math.isclose(base.grad.tolist()[0], 3e-92, rel_tol=1e-12, abs_tol=0.0)
+        )
+        self.assertEqual(denominator.grad.tolist()[0], -1.0)
 
     def test_fused_replay_preserves_extended_math_domains(self):
         """A fused replay still honours the domains that remain errors.
