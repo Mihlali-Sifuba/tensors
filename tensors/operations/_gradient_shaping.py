@@ -29,21 +29,6 @@ from tensors.shape import Shape
 from tensors.tensor import Tensor
 
 
-def sum_products_to_shape(
-    gradient: Tensor, factor: Tensor, shape: tuple[int, ...]
-) -> Tensor:
-    """Fused multiply-and-reduce for a broadcast VJP.
-
-    Multiplying first can create opposite infinities even when the exact
-    reduced result is finite. Grouping the factors before rounding preserves
-    that cancellation.
-    """
-    from tensors.backend import execute_sum_products_to_shape
-
-    accelerated = execute_sum_products_to_shape(gradient, factor, shape)
-    return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
-
-
 def sum_to_shape(gradient, shape):
     """Reduce a broadcast gradient to ``shape``, on the selected backend.
 
@@ -91,8 +76,17 @@ class ProductSumToShape(Operation):
         object.__setattr__(self, "target_shape", target_shape)
 
     def forward(self, left: Tensor, right: Tensor) -> Tensor:
-        target_shape = self.target_shape
-        return sum_products_to_shape(left, right, target_shape)
+        """Multiply and reduce in one step, so the product cannot lose range.
+
+        Forming the products first can overflow to infinities that cancel to
+        NaN, or underflow to zero, where the exact reduced result is
+        representable. The kernel groups the factors before rounding them.
+        """
+        from tensors.backend import execute_sum_products_to_shape
+
+        shape = self.target_shape
+        accelerated = execute_sum_products_to_shape(left, right, shape)
+        return Tensor._from_owned_storage(accelerated, dtype=left.dtype, shape=shape)
 
     def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Differentiate the fused product reduction, which is itself fused.
@@ -225,7 +219,6 @@ __all__ = [
     "MaskedValue",
     "ProductSumToShape",
     "masked_value_graph",
-    "sum_products_to_shape",
     "sum_to_shape",
     "sum_to_shape",
     "ZeroLike",
