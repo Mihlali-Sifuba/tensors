@@ -4,6 +4,7 @@ from tensors.operations.arithmetic.add import Add, add
 from tensors.operations.arithmetic.divide import (
     Div,
     DivisionDenominatorGradient,
+    DivisionDenominatorVJP,
     divide,
     divide_scalar,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "add",
     "Div",
     "DivisionDenominatorGradient",
+    "DivisionDenominatorVJP",
     "divide",
     "divide_scalar",
     "Mul",

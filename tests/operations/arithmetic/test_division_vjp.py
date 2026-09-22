@@ -155,17 +155,51 @@ class DivisionVjpResidencyTests(unittest.TestCase):
         with patch.object(numpy_backend, "division_denominator_gradient", spy):
             with ts.use_backend("numpy"):
                 a = ts.Variable(ts.Tensor([[6.0, 8.0]], dtype=ts.float64))
-                b = ts.Variable(ts.Tensor([[2.0, 4.0]], dtype=ts.float64))
-                ts.grad(a / b, [a, b], grad_outputs=ts.Tensor([[1.0, 1.0]]))
+                b = ts.Variable(ts.Tensor([[2.0], [4.0]], dtype=ts.float64))
+                ts.grad(
+                    a / b,
+                    [a, b],
+                    grad_outputs=ts.Tensor(
+                        [[1.0, 1.0], [1.0, 1.0]], dtype=ts.float64
+                    ),
+                )
 
-        for operand in seen["operands"]:
+        expected_shapes = ((2, 2), (1, 2), (2, 1))
+        for operand, expected_shape in zip(seen["operands"], expected_shapes):
             self.assertNotIsInstance(operand, ts.Tensor)
             self.assertIsInstance(operand, numpy.ndarray)
-            self.assertEqual(operand.shape, (1, 2))
+            self.assertEqual(operand.shape, expected_shape)
 
 
 class DivisionVjpBoundaryTests(unittest.TestCase):
     """The removed legacy machinery must not reappear."""
+
+    def test_the_vjp_rename_preserves_the_original_import(self):
+        from tensors.operations.arithmetic import (
+            DivisionDenominatorGradient,
+            DivisionDenominatorVJP,
+        )
+
+        self.assertIs(DivisionDenominatorGradient, DivisionDenominatorVJP)
+        self.assertEqual(
+            DivisionDenominatorVJP.name, "division_denominator_gradient"
+        )
+
+    def test_division_carries_no_removed_helpers_or_host_expansion(self):
+        import inspect
+
+        module = importlib.import_module("tensors.operations.arithmetic.divide")
+        source = inspect.getsource(module)
+
+        for removed in (
+            "_is_integer_division",
+            "_denominator_has_zero",
+            "_expanded_division_inputs",
+            "broadcast_to",
+            "def denominator_vjp",
+            "def reduced",
+        ):
+            self.assertNotIn(removed, source)
 
     def test_the_dispatcher_carries_no_threshold_or_fallback(self):
         import inspect
@@ -228,8 +262,8 @@ class DivisionVjpBoundaryTests(unittest.TestCase):
 
         module = importlib.import_module("tensors.operations.arithmetic.divide")
         for method in (
-            module.DivisionDenominatorGradient.forward,
-            module.DivisionDenominatorGradient.backward,
+            module.DivisionDenominatorVJP.forward,
+            module.DivisionDenominatorVJP.backward,
         ):
             with self.subTest(method=method.__name__):
                 tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
@@ -535,10 +569,10 @@ class DivisionSingleBackwardTests(unittest.TestCase):
                 self.assertEqual(replayed.backend_storage.kind, backend)
 
     def test_division_defines_exactly_one_derivative(self):
-        from tensors.operations.arithmetic.divide import DivisionDenominatorGradient
+        from tensors.operations.arithmetic.divide import DivisionDenominatorVJP
         from tensors.ops import Div, Operation
 
-        for operation in (Div, DivisionDenominatorGradient):
+        for operation in (Div, DivisionDenominatorVJP):
             with self.subTest(operation=operation.name):
                 self.assertNotIn("backward_graph", vars(operation))
                 self.assertFalse(hasattr(operation, "backward_graph"))

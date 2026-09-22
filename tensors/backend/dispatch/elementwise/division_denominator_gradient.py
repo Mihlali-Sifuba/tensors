@@ -11,9 +11,10 @@ this VJP — section 7.2 gives it a signed infinity or a NaN — so there is no
 reduction and no device synchronisation, and the kernels answer it
 numerically.
 
-The three operands arrive already broadcast to one shape, which is Tensor
-semantics settled by the operation layer. What is settled here is where the
-work runs and in what representation.
+The operands retain their logical shapes. NumPy and CUDA broadcast their
+native arrays directly, while the Python kernel applies the same mapping to
+its flat native buffers. What is settled here is where the work runs and in
+what representation.
 """
 
 from __future__ import annotations
@@ -88,6 +89,9 @@ def execute_division_denominator_gradient(
         lowered_denominator,
         dtype=dtype,
         output_shape=output_shape,
+        grad_shape=grad.shape,
+        numerator_shape=numerator.shape,
+        denominator_shape=denominator.shape,
     )
     if result is None:
         raise BackendOperationUnsupportedError(

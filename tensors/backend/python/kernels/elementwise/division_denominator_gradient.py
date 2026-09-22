@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
+from tensors.utils.broadcasting import broadcast_source_indices
 
 _INFINITY = float("inf")
 _NAN = float("nan")
@@ -78,17 +79,29 @@ def division_denominator_gradient(
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
+    grad_shape: tuple[int, ...],
+    numerator_shape: tuple[int, ...],
+    denominator_shape: tuple[int, ...],
 ) -> Storage:
     """Scale the upstream gradient by ``-numerator / denominator**2``.
 
-    The operands arrive prepared and already broadcast to one shape. A zero
-    divisor is answered numerically, not refused: section 7.2 specifies the
-    signed infinity or the NaN, and the range-safe helper above delivers it.
+    The operands arrive as flat native buffers with their logical shapes.
+    Broadcasting is applied as an index mapping, without constructing expanded
+    Tensors or moving values through another backend. A zero divisor is
+    answered numerically, not refused: section 7.2 specifies the signed
+    infinity or the NaN, and the range-safe helper above delivers it.
     """
+    grad_indices = broadcast_source_indices(grad_shape, output_shape)
+    numerator_indices = broadcast_source_indices(numerator_shape, output_shape)
+    denominator_indices = broadcast_source_indices(denominator_shape, output_shape)
     result = [
-        _negative_product_over_square(upstream, value, divisor)
-        for upstream, value, divisor in zip(
-            grad_values, numerator_values, denominator_values
+        _negative_product_over_square(
+            grad_values[grad_index],
+            numerator_values[numerator_index],
+            denominator_values[denominator_index],
+        )
+        for grad_index, numerator_index, denominator_index in zip(
+            grad_indices, numerator_indices, denominator_indices
         )
     ]
     if len(result) != math.prod(output_shape):

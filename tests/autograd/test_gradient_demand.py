@@ -12,7 +12,7 @@ from tensors.operations.losses.cross_entropy import CrossEntropy
 from tensors.operations.selection import Maximum, Minimum
 from tensors.operations.selection.where import Where
 from tensors.ops import Add, Div, Mul, Pow, Sub
-from tensors.operations.arithmetic.divide import DivisionDenominatorGradient
+from tensors.operations.arithmetic.divide import DivisionDenominatorVJP
 from tensors.operations.arithmetic.power import PowerBaseVJP, PowerExponentVJP
 
 
@@ -66,7 +66,7 @@ class OperationConfigurationTests(unittest.TestCase):
             Pow(),
             PowerBaseVJP(),
             PowerExponentVJP(),
-            DivisionDenominatorGradient(),
+            DivisionDenominatorVJP(),
             Where(),
             Maximum(),
             Minimum(),

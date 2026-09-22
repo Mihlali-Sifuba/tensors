@@ -18,6 +18,9 @@ def division_denominator_gradient(
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
+    grad_shape: tuple[int, ...],
+    numerator_shape: tuple[int, ...],
+    denominator_shape: tuple[int, ...],
 ) -> Storage:
     """Calculate ``-grad * numerator / denominator**2``.
 
@@ -29,7 +32,8 @@ def division_denominator_gradient(
     although the true quotient is representable. ``stable`` recovers those in
     the logarithm, and the selection below picks it only for them. The
     operands are never read back to the host: the choice is made elementwise
-    on the device, and they arrive already lowered and broadcast.
+    on the device, and the native arrays broadcast directly from their logical
+    shapes.
     """
     upstream = grad_values
     values = numerator_values

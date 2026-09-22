@@ -5,40 +5,9 @@ from tensors.backend import execute_divide, execute_division_denominator_gradien
 from tensors.dtype import convert_scalar, resolve_result_dtype, true_division_dtype
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
-from tensors.utils.broadcasting import broadcast_to
 from tensors.operations.gradient_primitives import sum_to_shape
 
 Scalar = Union[int, float]
-
-
-def _denominator_has_zero(denominator: Tensor) -> bool:
-    """Whether an integer denominator contains a zero.
-
-    Integer division has no infinity to deliver, so this test is required and
-    section 7.2 keeps it. It runs only for integer operands: floating division
-    delivers the IEEE result and must never read its denominator, which on a
-    device would mean a host synchronisation on every call.
-
-    The test asks the native buffer rather than materialising the tensor, so
-    a device denominator costs one synchronisation and no transfer. A view is
-    resolved to its logical values first, so elements the denominator does not
-    address cannot make it raise.
-    """
-    storage = denominator._logical_storage_for(denominator.backend_storage.kind)
-    buffer = storage.buffer
-    if getattr(buffer, "any", None) is None:
-        return any(value == 0 for value in buffer)
-    return bool((buffer == 0).any())
-
-
-def _is_integer_division(left: Tensor, right) -> bool:
-    """Whether both operands of a division are integers."""
-    if left.dtype.kind != "integer":
-        return False
-    right_dtype = getattr(right, "dtype", None)
-    if right_dtype is not None:
-        return right_dtype.kind == "integer"
-    return True
 
 
 class Div(Operation):
@@ -62,9 +31,19 @@ class Div(Operation):
             other = convert_scalar(b, a.dtype)
             resolved_dtype = a.dtype
         dtype = true_division_dtype(resolved_dtype)
-        if _is_integer_division(a, b):
+        right_dtype = getattr(b, "dtype", None)
+        if a.dtype.kind == "integer" and (
+            right_dtype is None or right_dtype.kind == "integer"
+        ):
             if isinstance(b, Tensor):
-                if _denominator_has_zero(b):
+                storage = b._logical_storage_for(b.backend_storage.kind)
+                buffer = storage.buffer
+                has_zero = (
+                    any(value == 0 for value in buffer)
+                    if getattr(buffer, "any", None) is None
+                    else bool((buffer == 0).any())
+                )
+                if has_zero:
                     raise ZeroDivisionError("Division by zero")
             elif other == 0:
                 raise ZeroDivisionError("Division by zero")
@@ -108,7 +87,7 @@ class Div(Operation):
             if slot == 0:
                 contribution = grad / denominator
             else:
-                primitive = DivisionDenominatorGradient()
+                primitive = DivisionDenominatorVJP()
                 contribution = (
                     apply_operation(primitive, (grad, numerator, denominator))
                     if is_graph_operand(grad)
@@ -120,18 +99,7 @@ class Div(Operation):
         return gradients
 
 
-def _expanded_division_inputs(
-    grad: Tensor, numerator: Tensor, denominator: Tensor
-) -> tuple[Tensor, Tensor, Tensor]:
-    shape = grad.shape.broadcast_with(numerator.shape).broadcast_with(denominator.shape)
-    return (
-        broadcast_to(grad, shape),
-        broadcast_to(numerator, shape),
-        broadcast_to(denominator, shape),
-    )
-
-
-class DivisionDenominatorGradient(Operation):
+class DivisionDenominatorVJP(Operation):
     """Differentiable range-safe VJP for a division denominator."""
 
     __slots__ = ()
@@ -148,20 +116,20 @@ class DivisionDenominatorGradient(Operation):
         when this operation was recorded, which made it disagree with the
         eager pass it is supposed to reproduce.
         """
-        grad, numerator, denominator = _expanded_division_inputs(
-            grad, numerator, denominator
+        output_shape = (
+            grad.shape.broadcast_with(numerator.shape)
+            .broadcast_with(denominator.shape)
         )
         accelerated = execute_division_denominator_gradient(
             grad,
             numerator,
             denominator,
             dtype=grad.dtype,
-            output_shape=grad.shape,
+            output_shape=output_shape,
         )
         return Tensor._from_owned_storage(
-            accelerated, dtype=grad.dtype, shape=grad.shape
+            accelerated, dtype=grad.dtype, shape=output_shape
         )
-
     def backward(
         self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Optional[Tensor]]:
@@ -197,30 +165,45 @@ class DivisionDenominatorGradient(Operation):
         grad, numerator, denominator = inputs
         need_grad, need_numerator, need_denominator = needs_input_grad
 
-        def denominator_vjp(value):
-            """This same operation, on ``value`` in the numerator's place."""
-            operands = (outer_grad, value, denominator)
-            return (
-                apply_operation(DivisionDenominatorGradient(), operands)
+        grad_partial = None
+        if need_grad:
+            operation = DivisionDenominatorVJP()
+            operands = (outer_grad, numerator, denominator)
+            contribution = (
+                apply_operation(operation, operands)
                 if is_graph_operand(outer_grad)
-                else DivisionDenominatorGradient().forward(*operands)
+                else operation.forward(*operands)
             )
+            grad_partial = sum_to_shape(contribution, grad.shape)
 
-        def reduced(value, target):
-            return sum_to_shape(value, target.shape)
+        numerator_partial = None
+        if need_numerator:
+            operation = DivisionDenominatorVJP()
+            operands = (outer_grad, grad, denominator)
+            contribution = (
+                apply_operation(operation, operands)
+                if is_graph_operand(outer_grad)
+                else operation.forward(*operands)
+            )
+            numerator_partial = sum_to_shape(contribution, numerator.shape)
 
-        grad_partial = reduced(denominator_vjp(numerator), grad) if need_grad else None
-        numerator_partial = (
-            reduced(denominator_vjp(grad), numerator) if need_numerator else None
-        )
         denominator_partial = None
         if need_denominator:
-            inner = denominator_vjp(grad)
-            denominator_partial = reduced(
-                inner * (numerator / denominator) * -2.0, denominator
+            operation = DivisionDenominatorVJP()
+            operands = (outer_grad, grad, denominator)
+            inner = (
+                apply_operation(operation, operands)
+                if is_graph_operand(outer_grad)
+                else operation.forward(*operands)
+            )
+            denominator_partial = sum_to_shape(
+                inner * (numerator / denominator) * -2.0, denominator.shape
             )
         return [grad_partial, numerator_partial, denominator_partial]
 
+
+# Compatibility name retained for callers that imported the original class.
+DivisionDenominatorGradient = DivisionDenominatorVJP
 
 divide = Div().forward
 
@@ -229,8 +212,16 @@ def divide_scalar(numerator: Scalar, denominator: Tensor) -> Tensor:
     """Return ``numerator / denominator`` for a scalar left operand."""
     converted = convert_scalar(numerator, denominator.dtype)
     dtype = true_division_dtype(denominator.dtype)
-    if denominator.dtype.kind == "integer" and _denominator_has_zero(denominator):
-        raise ZeroDivisionError("Division by zero")
+    if denominator.dtype.kind == "integer":
+        storage = denominator._logical_storage_for(denominator.backend_storage.kind)
+        buffer = storage.buffer
+        has_zero = (
+            any(value == 0 for value in buffer)
+            if getattr(buffer, "any", None) is None
+            else bool((buffer == 0).any())
+        )
+        if has_zero:
+            raise ZeroDivisionError("Division by zero")
     numerator = converted
     accelerated = execute_divide(
         numerator, denominator, dtype=dtype, output_shape=denominator.shape
