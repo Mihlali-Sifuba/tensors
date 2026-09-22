@@ -216,5 +216,136 @@ class GradientsAreUnchanged(unittest.TestCase):
                     )
 
 
+def addition_gradients(backend, size, broadcast, create_graph):
+    """Both VJPs of one addition, in one reverse mode, on one backend."""
+    with ts.use_backend(backend):
+        left = ts.Variable(ts.full((2, size), 1.5, dtype=ts.float64))
+        right = ts.Variable(
+            ts.full((1, size) if broadcast else (2, size), 2.5, dtype=ts.float64)
+        )
+        output = left + right
+        first, second = ts.grad(
+            output,
+            [left, right],
+            grad_outputs=resident_seed(output.data.shape),
+            create_graph=create_graph,
+        )
+        if create_graph:
+            first, second = first.data, second.data
+        return first, second
+
+
+class RecordedAdditionVjpExecutesOnTheSelectedBackend(unittest.TestCase):
+    """``+`` reduces on the selected backend in both reverse modes.
+
+    Addition defines one ``backward``, so the reduction a recorded reverse
+    pass builds is the reduction a numerical one runs, under the same
+    execution contract. Before that, graph building reduced through the
+    ordinary ``sum``, which consults the workload policy: a small recorded
+    broadcast VJP returned ``PythonStorage`` under explicit NumPy while the
+    numerical VJP of the same expression returned ``NumPyStorage``. These
+    cases are about ``+`` alone, which is the only operation migrated so far.
+    """
+
+    def _assert_recorded_runs_on(self, selection, expected=None):
+        expected = STORAGE_FOR[expected or selection]
+        for size in SMALL + LARGE:
+            for broadcast in (False, True):
+                with self.subTest(size=size, broadcast=broadcast):
+                    gradients = addition_gradients(
+                        selection, size, broadcast, create_graph=True
+                    )
+                    self.assertEqual(
+                        tuple(storage_name(g) for g in gradients),
+                        (expected, expected),
+                    )
+
+    def test_python_selection_records_a_reduction_that_runs_on_python(self):
+        self._assert_recorded_runs_on("python")
+
+    @requires_numpy
+    def test_explicit_numpy_records_a_reduction_that_runs_on_numpy(self):
+        self._assert_recorded_runs_on("numpy")
+
+    @requires_cuda
+    def test_explicit_cuda_records_a_reduction_that_runs_on_cuda(self):
+        self._assert_recorded_runs_on("cuda")
+
+    def test_both_reverse_modes_produce_the_same_values_and_residency(self):
+        for backend in ts.available_backends():
+            for size in SMALL + LARGE:
+                for broadcast in (False, True):
+                    with self.subTest(
+                        backend=backend, size=size, broadcast=broadcast
+                    ):
+                        numerical = addition_gradients(
+                            backend, size, broadcast, create_graph=False
+                        )
+                        recorded = addition_gradients(
+                            backend, size, broadcast, create_graph=True
+                        )
+                        for produced, expected in zip(recorded, numerical):
+                            self.assertEqual(produced.tolist(), expected.tolist())
+                            self.assertEqual(produced.shape, expected.shape)
+                            self.assertEqual(produced.dtype, expected.dtype)
+                            self.assertEqual(
+                                storage_name(produced), storage_name(expected)
+                            )
+
+    def test_a_replayed_reduction_stays_on_the_selected_backend(self):
+        """The contract is the reduction's own state, so replay keeps it."""
+        for backend in ts.available_backends():
+            with self.subTest(backend=backend):
+                with ts.use_backend(backend):
+                    left = ts.Variable(ts.full((2, 3), 1.5, dtype=ts.float64))
+                    right = ts.Variable(ts.full((1, 3), 2.5, dtype=ts.float64))
+                    output = left + right
+                    seed = ts.Variable(resident_seed(output.data.shape))
+                    _, second = ts.grad(
+                        output,
+                        [left, right],
+                        grad_outputs=seed,
+                        create_graph=True,
+                    )
+                    program = ts.graph.Computation(second)
+                    self.assertEqual(program.forward().tolist(), [2.0, 2.0, 2.0])
+
+                    seed.data = resident_seed(output.data.shape, 3.0)
+                    replayed = program.forward()
+                self.assertEqual(replayed.tolist(), [6.0, 6.0, 6.0])
+                self.assertEqual(storage_name(replayed), STORAGE_FOR[backend])
+
+    @requires_numpy
+    def test_a_declining_kernel_is_reported_in_both_reverse_modes(self):
+        """A decline is an error in the recorded pass as in the value pass."""
+        for create_graph in (False, True):
+            with self.subTest(create_graph=create_graph):
+                with patch.object(numpy_kernels, "sum_to_shape", return_value=None):
+                    backend_state._clear_backend_kernel_cache()
+                    try:
+                        with self.assertRaises(
+                            ts.BackendOperationUnsupportedError
+                        ) as raised:
+                            addition_gradients(
+                                "numpy", 4, broadcast=True, create_graph=create_graph
+                            )
+                    finally:
+                        backend_state._clear_backend_kernel_cache()
+                message = str(raised.exception)
+                self.assertIn("numpy", message)
+                self.assertIn("sum_to_shape", message)
+
+    @requires_numpy
+    def test_a_small_recorded_broadcast_reaches_the_numpy_kernel(self):
+        original = numpy_kernels.sum_to_shape
+        with patch.object(
+            numpy_kernels, "sum_to_shape", wraps=original
+        ) as kernel:
+            backend_state._clear_backend_kernel_cache()
+            addition_gradients("numpy", 4, broadcast=True, create_graph=True)
+        backend_state._clear_backend_kernel_cache()
+        self.assertGreaterEqual(kernel.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -271,5 +271,257 @@ class AutogradTests(unittest.TestCase):
         self.assertIsNone(weight.grad)
 
 
+class AdditionVjpTests(unittest.TestCase):
+    """Addition's single ``backward``, through the public API.
+
+    ``Add`` defines its derivative once, against operations rather than
+    against Tensors, so an ordinary reverse pass and one building a
+    derivative graph run the same statements over different operands. Every
+    case below is therefore asserted in both modes, and the recorded mode is
+    also replayed, because a recorded VJP is a program and not an answer.
+
+    Addition is the only operation migrated so far. Expressions here are
+    built from ``+`` alone so that what fails is addition's own behaviour.
+    """
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def _gradients(self, left, right, seed, *, create_graph, dtype=ts.float64):
+        """Both VJPs of ``left + right`` at ``seed``, in one reverse mode."""
+        a = ts.Variable(ts.Tensor(left, dtype=dtype), name="a")
+        b = ts.Variable(ts.Tensor(right, dtype=dtype), name="b")
+        first, second = ts.grad(
+            a + b,
+            [a, b],
+            grad_outputs=ts.Tensor(seed, dtype=dtype),
+            create_graph=create_graph,
+        )
+        if create_graph:
+            first, second = first.data, second.data
+        return first, second
+
+    def _assertBothModes(self, left, right, seed, expected, dtype=ts.float64):
+        """Assert the values, shapes and dtypes of both VJPs, in both modes."""
+        for create_graph in (False, True):
+            with self.subTest(create_graph=create_graph):
+                reset_graph_state()
+                produced = self._gradients(
+                    left, right, seed, create_graph=create_graph, dtype=dtype
+                )
+                for index, (gradient, operand) in enumerate(
+                    zip(produced, (left, right))
+                ):
+                    with self.subTest(input=index):
+                        wanted = ts.Tensor(operand, dtype=dtype)
+                        self.assertEqual(gradient.tolist(), expected[index])
+                        self.assertEqual(gradient.shape, wanted.shape)
+                        self.assertEqual(gradient.dtype, dtype)
+
+    def test_equal_shapes_hand_the_gradient_to_both_operands(self):
+        self._assertBothModes(
+            [[1.0, 2.0], [3.0, 4.0]],
+            [[5.0, 6.0], [7.0, 8.0]],
+            [[1.0, 2.0], [3.0, 4.0]],
+            expected=[[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0]],
+        )
+
+    def test_a_stretched_axis_sums_the_positions_it_fed(self):
+        """(1, 3) + (2, 1): each operand reduces along a different axis."""
+        self._assertBothModes(
+            [[1.0, 2.0, 3.0]],
+            [[10.0], [20.0]],
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            expected=[[5.0, 7.0, 9.0], [6.0, 15.0]],
+        )
+
+    def test_an_added_leading_axis_is_summed_away(self):
+        """(2, 3) + (3,): the rank the broadcast added is reduced out."""
+        self._assertBothModes(
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            [1.0, 2.0, 3.0],
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            expected=[[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [5.0, 7.0, 9.0]],
+        )
+
+    def test_a_fully_reduced_operand_keeps_its_own_shape(self):
+        self._assertBothModes(
+            [[1.0, 2.0], [3.0, 4.0]],
+            [[5.0]],
+            [[1.0, 2.0], [3.0, 4.0]],
+            expected=[[1.0, 2.0, 3.0, 4.0], [10.0]],
+        )
+
+    def test_float32_gradients_keep_their_dtype(self):
+        self._assertBothModes(
+            [[1.0, 2.0, 3.0]],
+            [[10.0], [20.0]],
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            expected=[[5.0, 7.0, 9.0], [6.0, 15.0]],
+            dtype=ts.float32,
+        )
+
+    def test_only_one_operand_may_be_requested(self):
+        """An unrequested operand is skipped, not calculated and discarded."""
+        for create_graph in (False, True):
+            for wanted_index in (0, 1):
+                with self.subTest(create_graph=create_graph, input=wanted_index):
+                    reset_graph_state()
+                    operands = [
+                        ts.Variable(ts.Tensor([[1.0, 2.0, 3.0]])),
+                        ts.Variable(ts.Tensor([[10.0], [20.0]])),
+                    ]
+                    operands[1 - wanted_index].requires_grad = False
+                    seed = ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+                    result = ts.grad(
+                        operands[0] + operands[1],
+                        operands[wanted_index],
+                        grad_outputs=seed,
+                        create_graph=create_graph,
+                    )
+                    produced = result.data if create_graph else result
+                    expected = [[5.0, 7.0, 9.0], [6.0, 15.0]][wanted_index]
+                    self.assertEqual(produced.tolist(), expected)
+                    self.assertEqual(
+                        produced.shape, operands[wanted_index].data.shape
+                    )
+                    self.assertIsNone(
+                        ts.grad(
+                            operands[0] + operands[1],
+                            operands[1 - wanted_index],
+                            grad_outputs=seed,
+                        )
+                    )
+
+    def test_a_repeated_operand_accumulates_both_contributions(self):
+        """``x + x`` reaches the same Variable through both input slots."""
+        for create_graph in (False, True):
+            with self.subTest(create_graph=create_graph):
+                reset_graph_state()
+                x = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0]]))
+                result = ts.grad(
+                    x + x,
+                    x,
+                    grad_outputs=ts.Tensor([[1.0, 2.0, 3.0]]),
+                    create_graph=create_graph,
+                )
+                produced = result.data if create_graph else result
+                self.assertEqual(produced.tolist(), [2.0, 4.0, 6.0])
+                self.assertEqual(tuple(produced.shape), (1, 3))
+
+    def test_a_repeated_operand_accumulates_across_a_broadcast(self):
+        """``(x + y) + x`` reduces one contribution and passes the other."""
+        for create_graph in (False, True):
+            with self.subTest(create_graph=create_graph):
+                reset_graph_state()
+                x = ts.Variable(ts.Tensor([1.0, 2.0, 3.0]))
+                y = ts.Variable(ts.Tensor([[1.0], [2.0]]))
+                result = ts.grad(
+                    (x + y) + x,
+                    x,
+                    grad_outputs=ts.Tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]),
+                    create_graph=create_graph,
+                )
+                produced = result.data if create_graph else result
+                # Both contributions reduce (2, 3) to (3,): 2 + 2 per position.
+                self.assertEqual(produced.tolist(), [4.0, 4.0, 4.0])
+                self.assertEqual(tuple(produced.shape), (3,))
+
+    def test_a_scalar_operand_leaves_the_gradient_untouched(self):
+        for create_graph in (False, True):
+            with self.subTest(create_graph=create_graph):
+                reset_graph_state()
+                x = ts.Variable(ts.Tensor([1.0, 2.0]))
+                result = ts.grad(
+                    x + 3.0,
+                    x,
+                    grad_outputs=ts.Tensor([1.0, 2.0]),
+                    create_graph=create_graph,
+                )
+                produced = result.data if create_graph else result
+                self.assertEqual(produced.tolist(), [1.0, 2.0])
+
+    def test_the_recorded_gradient_replays_with_a_changed_seed(self):
+        """The recorded VJP is a program: re-run it, do not re-derive it."""
+        a = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0]]))
+        b = ts.Variable(ts.Tensor([[10.0], [20.0]]))
+        seed = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]))
+        first, second = ts.grad(a + b, [a, b], grad_outputs=seed, create_graph=True)
+
+        left_program = Computation(first)
+        right_program = Computation(second)
+        self.assertEqual(left_program.forward().tolist(), [5.0, 7.0, 9.0])
+        self.assertEqual(right_program.forward().tolist(), [6.0, 15.0])
+
+        seed.data = ts.Tensor([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]])
+        replayed_left = left_program.forward()
+        replayed_right = right_program.forward()
+
+        self.assertEqual(replayed_left.tolist(), [50.0, 70.0, 90.0])
+        self.assertEqual(tuple(replayed_left.shape), (1, 3))
+        self.assertEqual(replayed_right.tolist(), [60.0, 150.0])
+        self.assertEqual(tuple(replayed_right.shape), (2, 1))
+
+    def test_the_recorded_gradient_differentiates_by_its_upstream_seed(self):
+        """d(dz/da)/d(seed) across the broadcast reduction.
+
+        The left operand's VJP sums the seed down axis 0, so each seed
+        position contributes to exactly one reduced position, and the
+        derivative of that sum with respect to the seed is one everywhere.
+        """
+        a = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0]]))
+        b = ts.Variable(ts.Tensor([[10.0], [20.0]]))
+        seed = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]))
+        first, second = ts.grad(a + b, [a, b], grad_outputs=seed, create_graph=True)
+
+        by_seed = ts.grad(first, seed, grad_outputs=ts.Tensor([[1.0, 1.0, 1.0]]))
+        self.assertEqual(by_seed.tolist(), [1.0] * 6)
+        self.assertEqual(tuple(by_seed.shape), (2, 3))
+        self.assertEqual(by_seed.dtype, ts.float64)
+
+        # The right operand reduces the other axis, and a weighted cotangent
+        # spreads back over the positions each reduced value was summed from.
+        weighted = ts.grad(second, seed, grad_outputs=ts.Tensor([[2.0], [3.0]]))
+        self.assertEqual(weighted.tolist(), [2.0, 2.0, 2.0, 3.0, 3.0, 3.0])
+        self.assertEqual(tuple(weighted.shape), (2, 3))
+
+    def test_a_seed_derivative_without_a_broadcast_is_the_identity(self):
+        a = ts.Variable(ts.Tensor([1.0, 2.0]))
+        b = ts.Variable(ts.Tensor([3.0, 4.0]))
+        seed = ts.Variable(ts.Tensor([1.0, 2.0]))
+        first, _ = ts.grad(a + b, [a, b], grad_outputs=seed, create_graph=True)
+
+        by_seed = ts.grad(first, seed, grad_outputs=ts.Tensor([5.0, 7.0]))
+        self.assertEqual(by_seed.tolist(), [5.0, 7.0])
+        self.assertEqual(tuple(by_seed.shape), (2,))
+
+
+class AdditionVjpBoundaryTests(unittest.TestCase):
+    """What addition must not have grown back."""
+
+    def test_addition_defines_exactly_one_derivative(self):
+        from tensors.ops import Add
+
+        self.assertIs(Add.backward_graph, Operation.backward_graph)
+        self.assertNotIn("backward_graph", vars(Add))
+
+    def test_no_compatibility_marker_selects_the_reverse_method(self):
+        """Both reverse modes call ``backward``; nothing chooses between them."""
+        import inspect
+
+        from tensors.graph.computation import computation as module
+
+        source = inspect.getsource(module.Computation._backward_graph)
+        self.assertIn("operation.backward(", source)
+        # ``_backward_graph`` is this method's own name; the operation call
+        # inside it is what must no longer reach a second derivative method.
+        self.assertNotIn(".backward_graph(", source)
+        self.assertNotIn("backward_accepts_graph_operands", source)
+        self.assertFalse(hasattr(Operation, "backward_accepts_graph_operands"))
+
+
 if __name__ == "__main__":
     unittest.main()

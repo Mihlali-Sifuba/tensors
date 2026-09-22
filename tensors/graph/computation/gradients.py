@@ -129,7 +129,8 @@ def validate_gradients(
     from ...variable import Variable
 
     label = operation.name
-    mode = "backward_graph" if graph else "backward"
+    # One method serves both reverse passes, so the mode names the pass.
+    mode = "graph backward" if graph else "backward"
     try:
         results = tuple(gradients)
     except TypeError as exc:
