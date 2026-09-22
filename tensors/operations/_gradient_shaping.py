@@ -132,46 +132,47 @@ class ProductSumToShape(Operation):
         target_shape = self.target_shape
         return sum_products_to_shape(left, right, target_shape)
 
-    def backward(
-        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
-    ) -> list[Tensor]:
-        from tensors.utils.broadcasting import broadcast_to
+    def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        """Differentiate the fused product reduction, which is itself fused.
+
+        Each operand's derivative is the same shape of computation as the
+        multiplication VJP this operation implements: the upstream gradient
+        times the other operand, grouped before rounding and summed back to
+        that operand's shape. So it is expressed as this operation again,
+        and the grouping the fused kernel performs is preserved at every
+        derivative level rather than only at the first.
+
+        The gradient arrives at the reduced shape and the reduction needs it
+        at the shape the products had. Multiplying by ones is that expansion,
+        exactly — ``x * 1`` is ``x`` for every value a gradient can hold —
+        and it keeps the work on the selected backend, where the host-side
+        broadcast it replaces did not.
+        """
+        from tensors.creation import ones
+        from tensors.graph.expression import apply_operation, is_graph_operand
 
         left, right = inputs
-        need_left, need_right = needs_input_grad
         common_shape = left.shape.broadcast_with(right.shape)
-        expanded_grad = broadcast_to(grad, common_shape)
-        return [
-            (
-                sum_products_to_shape(expanded_grad, right, left.shape)
-                if need_left
-                else None
-            ),
-            (
-                sum_products_to_shape(expanded_grad, left, right.shape)
-                if need_right
-                else None
-            ),
-        ]
-
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        left, right = inputs
-        common_shape = left.shape.broadcast_with(right.shape)
-        ones = Tensor([1.0] * common_shape.size, dtype=grad.dtype, shape=common_shape)
-        expanded_grad = grad * ones
-        need_left, need_right = needs_input_grad
-        return [
-            (
-                sum_products_to_shape_graph(expanded_grad, right, left.shape)
-                if need_left
-                else None
-            ),
-            (
-                sum_products_to_shape_graph(expanded_grad, left, right.shape)
-                if need_right
-                else None
-            ),
-        ]
+        expanded = (
+            grad
+            if grad.shape == common_shape
+            else grad * ones(common_shape, dtype=grad.dtype)
+        )
+        gradients = []
+        for operand, factor, requested in (
+            (left, right, needs_input_grad[0]),
+            (right, left, needs_input_grad[1]),
+        ):
+            if not requested:
+                gradients.append(None)
+                continue
+            reduction = ProductSumToShape(target_shape=operand.shape)
+            gradients.append(
+                apply_operation(reduction, (expanded, factor))
+                if is_graph_operand(expanded)
+                else reduction.forward(expanded, factor)
+            )
+        return gradients
 
 
 def sum_products_to_shape_graph(left, right, shape: tuple[int, ...]):

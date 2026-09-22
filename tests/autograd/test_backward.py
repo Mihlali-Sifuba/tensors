@@ -1,3 +1,4 @@
+import math
 import unittest
 
 import tensors as ts
@@ -716,6 +717,55 @@ class AdditionSeedDerivativeTests(unittest.TestCase):
                     backend=backend,
                 )
 
+    def test_the_add_chain_differentiates_a_third_time(self):
+        """The level that used to stop inside multiplication.
+
+        Add's VJP records a reduction; the reduction's VJP records a
+        multiplication by ones; so a third recorded derivative lands in
+        ``Mul.backward``. Each seed position feeds two rows of the first
+        sum, so differentiating the spread back by its own cotangent of ones
+        counts those rows: two everywhere, whichever broadcast was reduced.
+        """
+        for backend in self.BACKENDS:
+            for label in ("stretched", "leading"):
+                with self.subTest(backend=backend, broadcast=label):
+                    self._require(backend)
+                    reset_graph_state()
+                    with ts.use_backend(backend):
+                        if label == "stretched":
+                            first, _, seed = self._stretched_axis_gradient()
+                            cotangent = ts.Tensor([[2.0, 3.0, 5.0]])
+                            shape = (1, 3)
+                        else:
+                            first, seed = self._leading_axis_gradient()
+                            cotangent = ts.Tensor([2.0, 3.0, 5.0])
+                            shape = (3,)
+                        second_seed = ts.Variable(cotangent)
+                        built = ts.grad(
+                            first, seed, grad_outputs=second_seed, create_graph=True
+                        )
+                        self.assertProduced(
+                            built.data,
+                            values=[2.0, 3.0, 5.0, 2.0, 3.0, 5.0],
+                            shape=(2, 3),
+                            backend=backend,
+                        )
+
+                        third = ts.grad(
+                            built,
+                            second_seed,
+                            grad_outputs=ts.Tensor(
+                                [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]
+                            ),
+                            create_graph=True,
+                        )
+                    self.assertProduced(
+                        third.data,
+                        values=[2.0, 2.0, 2.0],
+                        shape=shape,
+                        backend=backend,
+                    )
+
     def test_a_removed_leading_axis_derivative_replays_with_a_changed_cotangent(
         self,
     ):
@@ -752,11 +802,12 @@ class AdditionVjpBoundaryTests(unittest.TestCase):
     """What addition must not have grown back."""
 
     def test_addition_and_its_dependencies_define_exactly_one_derivative(self):
+        from tensors.operations._gradient_shaping import ProductSumToShape
         from tensors.operations.manipulation.reshape import Reshape
         from tensors.operations.reductions.sum import Sum
-        from tensors.ops import Add
+        from tensors.ops import Add, Mul
 
-        for operation in (Add, Sum, Reshape):
+        for operation in (Add, Sum, Reshape, Mul, ProductSumToShape):
             with self.subTest(operation=operation.name):
                 self.assertIs(operation.backward_graph, Operation.backward_graph)
                 self.assertNotIn("backward_graph", vars(operation))
@@ -788,6 +839,381 @@ class AdditionVjpBoundaryTests(unittest.TestCase):
         self.assertNotIn(".backward_graph(", source)
         self.assertNotIn("backward_accepts_graph_operands", source)
         self.assertFalse(hasattr(Operation, "backward_accepts_graph_operands"))
+
+
+class MultiplicationVjpTests(unittest.TestCase):
+    """Multiplication's single ``backward``, on every backend.
+
+    Expected values are the product rule: d(a*b)/da is b, so each operand's
+    VJP is the upstream gradient times the other operand, summed back over
+    the axes the forward broadcast stretched. Nothing here reads one
+    backend's answer to judge another's.
+
+    The two steps stay one operation. Forming the products first can
+    overflow to infinities that cancel to NaN, or underflow to zero, where
+    the exact reduced sum is representable, so the fused reduction is kept
+    and the cases that exercise it are below.
+    """
+
+    BACKENDS = ("python", "numpy", "cuda")
+
+    #: ``sum_gradient_graph`` stacks a repeated operand's contributions, and
+    #: ``execute_stack`` answers from the Python reference when the *stacked*
+    #: result holds fewer than this many elements. Recorded gradients for
+    #: repeated operands are therefore sized well above it, and the boundary
+    #: itself is pinned by its own test.
+    ACCUMULATION_THRESHOLD = 32
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def _require(self, backend):
+        if backend not in ts.available_backends():
+            self.skipTest(f"the {backend} backend is not available here")
+
+    def assertProduced(self, produced, *, values, shape, backend, dtype=ts.float64):
+        self.assertEqual(produced.tolist(), values)
+        self.assertEqual(tuple(produced.shape), shape)
+        self.assertEqual(produced.dtype, dtype)
+        self.assertEqual(produced.backend_storage.kind, backend)
+
+    def _assertBothVjps(self, left, right, seed, expected, shapes, dtype=ts.float64):
+        """Both VJPs, in both reverse modes, on every available backend."""
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    with ts.use_backend(backend):
+                        a = ts.Variable(ts.Tensor(left, dtype=dtype), name="a")
+                        b = ts.Variable(ts.Tensor(right, dtype=dtype), name="b")
+                        produced = ts.grad(
+                            a * b,
+                            [a, b],
+                            grad_outputs=ts.Tensor(seed, dtype=dtype),
+                            create_graph=create_graph,
+                        )
+                        if create_graph:
+                            produced = [item.data for item in produced]
+                    for index, item in enumerate(produced):
+                        with self.subTest(input=index):
+                            self.assertProduced(
+                                item,
+                                values=expected[index],
+                                shape=shapes[index],
+                                backend=backend,
+                                dtype=dtype,
+                            )
+
+    def test_equal_shapes_weight_each_operand_by_the_other(self):
+        self._assertBothVjps(
+            [[1.5, -2.5], [3.0, 4.0]],
+            [[0.5, 2.0], [-1.0, 8.0]],
+            [[1.0, 2.0], [3.0, 4.0]],
+            expected=[[0.5, 4.0, -3.0, 32.0], [1.5, -5.0, 9.0, 16.0]],
+            shapes=[(2, 2), (2, 2)],
+        )
+
+    def test_a_stretched_singleton_axis_sums_the_products_it_fed(self):
+        """``(1, 3) * (2, 1)``: each operand reduces the other's axis."""
+        self._assertBothVjps(
+            [[1.5, -2.5, 3.0]],
+            [[2.0], [-4.0]],
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            expected=[[-14.0, -16.0, -18.0], [5.5, 11.5]],
+            shapes=[(1, 3), (2, 1)],
+        )
+
+    def test_an_added_leading_axis_is_summed_away(self):
+        """``(2, 3) * (3,)``: the rank the broadcast added is reduced out."""
+        self._assertBothVjps(
+            [[1.5, -2.5, 3.0], [2.0, 4.0, 6.0]],
+            [0.5, 2.0, -1.0],
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            expected=[[0.5, 4.0, -3.0, 2.0, 10.0, -6.0], [9.5, 15.0, 45.0]],
+            shapes=[(2, 3), (3,)],
+        )
+
+    def test_float32_products_keep_their_dtype(self):
+        self._assertBothVjps(
+            [[1.5, -2.5, 3.0]],
+            [[2.0], [-4.0]],
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            expected=[[-14.0, -16.0, -18.0], [5.5, 11.5]],
+            shapes=[(1, 3), (2, 1)],
+            dtype=ts.float32,
+        )
+
+    def test_a_scalar_factor_scales_the_gradient(self):
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    with ts.use_backend(backend):
+                        x = ts.Variable(ts.Tensor([1.5, -2.5]))
+                        result = ts.grad(
+                            x * 3.0,
+                            x,
+                            grad_outputs=ts.Tensor([1.0, 2.0]),
+                            create_graph=create_graph,
+                        )
+                        produced = result.data if create_graph else result
+                    self.assertProduced(
+                        produced, values=[3.0, 6.0], shape=(2,), backend=backend
+                    )
+
+    def test_only_one_operand_may_be_requested(self):
+        """An unrequested operand's product is never formed."""
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                for wanted in (0, 1):
+                    with self.subTest(
+                        backend=backend, create_graph=create_graph, input=wanted
+                    ):
+                        self._require(backend)
+                        reset_graph_state()
+                        with ts.use_backend(backend):
+                            operands = [
+                                ts.Variable(ts.Tensor([[1.5, -2.5, 3.0]])),
+                                ts.Variable(ts.Tensor([[2.0], [-4.0]])),
+                            ]
+                            operands[1 - wanted].requires_grad = False
+                            result = ts.grad(
+                                operands[0] * operands[1],
+                                operands[wanted],
+                                grad_outputs=ts.Tensor(
+                                    [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+                                ),
+                                create_graph=create_graph,
+                            )
+                            produced = result.data if create_graph else result
+                        expected = [[-14.0, -16.0, -18.0], [5.5, 11.5]][wanted]
+                        shape = [(1, 3), (2, 1)][wanted]
+                        self.assertProduced(
+                            produced, values=expected, shape=shape, backend=backend
+                        )
+
+    def test_a_repeated_operand_accumulates_both_products(self):
+        """``x * x`` reaches one Variable twice, so its VJP is ``2x``."""
+        size = self.ACCUMULATION_THRESHOLD * 2
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    with ts.use_backend(backend):
+                        x = ts.Variable(ts.full((size,), 3.0, dtype=ts.float64))
+                        result = ts.grad(
+                            x * x,
+                            x,
+                            grad_outputs=ts.full((size,), 1.0, dtype=ts.float64),
+                            create_graph=create_graph,
+                        )
+                        produced = result.data if create_graph else result
+                    self.assertProduced(
+                        produced,
+                        values=[6.0] * size,
+                        shape=(size,),
+                        backend=backend,
+                    )
+
+    def test_a_nonconstant_higher_derivative_stays_connected_to_its_input(self):
+        """``x**3`` through three recorded derivatives: 3x^2, 6x, then 6.
+
+        Each level is rebuilt from the recorded one before it, so a level
+        that had lost its connection to ``x`` would answer zero rather than a
+        value that still moves with ``x``.
+        """
+        size = self.ACCUMULATION_THRESHOLD * 2
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    x = ts.Variable(ts.full((size,), 2.0, dtype=ts.float64))
+                    ones = ts.full((size,), 1.0, dtype=ts.float64)
+                    first = ts.grad(x * x * x, x, grad_outputs=ones, create_graph=True)
+                    second = ts.grad(first, x, grad_outputs=ones, create_graph=True)
+                    third = ts.grad(second, x, grad_outputs=ones, create_graph=True)
+                for level, expected in (
+                    (first, 12.0),  # 3x^2 at x = 2
+                    (second, 12.0),  # 6x   at x = 2
+                    (third, 6.0),  # 6
+                ):
+                    self.assertProduced(
+                        level.data,
+                        values=[expected] * size,
+                        shape=(size,),
+                        backend=backend,
+                    )
+
+    def test_a_recorded_derivative_replays_with_a_changed_input(self):
+        """Re-run the recorded 3x^2; do not rebuild it."""
+        size = self.ACCUMULATION_THRESHOLD * 2
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    x = ts.Variable(ts.full((size,), 2.0, dtype=ts.float64))
+                    ones = ts.full((size,), 1.0, dtype=ts.float64)
+                    first = ts.grad(x * x * x, x, grad_outputs=ones, create_graph=True)
+                    program = Computation(first)
+                    self.assertProduced(
+                        program.forward(),
+                        values=[12.0] * size,
+                        shape=(size,),
+                        backend=backend,
+                    )
+
+                    x.data = ts.full((size,), 5.0, dtype=ts.float64)
+                    replayed = program.forward()
+                self.assertProduced(
+                    replayed,
+                    values=[75.0] * size,  # 3x^2 at x = 5
+                    shape=(size,),
+                    backend=backend,
+                )
+
+    def test_a_recorded_vjp_differentiates_by_its_upstream_seed(self):
+        """d(seed * b)/d(seed) is b, recovered through the fused reduction."""
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    a = ts.Variable(ts.Tensor([[1.5, -2.5, 3.0]]))
+                    b = ts.Variable(ts.Tensor([[2.0], [-4.0]]), requires_grad=False)
+                    seed = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]))
+                    first = ts.grad(
+                        a * b, a, grad_outputs=seed, create_graph=True
+                    )
+                    self.assertProduced(
+                        first.data,
+                        values=[-14.0, -16.0, -18.0],
+                        shape=(1, 3),
+                        backend=backend,
+                    )
+
+                    # The VJP is linear in the seed, so its derivative is the
+                    # other operand broadcast over the summed axis.
+                    by_seed = ts.grad(
+                        first, seed, grad_outputs=ts.Tensor([[1.0, 1.0, 1.0]])
+                    )
+                self.assertProduced(
+                    by_seed,
+                    values=[2.0, 2.0, 2.0, -4.0, -4.0, -4.0],
+                    shape=(2, 3),
+                    backend=backend,
+                )
+
+    def test_the_fused_reduction_preserves_exact_cancellation(self):
+        """Products that overflow, reduced to a result that does not.
+
+        ``2 * 1e308`` is not representable, so a multiply followed by a
+        separate reduction gives infinities that cancel to NaN. The fused
+        reduction groups the factors before rounding and answers exactly.
+        """
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    value = ts.Variable(ts.Tensor([0.0]))
+                    factor = ts.Variable(
+                        ts.Tensor([1.0e308, -1.0e308]), requires_grad=False
+                    )
+                    seed = ts.Variable(ts.Tensor([2.0, 2.0]))
+                    derivative = ts.grad(
+                        value * factor, value, grad_outputs=seed, create_graph=True
+                    )
+                    self.assertProduced(
+                        derivative.data, values=[0.0], shape=(1,), backend=backend
+                    )
+
+                    by_seed = ts.grad(derivative, seed)
+                self.assertProduced(
+                    by_seed,
+                    values=[1.0e308, -1.0e308],
+                    shape=(2,),
+                    backend=backend,
+                )
+
+    def test_a_nonfinite_factor_is_computed_or_explicitly_refused(self):
+        """An infinity in the fused reduction is a specified refusal.
+
+        The array kernels cannot carry an infinity through their scaled
+        accumulation, so they decline, and a decline under an explicit
+        selection is reported rather than answered somewhere else. The
+        Python backend accumulates exactly and returns the value. Both are
+        the specified behaviour; neither is a fallback for the other.
+
+        The other operand's VJP has no infinite factor, so it is unaffected
+        on every backend, which is what makes this a property of the
+        reduction and not of the expression.
+        """
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    a = ts.Variable(ts.Tensor([1.0, 2.0]))
+                    b = ts.Variable(ts.Tensor([math.inf, 1.0]))
+                    seed = ts.Tensor([1.0, 1.0])
+
+                    if backend == "python":
+                        produced = ts.grad(a * b, a, grad_outputs=seed)
+                        self.assertEqual(produced.tolist(), [math.inf, 1.0])
+                        self.assertEqual(produced.backend_storage.kind, backend)
+                    else:
+                        with self.assertRaises(
+                            ts.BackendOperationUnsupportedError
+                        ) as raised:
+                            ts.grad(a * b, a, grad_outputs=seed)
+                        message = str(raised.exception)
+                        self.assertIn(backend, message)
+                        self.assertIn("sum_products_to_shape", message)
+
+                    # d/db is seed * a, which is finite everywhere.
+                    other = ts.grad(a * b, b, grad_outputs=seed)
+                self.assertProduced(
+                    other, values=[1.0, 2.0], shape=(2,), backend=backend
+                )
+
+    def test_repeated_operand_accumulation_below_the_stack_threshold_is_blocked(self):
+        """A dependency limit, recorded here so it cannot pass unnoticed.
+
+        A repeated operand's contributions are combined by
+        ``sum_gradient_graph``, which stacks them. ``execute_stack`` still
+        applies a workload-size policy and answers from the Python reference
+        when the stacked result is small, so under NumPy the accumulated
+        gradient leaves the selected backend and the next strict dispatch
+        refuses it. ``x * x * x`` stacks three contributions, so a length of
+        two makes a six-element stack, well inside the policy.
+
+        This is ``execute_stack``'s policy, not multiplication's derivative:
+        the same expression above the threshold is verified on every backend
+        above. When ``stack`` is migrated this test will fail, and the right
+        fix is to delete it.
+        """
+        if "numpy" not in ts.available_backends():
+            self.skipTest("the numpy backend is not available here")
+        reset_graph_state()
+        with ts.use_backend("numpy"):
+            small = 2
+            self.assertLess(small * 3, self.ACCUMULATION_THRESHOLD)
+            x = ts.Variable(ts.full((small,), 2.0, dtype=ts.float64))
+            ones = ts.full((small,), 1.0, dtype=ts.float64)
+            first = ts.grad(x * x * x, x, grad_outputs=ones, create_graph=True)
+            # The values are right; only where they live is wrong.
+            self.assertEqual(first.data.tolist(), [12.0] * small)
+            self.assertEqual(first.data.backend_storage.kind, "python")
+            with self.assertRaises(ts.BackendMismatchError):
+                ts.grad(first, x, grad_outputs=ones)
 
 
 if __name__ == "__main__":
