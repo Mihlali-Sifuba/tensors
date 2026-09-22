@@ -141,7 +141,7 @@ tensors/
 │   └── slicing.py
 ├── operations/            # the semantic operation hierarchy (canonical)
 │   ├── base.py            # the Operation abstract base class, UNARY_DEMAND
-│   ├── vjp.py  # what a VJP cannot write the obvious way
+│   ├── gradient_primitives.py  # shared broadcast-gradient shaping
 │   ├── arithmetic/        # add.py, subtract.py, multiply.py, divide.py,
 │   │                      # negate.py, power.py
 │   ├── elementary/        # abs.py, sign.py, sqrt.py, exp.py, log.py
@@ -154,7 +154,8 @@ tensors/
 │   │                      # greater.py, greater_equal.py, _operands.py
 │   ├── selection/         # minimum.py, maximum.py, clip.py, where.py,
 │   │                      # _extremum.py
-│   ├── reductions/        # sum.py, mean.py, prod.py, min.py, max.py,
+│   ├── reductions/        # sum.py, mean.py, prod.py,
+│   │                      # product_sum_to_shape.py, min.py, max.py,
 │   │                      # variance.py, std.py, norm.py, logsumexp.py,
 │   │                      # argmin.py, argmax.py, _arg_extremum.py
 │   ├── manipulation/      # reshape.py, transpose.py, concat.py, stack.py,
@@ -304,11 +305,31 @@ The folders have deliberately narrow responsibilities:
   kernels; the semantic folder says what the operation means, the backend
   folder says how it runs.
 
-  `vjp.py` is shared structure rather than a domain: it holds the pieces a
-  vector-Jacobian product cannot write the obvious way, because the obvious
-  expression is wrong in shape or in floating point. It carries no underscore,
-  because the facades decide what is public and a leading underscore is not
-  allowed to make that decision
+  Two modules that a vector-Jacobian product reaches for are placed by that
+  same principle — what the computation *means*, not which caller it currently
+  has.
+
+  `reductions/product_sum_to_shape.py` holds `ProductSumToShape`, a
+  specialised mathematical operation: `F(A, B; S) = ReduceToShape(A ⊙ B, S)`,
+  an elementwise product reduced to a target shape. It is a reduction, so it
+  sits with the reductions. It is an `Operation` because it defines a forward
+  and a derivative rule of its own, and it is one step rather than two because
+  forming the products before reducing them can overflow or underflow where
+  the reduced result is representable — `sum_to_shape(left * right, shape)` is
+  a different computation, not a slower spelling. Multiplication's VJP is its
+  best-known caller; that does not make it a gradient helper.
+
+  `gradient_primitives.py` holds `sum_to_shape`, which is one: shared
+  gradient-shaping logic that reverses a broadcast by composing the existing
+  `sum` and `reshape` operations. It is deliberately *not* an `Operation`.
+  An operation exists when a computation needs its own derivative rule, and
+  this one differentiates through the operations it composes, so a vertex of
+  its own would add a name and nothing else.
+
+  Neither module is re-exported by a facade, so both stay internal whatever
+  they are called, and neither carries a leading underscore, because the
+  facades decide what is public and an underscore is not allowed to make that
+  decision
   ([Naming and the public API boundary](backends.md#naming-and-the-public-api-boundary)).
   Three modules still start with one — `_extremum.py`, `_arg_extremum.py` and
   `_operands.py` — each holding what a pair or family of neighbouring

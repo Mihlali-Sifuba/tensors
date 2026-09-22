@@ -14,7 +14,7 @@ from typing import Any, ClassVar, Optional
 
 from tensors.dtype import result_dtype
 from tensors.graph.expression import as_tensor_operand
-from tensors.operations.vjp import sum_to_shape
+from tensors.operations.gradient_primitives import sum_to_shape
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.utils.broadcasting import broadcast_tensors

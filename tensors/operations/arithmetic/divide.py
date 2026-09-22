@@ -6,7 +6,7 @@ from tensors.dtype import convert_scalar, resolve_result_dtype, true_division_dt
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.utils.broadcasting import broadcast_to
-from tensors.operations.vjp import sum_to_shape
+from tensors.operations.gradient_primitives import sum_to_shape
 
 Scalar = Union[int, float]
 

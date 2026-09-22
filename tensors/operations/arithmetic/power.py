@@ -17,9 +17,7 @@ from tensors.utils.broadcasting import broadcast_to
 
 if TYPE_CHECKING:
     from tensors.variable import Variable
-from tensors.operations.vjp import (
-    sum_to_shape,
-)
+from tensors.operations.gradient_primitives import sum_to_shape
 
 Scalar = Union[int, float]
 

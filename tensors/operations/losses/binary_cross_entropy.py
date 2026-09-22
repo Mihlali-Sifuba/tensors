@@ -9,7 +9,7 @@ from tensors.backend import (
     execute_binary_cross_entropy_gradient,
 )
 from tensors.dtype import result_dtype
-from tensors.operations.vjp import sum_to_shape
+from tensors.operations.gradient_primitives import sum_to_shape
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand

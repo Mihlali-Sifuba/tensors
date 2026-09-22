@@ -210,7 +210,7 @@ class DivisionVjpBoundaryTests(unittest.TestCase):
         # There is one broadcast reduction now, and it is the strict one, so
         # the assertion is about the module it comes from rather than about
         # which of several names this one picked.
-        shaping = importlib.import_module("tensors.operations.vjp")
+        shaping = importlib.import_module("tensors.operations.gradient_primitives")
         reductions = [
             name
             for name in vars(shaping)

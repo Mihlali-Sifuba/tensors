@@ -5,7 +5,9 @@ from tensors.backend import execute_multiply
 from tensors.dtype import convert_scalar, resolve_result_dtype
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
-from tensors.operations.vjp import ProductSumToShape
+from tensors.operations.reductions.product_sum_to_shape import (
+    ProductSumToShape,
+)
 
 Scalar = Union[int, float]
 
