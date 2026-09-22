@@ -30,24 +30,23 @@ from tensors.tensor import Tensor
 
 
 def sum_to_shape(gradient, shape):
-    """Reduce a broadcast gradient to ``shape``, on the selected backend.
+    """Reduce a broadcast gradient back to an operand's shape.
 
-    The same reduction as :func:`sum_to_shape_graph`, asked for under the
-    execution contract of `docs/backends.md` rather than under the ordinary
-    summation policy: no workload-size threshold decides where it runs, and a
-    backend that cannot reduce conformingly reports that. The arithmetic VJPs
-    reduce this way because ``+``, ``-``, ``*``, ``/`` and ``**`` are inside
-    that contract; the operations outside it still use the other one.
+    A forward broadcast lets one operand value feed several output positions,
+    so the gradient arrives at the output's shape and that value is owed the
+    sum of the positions it fed. :meth:`~tensors.shape.Shape.stretched_axes_from`
+    says which axes those are; summing them with ``keepdims`` leaves them in
+    place, and dropping them afterwards is a relabelling rather than
+    arithmetic.
 
-    Like that one it is written with the sum and reshape operations, so the
-    operands decide what the statements mean: given a Tensor they calculate,
-    and given a Variable they record a reduction that can be differentiated
-    again.
+    It is written with the sum and reshape operations, so the operands decide
+    what the statements mean: given a Tensor they calculate, and given a
+    Variable they record a reduction that can be differentiated again.
 
-    A forward broadcast prepends axes and stretches singleton ones. Those are
-    the axes along which one operand value fed several output positions, so
-    those are summed away and only those; reducing with ``keepdims`` leaves
-    them in place, and dropping them afterwards is a relabelling.
+    The sum runs under the execution contract of `docs/backends.md`: no
+    workload-size threshold decides where it happens, and a backend that
+    cannot reduce conformingly reports that rather than letting the Python
+    reference answer somewhere else.
     """
     from tensors.graph.expression import apply_operation, is_graph_operand
     from tensors.operations.manipulation.reshape import reshape
