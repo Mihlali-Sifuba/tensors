@@ -1841,6 +1841,43 @@ class PowerVjpTests(unittest.TestCase):
                 self.assertEqual(replayed.tolist(), [75.0])  # 3x^2 at x = 5
                 self.assertEqual(replayed.backend_storage.kind, backend)
 
+    def test_the_gradient_primitives_do_not_restate_their_own_kernel(self):
+        """Each one's first slot is its own forward, not a copy of the kernel.
+
+        ``d(base gradient)/d(upstream gradient)`` is the base gradient, so the
+        host loop that recomputed it held a second implementation of the
+        section 12.7.2 table — the Python backend kernel already holds one —
+        and computed it in Python whatever backend was selected.
+        """
+        import importlib
+        import inspect
+
+        module = importlib.import_module("tensors.operations.arithmetic.power")
+        kernel = importlib.import_module(
+            "tensors.backend.python.kernels.elementwise.power_base_gradient"
+        )
+        # The table's per-element rules belong to the kernels alone.
+        for name in ("_base_gradient_value", "_exponent_gradient_value"):
+            with self.subTest(helper=name):
+                self.assertFalse(hasattr(module, name))
+                self.assertTrue(hasattr(kernel, "_base_gradient_value"))
+
+        for operation in (module.PowerBaseGradient, module.PowerExponentGradient):
+            with self.subTest(operation=operation.name):
+                source = inspect.getsource(operation.backward)
+                self.assertIn("self.forward(", source)
+
+    def test_the_mixed_second_partial_is_stated_once(self):
+        """Both operations reach the same statement of it."""
+        import importlib
+        import inspect
+
+        module = importlib.import_module("tensors.operations.arithmetic.power")
+        for operation in (module.PowerBaseGradient, module.PowerExponentGradient):
+            with self.subTest(operation=operation.name):
+                source = inspect.getsource(operation.backward)
+                self.assertIn("_mixed_power_derivative(", source)
+
     def test_the_gradient_primitives_do_not_expand_through_the_host(self):
         """Each backend's kernel broadcasts; expanding first read operands back."""
         import ast

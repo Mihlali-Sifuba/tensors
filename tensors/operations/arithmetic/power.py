@@ -13,8 +13,7 @@ from tensors.dtype import resolve_power, resolve_power_scalar_base
 from tensors.operations.base import Operation
 from tensors.shape import Shape
 from tensors.tensor import Tensor
-from tensors.utils.broadcasting import broadcast_to, broadcast_tensors
-from tensors.utils.power_gradients import base_derivative, exponent_derivative
+from tensors.utils.broadcasting import broadcast_to
 
 if TYPE_CHECKING:
     from tensors.variable import Variable
@@ -23,12 +22,6 @@ from tensors.operations.manipulation.reshape import reshape
 from tensors.operations.reductions.sum import Sum
 
 Scalar = Union[int, float]
-
-#: The smallest normal binary32 magnitude. The gradient shortcut that
-#: divides the forward value by the base is exact enough only above it;
-#: the narrower dtype's threshold is used so neither dtype is served by a
-#: value that has already lost significand bits.
-_SMALLEST_NORMAL = 1.1754943508222875e-38
 
 
 def _has_negative_exponent(exponent: Tensor) -> bool:
@@ -158,67 +151,6 @@ def _power_product(factors: list[float], base: float, exponent: float) -> float:
     return _product_quotient(factors + [power])
 
 
-def _base_gradient_value(
-    upstream: float,
-    base: float,
-    exponent: float,
-    output: float,
-    normal_minimum: float = 0.0,
-) -> float:
-    """Return the VJP with respect to the base, by the section 12.7.2 table."""
-    derivative, _ = base_derivative(base, exponent)
-    if derivative is not None:
-        return upstream * derivative
-    if upstream == 0.0 or exponent == 0.0:
-        return 0.0
-    if math.isfinite(base) and base > 0.0 and math.isfinite(exponent):
-        # Two forms are available and they fail in opposite directions.
-        #
-        #   direct:   upstream * exponent * base**(exponent - 1)
-        #   quotient: upstream * exponent * base**exponent / base
-        #
-        # The quotient reuses the forward value, so it survives where
-        # base**(exponent - 1) underflows to nothing — at base 1e308 with
-        # exponent -1 that power is 1e-616 and the direct form has no digits
-        # left. But it inherits whatever the forward value has already lost,
-        # so where *that* is subnormal the quotient is the worse of the two:
-        # at base 1e-10 with exponent 4 in float32 the forward value is a
-        # subnormal and the quotient came out 57 ULP from the correctly
-        # rounded derivative.
-        #
-        # Whichever intermediate is a normal number is therefore preferred,
-        # and the logarithmic form below takes over when neither is.
-        try:
-            shifted = float(_power(base, exponent - 1.0))
-        except OverflowError:
-            shifted = math.inf
-        if math.isfinite(shifted) and abs(shifted) >= normal_minimum:
-            return _product_quotient([upstream, exponent, shifted])
-        # Second choice, and only second: the forward value may be subnormal
-        # and have lost digits, but it still carries more of them than the
-        # logarithmic form below, which is accurate to about a part in 1e14.
-        if math.isfinite(output) and output != 0.0:
-            return _product_quotient([upstream, exponent, output], [base])
-    return _power_product([upstream, exponent], base, exponent - 1.0)
-
-
-def _exponent_gradient_value(
-    upstream: float, output: float, base: float, exponent: float
-) -> float:
-    """Return the VJP with respect to the exponent, by the same table."""
-    derivative, _ = exponent_derivative(base, exponent)
-    if derivative is not None:
-        return upstream * derivative
-    if upstream == 0.0:
-        return 0.0
-    logarithm = math.log(base)
-    if logarithm == 0.0:
-        return 0.0
-    if output == 0.0 and math.isfinite(base):
-        return _power_product([upstream, logarithm], base, exponent)
-    return _product_quotient([upstream, output, logarithm])
-
-
 class Pow(Operation):
     """Element-wise exponentiation with reverse-mode gradient rules."""
 
@@ -312,6 +244,20 @@ class Pow(Operation):
         return gradients
 
 
+def _mixed_power_derivative(
+    outer: float, upstream: float, base_value: float, power: float
+) -> float:
+    """``d2(b**e)/db de`` weighted by both upstream gradients.
+
+    Differentiating the base gradient by the exponent and the exponent
+    gradient by the base give the same mixed second partial, so the two
+    operations below share this one statement of it rather than each
+    carrying a copy that could drift.
+    """
+    coefficient = math.fsum([1.0, power * math.log(base_value)])
+    return _power_product([outer, upstream, coefficient], base_value, power - 1.0)
+
+
 def _reduced(
     values: list[float], reference: Tensor, shape: Shape, target: Tensor
 ) -> Tensor:
@@ -358,28 +304,18 @@ class PowerBaseGradient(Operation):
             grad, base, exponent
         )
         expanded_outer = broadcast_to(outer_grad, expanded_grad.shape)
-        output = _power_values(expanded_base, expanded_exponent)
-        grad_values = []
         base_values = []
         exponent_values = []
-        for outer, upstream, base_value, power, result in zip(
+        for outer, upstream, base_value, power in zip(
             expanded_outer._data,
             expanded_grad._data,
             expanded_base._data,
             expanded_exponent._data,
-            output._data,
         ):
             outer = float(outer)
             upstream = float(upstream)
             base_value = float(base_value)
             power = float(power)
-            result = float(result)
-            if need_grad:
-                grad_values.append(
-                    _base_gradient_value(
-                        outer, base_value, power, result, _SMALLEST_NORMAL
-                    )
-                )
             if need_base:
                 base_values.append(
                     _power_product(
@@ -396,15 +332,16 @@ class PowerBaseGradient(Operation):
                         "higher-order power derivatives are undefined at this zero base"
                     )
             else:
-                coefficient = math.fsum([1.0, power * math.log(base_value)])
                 exponent_values.append(
-                    _power_product(
-                        [outer, upstream, coefficient], base_value, power - 1.0
-                    )
+                    _mixed_power_derivative(outer, upstream, base_value, power)
                 )
         shape = expanded_grad.shape
         return [
-            _reduced(grad_values, outer_grad, shape, grad) if need_grad else None,
+            (
+                sum_to_shape(self.forward(outer_grad, base, exponent), grad.shape)
+                if need_grad
+                else None
+            ),
             _reduced(base_values, outer_grad, shape, base) if need_base else None,
             (
                 _reduced(exponent_values, outer_grad, shape, exponent)
@@ -478,26 +415,18 @@ class PowerExponentGradient(Operation):
             grad, base, exponent
         )
         expanded_outer = broadcast_to(outer_grad, expanded_grad.shape)
-        output = _power_values(expanded_base, expanded_exponent)
-        grad_values = []
         base_values = []
         exponent_values = []
-        for outer, upstream, base_value, power, result in zip(
+        for outer, upstream, base_value, power in zip(
             expanded_outer._data,
             expanded_grad._data,
             expanded_base._data,
             expanded_exponent._data,
-            output._data,
         ):
             outer = float(outer)
             upstream = float(upstream)
             base_value = float(base_value)
             power = float(power)
-            result = float(result)
-            if need_grad:
-                grad_values.append(
-                    _exponent_gradient_value(outer, result, base_value, power)
-                )
             if base_value == 0.0:
                 if not need_base or power > 1.0:
                     base_values.append(0.0)
@@ -508,11 +437,8 @@ class PowerExponentGradient(Operation):
                 )
             logarithm = math.log(base_value)
             if need_base:
-                coefficient = math.fsum([1.0, power * logarithm])
                 base_values.append(
-                    _power_product(
-                        [outer, upstream, coefficient], base_value, power - 1.0
-                    )
+                    _mixed_power_derivative(outer, upstream, base_value, power)
                 )
             if need_exponent:
                 exponent_values.append(
@@ -522,7 +448,11 @@ class PowerExponentGradient(Operation):
                 )
         shape = expanded_grad.shape
         return [
-            _reduced(grad_values, outer_grad, shape, grad) if need_grad else None,
+            (
+                sum_to_shape(self.forward(outer_grad, base, exponent), grad.shape)
+                if need_grad
+                else None
+            ),
             _reduced(base_values, outer_grad, shape, base) if need_base else None,
             (
                 _reduced(exponent_values, outer_grad, shape, exponent)
