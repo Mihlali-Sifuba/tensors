@@ -249,7 +249,9 @@ class StackExecutionTests(unittest.TestCase):
             "as reference",
         ):
             self.assertNotIn(forbidden, source)
-        self.assertIn("run_on_selected_backend", source)
+        self.assertIn("validate_backend_residency", source)
+        self.assertIn("load_backend", source)
+        self.assertIn("BackendOperationUnsupportedError", source)
 
 
 if __name__ == "__main__":

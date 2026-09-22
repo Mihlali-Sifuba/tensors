@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from tensors.backend import config
-from tensors.backend.dispatch._selected import run_on_selected_backend
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
 from tensors.backend.validation import validate_backend_residency
 
@@ -38,20 +39,16 @@ def execute_stack(
     is no numerical decision here: the axis, the dtype, the output shape and
     the logical element order are resolved by ``Stack.forward`` exactly as
     before, and each backend's kernel arranges the same values.
-
-    The operands arrive as one sequence, and the residency check at the
-    execution boundary reads its arguments one by one, so it sees that
-    sequence as a single value carrying no residency and passes over the
-    tensors inside it. They are checked here instead, before the kernel is
-    reached and before anything is converted, so an operand residing
-    elsewhere is rejected rather than quietly moved.
     """
-    validate_backend_residency(values, config.get_backend())
-    return run_on_selected_backend(
-        "stack",
-        values,
-        axis,
-        dtype=dtype,
-        output_shape=output_shape,
-        detail=f"at dtype {dtype.name}",
-    )
+    selected = config.get_backend()
+    validate_backend_residency(values, selected)
+    backend: Any = load_backend(selected)
+    result = backend.stack(values, axis, dtype=dtype, output_shape=output_shape)
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute stack at dtype "
+            f"{dtype.name} conformingly. This computation runs on the selected "
+            f"backend; select another backend to run it elsewhere."
+        )
+    validate_backend_residency((result,), selected)
+    return result

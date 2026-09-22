@@ -19,12 +19,12 @@ from unittest.mock import patch
 
 import tensors as ts
 from tensors.backend import config
-from tensors.backend.dispatch import _selected
 from tensors.backend.dispatch.arithmetic import add as add_dispatch
 from tensors.backend.dispatch.arithmetic import divide as divide_dispatch
 from tensors.backend.dispatch.arithmetic import multiply as multiply_dispatch
 from tensors.backend.dispatch.arithmetic import power as power_dispatch
 from tensors.backend.dispatch.arithmetic import subtract as subtract_dispatch
+from tensors.backend.dispatch.creation import full as full_dispatch
 from tensors.backend.dispatch.manipulation import cast as cast_dispatch
 from tensors.backend.loading import load_backend
 from tensors.backend.python.storage import PythonStorage
@@ -157,22 +157,21 @@ class SelectedPackageTests(BackendTestCase):
                         pass
                 self.assertEqual(loader.requested, ["cuda"])
 
-    def test_the_strict_helper_takes_no_python_reference(self):
-        """Its callers name an operation; they do not supply an implementation."""
-        parameters = inspect.signature(
-            _selected.run_on_selected_backend
-        ).parameters
-        self.assertNotIn("reference", parameters)
-        self.assertEqual(list(parameters)[0], "operation")
+    def test_a_strict_dispatcher_names_no_python_reference(self):
+        """It loads a package; it does not import an implementation."""
+        source = inspect.getsource(full_dispatch)
+        self.assertNotIn("python.kernels", source)
+        self.assertNotIn("as reference", source)
+        self.assertIn("load_backend", source)
 
-    def test_the_strict_helper_loads_the_selected_package(self):
+    def test_a_strict_dispatcher_loads_the_selected_package(self):
         loader = RecordingLoader()
         with ts.use_backend("python"):
-            with patch.object(_selected, "load_backend", loader):
+            with patch.object(full_dispatch, "load_backend", loader):
                 ts.full((2,), 3.0)
         self.assertEqual(loader.requested, ["python"])
 
-    def test_the_strict_helper_uses_the_loaded_package_kernel(self):
+    def test_a_strict_dispatcher_uses_the_loaded_package_kernel(self):
         calls = []
 
         def kernel(*args, **kwargs):
@@ -181,7 +180,9 @@ class SelectedPackageTests(BackendTestCase):
 
         stub = SimpleNamespace(full=kernel)
         with ts.use_backend("python"):
-            with patch.object(_selected, "load_backend", RecordingLoader(stub)):
+            with patch.object(
+                full_dispatch, "load_backend", RecordingLoader(stub)
+            ):
                 result = ts.full((2,), 3.0)
         self.assertEqual(len(calls), 1)
         self.assertEqual(result.tolist(), [7.0, 7.0])
@@ -283,11 +284,11 @@ class PreservedContractTests(BackendTestCase):
                 ):
                     left + 2.0
 
-    def test_the_strict_helper_keeps_its_informative_message(self):
+    def test_a_strict_dispatcher_keeps_its_informative_message(self):
         stub = SimpleNamespace(full=lambda *a, **k: None)
         with ts.use_backend("python"):
             with patch.object(
-                _selected, "load_backend", RecordingLoader(stub)
+                full_dispatch, "load_backend", RecordingLoader(stub)
             ):
                 with self.assertRaisesRegex(
                     ts.BackendOperationUnsupportedError,

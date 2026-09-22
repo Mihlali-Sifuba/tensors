@@ -1,9 +1,12 @@
 """Dispatch for shape, layout, indexing, and representation changes."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.dispatch._selected import run_on_selected_backend
+from typing import TYPE_CHECKING, Any
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
     from tensors._typing import TensorIndex
@@ -28,10 +31,15 @@ def execute_slice(
     selected elements in the same logical order, so no numerical decision
     depends on where this runs.
     """
-    return run_on_selected_backend(
-        "slice_tensor",
-        value,
-        key,
-        output_shape=output_shape,
-        detail=f"at dtype {value.dtype.name}",
-    )
+    selected = config.get_backend()
+    validate_backend_residency((value,), selected)
+    backend: Any = load_backend(selected)
+    result = backend.slice_tensor(value, key, output_shape=output_shape)
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute slice_tensor at dtype "
+            f"{value.dtype.name} conformingly. This computation runs on the "
+            f"selected backend; select another backend to run it elsewhere."
+        )
+    validate_backend_residency((result,), selected)
+    return result

@@ -347,8 +347,12 @@ they execute on the selected backend at every size
 threshold is gone, and no kernel reads operand values back to the host to
 decide whether to decline.
 
-Other operations' vector-Jacobian products still use the older arrangement,
-through `dispatch/_selected.py`.
+Other operations' vector-Jacobian products still use the older arrangement.
+Every strict dispatcher writes the same decision out in its own module — read
+the selection, check operand residency, load that backend's package, call its
+kernel, and raise when the kernel declines — so the operation being dispatched
+and the kernel being called are visible in one place rather than named by a
+string handed to a shared helper.
 Where a VJP's computation shares an entry point with something outside the
 contract — the broadcast reduction is also used by `power`, `where` and the
 losses, and negation is also a forward operation — a second entry point named
