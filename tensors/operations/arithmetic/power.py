@@ -19,6 +19,8 @@ from tensors.utils.power_gradients import base_derivative, exponent_derivative
 if TYPE_CHECKING:
     from tensors.variable import Variable
 from tensors.operations._gradient_shaping import sum_to_shape, sum_to_shape_graph
+from tensors.operations.manipulation.reshape import reshape
+from tensors.operations.reductions.sum import Sum
 
 Scalar = Union[int, float]
 
@@ -241,66 +243,73 @@ class Pow(Operation):
         )
         return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
 
-    def backward(
-        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
-    ) -> List[Optional[Tensor]]:
+    def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Return the requested VJPs for a power invocation.
+
+        Each gradient is the range-safe primitive of section 12.7 applied to
+        the upstream gradient and both operands, reduced afterwards over the
+        axes the forward broadcast stretched. The primitive is applied as an
+        operation rather than called as a function, so the operands decide
+        what the statement means: given Tensors it calculates, and given
+        Variables it records a differentiable graph. Rule G5 lives inside it,
+        so each gradient carries its own operand's declared dtype rather than
+        the upstream gradient's.
+
+        No operand is inspected here. The exponent-gradient domain checks
+        that used to stand in this place read both tensors to the host,
+        raised for a negative or zero base, and in raising discarded the
+        *base* gradient as well — the case section 12.7.3 works through.
+        Rules G1 to G3 replace all three behaviours: each requested gradient
+        is computed on its own, an absent derivative is NaN rather than an
+        exception, and no host synchronisation detects any of it.
 
         Only a requested derivative is calculated, and a derivative's domain
         check runs only when the derivative it guards was requested.
         """
-        base, exponent = inputs
-        need_base, need_exponent = needs_input_grad
-        # No operand is inspected here. The exponent-gradient domain checks
-        # that used to stand in this place read both tensors to the host,
-        # raised for a negative or zero base, and in raising discarded the
-        # *base* gradient as well — the case section 12.7.3 works through.
-        # Rules G1 to G3 replace all three behaviours: each requested gradient
-        # is computed on its own, an absent derivative is NaN rather than an
-        # exception, and no host synchronisation detects any of it.
-        base_grad = None
-        if need_base:
-            storage = execute_power_base_gradient(grad, base, exponent)
-            # Rule G5: each gradient carries its own operand's declared dtype,
-            # not the upstream gradient's.
-            base_grad = Tensor._from_owned_storage(
-                storage, dtype=base.dtype, shape=grad.shape
-            )
-        exponent_grad = None
-        if need_exponent:
-            storage = execute_power_exponent_gradient(grad, base, exponent)
-            exponent_grad = Tensor._from_owned_storage(
-                storage, dtype=exponent.dtype, shape=grad.shape
-            )
-        return [
-            sum_to_shape(base_grad, base.shape) if base_grad is not None else None,
-            (
-                sum_to_shape(exponent_grad, exponent.shape)
-                if exponent_grad is not None
-                else None
-            ),
-        ]
+        from tensors.graph.expression import apply_operation, is_graph_operand
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build the requested differentiable VJPs for exponentiation."""
-        base, exponent = inputs
-        need_base, need_exponent = needs_input_grad
-        # The same three corrections as in `backward`; the differentiable path
-        # must implement the same D7 semantics as the eager one.
-        return [
-            (
-                sum_to_shape_graph(_power_base_vjp(grad, base, exponent), base.shape)
-                if need_base
-                else None
-            ),
-            (
-                sum_to_shape_graph(
-                    _power_exponent_vjp(grad, base, exponent), exponent.shape
+        gradients = []
+        for operation, operand, requested in (
+            (PowerBaseGradient(), inputs[0], needs_input_grad[0]),
+            (PowerExponentGradient(), inputs[1], needs_input_grad[1]),
+        ):
+            if not requested:
+                gradients.append(None)
+                continue
+            contribution = (
+                apply_operation(operation, (grad, inputs[0], inputs[1]))
+                if is_graph_operand(grad)
+                else operation.forward(grad, inputs[0], inputs[1])
+            )
+            shape = operand.shape
+            if contribution.shape == shape:
+                gradients.append(contribution)
+                continue
+            if len(shape) > len(contribution.shape):
+                raise ValueError(
+                    f"Cannot reduce gradient shape {contribution.shape} to {shape}"
                 )
-                if need_exponent
-                else None
-            ),
-        ]
+            # A forward broadcast prepends axes and stretches singleton ones;
+            # those are the axes one operand value fed several outputs along,
+            # and the only ones summed away.
+            padded = (1,) * (len(contribution.shape) - len(shape)) + tuple(shape)
+            axes = tuple(
+                axis
+                for axis, (produced, original) in enumerate(
+                    zip(contribution.shape, padded)
+                )
+                if original == 1 and produced != 1
+            )
+            reduction = Sum(axis=axes, keepdims=True, on_selected_backend=True)
+            reduced = (
+                apply_operation(reduction, (contribution,))
+                if is_graph_operand(contribution)
+                else reduction.forward(contribution)
+            )
+            gradients.append(
+                reduced if reduced.shape == shape else reshape(reduced, shape)
+            )
+        return gradients
 
 
 def _reduced(
@@ -330,7 +339,10 @@ class PowerBaseGradient(Operation):
     name = "power_base_gradient"
 
     def forward(self, grad: Tensor, base: Tensor, exponent: Tensor) -> Tensor:
-        grad, base, exponent = _expanded_power_inputs(grad, base, exponent)
+        # The operands are not broadcast here. Each backend's kernel already
+        # broadcasts them natively, and expanding first materialised them
+        # through the host, which is the read this gradient is specified not
+        # to perform.
         accelerated = execute_power_base_gradient(grad, base, exponent)
         # Rule G5: the base's declared dtype, not the upstream gradient's.
         return Tensor._from_owned_storage(
@@ -447,7 +459,10 @@ class PowerExponentGradient(Operation):
     name = "power_exponent_gradient"
 
     def forward(self, grad: Tensor, base: Tensor, exponent: Tensor) -> Tensor:
-        grad, base, exponent = _expanded_power_inputs(grad, base, exponent)
+        # The operands are not broadcast here. Each backend's kernel already
+        # broadcasts them natively, and expanding first materialised them
+        # through the host, which is the read this gradient is specified not
+        # to perform.
         accelerated = execute_power_exponent_gradient(grad, base, exponent)
         # Rule G5: the exponent's declared dtype.
         return Tensor._from_owned_storage(

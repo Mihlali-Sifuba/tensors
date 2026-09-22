@@ -630,15 +630,24 @@ are not restated here.
 > arithmetic, which is separate work, and is why two entry points exist for
 > the same reduction.
 >
-> **Power is a partial case, and the distinction matters.** Its two gradient
-> *kernels* now dispatch strictly — no threshold, no fallback, no
-> operand-reading decline — under
-> [arithmetic semantics G6](arithmetic-semantics.md#1271-rules). The broadcast
-> reduction that shapes their results does not, because it is the shared
-> `sum_to_shape` above. So a four-element power backward pass under explicit
-> NumPy returns `NumPyStorage` without broadcasting and `PythonStorage` with
-> it. The gradient's *numerical* contract is met in both cases; only its
-> execution location differs, and the two requirements are separate.
+> **Power is closed for its first derivative.** Its two gradient kernels
+> dispatch strictly — no threshold, no fallback, no operand-reading decline —
+> under [arithmetic semantics G6](arithmetic-semantics.md#1271-rules), and the
+> broadcast reduction that shapes their results now asks for the same
+> selected-backend execution the `+` and `-` reductions do, so a small
+> broadcast power backward pass no longer returns `PythonStorage` where the
+> same pass without broadcasting returns `NumPyStorage`. Section 12.7.4 does
+> not impose `**`'s own accuracy bounds on a whole gradient expression, and
+> the reduction it now uses agrees with the one it replaced to well under an
+> ulp, in both directions, on the cases measured.
+>
+> **Its second derivative is not closed.** `PowerBaseGradient` and
+> `PowerExponentGradient` still carry two implementations of their own
+> derivative with different guarantees — a range-safe host loop that raises at
+> a zero base, and a formula built from ordinary operations that neither
+> guards the range nor raises — so differentiating a recorded power gradient
+> a second time with `create_graph` has no single answer to give yet.
+> Numerical second derivatives are unaffected and use the host loop.
 
 > **Consequence worth knowing.** The array `sum_to_shape` and
 > `sum_products_to_shape` kernels decline when a gradient contains an infinity

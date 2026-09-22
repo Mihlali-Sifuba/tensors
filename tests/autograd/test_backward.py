@@ -805,9 +805,11 @@ class AdditionVjpBoundaryTests(unittest.TestCase):
         from tensors.operations._gradient_shaping import ProductSumToShape
         from tensors.operations.manipulation.reshape import Reshape
         from tensors.operations.reductions.sum import Sum
-        from tensors.ops import Add, Mul, Neg, Sub
+        from tensors.ops import Add, Mul, Neg, Pow, Sub
 
-        for operation in (Add, Sum, Reshape, Mul, ProductSumToShape, Sub, Neg):
+        for operation in (
+            Add, Sum, Reshape, Mul, ProductSumToShape, Sub, Neg, Pow
+        ):
             with self.subTest(operation=operation.name):
                 self.assertIs(operation.backward_graph, Operation.backward_graph)
                 self.assertNotIn("backward_graph", vars(operation))
@@ -1610,6 +1612,255 @@ class NegationVjpTests(unittest.TestCase):
         self.assertIn("validate_backend_residency", source)
         self.assertIn("load_backend", source)
         self.assertIn("BackendOperationUnsupportedError", source)
+
+
+class PowerVjpTests(unittest.TestCase):
+    """Power's single ``backward``, over the region table of section 12.7.2.
+
+    Expected values are the differentiation rules: d(b**e)/db is
+    ``e * b**(e-1)`` and d(b**e)/de is ``b**e * ln(b)``, with the table's
+    conventions where those are not defined. Section 12.7.4 states that the
+    accuracy bounds on ``**`` itself are not imposed on a whole gradient
+    expression, so the comparisons below are to the rule's value at the
+    precision the rule can carry, never to another backend's output.
+    """
+
+    BACKENDS = ("python", "numpy", "cuda")
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def _require(self, backend):
+        if backend not in ts.available_backends():
+            self.skipTest(f"the {backend} backend is not available here")
+
+    def _gradients(self, backend, base, exponent, seed, *, create_graph):
+        with ts.use_backend(backend):
+            b = ts.Variable(ts.Tensor(base, dtype=ts.float64), name="base")
+            e = ts.Variable(ts.Tensor(exponent, dtype=ts.float64), name="exponent")
+            produced = ts.grad(
+                b**e,
+                [b, e],
+                grad_outputs=ts.Tensor(seed, dtype=ts.float64),
+                create_graph=create_graph,
+            )
+            if create_graph:
+                produced = [item.data for item in produced]
+            return produced
+
+    def test_the_ordinary_region_follows_the_differentiation_rules(self):
+        """``e * b**(e-1)`` and ``b**e * ln(b)``."""
+        expected_base = [3.0 * 2.0**2.0, 2.0 * 3.0**1.0]
+        expected_exponent = [2.0**3.0 * math.log(2.0), 3.0**2.0 * math.log(3.0)]
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    base, exponent = self._gradients(
+                        backend, [2.0, 3.0], [3.0, 2.0], [1.0, 1.0],
+                        create_graph=create_graph,
+                    )
+                    for produced, expected in (
+                        (base, expected_base),
+                        (exponent, expected_exponent),
+                    ):
+                        for got, want in zip(produced.tolist(), expected):
+                            self.assertAlmostEqual(got, want, places=12)
+                        self.assertEqual(tuple(produced.shape), (2,))
+                        self.assertIs(produced.dtype, ts.float64)
+                        self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_a_negative_base_keeps_its_base_gradient_and_nans_the_exponent(self):
+        """Section 12.7.3: an undefined derivative does not discard the other."""
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    base, exponent = self._gradients(
+                        backend, [-2.0], [3.0], [1.0], create_graph=create_graph
+                    )
+                    self.assertEqual(base.tolist(), [12.0])
+                    self.assertTrue(math.isnan(exponent.tolist()[0]))
+                    self.assertEqual(base.backend_storage.kind, backend)
+
+    def test_the_zero_and_unit_regions(self):
+        cases = (
+            # base, exponent, seed, base gradient, exponent gradient
+            ([0.0], [3.0], [1.0], 0.0, 0.0),
+            ([0.0], [1.0], [1.0], 1.0, 0.0),
+            ([2.0], [0.0], [1.0], 0.0, math.log(2.0)),
+            ([1.0], [5.0], [1.0], 5.0, 0.0),
+        )
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                for b, e, seed, want_base, want_exp in cases:
+                    with self.subTest(
+                        backend=backend, create_graph=create_graph, base=b[0],
+                        exponent=e[0],
+                    ):
+                        self._require(backend)
+                        reset_graph_state()
+                        base, exponent = self._gradients(
+                            backend, b, e, seed, create_graph=create_graph
+                        )
+                        self.assertAlmostEqual(base.tolist()[0], want_base, places=12)
+                        self.assertAlmostEqual(
+                            exponent.tolist()[0], want_exp, places=12
+                        )
+
+    def test_the_range_safe_regions_survive_both_reverse_modes(self):
+        """Intermediates that overflow or underflow; the result does not.
+
+        ``1e-308 ** 2`` scaled by ``1e308`` is exactly 2, and
+        ``1e308 ** -1`` scaled by ``1e308`` is exactly ``-1e-308``. A naive
+        product forms an intermediate outside the range on the way to each.
+        """
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(case="small base", backend=backend,
+                                  create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    base, _ = self._gradients(
+                        backend, [1.0e-308], [2.0], [1.0e308],
+                        create_graph=create_graph,
+                    )
+                    self.assertTrue(
+                        math.isclose(base.tolist()[0], 2.0, rel_tol=1.0e-12)
+                    )
+                    self.assertEqual(base.backend_storage.kind, backend)
+
+                with self.subTest(case="large base", backend=backend,
+                                  create_graph=create_graph):
+                    reset_graph_state()
+                    base, _ = self._gradients(
+                        backend, [1.0e308], [-1.0], [1.0e308],
+                        create_graph=create_graph,
+                    )
+                    self.assertTrue(
+                        math.isclose(base.tolist()[0], -1.0e-308, rel_tol=1.0e-12)
+                    )
+
+    def test_a_broadcast_gradient_reduces_to_each_operand(self):
+        """``(1, 3) ** (2, 1)``: each operand reduces the other's axis."""
+        bases = [2.0, 3.0, 4.0]
+        exponents = [2.0, 3.0]
+        expected_base = [
+            sum(e * b ** (e - 1.0) for e in exponents) for b in bases
+        ]
+        expected_exponent = [
+            sum(b**e * math.log(b) for b in bases) for e in exponents
+        ]
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    base, exponent = self._gradients(
+                        backend,
+                        [bases],
+                        [[e] for e in exponents],
+                        [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+                        create_graph=create_graph,
+                    )
+                    self.assertEqual(tuple(base.shape), (1, 3))
+                    self.assertEqual(tuple(exponent.shape), (2, 1))
+                    for got, want in zip(base.tolist(), expected_base):
+                        self.assertAlmostEqual(got, want, places=10)
+                    for got, want in zip(exponent.tolist(), expected_exponent):
+                        self.assertAlmostEqual(got, want, places=10)
+                    self.assertEqual(base.backend_storage.kind, backend)
+                    self.assertEqual(exponent.backend_storage.kind, backend)
+
+    def test_either_operand_may_be_requested_alone(self):
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                for wanted in (0, 1):
+                    with self.subTest(
+                        backend=backend, create_graph=create_graph, input=wanted
+                    ):
+                        self._require(backend)
+                        reset_graph_state()
+                        with ts.use_backend(backend):
+                            operands = [
+                                ts.Variable(ts.Tensor([2.0], dtype=ts.float64)),
+                                ts.Variable(ts.Tensor([3.0], dtype=ts.float64)),
+                            ]
+                            operands[1 - wanted].requires_grad = False
+                            result = ts.grad(
+                                operands[0] ** operands[1],
+                                operands[wanted],
+                                grad_outputs=ts.Tensor([1.0], dtype=ts.float64),
+                                create_graph=create_graph,
+                            )
+                            produced = result.data if create_graph else result
+                        expected = [12.0, 8.0 * math.log(2.0)][wanted]
+                        self.assertAlmostEqual(
+                            produced.tolist()[0], expected, places=12
+                        )
+                        self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_a_second_derivative_is_available_numerically(self):
+        """d2(x**3)/dx2 is 6x, from the recorded first derivative."""
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    x = ts.Variable(ts.Tensor([2.0], dtype=ts.float64))
+                    ones = ts.Tensor([1.0], dtype=ts.float64)
+                    first = ts.grad(x**3.0, x, grad_outputs=ones, create_graph=True)
+                    second = ts.grad(first, x, grad_outputs=ones)
+                self.assertEqual(first.data.tolist(), [12.0])  # 3x^2
+                self.assertEqual(second.tolist(), [12.0])  # 6x
+                self.assertEqual(second.backend_storage.kind, backend)
+
+    def test_the_recorded_gradient_replays_with_a_changed_base(self):
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    x = ts.Variable(ts.Tensor([2.0], dtype=ts.float64))
+                    first = ts.grad(
+                        x**3.0,
+                        x,
+                        grad_outputs=ts.Tensor([1.0], dtype=ts.float64),
+                        create_graph=True,
+                    )
+                    program = Computation(first)
+                    self.assertEqual(program.forward().tolist(), [12.0])
+
+                    x.data = ts.Tensor([5.0], dtype=ts.float64)
+                    replayed = program.forward()
+                self.assertEqual(replayed.tolist(), [75.0])  # 3x^2 at x = 5
+                self.assertEqual(replayed.backend_storage.kind, backend)
+
+    def test_the_gradient_primitives_do_not_expand_through_the_host(self):
+        """Each backend's kernel broadcasts; expanding first read operands back."""
+        import ast
+        import inspect
+        import textwrap
+
+        import importlib
+
+        module = importlib.import_module("tensors.operations.arithmetic.power")
+
+        for operation in (module.PowerBaseGradient, module.PowerExponentGradient):
+            with self.subTest(operation=operation.name):
+                source = textwrap.dedent(inspect.getsource(operation.forward))
+                self.assertNotIn("_expanded_power_inputs", source)
+                host_reads = [
+                    node
+                    for node in ast.walk(ast.parse(source))
+                    if isinstance(node, ast.Attribute) and node.attr == "_data"
+                ]
+                self.assertEqual(host_reads, [])
 
 
 if __name__ == "__main__":
