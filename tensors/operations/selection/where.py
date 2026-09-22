@@ -85,42 +85,6 @@ class Where(Operation):
             ),
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        from tensors.operations.vjp import (
-            masked_value_graph,
-            sum_to_shape,
-            zero_like_graph,
-        )
-
-        condition, left, right = inputs
-        need_condition, need_left, need_right = needs_input_grad
-        expanded = broadcast_to(condition.data, grad.shape)
-        left_gradient = None
-        if need_left:
-            left_mask = Tensor(
-                [1.0 if item != 0 else 0.0 for item in expanded._data],
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
-            left_gradient = sum_to_shape(
-                masked_value_graph(grad, left_mask), left.shape
-            ) + zero_like_graph(left)
-        right_gradient = None
-        if need_right:
-            right_mask = Tensor(
-                [1.0 if item == 0 else 0.0 for item in expanded._data],
-                dtype=grad.dtype,
-                shape=grad.shape,
-            )
-            right_gradient = sum_to_shape(
-                masked_value_graph(grad, right_mask), right.shape
-            ) + zero_like_graph(right)
-        return [
-            zero_like_graph(condition) if need_condition else None,
-            left_gradient,
-            right_gradient,
-        ]
-
 
 @overload
 def where(

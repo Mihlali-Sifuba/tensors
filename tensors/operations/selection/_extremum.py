@@ -106,30 +106,6 @@ class _ElementwiseExtremum(Operation):
             ),
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        from tensors.operations.vjp import (
-            masked_value_graph,
-            sum_to_shape,
-            zero_like_graph,
-        )
-
-        left, right = inputs
-        need_left, need_right = needs_input_grad
-        left_weights, right_weights = self._weights(
-            left.data, right.data, higher_order=True
-        )
-
-        def masked(weights: list[float], target: Any) -> Any:
-            mask = Tensor(weights, dtype=grad.dtype, shape=grad.shape)
-            return sum_to_shape(
-                masked_value_graph(grad, mask), target.shape
-            ) + zero_like_graph(target)
-
-        return [
-            masked(left_weights, left) if need_left else None,
-            masked(right_weights, right) if need_right else None,
-        ]
-
 
 def _extremum(operation: Operation, left: Any, right: Any) -> Any:
     """Apply an extremum as the kinds of its two operands imply.

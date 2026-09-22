@@ -40,12 +40,6 @@ class Cosh(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for hyperbolic cosine."""
-        from tensors.operations.hyperbolic.sinh import sinh
-
-        return [grad * sinh(inputs[0])]
-
 
 @overload
 def cosh(value: VariableNode) -> VariableNode: ...

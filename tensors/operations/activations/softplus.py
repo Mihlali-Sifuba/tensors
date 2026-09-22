@@ -40,12 +40,6 @@ class Softplus(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for softplus."""
-        from tensors.operations.activations.sigmoid import sigmoid
-
-        return [grad * sigmoid(inputs[0])]
-
 
 @overload
 def softplus(value: VariableNode) -> VariableNode: ...

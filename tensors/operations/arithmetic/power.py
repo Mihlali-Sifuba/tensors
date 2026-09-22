@@ -325,45 +325,6 @@ class PowerBaseGradient(Operation):
             ),
         ]
 
-    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        from tensors.operations.elementary.log import log
-
-        grad, base, exponent = inputs
-        need_grad, need_base, need_exponent = needs_input_grad
-        return [
-            (
-                sum_to_shape(
-                    _power_base_vjp(outer_grad, base, exponent), grad.shape
-                )
-                if need_grad
-                else None
-            ),
-            (
-                sum_to_shape(
-                    outer_grad
-                    * grad
-                    * exponent
-                    * (exponent - 1.0)
-                    * base ** (exponent - 2.0),
-                    base.shape,
-                )
-                if need_base
-                else None
-            ),
-            (
-                sum_to_shape(
-                    outer_grad
-                    * grad
-                    * base ** (exponent - 1.0)
-                    * (1.0 + exponent * log(base)),
-                    exponent.shape,
-                )
-                if need_exponent
-                else None
-            ),
-        ]
-
-
 class PowerExponentGradient(Operation):
     """Differentiable range-safe VJP with respect to a power exponent."""
 
@@ -435,41 +396,6 @@ class PowerExponentGradient(Operation):
                 else None
             ),
         ]
-
-    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        from tensors.operations.elementary.log import log
-
-        grad, base, exponent = inputs
-        need_grad, need_base, need_exponent = needs_input_grad
-        logarithm = log(base)
-        return [
-            (
-                sum_to_shape(
-                    _power_exponent_vjp(outer_grad, base, exponent), grad.shape
-                )
-                if need_grad
-                else None
-            ),
-            (
-                sum_to_shape(
-                    outer_grad
-                    * grad
-                    * base ** (exponent - 1.0)
-                    * (1.0 + exponent * logarithm),
-                    base.shape,
-                )
-                if need_base
-                else None
-            ),
-            (
-                sum_to_shape(
-                    outer_grad * grad * base**exponent * logarithm**2.0, exponent.shape
-                )
-                if need_exponent
-                else None
-            ),
-        ]
-
 
 def _power_base_vjp(grad, base, exponent):
     from tensors.variable import Variable

@@ -40,12 +40,6 @@ class Sinh(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for hyperbolic sine."""
-        from tensors.operations.hyperbolic.cosh import cosh
-
-        return [grad * cosh(inputs[0])]
-
 
 @overload
 def sinh(value: VariableNode) -> VariableNode: ...

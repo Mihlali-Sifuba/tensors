@@ -239,57 +239,6 @@ class CrossEntropy(Operation):
             ),
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable cross-entropy VJP."""
-        from tensors.operations.normalization.log_softmax import _log_softmax_vjp
-        from tensors.operations.manipulation.reshape import reshape
-        from tensors.variable import Variable
-
-        logits, targets = inputs
-        need_logits, need_targets = needs_input_grad
-        axis = self.axis
-        reduction = self.reduction
-        if isinstance(axis, bool) or not isinstance(axis, int):
-            raise TypeError("cross_entropy axis must be an integer")
-        _validate_reduction(reduction)
-        axis = _normalize_axis(logits.data, axis)
-        dense, from_class_indices = _dense_targets(logits.data, targets.data, axis)
-        if from_class_indices:
-            if need_targets or self.targets_from_variable:
-                _reject_variable_class_indices()
-            targets = Variable(dense, requires_grad=False)
-        ones = Tensor([1.0] * logits.size, dtype=targets.dtype, shape=logits.shape)
-        expanded_targets = targets * ones
-        logits_derivative = (
-            _log_softmax_vjp(-expanded_targets, logits, axis) if need_logits else None
-        )
-        targets_derivative = (
-            -log_softmax(logits, axis=axis) + expanded_targets * 0.0
-            if need_targets
-            else None
-        )
-        if reduction == "none":
-            upstream = reshape(grad, keepdims_shape(logits.shape, axis))
-        else:
-            upstream = grad
-            if reduction == "mean":
-                sample_shape = logits.shape[:axis] + logits.shape[axis + 1 :]
-                sample_count = Shape.from_iterable(sample_shape).size
-                if sample_count:
-                    upstream = upstream / sample_count
-        return [
-            (
-                sum_to_shape(upstream * logits_derivative, logits.shape)
-                if need_logits
-                else None
-            ),
-            (
-                sum_to_shape(upstream * targets_derivative, targets.shape)
-                if need_targets
-                else None
-            ),
-        ]
-
 
 @overload
 def cross_entropy(

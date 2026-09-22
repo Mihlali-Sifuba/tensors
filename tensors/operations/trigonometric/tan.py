@@ -38,12 +38,6 @@ class Tan(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for tangent."""
-        from tensors.operations.trigonometric.cos import cos
-
-        return [grad / cos(inputs[0]) ** 2.0]
-
 
 @overload
 def tan(value: VariableNode) -> VariableNode: ...

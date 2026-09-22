@@ -340,7 +340,7 @@ class SignGraphVjpTests(unittest.TestCase):
                 self.assertEqual(second.data.tolist(), [0.0, 0.0])
                 self.assertEqual(third.tolist(), [0.0, 0.0])
 
-    def test_backward_graph_reads_no_host_values(self):
+    def test_the_vjp_reads_no_host_values(self):
         """Section 7: no Python mask is built from the materialised data.
 
         Checked structurally on the parsed statements rather than by
@@ -352,7 +352,7 @@ class SignGraphVjpTests(unittest.TestCase):
         import textwrap
 
         module = importlib.import_module("tensors.operations.elementary.sign")
-        tree = ast.parse(textwrap.dedent(inspect.getsource(module.Sign.backward_graph)))
+        tree = ast.parse(textwrap.dedent(inspect.getsource(module.Sign.backward)))
         body = tree.body[0].body
         if (
             isinstance(body[0], ast.Expr)
@@ -373,9 +373,9 @@ class SignGraphVjpTests(unittest.TestCase):
                 if isinstance(node, ast.Attribute) and node.attr == "_data":
                     host_reads.append(node)
         self.assertEqual(
-            comprehensions, [], "backward_graph must not build a Python mask"
+            comprehensions, [], "the VJP must not build a Python mask"
         )
-        self.assertEqual(host_reads, [], "backward_graph must not read host values")
+        self.assertEqual(host_reads, [], "the VJP must not read host values")
 
     def test_a_compiled_first_vjp_graph_replays_with_changed_values(self):
         """Section 7: the recorded VJP is re-executed, not re-derived.

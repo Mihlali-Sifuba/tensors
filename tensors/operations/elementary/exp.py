@@ -38,10 +38,6 @@ class Exp(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for exponentiation."""
-        return [grad * exp(inputs[0])]
-
 
 @overload
 def exp(value: VariableNode) -> VariableNode: ...

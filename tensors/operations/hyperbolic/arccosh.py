@@ -40,16 +40,6 @@ class ArcCosh(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for inverse hyperbolic cosine."""
-        from tensors.operations.elementary.sqrt import sqrt
-
-        value = inputs[0]
-        if any((item == 1.0 for item in value.data._data)):
-            raise ValueError("arccosh derivative is undefined at 1")
-        denominator = sqrt(value - 1.0) * sqrt(value + 1.0)
-        return [grad / denominator]
-
 
 @overload
 def arccosh(value: VariableNode) -> VariableNode: ...

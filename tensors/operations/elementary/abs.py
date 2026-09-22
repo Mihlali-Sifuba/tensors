@@ -57,27 +57,12 @@ class Abs(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build the same VJP as a graph vertex, not a frozen host mask.
-
-        The previous implementation read the materialised host values to
-        build two Python masks and combined them arithmetically. That pulled
-        device values to Python, froze the branch decision at the values the
-        graph was built with, and let the arithmetic carry an upstream sign
-        or NaN into the kink. :class:`AbsVJP` records the routing instead
-        and re-executes it.
-        """
-        from tensors.variable import Variable
-
-        value = inputs[0]
-        return [Variable._apply_operation(AbsVJP(), (grad, value))]
-
 
 class AbsVJP(Operation):
     """Internal graph-building first-order VJP for :class:`Abs`.
 
     This is not public API. No facade re-exports it, and it exists so that
-    `Abs.backward_graph` can record the VJP as a graph vertex rather than
+    `Abs.backward` can record the VJP as a graph vertex rather than
     materialise masks from host values.
     """
 
@@ -126,34 +111,6 @@ class AbsVJP(Operation):
 
         return [upstream_partial, primal_partial]
 
-    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build that higher-order rule as graph vertices.
-
-        The primal partial is recorded as :class:`AbsPrimalVJP` rather than
-        as the sign VJP it borrows its numbers from. The distinction only
-        shows up on replay: a graph built here runs again later, and an
-        error raised then comes from the recorded operation's own
-        ``forward``, long after any ``try`` around the construction has
-        returned. Recording the sign VJP directly would therefore report
-        the sign function's error for a second derivative of abs.
-        """
-        from tensors.variable import Variable
-
-        need_grad, need_value = needs_input_grad
-        value = inputs[1]
-
-        upstream_partial = None
-        if need_grad:
-            upstream_partial = Variable._apply_operation(AbsVJP(), (outer_grad, value))
-
-        primal_partial = None
-        if need_value:
-            primal_partial = Variable._apply_operation(
-                AbsPrimalVJP(), (outer_grad, value)
-            )
-
-        return [upstream_partial, primal_partial]
-
 
 class AbsPrimalVJP(Operation):
     """Internal node for the primal partial of :class:`AbsVJP`.
@@ -165,7 +122,7 @@ class AbsPrimalVJP(Operation):
     *identity* of the operation survives into a compiled graph. A recorded
     vertex is executed again on every replay, and an error raised then is
     raised by the recorded operation's own ``forward`` — not inside the
-    ``backward_graph`` call that recorded it. Recording the sign VJP
+    call that recorded it. Recording the sign VJP
     directly would therefore make a replayed second derivative of abs report
     the sign function's error, so the translation has to live here, where
     replay will run it.
@@ -189,14 +146,6 @@ class AbsPrimalVJP(Operation):
         """Differentiate a partial that is itself locally constant."""
         value = inputs[1]
         pattern = AbsPrimalVJP().forward(outer_grad, value)
-        return [pattern if needed else None for needed in needs_input_grad]
-
-    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build that rule as graph vertices, keeping this operation's error."""
-        from tensors.variable import Variable
-
-        value = inputs[1]
-        pattern = Variable._apply_operation(AbsPrimalVJP(), (outer_grad, value))
         return [pattern if needed else None for needed in needs_input_grad]
 
 

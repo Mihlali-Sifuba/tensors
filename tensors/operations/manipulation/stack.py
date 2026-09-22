@@ -93,23 +93,6 @@ class Stack(Operation):
             gradients.append(grad[tuple(key)])
         return gradients
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build differentiable selections for a stack VJP."""
-        axis = self.axis
-        if isinstance(axis, bool) or not isinstance(axis, int):
-            raise TypeError("stack axis must be an integer")
-        if axis < 0:
-            axis += grad.ndim
-        gradients = []
-        for index, wanted in enumerate(needs_input_grad):
-            if not wanted:
-                gradients.append(None)
-                continue
-            key = [slice(None)] * grad.ndim
-            key[axis] = index
-            gradients.append(grad[tuple(key)])
-        return gradients
-
 
 @overload
 def stack(tensors: Sequence[VariableNode], axis: int = 0) -> VariableNode: ...

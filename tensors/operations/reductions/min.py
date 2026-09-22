@@ -68,40 +68,6 @@ class Min(Operation):
             Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=value.shape)
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP where every minimum is unique."""
-        from tensors.operations.vjp import (
-            masked_value_graph,
-            zero_like_graph,
-        )
-        from tensors.operations.manipulation.reshape import reshape
-
-        value = inputs[0]
-        axis = self.axis
-        keepdims = self.keepdims
-        _, _, groups = reduction_groups(
-            value.data.shape, axis, keepdims, scalar_as_vector=True
-        )
-        weights = [0.0] * value.size
-        for group in groups:
-            group_values = [value.data._data[index] for index in group]
-            if any(
-                (isinstance(item, float) and math.isnan(item) for item in group_values)
-            ):
-                raise ValueError("Higher-order derivatives of min are undefined at NaN")
-            minimum = builtins.min(group_values)
-            selected = [index for index in group if value.data._data[index] == minimum]
-            if len(selected) != 1:
-                raise ValueError(
-                    "Higher-order derivatives of min are undefined at ties"
-                )
-            weights[selected[0]] = 1.0
-        expanded = (
-            grad if keepdims else reshape(grad, keepdims_shape(value.shape, axis))
-        )
-        mask = Tensor(weights, dtype=grad.dtype, shape=value.shape)
-        return [masked_value_graph(expanded, mask) + zero_like_graph(value)]
-
 
 @overload
 def min(

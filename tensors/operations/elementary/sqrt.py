@@ -60,27 +60,12 @@ class Sqrt(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build the same VJP as a graph vertex, not a frozen host check.
-
-        The previous implementation read the materialised host values to
-        decide the zero domain and then built ``grad / (2 * sqrt(x))`` from
-        public operations. That pulled device values to Python and froze the
-        domain decision at the values the graph was built with, so a replay
-        onto a zero primal would not have raised. :class:`SqrtVJP` records
-        the VJP instead and re-executes it, domain check included.
-        """
-        from tensors.variable import Variable
-
-        value = inputs[0]
-        return [Variable._apply_operation(SqrtVJP(), (grad, value))]
-
 
 class SqrtVJP(Operation):
     """Internal graph-building first-order VJP for :class:`Sqrt`.
 
     This is not public API. No facade re-exports it, and it exists so that
-    `Sqrt.backward_graph` can record the VJP as a graph vertex — carrying
+    `Sqrt.backward` can record the VJP as a graph vertex — carrying
     its zero domain check with it — rather than decide the domain from host
     values once, at graph-build time.
     """
@@ -126,28 +111,6 @@ class SqrtVJP(Operation):
         if need_value:
             root = Sqrt().forward(value)
             primal_partial = (outer_grad * grad) / (-4.0 * value * root)
-
-        return [upstream_partial, primal_partial]
-
-    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build that higher-order rule as graph vertices.
-
-        The primal partial is written with public graph operations, so any
-        further derivative follows from the graph rather than from another
-        hand-written rule.
-        """
-        from tensors.variable import Variable
-
-        grad, value = inputs
-        need_grad, need_value = needs_input_grad
-
-        upstream_partial = None
-        if need_grad:
-            upstream_partial = Variable._apply_operation(SqrtVJP(), (outer_grad, value))
-
-        primal_partial = None
-        if need_value:
-            primal_partial = (outer_grad * grad) / (-4.0 * value * sqrt(value))
 
         return [upstream_partial, primal_partial]
 

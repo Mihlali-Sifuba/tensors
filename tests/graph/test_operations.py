@@ -22,7 +22,16 @@ class OperationContractTests(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "abstract"):
             ForwardOnly()
 
-    def test_backward_graph_is_optional(self):
+    def test_an_operation_defines_one_derivative(self):
+        """``backward`` is the whole contract; there is no second method.
+
+        It used to be joined by ``backward_graph``, which a reverse pass
+        building a derivative graph called instead. Nothing selects between
+        them now, so an operation that implements ``backward`` against
+        operations rather than against Tensors serves both passes, and one
+        that does not simply answers the numerical pass.
+        """
+
         class Identity(Operation):
             name = "identity"
 
@@ -36,15 +45,25 @@ class OperationContractTests(unittest.TestCase):
         value = ts.Tensor([1.0])
 
         self.assertIs(operation.forward(value), value)
-        with self.assertRaisesRegex(
-            NotImplementedError,
-            "Higher-order derivatives are not implemented for identity",
-        ):
-            operation.backward_graph(
-                value,
-                value,
-                needs_input_grad=(True,),
-            )
+        self.assertFalse(hasattr(operation, "backward_graph"))
+        self.assertEqual(
+            [name for name in dir(Operation) if "backward" in name], ["backward"]
+        )
+
+    def test_no_operation_keeps_a_second_derivative_method(self):
+        """The superseded method is gone from every subclass, not just the base."""
+        stack, concrete = [Operation], []
+        while stack:
+            for subclass in stack.pop().__subclasses__():
+                stack.append(subclass)
+                concrete.append(subclass)
+        self.assertGreater(len(concrete), 40)
+        offenders = [
+            subclass.__name__
+            for subclass in concrete
+            if "backward_graph" in vars(subclass)
+        ]
+        self.assertEqual(offenders, [])
 
     def test_operation_instances_are_immutable(self):
         operation = Sum(axis=(1,), keepdims=True)

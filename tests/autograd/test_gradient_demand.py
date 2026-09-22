@@ -277,7 +277,7 @@ class ReverseDemandPlanningTests(unittest.TestCase):
         method, the recorder would see nothing in the recorded pass, and if
         the two disagreed, the gradients would differ.
         """
-        self.assertIs(Add.backward_graph, Operation.backward_graph)
+        self.assertFalse(hasattr(Add, "backward_graph"))
 
         def reverse(create_graph):
             reset_graph_state()

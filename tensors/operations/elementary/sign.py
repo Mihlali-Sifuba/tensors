@@ -59,26 +59,12 @@ class Sign(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build the same VJP as a graph vertex, not a frozen host mask.
-
-        The previous implementation read ``value.data._data`` to decide the
-        domain and to build a constant. That pulled device values to Python
-        and froze the decision at the values present when the graph was
-        built, so a replay with different data reused the old answer.
-        :class:`SignVJP` records the operation instead and re-executes it.
-        """
-        from tensors.variable import Variable
-
-        value = inputs[0]
-        return [Variable._apply_operation(SignVJP(), (grad, value))]
-
 
 class SignVJP(Operation):
     """Internal graph-building first-order VJP for :class:`Sign`.
 
     This is not public API. No facade re-exports it, and it exists so that
-    `Sign.backward_graph` can record the VJP as a graph vertex rather than
+    `Sign.backward` can record the VJP as a graph vertex rather than
     materialise a constant from host values. Its own ``backward`` supplies
     the higher-order rule.
     """
@@ -103,19 +89,6 @@ class SignVJP(Operation):
         """
         grad, value = inputs
         pattern = Sign().backward(outer_grad, value, needs_input_grad=UNARY_DEMAND)[0]
-        return [pattern if needed else None for needed in needs_input_grad]
-
-    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build that higher-order rule as a graph vertex.
-
-        The derivative of the first VJP has the same shape as the first VJP
-        itself — zero away from NaN, NaN at NaN — so the rule is
-        self-similar and recorded with this same operation.
-        """
-        from tensors.variable import Variable
-
-        grad, value = inputs
-        pattern = Variable._apply_operation(SignVJP(), (outer_grad, value))
         return [pattern if needed else None for needed in needs_input_grad]
 
 

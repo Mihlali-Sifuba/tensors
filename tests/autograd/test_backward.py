@@ -811,8 +811,8 @@ class AdditionVjpBoundaryTests(unittest.TestCase):
             Add, Sum, Reshape, Mul, ProductSumToShape, Sub, Neg, Pow
         ):
             with self.subTest(operation=operation.name):
-                self.assertIs(operation.backward_graph, Operation.backward_graph)
                 self.assertNotIn("backward_graph", vars(operation))
+                self.assertFalse(hasattr(operation, "backward_graph"))
 
     def test_the_sum_reduction_carries_no_separate_implementation(self):
         """``Sum.forward`` holds the reduction; no helper stands beside it."""

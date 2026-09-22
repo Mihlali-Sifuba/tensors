@@ -68,25 +68,6 @@ class Mean(Operation):
             Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=a.shape)
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for an axis-aware mean."""
-        from tensors.creation import ones
-        from tensors.operations.vjp import zero_like_graph
-        from tensors.variable import Variable
-        from tensors.operations.manipulation.reshape import reshape
-
-        axis = self.axis
-        keepdims = self.keepdims
-        value = inputs[0]
-        count = reduction_size(value.shape, normalize_axes(value.ndim, axis))
-        if count == 0:
-            return [zero_like_graph(value)]
-        expanded = (
-            grad if keepdims else reshape(grad, keepdims_shape(value.shape, axis))
-        )
-        unit = Variable(ones(value.shape, dtype=grad.dtype), requires_grad=False)
-        return [expanded * unit / count]
-
 
 @overload
 def mean(

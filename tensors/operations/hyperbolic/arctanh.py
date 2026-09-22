@@ -40,11 +40,6 @@ class ArcTanh(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for inverse hyperbolic tangent."""
-        value = inputs[0]
-        return [grad / (1.0 - value**2.0)]
-
 
 @overload
 def arctanh(value: VariableNode) -> VariableNode: ...

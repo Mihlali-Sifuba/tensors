@@ -346,8 +346,7 @@ VJPs dispatch under the backend active for the reverse pass; gradients are
 constructed from returned native storage. `backward()` publishes `.grad`
 values only after the complete reverse pass succeeds, while `grad()` returns
 from local gradient buffers without mutating `.grad`. Higher-order
-differentiation records the VJP operations as a new graph through
-`backward_graph`.
+differentiation records the VJP operations as a new graph.
 
 ### 3.8 Nested scopes already restore correctly
 
@@ -1287,7 +1286,7 @@ although local gradient buffers and, for `create_graph=True`, unreachable
 partial structural records may have been created before a later non-preflight
 failure. `grad()` remains functional and never publishes `.grad`.
 
-Higher-order differentiation adds no exception. `backward_graph` records VJP
+Higher-order differentiation adds no exception. A recorded VJP holds
 operations as backend-neutral graph structure, while the Variables and Tensors
 it reads and produces obey the same active-backend checks. Gradient
 accumulation, shape reduction, dtype restoration, saved-state version checks

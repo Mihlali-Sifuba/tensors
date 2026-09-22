@@ -84,27 +84,6 @@ class Clip(Operation):
             Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=value.shape)
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        from tensors.operations.vjp import (
-            masked_value_graph,
-            zero_like_graph,
-        )
-
-        value = inputs[0]
-        min_value = self.min_value
-        max_value = self.max_value
-        _validate_bounds(min_value, max_value)
-        if any(
-            (isinstance(item, float) and math.isnan(item) for item in value.data._data)
-        ):
-            raise ValueError("Higher-order derivatives of clip are undefined at NaN")
-        mask = Tensor(
-            Clip._mask(value.data, min_value, max_value),
-            dtype=grad.dtype,
-            shape=value.shape,
-        )
-        return [masked_value_graph(grad, mask) + zero_like_graph(value)]
-
 
 @overload
 def clip(

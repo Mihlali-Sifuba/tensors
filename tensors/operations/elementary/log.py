@@ -38,10 +38,6 @@ class Log(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for the natural logarithm."""
-        return [grad / inputs[0]]
-
 
 @overload
 def log(value: VariableNode) -> VariableNode: ...

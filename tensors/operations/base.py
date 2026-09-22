@@ -13,7 +13,7 @@ as its execution form.
 An operation defines *how* a local derivative is calculated.
 :class:`~tensors.graph.computation.Computation` decides *which* local
 derivatives a particular reverse pass requires and passes that demand to
-``backward`` and ``backward_graph`` as ``needs_input_grad``. Reverse demand is
+``backward`` as ``needs_input_grad``. Reverse demand is
 execution state: it depends on the call being made, never on the recorded
 graph, and it is never stored on an operation.
 """
@@ -33,11 +33,9 @@ class Operation(ABC):
     Subclasses implement ``forward`` and ``backward``. ``backward`` is the
     one derivative an operation defines: it is written against operations
     rather than against Tensors, so the same method calculates a numerical
-    VJP and records a differentiable one.
-
-    ``backward_graph`` below is the superseded second derivative method. It
-    is no longer called, and the operations that still define it have not
-    been migrated yet.
+    VJP and records a differentiable one. An operation that writes it that
+    way can be differentiated to any order the expression supports; one that
+    writes it against Tensors answers a numerical reverse pass only.
 
     An operation is immutable once constructed: its recorded mathematical
     meaning must not change while a graph still refers to it. Subclasses that
@@ -96,22 +94,6 @@ class Operation(ABC):
         the caller discards, and only apply a derivative-specific domain check
         when the derivative it guards was requested.
         """
-
-    def backward_graph(
-        self,
-        gradient: Any,
-        *inputs: Any,
-        needs_input_grad: tuple[bool, ...],
-    ) -> Sequence[Any | None]:
-        """Superseded: build the requested differentiable VJPs.
-
-        :meth:`backward` now serves both reverse modes, so nothing calls this.
-        It remains only for the operations that have not been migrated to a
-        single derivative yet, and goes away with the last of them.
-        """
-        raise NotImplementedError(
-            f"Higher-order derivatives are not implemented for {self.name}"
-        )
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}()"

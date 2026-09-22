@@ -66,50 +66,6 @@ class Variance(Operation):
             Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=value.shape)
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable population-variance VJP."""
-        from tensors.operations.vjp import zero_like_graph
-        from tensors.variable import Variable
-        from tensors.operations.reductions.mean import mean
-        from tensors.operations.manipulation.reshape import reshape
-
-        value = inputs[0]
-        axis = self.axis
-        keepdims = self.keepdims
-        _, scale_shape, groups = reduction_groups(value.data.shape, axis, True)
-        count = len(groups[0]) if groups else 0
-        if count == 0:
-            return [zero_like_graph(value)]
-        statistics = [scaled_deviations(value.data._data, group) for group in groups]
-        scales = Variable(
-            Tensor(
-                [
-                    scale if math.isfinite(scale) and scale > 0.0 else 1.0
-                    for scale, _, _ in statistics
-                ],
-                dtype=value.dtype,
-                shape=scale_shape,
-            ),
-            requires_grad=False,
-        )
-        normalized = value / scales
-        center = mean(normalized, axis=axis, keepdims=True)
-        expanded = (
-            grad
-            if keepdims
-            else reshape(
-                grad,
-                tuple(
-                    (
-                        1 if index in normalize_axes(value.ndim, axis) else size
-                        for index, size in enumerate(value.shape)
-                    )
-                ),
-            )
-        )
-        factor = scales / count * 2.0
-        return [expanded * (normalized - center) * factor]
-
 
 @overload
 def variance(

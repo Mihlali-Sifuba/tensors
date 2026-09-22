@@ -8,7 +8,7 @@ Scope, stated exactly. This document governs:
 
 - the **forward** result (§1–§5);
 - the **first-order VJP**, `Sign.backward` and `execute_sign_gradient` (§6);
-- the **graph-built first-order VJP**, `Sign.backward_graph` and the
+- the **recorded first-order VJP**, `Sign.backward` and the
   internal `SignVJP` operation, which must agree with §6 in every respect
   (§7);
 - the **higher-order regions and boundaries** named in §8, and only those.
@@ -205,7 +205,7 @@ comparing.
 
 ## 7. The graph-built VJP
 
-`Sign.backward_graph` records the VJP as a graph vertex through the internal
+`Sign.backward` records the VJP as a graph vertex through the internal
 `SignVJP` operation. For the same operands,
 
 ```python
@@ -216,7 +216,7 @@ ts.grad(output, value, create_graph=True).data
 agree in value, NaN classification, signed zero, dtype, shape,
 selected-backend residency and domain errors.
 
-`backward_graph` reads no host values. It does not inspect `value.data._data`
+the VJP reads no host values. It does not inspect `value.data._data`
 and builds no Python list-comprehension mask. That matters for replay: a
 compiled graph built over positive values and replayed over negative, zero or
 subnormal values must answer for the values it is replayed with, including

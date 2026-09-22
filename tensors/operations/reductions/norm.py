@@ -83,37 +83,6 @@ class Norm(Operation):
                 )
         return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for nonzero axis-aware norms."""
-        from tensors.operations.manipulation.reshape import reshape
-        from tensors.variable import Variable
-
-        value = inputs[0]
-        axis = self.axis
-        keepdims = self.keepdims
-        _, scale_shape, groups = reduction_groups(value.data.shape, axis, True)
-        statistics = [_scaled_norm(value.data, group) for group in groups]
-        if any((item[2] == 0 for item in statistics)):
-            raise ValueError("Higher-order derivatives of norm are undefined at zero")
-        scales = Variable(
-            Tensor(
-                [
-                    scale if math.isfinite(scale) and scale > 0.0 else 1.0
-                    for scale, _, _ in statistics
-                ],
-                dtype=value.dtype,
-                shape=scale_shape,
-            ),
-            requires_grad=False,
-        )
-        normalized = value / scales
-        expanded_grad = (
-            grad if keepdims else reshape(grad, keepdims_shape(value.shape, axis))
-        )
-        return [
-            expanded_grad * (normalized / norm(normalized, axis=axis, keepdims=True))
-        ]
-
 
 @overload
 def norm(

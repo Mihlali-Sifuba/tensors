@@ -375,14 +375,14 @@ class ReluGraphVjpTests(unittest.TestCase):
                 ).tolist()
                 self.assertTrue(math.isnan(built[0]))
 
-    def test_backward_graph_reads_no_host_values(self):
+    def test_the_vjp_reads_no_host_values(self):
         """Section 7, checked structurally on the parsed statements."""
         import ast
         import inspect
         import textwrap
 
         module = importlib.import_module("tensors.operations.activations.relu")
-        tree = ast.parse(textwrap.dedent(inspect.getsource(module.ReLU.backward_graph)))
+        tree = ast.parse(textwrap.dedent(inspect.getsource(module.ReLU.backward)))
         body = tree.body[0].body
         if (
             isinstance(body[0], ast.Expr)
@@ -403,9 +403,9 @@ class ReluGraphVjpTests(unittest.TestCase):
                 if isinstance(node, ast.Attribute) and node.attr == "_data":
                     host_reads.append(node)
         self.assertEqual(
-            comprehensions, [], "backward_graph must not build a Python mask"
+            comprehensions, [], "the VJP must not build a Python mask"
         )
-        self.assertEqual(host_reads, [], "backward_graph must not read host values")
+        self.assertEqual(host_reads, [], "the VJP must not read host values")
 
     def test_a_compiled_first_vjp_graph_replays_with_changed_values(self):
         """Section 7: the recorded VJP is re-executed, not re-derived.

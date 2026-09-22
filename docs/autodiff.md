@@ -260,8 +260,9 @@ a zero Tensor/Variable
 
 Returning a value for an unrequested operand raises, as does returning `None`
 for a requested one. That makes skipping unused work an enforceable contract
-rather than an optimisation an operation may quietly ignore. `backward_graph`
-follows the same contract with `Variable` results.
+rather than an optimisation an operation may quietly ignore. The contract is
+the same when the reverse pass is building a derivative graph; only the kind
+of the results changes, from `Tensor` to `Variable`.
 
 A derivative-specific domain error is raised only when the derivative it
 guards was requested. Differentiating `base ** exponent` with respect to a
@@ -493,10 +494,10 @@ previously inconsistent between backends:
   multiplies.** Multiplying by a materialised zero lets a negative upstream
   leave `-0.0` and an infinite or NaN upstream leave NaN on a branch the
   derivative says contributes nothing. Selecting a literal zero does not.
-- **`backward_graph` records the VJP rather than freezing it.** None of the
-  four reads host values to build a mask, so a compiled graph replayed with
-  values that change branch answers for the values it is replayed with, and
-  a domain error that the replayed values deserve is still raised.
+- **The VJP is recorded rather than frozen.** None of the four reads host
+  values to build a mask, so a compiled graph replayed with values that
+  change branch answers for the values it is replayed with, and a domain
+  error that the replayed values deserve is still raised.
 
 ## Mutation and recomputation
 
@@ -835,9 +836,12 @@ class Identity(Operation):
         return [gradient]
 ```
 
-`backward_graph()` is optional and enables higher-order differentiation. The
-base implementation raises `NotImplementedError`, so an operation without it
-reports the limitation instead of silently detaching a gradient.
+`backward()` is the whole derivative contract. It used to be joined by
+`backward_graph()`, which a reverse pass building a derivative graph called
+instead; nothing selects between them now. An operation written against
+operations rather than against Tensors serves both passes and can be
+differentiated again, and one written against Tensors answers the numerical
+pass and stops there.
 
 A configured operation declares its configuration in `__slots__` and assigns it
 in `__init__`, which keeps the instance immutable:
@@ -857,9 +861,8 @@ class Scale(Operation):
         return [gradient * self.factor]
 ```
 
-`Computation` invokes `operation.forward(...)`, `operation.backward(...)`, and
-`operation.backward_graph(...)` directly; it never interprets an operation's
-configuration.
+`Computation` invokes `operation.forward(...)` and `operation.backward(...)`
+directly; it never interprets an operation's configuration.
 
 ## Numerically stable probability functions
 

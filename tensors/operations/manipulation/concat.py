@@ -129,30 +129,6 @@ class Concat(Operation):
             offset += tensor.shape[axis]
         return gradients
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Differentiably split an upstream gradient along the concat axis."""
-        axis = self.axis
-        if isinstance(axis, bool) or not isinstance(axis, int):
-            raise TypeError("concat axis must be an integer")
-        if axis < 0:
-            axis += grad.ndim
-        if inputs[0].ndim == 0:
-            return [
-                grad[index] if wanted else None
-                for index, wanted in enumerate(needs_input_grad)
-            ]
-        offset = 0
-        gradients = []
-        for tensor, wanted in zip(inputs, needs_input_grad):
-            if wanted:
-                key = [slice(None)] * grad.ndim
-                key[axis] = slice(offset, offset + tensor.shape[axis])
-                gradients.append(grad[tuple(key)])
-            else:
-                gradients.append(None)
-            offset += tensor.shape[axis]
-        return gradients
-
 
 @overload
 def concat(tensors: Sequence[VariableNode], axis: int = 0) -> VariableNode: ...

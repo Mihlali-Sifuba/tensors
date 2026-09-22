@@ -10,7 +10,7 @@ Scope, stated exactly. This document governs:
 - the **forward** result (sections 1 to 5);
 - the **first-order VJP**, `Abs.backward` and `execute_abs_gradient`
   (section 6);
-- the **graph-built first-order VJP**, `Abs.backward_graph` and the internal
+- the **recorded first-order VJP**, `Abs.backward` and the internal
   `AbsVJP` operation, which must agree with section 6 in every respect
   (section 7);
 - the **higher-order regions and boundaries** named in section 8, and only
@@ -252,7 +252,7 @@ through `ieee32.narrow`.
 
 ## 7. The graph-built VJP
 
-`Abs.backward_graph` records the VJP as a graph vertex through the internal
+`Abs.backward` records the VJP as a graph vertex through the internal
 `AbsVJP` operation. For the same operands,
 
 ```python
@@ -263,7 +263,7 @@ ts.grad(output, value, create_graph=True).data
 agree in value, NaN classification, signed zero, dtype, shape,
 selected-backend residency and domain behaviour.
 
-`backward_graph` reads no host values. The previous implementation built two
+the VJP reads no host values. The previous implementation built two
 Python masks from `value.data._data` and combined them arithmetically; that
 pulled device values to Python, froze the branch decision at the values the
 graph was built with, and let the arithmetic carry an upstream sign or NaN
@@ -300,7 +300,7 @@ dedicated node to guarantee. The primal partial borrows its numbers from
 the sign VJP, but it is recorded as the internal `AbsPrimalVJP` rather
 than as the sign VJP itself. A recorded vertex is executed again every time
 a compiled graph is replayed, and an error raised then comes from that
-vertex's own `forward` — not from the `backward_graph` call that recorded
+vertex's own `forward` — not from the call that recorded
 it, which returned long before. Recording the sign VJP directly therefore
 produced the right number and the *wrong error*: a second-derivative graph
 built over a nonzero value and replayed onto zero reported `sign derivative

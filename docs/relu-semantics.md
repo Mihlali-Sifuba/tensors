@@ -11,7 +11,7 @@ Scope, stated exactly. This document governs:
 - the **forward** result (sections 1 to 5);
 - the **first-order VJP**, `ReLU.backward` and `execute_relu_gradient`
   (section 6);
-- the **graph-built first-order VJP**, `ReLU.backward_graph` and the
+- the **recorded first-order VJP**, `ReLU.backward` and the
   internal `ReLUVJP` operation, which must agree with section 6 in every
   respect (section 7);
 - the **higher-order regions and boundaries** named in section 8, and only
@@ -233,7 +233,7 @@ binary64.
 
 ## 7. The graph-built VJP
 
-`ReLU.backward_graph` records the VJP as a graph vertex through the
+`ReLU.backward` records the VJP as a graph vertex through the
 internal `ReLUVJP` operation. For the same operands,
 
 ```python
@@ -244,7 +244,7 @@ ts.grad(output, value, create_graph=True).data
 agree in value, NaN classification, signed zero, dtype, shape,
 selected-backend residency and domain behaviour.
 
-`backward_graph` reads no host values. The previous implementation built a
+the VJP reads no host values. The previous implementation built a
 Python mask from the materialised values and multiplied by it, which pulled
 device values to Python, froze the branch decision at the values the graph
 was built with, and carried an infinity or a NaN into the inactive side. A
@@ -279,7 +279,7 @@ dedicated node to guarantee. The primal partial borrows its numbers from
 the sign VJP, but it is recorded as the internal `ReLUPrimalVJP` rather
 than as the sign VJP itself. A recorded vertex is executed again every time
 a compiled graph is replayed, and an error raised then comes from that
-vertex's own `forward` — not from the `backward_graph` call that recorded
+vertex's own `forward` — not from the call that recorded
 it, which returned long before. Recording the sign VJP directly therefore
 produced the right number and the *wrong error*: a second-derivative graph
 built over a nonzero value and replayed onto zero reported `sign derivative

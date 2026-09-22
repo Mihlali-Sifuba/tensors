@@ -540,8 +540,8 @@ class DivisionSingleBackwardTests(unittest.TestCase):
 
         for operation in (Div, DivisionDenominatorGradient):
             with self.subTest(operation=operation.name):
-                self.assertIs(operation.backward_graph, Operation.backward_graph)
                 self.assertNotIn("backward_graph", vars(operation))
+                self.assertFalse(hasattr(operation, "backward_graph"))
 
 
 if __name__ == "__main__":

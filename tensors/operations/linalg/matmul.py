@@ -180,42 +180,6 @@ class MatMul(Operation):
             ),
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for vector and matrix products."""
-        from tensors.operations.manipulation.transpose import transpose
-        from tensors.operations.manipulation.reshape import reshape
-        from tensors.operations.vjp import sum_to_shape
-
-        left, right = inputs
-        need_left, need_right = needs_input_grad
-        left_vector = left.ndim == 1
-        right_vector = right.ndim == 1
-        left_matrix = reshape(left, (1, left.shape[0])) if left_vector else left
-        right_matrix = reshape(right, (right.shape[0], 1)) if right_vector else right
-        if left_vector and right_vector:
-            matrix_grad = reshape(grad, (1, 1))
-        elif left_vector:
-            matrix_grad = reshape(grad, grad.shape[:-1] + (1, grad.shape[-1]))
-        elif right_vector:
-            matrix_grad = reshape(grad, grad.shape + (1,))
-        else:
-            matrix_grad = grad
-        left_gradient = None
-        if need_left:
-            left_gradient = sum_to_shape(
-                matrix_grad @ transpose(right_matrix), left_matrix.shape
-            )
-            if left_vector:
-                left_gradient = reshape(left_gradient, left.shape)
-        right_gradient = None
-        if need_right:
-            right_gradient = sum_to_shape(
-                transpose(left_matrix) @ matrix_grad, right_matrix.shape
-            )
-            if right_vector:
-                right_gradient = reshape(right_gradient, right.shape)
-        return [left_gradient, right_gradient]
-
 
 @overload
 def matmul(a: VariableNode, b: TensorLike | VariableNode) -> VariableNode: ...

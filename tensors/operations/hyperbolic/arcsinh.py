@@ -40,27 +40,6 @@ class ArcSinh(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a stable differentiable VJP for inverse hyperbolic sine."""
-        from tensors.operations.elementary.abs import abs
-        from tensors.operations.elementary.sqrt import sqrt
-        from tensors.operations.selection.where import where
-
-        value = inputs[0]
-        scale = 1.0 + abs(value)
-        reciprocal_scale = 1.0 / scale
-        normalized_value = value / scale
-        stable_derivative = reciprocal_scale / sqrt(
-            reciprocal_scale**2.0 + normalized_value**2.0
-        )
-        direct_derivative = 1.0 / sqrt(1.0 + value**2.0)
-        large_mask = Tensor(
-            [1.0 if math.fabs(float(item)) > 1.0 else 0.0 for item in value.data._data],
-            dtype=grad.dtype,
-            shape=value.shape,
-        )
-        return [grad * where(large_mask, stable_derivative, direct_derivative)]
-
 
 @overload
 def arcsinh(value: VariableNode) -> VariableNode: ...

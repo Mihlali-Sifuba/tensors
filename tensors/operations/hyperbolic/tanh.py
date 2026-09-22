@@ -38,28 +38,6 @@ class Tanh(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for hyperbolic tangent."""
-        from tensors.operations.vjp import masked_value_graph
-        from tensors.operations.elementary.exp import exp
-
-        value = inputs[0]
-        positive_mask = Tensor(
-            [1.0 if item >= 0.0 else 0.0 for item in value.data._data],
-            dtype=value.dtype,
-            shape=value.shape,
-        )
-        negative_mask = Tensor(
-            [1.0 - item for item in positive_mask._data],
-            dtype=value.dtype,
-            shape=value.shape,
-        )
-        positive_z = exp(-2.0 * masked_value_graph(value, positive_mask))
-        negative_z = exp(2.0 * masked_value_graph(value, negative_mask))
-        positive = 4.0 * positive_z / (1.0 + positive_z) ** 2 * positive_mask
-        negative = 4.0 * negative_z / (1.0 + negative_z) ** 2 * negative_mask
-        return [grad * (positive + negative)]
-
 
 @overload
 def tanh(value: VariableNode) -> VariableNode: ...

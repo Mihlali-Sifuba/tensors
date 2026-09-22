@@ -40,18 +40,6 @@ class ArcTan(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for inverse tangent."""
-        from tensors.operations.elementary.abs import abs
-
-        value = inputs[0]
-        scale = 1.0 + abs(value)
-        reciprocal_scale = 1.0 / scale
-        normalized_value = value / scale
-        reciprocal_square = reciprocal_scale**2.0
-        derivative = reciprocal_square / (reciprocal_square + normalized_value**2.0)
-        return [grad * derivative]
-
 
 @overload
 def arctan(value: VariableNode) -> VariableNode: ...

@@ -71,37 +71,6 @@ class Prod(Operation):
             Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=value.shape)
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build the product VJP explicitly from products excluding each input."""
-        from tensors.operations.vjp import zero_like_graph
-        from tensors.operations.manipulation.concat import concat
-        from tensors.operations.manipulation.reshape import reshape
-
-        value = inputs[0]
-        axis = self.axis
-        keepdims = self.keepdims
-        _, _, groups = reduction_groups(
-            value.data.shape, axis, keepdims, scalar_as_vector=True
-        )
-        if value.size == 0:
-            return [zero_like_graph(value)]
-        flat_value = reshape(value, (value.size,))
-        flat_grad = reshape(grad, (grad.size,))
-        group_for_input = {}
-        for output_index, group in enumerate(groups):
-            for input_index in group:
-                group_for_input[input_index] = (output_index, group)
-        terms = []
-        for input_index in range(value.size):
-            output_index, group = group_for_input[input_index]
-            derivative = zero_like_graph(flat_value[input_index]) + 1.0
-            for other_index in group:
-                if other_index != input_index:
-                    derivative = derivative * flat_value[other_index]
-            term = flat_grad[output_index] * derivative
-            terms.append(reshape(term, (1,)))
-        return [reshape(concat(terms), value.shape)]
-
 
 @overload
 def prod(

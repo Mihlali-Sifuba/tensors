@@ -78,16 +78,6 @@ class LogSumExp(Operation):
         storage = execute_logsumexp_gradient(grad, a, axes, keepdims=keepdims)
         return [Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=a.shape)]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable log-sum-exp VJP."""
-        from tensors.variable import Variable
-
-        axis = self.axis
-        keepdims = self.keepdims
-        value = inputs[0]
-        operation = LogSumExpGradient(axis=axis, keepdims=keepdims)
-        return [Variable._apply_operation(operation, (grad, value))]
-
 
 class LogSumExpGradient(Operation):
     """Differentiable, infinity-safe VJP used by :class:`LogSumExp`."""
@@ -163,50 +153,6 @@ class LogSumExpGradient(Operation):
                 else None
             ),
         ]
-
-    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a smooth third-order rule away from infinite inputs."""
-        from tensors.variable import Variable
-        from tensors.operations.elementary.exp import exp
-        from tensors.operations.manipulation.reshape import reshape
-        from tensors.operations.reductions.sum import sum
-
-        grad, value = inputs
-        need_grad, need_value = needs_input_grad
-        axis = self.axis
-        keepdims = self.keepdims
-        _, _, groups = reduction_groups(
-            value.data.shape, axis, keepdims, scalar_as_vector=True
-        )
-        if any(
-            (
-                any((math.isinf(float(value.data._data[index])) for index in group))
-                for group in groups
-            )
-        ):
-            numerical = LogSumExpGradient(axis=axis, keepdims=keepdims).backward(
-                outer_grad.data,
-                grad.data,
-                value.data,
-                needs_input_grad=needs_input_grad,
-            )
-            return [
-                Variable(result, requires_grad=False) if result is not None else None
-                for result in numerical
-            ]
-        normalizer = logsumexp(value, axis=axis, keepdims=True)
-        weights = exp(value - normalizer)
-        grad_gradient = None
-        if need_grad:
-            grad_gradient = sum(outer_grad * weights, axis=axis, keepdims=keepdims)
-        value_gradient = None
-        if need_value:
-            projection = sum(outer_grad * weights, axis=axis, keepdims=True)
-            expanded_grad = (
-                grad if keepdims else reshape(grad, keepdims_shape(value.shape, axis))
-            )
-            value_gradient = expanded_grad * weights * (outer_grad - projection)
-        return [grad_gradient, value_gradient]
 
 
 @overload

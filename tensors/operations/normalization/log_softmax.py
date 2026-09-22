@@ -50,14 +50,6 @@ class LogSoftmax(Operation):
         axis = _normalize_axis(a, axis)
         return [_log_softmax_vjp_tensor(grad, a, axis)]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable log-softmax VJP."""
-        axis = self.axis
-        if isinstance(axis, bool) or not isinstance(axis, int):
-            raise TypeError("log_softmax axis must be an integer")
-        axis = _normalize_axis(inputs[0].data, axis)
-        return [_log_softmax_vjp(grad, inputs[0], axis)]
-
 
 def _log_softmax_vjp_tensor(grad: Tensor, value: Tensor, axis: int) -> Tensor:
     """Return a cancellation-resistant log-softmax VJP."""
@@ -104,22 +96,6 @@ class LogSoftmaxGradient(Operation):
         return [
             _centered_softmax_tensor(outer_grad, value, axis) if need_grad else None,
             value_gradient,
-        ]
-
-    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        from tensors.operations.reductions.sum import sum
-
-        grad, value = inputs
-        need_grad, need_value = needs_input_grad
-        axis = self.axis
-        return [
-            _softmax_centered(outer_grad, value, axis) if need_grad else None,
-            (
-                -sum(grad, axis=axis, keepdims=True)
-                * _softmax_vjp(outer_grad, value, axis)
-                if need_value
-                else None
-            ),
         ]
 
 

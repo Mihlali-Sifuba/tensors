@@ -10,7 +10,7 @@ Scope, stated exactly. This document governs:
 - the **forward** result (sections 1 to 5);
 - the **first-order VJP**, `Sqrt.backward` and `execute_sqrt_gradient`
   (section 6);
-- the **graph-built first-order VJP**, `Sqrt.backward_graph` and the
+- the **recorded first-order VJP**, `Sqrt.backward` and the
   internal `SqrtVJP` operation, which must agree with section 6 in every
   respect (section 7);
 - the **higher-order regions and boundaries** named in section 8, and only
@@ -268,7 +268,7 @@ operations would flush at both points.
 
 ## 7. The graph-built VJP
 
-`Sqrt.backward_graph` records the VJP as a graph vertex through the internal
+`Sqrt.backward` records the VJP as a graph vertex through the internal
 `SqrtVJP` operation. For the same operands,
 
 ```python

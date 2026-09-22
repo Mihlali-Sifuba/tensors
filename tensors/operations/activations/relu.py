@@ -59,27 +59,12 @@ class ReLU(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build the same VJP as a graph vertex, not a frozen host mask.
-
-        The previous implementation built a Python mask from the
-        materialised host values and multiplied the upstream gradient by it.
-        That pulled device values to Python, froze the branch decision at
-        the values the graph was built with, and let the multiplication
-        carry an infinity or a NaN into the inactive side.
-        :class:`ReLUVJP` records the routing instead and re-executes it.
-        """
-        from tensors.variable import Variable
-
-        value = inputs[0]
-        return [Variable._apply_operation(ReLUVJP(), (grad, value))]
-
 
 class ReLUVJP(Operation):
     """Internal graph-building first-order VJP for :class:`ReLU`.
 
     This is not public API. No facade re-exports it, and it exists so that
-    `ReLU.backward_graph` can record the VJP as a graph vertex rather than
+    `ReLU.backward` can record the VJP as a graph vertex rather than
     materialise a mask from host values.
     """
 
@@ -126,34 +111,6 @@ class ReLUVJP(Operation):
 
         return [upstream_partial, primal_partial]
 
-    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build that higher-order rule as graph vertices.
-
-        The primal partial is recorded as :class:`ReLUPrimalVJP` rather than
-        as the sign VJP it borrows its numbers from. The distinction only
-        shows up on replay: a graph built here runs again later, and an
-        error raised then comes from the recorded operation's own
-        ``forward``, long after any ``try`` around the construction has
-        returned. Recording the sign VJP directly would therefore report the
-        sign function's error for a second derivative of ReLU.
-        """
-        from tensors.variable import Variable
-
-        need_grad, need_value = needs_input_grad
-        value = inputs[1]
-
-        upstream_partial = None
-        if need_grad:
-            upstream_partial = Variable._apply_operation(ReLUVJP(), (outer_grad, value))
-
-        primal_partial = None
-        if need_value:
-            primal_partial = Variable._apply_operation(
-                ReLUPrimalVJP(), (outer_grad, value)
-            )
-
-        return [upstream_partial, primal_partial]
-
 
 class ReLUPrimalVJP(Operation):
     """Internal node for the primal partial of :class:`ReLUVJP`.
@@ -165,7 +122,7 @@ class ReLUPrimalVJP(Operation):
     *identity* of the operation survives into a compiled graph. A recorded
     vertex is executed again on every replay, and an error raised then is
     raised by the recorded operation's own ``forward`` — not inside the
-    ``backward_graph`` call that recorded it. Recording the sign VJP
+    call that recorded it. Recording the sign VJP
     directly would therefore make a replayed second derivative of ReLU
     report the sign function's error, so the translation has to live here,
     where replay will run it.
@@ -189,14 +146,6 @@ class ReLUPrimalVJP(Operation):
         """Differentiate a partial that is itself locally constant."""
         value = inputs[1]
         pattern = ReLUPrimalVJP().forward(outer_grad, value)
-        return [pattern if needed else None for needed in needs_input_grad]
-
-    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build that rule as graph vertices, keeping this operation's error."""
-        from tensors.variable import Variable
-
-        value = inputs[1]
-        pattern = Variable._apply_operation(ReLUPrimalVJP(), (outer_grad, value))
         return [pattern if needed else None for needed in needs_input_grad]
 
 

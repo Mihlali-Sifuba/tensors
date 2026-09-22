@@ -37,12 +37,6 @@ class Sin(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for sine."""
-        from tensors.operations.trigonometric.cos import cos
-
-        return [grad * cos(inputs[0])]
-
 
 @overload
 def sin(value: VariableNode) -> VariableNode: ...

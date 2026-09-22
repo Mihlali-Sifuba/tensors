@@ -61,15 +61,6 @@ class Outer(Operation):
             ),
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for an outer product."""
-        left, right = inputs
-        need_left, need_right = needs_input_grad
-        return [
-            grad @ right if need_left else None,
-            left @ grad if need_right else None,
-        ]
-
 
 @overload
 def outer(a: VariableNode, b: TensorLike | VariableNode) -> VariableNode: ...

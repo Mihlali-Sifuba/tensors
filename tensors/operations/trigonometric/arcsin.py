@@ -40,15 +40,6 @@ class ArcSin(Operation):
             )
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for inverse sine."""
-        from tensors.operations.elementary.sqrt import sqrt
-
-        value = inputs[0]
-        if any((item == -1.0 or item == 1.0 for item in value.data._data)):
-            raise ValueError("arcsin derivative is undefined at -1 and 1")
-        return [grad / sqrt(1.0 - value**2.0)]
-
 
 @overload
 def arcsin(value: VariableNode) -> VariableNode: ...

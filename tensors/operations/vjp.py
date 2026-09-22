@@ -153,9 +153,6 @@ class ZeroLike(Operation):
     ) -> list[Tensor]:
         return [Tensor([0.0] * inputs[0].size, dtype=grad.dtype, shape=inputs[0].shape)]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        return [zero_like_graph(inputs[0])]
-
 
 def zero_like_graph(value):
     """Return graph-connected zeros without evaluating ``value * 0``."""
@@ -203,12 +200,6 @@ class MaskedValue(Operation):
             shape=mask.shape,
         )
         return [sum_to_shape(selected, inputs[0].shape)]
-
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        mask = self.mask
-        if not isinstance(mask, Tensor):
-            raise TypeError("masked-value mask must be a Tensor")
-        return [sum_to_shape_graph(masked_value_graph(grad, mask), inputs[0].shape)]
 
 
 def masked_value_graph(value, mask: Tensor):

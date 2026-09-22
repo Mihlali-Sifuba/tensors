@@ -419,14 +419,14 @@ class SqrtGraphVjpTests(unittest.TestCase):
             third = ts.grad(second, value, grad_outputs=ts.Tensor([1.0]))
         self.assertAlmostEqual(third.tolist()[0], expected, places=12)
 
-    def test_backward_graph_reads_no_host_values(self):
+    def test_the_vjp_reads_no_host_values(self):
         """Section 7, checked structurally on the parsed statements."""
         import ast
         import inspect
         import textwrap
 
         module = importlib.import_module("tensors.operations.elementary.sqrt")
-        tree = ast.parse(textwrap.dedent(inspect.getsource(module.Sqrt.backward_graph)))
+        tree = ast.parse(textwrap.dedent(inspect.getsource(module.Sqrt.backward)))
         body = tree.body[0].body
         if (
             isinstance(body[0], ast.Expr)

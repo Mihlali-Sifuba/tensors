@@ -67,61 +67,6 @@ class Std(Operation):
             Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=value.shape)
         ]
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable population-standard-deviation VJP."""
-        from tensors.operations.vjp import zero_like_graph
-        from tensors.variable import Variable
-        from tensors.operations.reductions.mean import mean
-        from tensors.operations.manipulation.reshape import reshape
-
-        value = inputs[0]
-        axis = self.axis
-        keepdims = self.keepdims
-        _, scale_shape, groups = reduction_groups(value.data.shape, axis, True)
-        statistics = [scaled_deviations(value.data._data, group) for group in groups]
-        count = len(groups[0]) if groups else 0
-        if count == 0:
-            return [zero_like_graph(value)]
-        if count == 1:
-            return [value * 0.0]
-        if any(
-            (
-                group and normalized_deviation == 0
-                for group, (_, _, normalized_deviation) in zip(groups, statistics)
-            )
-        ):
-            raise ValueError(
-                "Higher-order derivatives of std are undefined at zero deviation"
-            )
-        scales = Variable(
-            Tensor(
-                [
-                    scale if _math.isfinite(scale) and scale > 0.0 else 1.0
-                    for scale, _, _ in statistics
-                ],
-                dtype=value.dtype,
-                shape=scale_shape,
-            ),
-            requires_grad=False,
-        )
-        normalized = value / scales
-        center = mean(normalized, axis=axis, keepdims=True)
-        deviation = std(normalized, axis=axis, keepdims=True)
-        expanded = (
-            grad
-            if keepdims
-            else reshape(
-                grad,
-                tuple(
-                    (
-                        1 if index in normalize_axes(value.ndim, axis) else size
-                        for index, size in enumerate(value.shape)
-                    )
-                ),
-            )
-        )
-        return [expanded * (normalized - center) / (count * deviation)]
-
 
 @overload
 def std(
