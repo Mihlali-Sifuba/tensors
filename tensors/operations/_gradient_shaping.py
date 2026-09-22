@@ -45,28 +45,6 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
     return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
 
 
-def sum_to_shape_on_selected_backend(
-    gradient: Tensor, shape: tuple[int, ...]
-) -> Tensor:
-    """Reduce a broadcast gradient, on the backend that was selected.
-
-    Same reduction as :func:`sum_to_shape`, under the execution contract of
-    `docs/backends.md`: no workload-size policy decides where it runs, and a
-    backend that cannot perform it raises rather than letting Python answer.
-    The addition and subtraction VJPs use this one, because `+` and `-` are
-    inside the arithmetic contract; the operations outside it still use
-    :func:`sum_to_shape`.
-    """
-    if gradient.shape == shape:
-        return gradient
-    if len(shape) > gradient.ndim:
-        raise ValueError(f"Cannot reduce gradient shape {gradient.shape} to {shape}")
-    from tensors.backend import execute_vjp_sum_to_shape
-
-    accelerated = execute_vjp_sum_to_shape(gradient, shape)
-    return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
-
-
 def sum_products_to_shape(
     gradient: Tensor, factor: Tensor, shape: tuple[int, ...]
 ) -> Tensor:
@@ -205,14 +183,6 @@ class ProductSumToShape(Operation):
         return gradients
 
 
-def sum_products_to_shape_graph(left, right, shape: tuple[int, ...]):
-    """Record a fused multiply-and-reduce without premature overflow."""
-    from tensors.variable import Variable
-
-    operation = ProductSumToShape(target_shape=shape)
-    return Variable._apply_operation(operation, (left, right))
-
-
 class ZeroLike(Operation):
     """A graph-connected zero that is safe for infinite input values."""
 
@@ -302,7 +272,6 @@ __all__ = [
     "ProductSumToShape",
     "masked_value_graph",
     "sum_products_to_shape",
-    "sum_products_to_shape_graph",
     "sum_to_shape",
     "sum_to_shape_graph",
     "sum_to_shape_graph_on_selected_backend",
