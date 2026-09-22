@@ -119,24 +119,6 @@ class Pow(Operation):
         return gradients
 
 
-def _second_partial_shape(outer: Tensor, grad: Tensor, base: Tensor, exponent: Tensor):
-    """The shape a second partial is calculated at, before it is reduced."""
-    return (
-        outer.shape.broadcast_with(grad.shape)
-        .broadcast_with(base.shape)
-        .broadcast_with(exponent.shape)
-    )
-
-
-def _no_third_derivative(operation: Operation) -> NotImplementedError:
-    """Report the order this rule stops at, rather than failing obscurely."""
-    return NotImplementedError(
-        f"{operation.name} has no derivative rule, so a power cannot be "
-        "differentiated a third time. Its own derivative would be one of the "
-        "third partials of a power, and none of those is implemented; second "
-        "derivatives are unaffected."
-    )
-
 
 class PowerBaseBaseVJP(Operation):
     """Second partial of a power by its base, weighted by both gradients."""
@@ -158,11 +140,20 @@ class PowerBaseBaseVJP(Operation):
         return Tensor._from_owned_storage(
             accelerated,
             dtype=base.dtype,
-            shape=_second_partial_shape(outer, grad, base, exponent),
+            shape=(
+                outer.shape.broadcast_with(grad.shape)
+                .broadcast_with(base.shape)
+                .broadcast_with(exponent.shape)
+            ),
         )
 
     def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        raise _no_third_derivative(self)
+        raise NotImplementedError(
+            f"{self.name} has no derivative rule, so a power cannot be "
+            "differentiated a third time. Its own derivative would be one of the "
+            "third partials of a power, and none of those is implemented; second "
+            "derivatives are unaffected."
+        )
 
 
 class PowerMixedVJP(Operation):
@@ -194,11 +185,20 @@ class PowerMixedVJP(Operation):
         return Tensor._from_owned_storage(
             accelerated,
             dtype=self.dtype,
-            shape=_second_partial_shape(outer, grad, base, exponent),
+            shape=(
+                outer.shape.broadcast_with(grad.shape)
+                .broadcast_with(base.shape)
+                .broadcast_with(exponent.shape)
+            ),
         )
 
     def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        raise _no_third_derivative(self)
+        raise NotImplementedError(
+            f"{self.name} has no derivative rule, so a power cannot be "
+            "differentiated a third time. Its own derivative would be one of the "
+            "third partials of a power, and none of those is implemented; second "
+            "derivatives are unaffected."
+        )
 
 
 class PowerExponentExponentVJP(Operation):
@@ -218,69 +218,21 @@ class PowerExponentExponentVJP(Operation):
         return Tensor._from_owned_storage(
             accelerated,
             dtype=exponent.dtype,
-            shape=_second_partial_shape(outer, grad, base, exponent),
+            shape=(
+                outer.shape.broadcast_with(grad.shape)
+                .broadcast_with(base.shape)
+                .broadcast_with(exponent.shape)
+            ),
         )
 
     def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        raise _no_third_derivative(self)
-
-
-def _second_partials(
-    operation: Operation,
-    outer: Tensor,
-    grad: Tensor,
-    base: Tensor,
-    exponent: Tensor,
-    needs_input_grad: tuple[bool, ...],
-    base_rule: Operation,
-    exponent_rule: Operation,
-) -> List[Optional[Tensor]]:
-    """Differentiate one of power's VJPs, by the rules its caller names.
-
-    The two VJPs differ only in which second partial belongs to which
-    operand: the base VJP is differentiated by the base into ∂²f/∂b² and by
-    the exponent into the mixed partial, and the exponent VJP the other way
-    round. Everything else — that each VJP is linear in the upstream gradient
-    so its derivative by it is itself, which partial is skipped when it is not
-    requested, and the reduction back to each operand's shape — is the same
-    statement twice, so it is written once and the caller passes the two rules
-    that differ.
-
-    Each partial is applied as an operation, so the operands decide what the
-    statements mean and the whole of a reverse-over-reverse pass stays on the
-    selected backend. Nothing here reads an element.
-    """
-    from tensors.graph.expression import apply_operation, is_graph_operand
-
-    def apply(rule: Operation, operands: tuple[Tensor, ...]) -> Tensor:
-        return (
-            apply_operation(rule, operands)
-            if is_graph_operand(operands[0])
-            else rule.forward(*operands)
+        raise NotImplementedError(
+            f"{self.name} has no derivative rule, so a power cannot be "
+            "differentiated a third time. Its own derivative would be one of the "
+            "third partials of a power, and none of those is implemented; second "
+            "derivatives are unaffected."
         )
 
-    need_grad, need_base, need_exponent = needs_input_grad
-    return [
-        (
-            # This VJP is linear in the upstream gradient, so its derivative
-            # by it is the VJP itself, evaluated at the outer gradient.
-            sum_to_shape(apply(operation, (outer, base, exponent)), grad.shape)
-            if need_grad
-            else None
-        ),
-        (
-            sum_to_shape(apply(base_rule, (outer, grad, base, exponent)), base.shape)
-            if need_base
-            else None
-        ),
-        (
-            sum_to_shape(
-                apply(exponent_rule, (outer, grad, base, exponent)), exponent.shape
-            )
-            if need_exponent
-            else None
-        ),
-    ]
 
 
 class PowerBaseVJP(Operation):
@@ -316,17 +268,40 @@ class PowerBaseVJP(Operation):
         that did exist alongside the one that did not. An absent derivative
         is now NaN, as rules G1 to G3 require of a power's derivatives.
         """
+        from tensors.graph.expression import apply_operation, is_graph_operand
+
         grad, base, exponent = inputs
-        return _second_partials(
-            self,
-            outer_grad,
-            grad,
-            base,
-            exponent,
-            needs_input_grad,
-            PowerBaseBaseVJP(),
-            PowerMixedVJP(dtype=exponent.dtype),
-        )
+        need_grad, need_base, need_exponent = needs_input_grad
+        grad_partial = None
+        if need_grad:
+            contribution = (
+                apply_operation(self, (outer_grad, base, exponent))
+                if is_graph_operand(outer_grad)
+                else self.forward(outer_grad, base, exponent)
+            )
+            grad_partial = sum_to_shape(contribution, grad.shape)
+
+        base_partial = None
+        if need_base:
+            operation = PowerBaseBaseVJP()
+            contribution = (
+                apply_operation(operation, (outer_grad, grad, base, exponent))
+                if is_graph_operand(outer_grad)
+                else operation.forward(outer_grad, grad, base, exponent)
+            )
+            base_partial = sum_to_shape(contribution, base.shape)
+
+        exponent_partial = None
+        if need_exponent:
+            operation = PowerMixedVJP(dtype=exponent.dtype)
+            contribution = (
+                apply_operation(operation, (outer_grad, grad, base, exponent))
+                if is_graph_operand(outer_grad)
+                else operation.forward(outer_grad, grad, base, exponent)
+            )
+            exponent_partial = sum_to_shape(contribution, exponent.shape)
+
+        return [grad_partial, base_partial, exponent_partial]
 
 
 class PowerExponentVJP(Operation):
@@ -355,17 +330,40 @@ class PowerExponentVJP(Operation):
         the base VJP reaches, carrying the base's dtype here instead of the
         exponent's — and by the exponent is ∂²f/∂e².
         """
+        from tensors.graph.expression import apply_operation, is_graph_operand
+
         grad, base, exponent = inputs
-        return _second_partials(
-            self,
-            outer_grad,
-            grad,
-            base,
-            exponent,
-            needs_input_grad,
-            PowerMixedVJP(dtype=base.dtype),
-            PowerExponentExponentVJP(),
-        )
+        need_grad, need_base, need_exponent = needs_input_grad
+        grad_partial = None
+        if need_grad:
+            contribution = (
+                apply_operation(self, (outer_grad, base, exponent))
+                if is_graph_operand(outer_grad)
+                else self.forward(outer_grad, base, exponent)
+            )
+            grad_partial = sum_to_shape(contribution, grad.shape)
+
+        base_partial = None
+        if need_base:
+            operation = PowerMixedVJP(dtype=base.dtype)
+            contribution = (
+                apply_operation(operation, (outer_grad, grad, base, exponent))
+                if is_graph_operand(outer_grad)
+                else operation.forward(outer_grad, grad, base, exponent)
+            )
+            base_partial = sum_to_shape(contribution, base.shape)
+
+        exponent_partial = None
+        if need_exponent:
+            operation = PowerExponentExponentVJP()
+            contribution = (
+                apply_operation(operation, (outer_grad, grad, base, exponent))
+                if is_graph_operand(outer_grad)
+                else operation.forward(outer_grad, grad, base, exponent)
+            )
+            exponent_partial = sum_to_shape(contribution, exponent.shape)
+
+        return [grad_partial, base_partial, exponent_partial]
 
 
 @overload
