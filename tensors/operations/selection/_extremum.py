@@ -109,7 +109,7 @@ class _ElementwiseExtremum(Operation):
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         from tensors.operations._gradient_shaping import (
             masked_value_graph,
-            sum_to_shape_graph,
+            sum_to_shape,
             zero_like_graph,
         )
 
@@ -121,7 +121,7 @@ class _ElementwiseExtremum(Operation):
 
         def masked(weights: list[float], target: Any) -> Any:
             mask = Tensor(weights, dtype=grad.dtype, shape=grad.shape)
-            return sum_to_shape_graph(
+            return sum_to_shape(
                 masked_value_graph(grad, mask), target.shape
             ) + zero_like_graph(target)
 

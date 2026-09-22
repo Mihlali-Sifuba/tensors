@@ -206,11 +206,20 @@ class DivisionVjpBoundaryTests(unittest.TestCase):
 
         module = importlib.import_module("tensors.operations.arithmetic.divide")
         source = inspect.getsource(module)
-        self.assertIn("sum_to_shape_graph_on_selected_backend", source)
-        # Neither reduction that consults the workload policy may appear.
-        remainder = source.replace("sum_to_shape_graph_on_selected_backend(", "")
-        self.assertNotIn("sum_to_shape(", remainder)
-        self.assertNotIn("sum_to_shape_graph(", remainder)
+        self.assertIn("sum_to_shape", source)
+        # There is one broadcast reduction now, and it is the strict one, so
+        # the assertion is about the module it comes from rather than about
+        # which of several names this one picked.
+        shaping = importlib.import_module("tensors.operations._gradient_shaping")
+        reductions = [
+            name
+            for name in vars(shaping)
+            if name.startswith("sum_to_shape") and callable(vars(shaping)[name])
+        ]
+        self.assertEqual(reductions, ["sum_to_shape"])
+        self.assertIn(
+            "on_selected_backend=True", inspect.getsource(shaping.sum_to_shape)
+        )
 
     def test_the_denominator_vjp_does_not_scan_host_values(self):
         import ast

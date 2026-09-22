@@ -57,10 +57,9 @@ def _matrix_gradient_view(gradient: Any, left_vector: bool, right_vector: bool) 
 
 def _reduce_matrix_gradient(values: Any, shape: tuple[int, ...]) -> Any | None:
     """Reduce broadcast batch axes back to one operand's matrix shape."""
-    layout = _sum_axes(tuple(values.shape), shape)
-    if layout is None:
+    axes = _sum_axes(tuple(values.shape), shape)
+    if axes is None:
         return None
-    _, axes = layout
     safe = _stable_sum_candidate(values, axes)
     if not bool(safe):
         return None

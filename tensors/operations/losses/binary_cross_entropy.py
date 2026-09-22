@@ -9,7 +9,7 @@ from tensors.backend import (
     execute_binary_cross_entropy_gradient,
 )
 from tensors.dtype import result_dtype
-from tensors.operations._gradient_shaping import sum_to_shape, sum_to_shape_graph
+from tensors.operations._gradient_shaping import sum_to_shape
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
@@ -213,12 +213,12 @@ class BinaryCrossEntropy(Operation):
                 target_derivative = None
         return [
             (
-                sum_to_shape_graph(upstream * prediction_derivative, prediction.shape)
+                sum_to_shape(upstream * prediction_derivative, prediction.shape)
                 if need_prediction
                 else None
             ),
             (
-                sum_to_shape_graph(upstream * target_derivative, target.shape)
+                sum_to_shape(upstream * target_derivative, target.shape)
                 if need_target
                 else None
             ),

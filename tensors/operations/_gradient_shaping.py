@@ -25,24 +25,8 @@ broadcast.
 
 from __future__ import annotations
 from tensors.operations.base import Operation
+from tensors.shape import Shape
 from tensors.tensor import Tensor
-
-
-def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Tensor:
-    """Reduce a broadcasted ``gradient`` back to an input ``shape``.
-
-    During a forward broadcast, a value can participate in several output
-    positions. Reverse-mode differentiation must sum those contributions into
-    the corresponding original position.
-    """
-    if gradient.shape == shape:
-        return gradient
-    if len(shape) > gradient.ndim:
-        raise ValueError(f"Cannot reduce gradient shape {gradient.shape} to {shape}")
-    from tensors.backend import execute_sum_to_shape
-
-    accelerated = execute_sum_to_shape(gradient, shape)
-    return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
 
 
 def sum_products_to_shape(
@@ -60,29 +44,7 @@ def sum_products_to_shape(
     return Tensor._from_owned_storage(accelerated, dtype=gradient.dtype, shape=shape)
 
 
-def sum_to_shape_graph(gradient, shape: tuple[int, ...]):
-    """Differentiably reduce a broadcasted Variable back to ``shape``."""
-    from tensors.operations.manipulation.reshape import reshape
-    from tensors.operations.reductions.sum import sum
-
-    if gradient.shape == shape:
-        return gradient
-    if len(shape) > gradient.ndim:
-        raise ValueError(f"Cannot reduce gradient shape {gradient.shape} to {shape}")
-    padding = gradient.ndim - len(shape)
-    padded_shape = (1,) * padding + shape
-    axes = tuple(
-        (
-            axis
-            for axis, (source, target) in enumerate(zip(gradient.shape, padded_shape))
-            if target == 1 and source != 1
-        )
-    )
-    reduced = sum(gradient, axis=axes, keepdims=True) if axes else gradient
-    return reshape(reduced, shape) if reduced.shape != shape else reduced
-
-
-def sum_to_shape_graph_on_selected_backend(gradient, shape):
+def sum_to_shape(gradient, shape):
     """Reduce a broadcast gradient to ``shape``, on the selected backend.
 
     The same reduction as :func:`sum_to_shape_graph`, asked for under the
@@ -107,17 +69,9 @@ def sum_to_shape_graph_on_selected_backend(gradient, shape):
     from tensors.operations.reductions.sum import Sum
 
     shape = tuple(shape)
-    produced_shape = tuple(gradient.shape)
-    if produced_shape == shape:
+    if tuple(gradient.shape) == shape:
         return gradient
-    if len(shape) > len(produced_shape):
-        raise ValueError(f"Cannot reduce gradient shape {produced_shape} to {shape}")
-    padded = (1,) * (len(produced_shape) - len(shape)) + shape
-    axes = tuple(
-        axis
-        for axis, (produced, original) in enumerate(zip(produced_shape, padded))
-        if original == 1 and produced != 1
-    )
+    axes = Shape.from_iterable(gradient.shape).stretched_axes_from(shape)
     reduction = Sum(axis=axes, keepdims=True, on_selected_backend=True)
     reduced = (
         apply_operation(reduction, (gradient,))
@@ -273,8 +227,7 @@ __all__ = [
     "masked_value_graph",
     "sum_products_to_shape",
     "sum_to_shape",
-    "sum_to_shape_graph",
-    "sum_to_shape_graph_on_selected_backend",
+    "sum_to_shape",
     "ZeroLike",
     "zero_like_graph",
 ]

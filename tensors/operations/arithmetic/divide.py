@@ -6,9 +6,7 @@ from tensors.dtype import convert_scalar, resolve_result_dtype, true_division_dt
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.utils.broadcasting import broadcast_to
-from tensors.operations._gradient_shaping import (
-    sum_to_shape_graph_on_selected_backend,
-)
+from tensors.operations._gradient_shaping import sum_to_shape
 
 Scalar = Union[int, float]
 
@@ -117,7 +115,7 @@ class Div(Operation):
                     else primitive.forward(grad, numerator, denominator)
                 )
             gradients.append(
-                sum_to_shape_graph_on_selected_backend(contribution, operand.shape)
+                sum_to_shape(contribution, operand.shape)
             )
         return gradients
 
@@ -209,7 +207,7 @@ class DivisionDenominatorGradient(Operation):
             )
 
         def reduced(value, target):
-            return sum_to_shape_graph_on_selected_backend(value, target.shape)
+            return sum_to_shape(value, target.shape)
 
         grad_partial = reduced(denominator_vjp(numerator), grad) if need_grad else None
         numerator_partial = (

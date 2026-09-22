@@ -84,6 +84,47 @@ class Shape(tuple[int, ...]):
         # Every dimension came from an already-validated Shape.
         return tuple.__new__(Shape, dimensions)
 
+    def stretched_axes_from(self, other: Shape | Iterable[int]) -> tuple[int, ...]:
+        """Return the axes a broadcast from ``other`` stretched to reach this.
+
+        :meth:`broadcast_with` agrees the shape two operands broadcast to;
+        this answers the reverse question about one of them. Given the shape a
+        broadcast produced, it says which of that shape's axes one operand did
+        not have, or had as a singleton — the axes along which one of the
+        operand's values fed several positions.
+
+        That is the question a reverse pass asks: a value that fed several
+        positions is owed the sum of them, so these are the axes to sum over
+        and the only ones. Nothing here reads an element or mentions a
+        gradient; it is the arithmetic of two shapes.
+
+        Shapes align from the right, as they do when broadcasting forwards, so
+        an axis ``other`` does not have at all is stretched like a singleton::
+
+            Shape(2, 3).stretched_axes_from((1, 3))  # (0,)
+            Shape(2, 3).stretched_axes_from((3,))    # (0,)
+            Shape(2, 3).stretched_axes_from((2, 1))  # (1,)
+            Shape(2, 3).stretched_axes_from((2, 3))  # ()
+
+        Raises:
+            ValueError: If ``other`` did not broadcast to this shape, either
+                because it has more axes or because an axis disagrees without
+                being a singleton. A caller that treats this as a capability
+                question rather than an error catches it and declines.
+        """
+        operand = other if isinstance(other, Shape) else Shape.from_iterable(other)
+        if operand.rank > self.rank:
+            raise ValueError(f"Shape {operand} did not broadcast to {self}")
+        padded = (1,) * (self.rank - operand.rank) + tuple(operand)
+        axes = []
+        for axis, (produced, original) in enumerate(zip(self, padded)):
+            if produced == original:
+                continue
+            if original != 1:
+                raise ValueError(f"Shape {operand} did not broadcast to {self}")
+            axes.append(axis)
+        return tuple(axes)
+
     @overload
     def __getitem__(self, key: SupportsIndex) -> int: ...
 

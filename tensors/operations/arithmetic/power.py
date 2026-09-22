@@ -19,8 +19,6 @@ if TYPE_CHECKING:
     from tensors.variable import Variable
 from tensors.operations._gradient_shaping import (
     sum_to_shape,
-    sum_to_shape_graph,
-    sum_to_shape_graph_on_selected_backend,
 )
 
 Scalar = Union[int, float]
@@ -216,7 +214,7 @@ class Pow(Operation):
                 else operation.forward(grad, inputs[0], inputs[1])
             )
             gradients.append(
-                sum_to_shape_graph_on_selected_backend(contribution, operand.shape)
+                sum_to_shape(contribution, operand.shape)
             )
         return gradients
 
@@ -334,14 +332,14 @@ class PowerBaseGradient(Operation):
         need_grad, need_base, need_exponent = needs_input_grad
         return [
             (
-                sum_to_shape_graph(
+                sum_to_shape(
                     _power_base_vjp(outer_grad, base, exponent), grad.shape
                 )
                 if need_grad
                 else None
             ),
             (
-                sum_to_shape_graph(
+                sum_to_shape(
                     outer_grad
                     * grad
                     * exponent
@@ -353,7 +351,7 @@ class PowerBaseGradient(Operation):
                 else None
             ),
             (
-                sum_to_shape_graph(
+                sum_to_shape(
                     outer_grad
                     * grad
                     * base ** (exponent - 1.0)
@@ -446,14 +444,14 @@ class PowerExponentGradient(Operation):
         logarithm = log(base)
         return [
             (
-                sum_to_shape_graph(
+                sum_to_shape(
                     _power_exponent_vjp(outer_grad, base, exponent), grad.shape
                 )
                 if need_grad
                 else None
             ),
             (
-                sum_to_shape_graph(
+                sum_to_shape(
                     outer_grad
                     * grad
                     * base ** (exponent - 1.0)
@@ -464,7 +462,7 @@ class PowerExponentGradient(Operation):
                 else None
             ),
             (
-                sum_to_shape_graph(
+                sum_to_shape(
                     outer_grad * grad * base**exponent * logarithm**2.0, exponent.shape
                 )
                 if need_exponent

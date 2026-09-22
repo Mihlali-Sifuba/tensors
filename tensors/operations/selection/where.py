@@ -88,7 +88,7 @@ class Where(Operation):
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         from tensors.operations._gradient_shaping import (
             masked_value_graph,
-            sum_to_shape_graph,
+            sum_to_shape,
             zero_like_graph,
         )
 
@@ -102,7 +102,7 @@ class Where(Operation):
                 dtype=grad.dtype,
                 shape=grad.shape,
             )
-            left_gradient = sum_to_shape_graph(
+            left_gradient = sum_to_shape(
                 masked_value_graph(grad, left_mask), left.shape
             ) + zero_like_graph(left)
         right_gradient = None
@@ -112,7 +112,7 @@ class Where(Operation):
                 dtype=grad.dtype,
                 shape=grad.shape,
             )
-            right_gradient = sum_to_shape_graph(
+            right_gradient = sum_to_shape(
                 masked_value_graph(grad, right_mask), right.shape
             ) + zero_like_graph(right)
         return [

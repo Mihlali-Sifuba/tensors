@@ -11,7 +11,7 @@ from tensors.backend import (
     execute_validate_distributions,
 )
 from tensors.dtype import result_dtype
-from tensors.operations._gradient_shaping import sum_to_shape, sum_to_shape_graph
+from tensors.operations._gradient_shaping import sum_to_shape
 from tensors.shape import Shape
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
@@ -279,12 +279,12 @@ class CrossEntropy(Operation):
                     upstream = upstream / sample_count
         return [
             (
-                sum_to_shape_graph(upstream * logits_derivative, logits.shape)
+                sum_to_shape(upstream * logits_derivative, logits.shape)
                 if need_logits
                 else None
             ),
             (
-                sum_to_shape_graph(upstream * targets_derivative, targets.shape)
+                sum_to_shape(upstream * targets_derivative, targets.shape)
                 if need_targets
                 else None
             ),

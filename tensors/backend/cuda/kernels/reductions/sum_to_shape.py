@@ -18,10 +18,9 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Storage | None:
     """Reduce a broadcast gradient using guarded native summation."""
     if gradient.dtype.kind == "integer":
         return None
-    layout = _sum_axes(gradient.shape, shape)
-    if layout is None:
+    axes = _sum_axes(gradient.shape, shape)
+    if axes is None:
         return None
-    _, axes = layout
     values = _working_values(gradient)
     safe = _stable_sum_candidate(values, axes)
     result = _scaled_sum(values, axes)

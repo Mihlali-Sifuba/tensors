@@ -4,9 +4,7 @@ from typing import Union
 from tensors.backend import execute_subtract
 from tensors.dtype import convert_scalar, resolve_result_dtype
 from tensors.operations.base import Operation
-from tensors.operations._gradient_shaping import (
-    sum_to_shape_graph_on_selected_backend,
-)
+from tensors.operations._gradient_shaping import sum_to_shape
 from tensors.tensor import Tensor
 
 Scalar = Union[int, float]
@@ -72,7 +70,7 @@ class Sub(Operation):
                 continue
             contribution = -grad if negated else grad
             gradients.append(
-                sum_to_shape_graph_on_selected_backend(contribution, operand.shape)
+                sum_to_shape(contribution, operand.shape)
             )
         return gradients
 

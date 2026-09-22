@@ -184,7 +184,7 @@ class MatMul(Operation):
         """Build a differentiable VJP for vector and matrix products."""
         from tensors.operations.manipulation.transpose import transpose
         from tensors.operations.manipulation.reshape import reshape
-        from tensors.operations._gradient_shaping import sum_to_shape_graph
+        from tensors.operations._gradient_shaping import sum_to_shape
 
         left, right = inputs
         need_left, need_right = needs_input_grad
@@ -202,14 +202,14 @@ class MatMul(Operation):
             matrix_grad = grad
         left_gradient = None
         if need_left:
-            left_gradient = sum_to_shape_graph(
+            left_gradient = sum_to_shape(
                 matrix_grad @ transpose(right_matrix), left_matrix.shape
             )
             if left_vector:
                 left_gradient = reshape(left_gradient, left.shape)
         right_gradient = None
         if need_right:
-            right_gradient = sum_to_shape_graph(
+            right_gradient = sum_to_shape(
                 transpose(left_matrix) @ matrix_grad, right_matrix.shape
             )
             if right_vector:

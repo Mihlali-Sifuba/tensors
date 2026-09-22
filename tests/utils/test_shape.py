@@ -148,5 +148,55 @@ class StridesTests(unittest.TestCase):
         self.assertEqual(strides[1:], ts.Strides(4, 1))
 
 
+Shape = ts.Shape
+
+
+class StretchedAxesTests(unittest.TestCase):
+    """The inverse of ``broadcast_with``: which axes a broadcast stretched.
+
+    Reverse-mode differentiation asks this to know which axes of a gradient to
+    sum, but nothing here reads an element or mentions a gradient — it is the
+    arithmetic of two shapes, and the answers below come from the broadcasting
+    rules rather than from running a reduction.
+    """
+
+    def test_a_singleton_axis_is_stretched(self):
+        self.assertEqual(Shape(2, 3).stretched_axes_from((1, 3)), (0,))
+        self.assertEqual(Shape(2, 3).stretched_axes_from((2, 1)), (1,))
+        self.assertEqual(Shape(2, 3).stretched_axes_from((1, 1)), (0, 1))
+
+    def test_an_axis_the_operand_never_had_is_stretched(self):
+        """Shapes align from the right, so a missing axis counts as one."""
+        self.assertEqual(Shape(2, 3).stretched_axes_from((3,)), (0,))
+        self.assertEqual(Shape(4, 2, 3).stretched_axes_from((3,)), (0, 1))
+        self.assertEqual(Shape(2, 3).stretched_axes_from(()), (0, 1))
+
+    def test_an_equal_shape_stretched_nothing(self):
+        self.assertEqual(Shape(2, 3).stretched_axes_from((2, 3)), ())
+        self.assertEqual(Shape(1, 3).stretched_axes_from((3,)), ())
+        self.assertEqual(Shape().stretched_axes_from(()), ())
+
+    def test_it_agrees_with_broadcast_with(self):
+        """Every axis it names is one the forward broadcast changed."""
+        pairs = (((1, 3), (2, 1)), ((2, 3), (3,)), ((4, 1, 3), (2, 3)), ((5,), (5,)))
+        for left, right in pairs:
+            with self.subTest(left=left, right=right):
+                common = Shape(*left).broadcast_with(right)
+                for operand in (left, right):
+                    stretched = common.stretched_axes_from(operand)
+                    padded = (1,) * (common.rank - len(operand)) + tuple(operand)
+                    for axis in range(common.rank):
+                        changed = padded[axis] != common[axis]
+                        self.assertEqual(axis in stretched, changed)
+
+    def test_a_shape_that_did_not_broadcast_here_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "did not broadcast"):
+            Shape(2, 3).stretched_axes_from((2, 3, 4))
+        with self.assertRaisesRegex(ValueError, "did not broadcast"):
+            Shape(2, 3).stretched_axes_from((2, 2))
+        with self.assertRaisesRegex(ValueError, "did not broadcast"):
+            Shape(2, 3).stretched_axes_from((3, 3))
+
+
 if __name__ == "__main__":
     unittest.main()
