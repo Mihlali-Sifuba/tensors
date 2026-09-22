@@ -1,152 +1,25 @@
 """Element-wise exponentiation and its differentiation rules."""
 
 from __future__ import annotations
-import math
 from typing import TYPE_CHECKING, List, Optional, Union, overload
 from tensors.backend import (
     execute_power,
+    execute_power_base_base_gradient,
     execute_power_base_gradient,
+    execute_power_exponent_exponent_gradient,
     execute_power_exponent_gradient,
+    execute_power_mixed_gradient,
 )
 from tensors._typing import TensorData, TensorLike, TensorResult
-from tensors.dtype import resolve_power, resolve_power_scalar_base
+from tensors.dtype import DataType, resolve_power, resolve_power_scalar_base
 from tensors.operations.base import Operation
-from tensors.shape import Shape
 from tensors.tensor import Tensor
-from tensors.utils.broadcasting import broadcast_to
 
 if TYPE_CHECKING:
     from tensors.variable import Variable
 from tensors.operations.gradient_primitives import sum_to_shape
 
 Scalar = Union[int, float]
-
-
-def _has_negative_exponent(exponent: Tensor) -> bool:
-    """Whether an integer exponent tensor holds a negative element.
-
-    Integer exponentiation has no fractional value to deliver, so section
-    12.4.2 requires this test, and it runs only when the result dtype is an
-    integer dtype: a floating power delivers the IEEE result and must never
-    read its exponent.
-
-    The test asks the native buffer rather than materialising the tensor, so a
-    device exponent costs one reduction and one scalar transfer, not a copy of
-    the tensor. A view is resolved to its logical values first, so elements the
-    exponent does not address cannot make it raise.
-    """
-    storage = exponent._logical_storage_for(exponent.backend_storage.kind)
-    buffer = storage.buffer
-    if getattr(buffer, "any", None) is None:
-        return any(value < 0 for value in buffer)
-    return bool((buffer < 0).any())
-
-
-def _reject_negative_exponent(dtype, exponent) -> None:
-    """Apply section 12.4.2 once the result dtype is settled.
-
-    The dtype is decided first, from declarations alone (section 12.5), and
-    only then is the exponent's domain examined. The two stages never
-    interact: a negative exponent never promotes the result to a floating
-    dtype, it refuses the operation.
-    """
-    if dtype.kind != "integer":
-        return
-    negative = (
-        _has_negative_exponent(exponent)
-        if isinstance(exponent, Tensor)
-        else exponent < 0
-    )
-    if negative:
-        raise ValueError(
-            "integer exponentiation requires a non-negative exponent; "
-            + dtype.name
-            + " cannot represent a reciprocal. Cast the base to a floating "
-            "dtype, for example base.astype(ts.float64) ** exponent"
-        )
-
-
-def _power(base: int | float, exponent: int | float) -> int | float:
-    """Calculate a real-valued power with a clear domain error."""
-    if isinstance(base, int) and isinstance(exponent, int) and (exponent >= 0):
-        return base**exponent
-    try:
-        value = math.pow(base, exponent)
-    except ValueError as exc:
-        raise ValueError("power is not defined for these real-valued inputs") from exc
-    except OverflowError as exc:
-        raise OverflowError("power result is too large to represent") from exc
-    return value
-
-
-def _product_quotient(
-    numerators: list[float], denominators: list[float] | None = None
-) -> float:
-    """Evaluate a product quotient without avoidable range loss."""
-    denominators = [] if denominators is None else denominators
-    if any((math.isnan(value) for value in numerators + denominators)):
-        return math.nan
-    if any((value == 0.0 for value in denominators)):
-        raise ZeroDivisionError("Division by zero")
-    if any((value == 0.0 for value in numerators)):
-        return 0.0
-    if all((math.isfinite(value) for value in numerators + denominators)):
-        numerator = 1
-        denominator = 1
-        for value in numerators:
-            value_numerator, value_denominator = value.as_integer_ratio()
-            numerator *= value_numerator
-            denominator *= value_denominator
-        for value in denominators:
-            value_numerator, value_denominator = value.as_integer_ratio()
-            numerator *= value_denominator
-            denominator *= value_numerator
-        try:
-            return numerator / denominator
-        except OverflowError:
-            return math.inf if numerator * denominator > 0 else -math.inf
-    result = 1.0
-    for value in numerators:
-        result *= value
-    for value in denominators:
-        result /= value
-    return result
-
-
-def _power_product(factors: list[float], base: float, exponent: float) -> float:
-    """Return ``product(factors) * base**exponent`` stably."""
-    if any((value == 0.0 for value in factors)):
-        return 0.0
-    try:
-        power = float(_power(base, exponent))
-    except OverflowError:
-        power = math.inf
-    if power != 0.0 and math.isfinite(power):
-        return _product_quotient(factors + [power])
-    if (
-        base != 0.0
-        and all((math.isfinite(value) for value in factors))
-        and math.isfinite(base)
-        and math.isfinite(exponent)
-    ):
-        sign = -1.0 if sum((value < 0.0 for value in factors)) % 2 else 1.0
-        magnitude_base = abs(base)
-        if base < 0.0:
-            if not exponent.is_integer():
-                # Section 12.3.3 gives NaN rather than an error here.
-                return math.nan
-            if int(exponent) % 2:
-                sign = -sign
-        logarithm = math.fsum(
-            [math.log(abs(value)) for value in factors]
-            + [exponent * math.log(magnitude_base)]
-        )
-        try:
-            magnitude = math.exp(logarithm)
-        except OverflowError:
-            magnitude = math.inf
-        return math.copysign(magnitude, sign)
-    return _product_quotient(factors + [power])
 
 
 class Pow(Operation):
@@ -162,7 +35,38 @@ class Pow(Operation):
         # Promotion for a typed exponent, conversion for a scalar; section
         # 12.5. No element value is read.
         dtype, exponent = resolve_power(base.dtype, exponent)
-        _reject_negative_exponent(dtype, exponent)
+        if dtype.kind == "integer":
+            # Section 12.4.2, applied once the result dtype is settled.
+            # The dtype is decided first, from declarations alone, and only
+            # then is the exponent's domain examined: a negative exponent
+            # never promotes the result to a floating dtype, it refuses the
+            # operation. Integer exponentiation has no fractional value to
+            # deliver, and a floating power delivers the IEEE result and
+            # must never read its exponent, which is why this is reached
+            # only for an integer result.
+            if isinstance(exponent, Tensor):
+                # The native buffer answers this, so a device exponent costs
+                # one reduction and one scalar transfer rather than a copy of
+                # the tensor. A view is resolved to its logical values first,
+                # so an element the exponent does not address cannot make it
+                # raise.
+                buffer = exponent._logical_storage_for(
+                    exponent.backend_storage.kind
+                ).buffer
+                negative = (
+                    any(value < 0 for value in buffer)
+                    if getattr(buffer, "any", None) is None
+                    else bool((buffer < 0).any())
+                )
+            else:
+                negative = exponent < 0
+            if negative:
+                raise ValueError(
+                    "integer exponentiation requires a non-negative exponent; "
+                    + dtype.name
+                    + " cannot represent a reciprocal. Cast the base to a floating "
+                    "dtype, for example base.astype(ts.float64) ** exponent"
+                )
         output_shape = (
             base.shape.broadcast_with(exponent.shape)
             if isinstance(exponent, Tensor)
@@ -200,8 +104,8 @@ class Pow(Operation):
 
         gradients = []
         for operation, operand, requested in (
-            (PowerBaseGradient(), inputs[0], needs_input_grad[0]),
-            (PowerExponentGradient(), inputs[1], needs_input_grad[1]),
+            (PowerBaseVJP(), inputs[0], needs_input_grad[0]),
+            (PowerExponentVJP(), inputs[1], needs_input_grad[1]),
         ):
             if not requested:
                 gradients.append(None)
@@ -211,51 +115,179 @@ class Pow(Operation):
                 if is_graph_operand(grad)
                 else operation.forward(grad, inputs[0], inputs[1])
             )
-            gradients.append(
-                sum_to_shape(contribution, operand.shape)
-            )
+            gradients.append(sum_to_shape(contribution, operand.shape))
         return gradients
 
 
-def _mixed_power_derivative(
-    outer: float, upstream: float, base_value: float, power: float
-) -> float:
-    """``d2(b**e)/db de`` weighted by both upstream gradients.
-
-    Differentiating the base gradient by the exponent and the exponent
-    gradient by the base give the same mixed second partial, so the two
-    operations below share this one statement of it rather than each
-    carrying a copy that could drift.
-    """
-    coefficient = math.fsum([1.0, power * math.log(base_value)])
-    return _power_product([outer, upstream, coefficient], base_value, power - 1.0)
-
-
-def _reduced(
-    values: list[float], reference: Tensor, shape: Shape, target: Tensor
-) -> Tensor:
-    """Reduce accumulated per-element VJP values back to an operand shape."""
-    return sum_to_shape(
-        Tensor(values, dtype=reference.dtype, shape=shape), target.shape
-    )
-
-
-def _expanded_power_inputs(
-    grad: Tensor, base: Tensor, exponent: Tensor
-) -> tuple[Tensor, Tensor, Tensor]:
-    shape = grad.shape.broadcast_with(base.shape).broadcast_with(exponent.shape)
+def _second_partial_shape(outer: Tensor, grad: Tensor, base: Tensor, exponent: Tensor):
+    """The shape a second partial is calculated at, before it is reduced."""
     return (
-        broadcast_to(grad, shape),
-        broadcast_to(base, shape),
-        broadcast_to(exponent, shape),
+        outer.shape.broadcast_with(grad.shape)
+        .broadcast_with(base.shape)
+        .broadcast_with(exponent.shape)
     )
 
 
-class PowerBaseGradient(Operation):
+def _no_third_derivative(operation: Operation) -> NotImplementedError:
+    """Report the order this rule stops at, rather than failing obscurely."""
+    return NotImplementedError(
+        f"{operation.name} has no derivative rule, so a power cannot be "
+        "differentiated a third time. Its own derivative would be one of the "
+        "third partials of a power, and none of those is implemented; second "
+        "derivatives are unaffected."
+    )
+
+
+class PowerBaseBaseVJP(Operation):
+    """Second partial of a power by its base, weighted by both gradients."""
+
+    __slots__ = ()
+    name = "power_base_base_vjp"
+
+    def forward(
+        self, outer: Tensor, grad: Tensor, base: Tensor, exponent: Tensor
+    ) -> Tensor:
+        """Apply ``exponent * (exponent - 1) * base ** (exponent - 2)``.
+
+        The operands are not broadcast here: each backend's kernel broadcasts
+        them natively, and expanding first would materialise them through the
+        host, which is the read a gradient is specified not to perform.
+        """
+        accelerated = execute_power_base_base_gradient(outer, grad, base, exponent)
+        # Rule G5: the base's declared dtype, not the upstream gradient's.
+        return Tensor._from_owned_storage(
+            accelerated,
+            dtype=base.dtype,
+            shape=_second_partial_shape(outer, grad, base, exponent),
+        )
+
+    def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        raise _no_third_derivative(self)
+
+
+class PowerMixedVJP(Operation):
+    """Mixed second partial of a power, weighted by both gradients.
+
+    Differentiating the base VJP by the exponent and the exponent VJP by the
+    base give the same mixed partial, so both reach this one operation rather
+    than each carrying a statement of it that could drift from the other.
+
+    It is configured with a dtype because that one partial is two different
+    gradients: the exponent's when the base VJP is differentiated and the
+    base's when the exponent VJP is. Rule G5 gives each the dtype of the
+    operand it belongs to, and only the caller knows which it is asking for.
+    """
+
+    __slots__ = ("dtype",)
+    name = "power_mixed_vjp"
+
+    def __init__(self, *, dtype: DataType) -> None:
+        object.__setattr__(self, "dtype", dtype)
+
+    def forward(
+        self, outer: Tensor, grad: Tensor, base: Tensor, exponent: Tensor
+    ) -> Tensor:
+        """Apply ``base ** (exponent - 1) * (1 + exponent * log(base))``."""
+        accelerated = execute_power_mixed_gradient(
+            outer, grad, base, exponent, dtype=self.dtype
+        )
+        return Tensor._from_owned_storage(
+            accelerated,
+            dtype=self.dtype,
+            shape=_second_partial_shape(outer, grad, base, exponent),
+        )
+
+    def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        raise _no_third_derivative(self)
+
+
+class PowerExponentExponentVJP(Operation):
+    """Second partial of a power by its exponent, weighted by both gradients."""
+
+    __slots__ = ()
+    name = "power_exponent_exponent_vjp"
+
+    def forward(
+        self, outer: Tensor, grad: Tensor, base: Tensor, exponent: Tensor
+    ) -> Tensor:
+        """Apply ``base ** exponent * log(base) ** 2``."""
+        accelerated = execute_power_exponent_exponent_gradient(
+            outer, grad, base, exponent
+        )
+        # Rule G5: the exponent's declared dtype.
+        return Tensor._from_owned_storage(
+            accelerated,
+            dtype=exponent.dtype,
+            shape=_second_partial_shape(outer, grad, base, exponent),
+        )
+
+    def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        raise _no_third_derivative(self)
+
+
+def _second_partials(
+    operation: Operation,
+    outer: Tensor,
+    grad: Tensor,
+    base: Tensor,
+    exponent: Tensor,
+    needs_input_grad: tuple[bool, ...],
+    base_rule: Operation,
+    exponent_rule: Operation,
+) -> List[Optional[Tensor]]:
+    """Differentiate one of power's VJPs, by the rules its caller names.
+
+    The two VJPs differ only in which second partial belongs to which
+    operand: the base VJP is differentiated by the base into ∂²f/∂b² and by
+    the exponent into the mixed partial, and the exponent VJP the other way
+    round. Everything else — that each VJP is linear in the upstream gradient
+    so its derivative by it is itself, which partial is skipped when it is not
+    requested, and the reduction back to each operand's shape — is the same
+    statement twice, so it is written once and the caller passes the two rules
+    that differ.
+
+    Each partial is applied as an operation, so the operands decide what the
+    statements mean and the whole of a reverse-over-reverse pass stays on the
+    selected backend. Nothing here reads an element.
+    """
+    from tensors.graph.expression import apply_operation, is_graph_operand
+
+    def apply(rule: Operation, operands: tuple[Tensor, ...]) -> Tensor:
+        return (
+            apply_operation(rule, operands)
+            if is_graph_operand(operands[0])
+            else rule.forward(*operands)
+        )
+
+    need_grad, need_base, need_exponent = needs_input_grad
+    return [
+        (
+            # This VJP is linear in the upstream gradient, so its derivative
+            # by it is the VJP itself, evaluated at the outer gradient.
+            sum_to_shape(apply(operation, (outer, base, exponent)), grad.shape)
+            if need_grad
+            else None
+        ),
+        (
+            sum_to_shape(apply(base_rule, (outer, grad, base, exponent)), base.shape)
+            if need_base
+            else None
+        ),
+        (
+            sum_to_shape(
+                apply(exponent_rule, (outer, grad, base, exponent)), exponent.shape
+            )
+            if need_exponent
+            else None
+        ),
+    ]
+
+
+class PowerBaseVJP(Operation):
     """Differentiable range-safe VJP with respect to a power base."""
 
     __slots__ = ()
-    name = "power_base_gradient"
+    name = "power_base_vjp"
 
     def forward(self, grad: Tensor, base: Tensor, exponent: Tensor) -> Tensor:
         # The operands are not broadcast here. Each backend's kernel already
@@ -271,63 +303,37 @@ class PowerBaseGradient(Operation):
     def backward(
         self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Optional[Tensor]]:
-        grad, base, exponent = inputs
-        need_grad, need_base, need_exponent = needs_input_grad
-        expanded_grad, expanded_base, expanded_exponent = _expanded_power_inputs(
-            grad, base, exponent
-        )
-        expanded_outer = broadcast_to(outer_grad, expanded_grad.shape)
-        base_values = []
-        exponent_values = []
-        for outer, upstream, base_value, power in zip(
-            expanded_outer._data,
-            expanded_grad._data,
-            expanded_base._data,
-            expanded_exponent._data,
-        ):
-            outer = float(outer)
-            upstream = float(upstream)
-            base_value = float(base_value)
-            power = float(power)
-            if need_base:
-                base_values.append(
-                    _power_product(
-                        [outer, upstream, power, power - 1.0], base_value, power - 2.0
-                    )
-                )
-            if not need_exponent:
-                exponent_values.append(0.0)
-            elif base_value == 0.0:
-                if power > 1.0:
-                    exponent_values.append(0.0)
-                else:
-                    raise ValueError(
-                        "higher-order power derivatives are undefined at this zero base"
-                    )
-            else:
-                exponent_values.append(
-                    _mixed_power_derivative(outer, upstream, base_value, power)
-                )
-        shape = expanded_grad.shape
-        return [
-            (
-                sum_to_shape(self.forward(outer_grad, base, exponent), grad.shape)
-                if need_grad
-                else None
-            ),
-            _reduced(base_values, outer_grad, shape, base) if need_base else None,
-            (
-                _reduced(exponent_values, outer_grad, shape, exponent)
-                if need_exponent
-                else None
-            ),
-        ]
+        """Differentiate ``upstream * exponent * base ** (exponent - 1)``.
 
-class PowerExponentGradient(Operation):
+        Its derivative by the base is ∂²f/∂b² and by the exponent is the
+        mixed partial; both are backend primitives, because each is a few
+        small factors times a power whose range the grouping has to protect,
+        and neither can be assembled from operations that stay on the
+        selected backend.
+
+        This replaced a host loop that read every operand back, raised at a
+        zero and at a negative base, and in raising discarded the partials
+        that did exist alongside the one that did not. An absent derivative
+        is now NaN, as rules G1 to G3 require of a power's derivatives.
+        """
+        grad, base, exponent = inputs
+        return _second_partials(
+            self,
+            outer_grad,
+            grad,
+            base,
+            exponent,
+            needs_input_grad,
+            PowerBaseBaseVJP(),
+            PowerMixedVJP(dtype=exponent.dtype),
+        )
+
+
+class PowerExponentVJP(Operation):
     """Differentiable range-safe VJP with respect to a power exponent."""
 
     __slots__ = ()
-    name = "power_exponent_gradient"
+    name = "power_exponent_vjp"
 
     def forward(self, grad: Tensor, base: Tensor, exponent: Tensor) -> Tensor:
         # The operands are not broadcast here. Each backend's kernel already
@@ -343,70 +349,23 @@ class PowerExponentGradient(Operation):
     def backward(
         self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Optional[Tensor]]:
+        """Differentiate ``upstream * base ** exponent * log(base)``.
+
+        Its derivative by the base is the mixed partial — the same operation
+        the base VJP reaches, carrying the base's dtype here instead of the
+        exponent's — and by the exponent is ∂²f/∂e².
+        """
         grad, base, exponent = inputs
-        need_grad, need_base, need_exponent = needs_input_grad
-        expanded_grad, expanded_base, expanded_exponent = _expanded_power_inputs(
-            grad, base, exponent
+        return _second_partials(
+            self,
+            outer_grad,
+            grad,
+            base,
+            exponent,
+            needs_input_grad,
+            PowerMixedVJP(dtype=base.dtype),
+            PowerExponentExponentVJP(),
         )
-        expanded_outer = broadcast_to(outer_grad, expanded_grad.shape)
-        base_values = []
-        exponent_values = []
-        for outer, upstream, base_value, power in zip(
-            expanded_outer._data,
-            expanded_grad._data,
-            expanded_base._data,
-            expanded_exponent._data,
-        ):
-            outer = float(outer)
-            upstream = float(upstream)
-            base_value = float(base_value)
-            power = float(power)
-            if base_value == 0.0:
-                if not need_base or power > 1.0:
-                    base_values.append(0.0)
-                    exponent_values.append(0.0)
-                    continue
-                raise ValueError(
-                    "higher-order power derivatives are undefined at this zero base"
-                )
-            logarithm = math.log(base_value)
-            if need_base:
-                base_values.append(
-                    _mixed_power_derivative(outer, upstream, base_value, power)
-                )
-            if need_exponent:
-                exponent_values.append(
-                    _power_product(
-                        [outer, upstream, logarithm, logarithm], base_value, power
-                    )
-                )
-        shape = expanded_grad.shape
-        return [
-            (
-                sum_to_shape(self.forward(outer_grad, base, exponent), grad.shape)
-                if need_grad
-                else None
-            ),
-            _reduced(base_values, outer_grad, shape, base) if need_base else None,
-            (
-                _reduced(exponent_values, outer_grad, shape, exponent)
-                if need_exponent
-                else None
-            ),
-        ]
-
-def _power_base_vjp(grad, base, exponent):
-    from tensors.variable import Variable
-
-    operation = PowerBaseGradient()
-    return Variable._apply_operation(operation, (grad, base, exponent))
-
-
-def _power_exponent_vjp(grad, base, exponent):
-    from tensors.variable import Variable
-
-    operation = PowerExponentGradient()
-    return Variable._apply_operation(operation, (grad, base, exponent))
 
 
 @overload
@@ -426,8 +385,7 @@ def pow(base: TensorLike, exponent: TensorLike) -> TensorResult:
     return base**exponent
 
 
-_power_values = Pow().forward
-power = _power_values
+power = Pow().forward
 
 
 def power_scalar_base(base: Scalar, exponent: Tensor) -> Tensor:
@@ -437,7 +395,24 @@ def power_scalar_base(base: Scalar, exponent: Tensor) -> Tensor:
     element of ``exponent``.
     """
     dtype, base = resolve_power_scalar_base(base, exponent.dtype)
-    _reject_negative_exponent(dtype, exponent)
+    if dtype.kind == "integer":
+        # Section 12.4.2, as in Pow.forward: the dtype is settled from
+        # declarations alone and only then is the exponent's domain examined.
+        # The native buffer answers it, so a device exponent costs one
+        # reduction and one scalar transfer rather than a copy of the tensor.
+        buffer = exponent._logical_storage_for(exponent.backend_storage.kind).buffer
+        negative = (
+            any(value < 0 for value in buffer)
+            if getattr(buffer, "any", None) is None
+            else bool((buffer < 0).any())
+        )
+        if negative:
+            raise ValueError(
+                "integer exponentiation requires a non-negative exponent; "
+                + dtype.name
+                + " cannot represent a reciprocal. Cast the base to a floating "
+                "dtype, for example base.astype(ts.float64) ** exponent"
+            )
     accelerated = execute_power(
         base, exponent, dtype=dtype, output_shape=exponent.shape
     )

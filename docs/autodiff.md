@@ -642,13 +642,36 @@ are not restated here.
 > the reduction it now uses agrees with the one it replaced to well under an
 > ulp, in both directions, on the cases measured.
 >
-> **Its second derivative is not closed.** `PowerBaseGradient` and
-> `PowerExponentGradient` still carry two implementations of their own
-> derivative with different guarantees — a range-safe host loop that raises at
-> a zero base, and a formula built from ordinary operations that neither
-> guards the range nor raises — so differentiating a recorded power gradient
-> a second time with `create_graph` has no single answer to give yet.
-> Numerical second derivatives are unaffected and use the host loop.
+> **Its second derivative is closed too.** `PowerBaseVJP` and
+> `PowerExponentVJP` each state one derivative rule, written against
+> operations, so differentiating a recorded power gradient a second time has
+> one answer wherever it is asked for. The three second partials —
+> \(f_{bb} = e(e-1)b^{e-2}\), the mixed \(f_{be} = b^{e-1}(1 + e\ln b)\) and
+> \(f_{ee} = b^{e}(\ln b)^2\) — are backend primitives, dispatched like the
+> first-order pair with no workload threshold and no fallback.
+>
+> They are primitives rather than compositions for two reasons. Each is a few
+> small factors times a power, and the power is what leaves the representable
+> range while the whole expression stays inside it, so the factors have to be
+> grouped before rounding in one kernel. And the expression would need `log`,
+> which still answers to the workload policy and returns host storage for a
+> small operand, so building it from operations would lose the selected
+> backend for exactly the tensors this branch exists to protect.
+>
+> What this replaced was a host loop that read every operand back, computed in
+> Python whatever backend was selected, raised `ValueError` at a zero base and
+> at a negative one, and in raising discarded the partials that did exist
+> alongside the one that did not. Rules G1 to G3 apply at the second order as
+> they do at the first: an absent derivative is NaN, nothing raises on a
+> numerical condition, and nothing synchronises with the host to detect one.
+> So `(-2.0) ** 3.0` differentiated twice by the base now yields `-12.0`, and
+> its mixed partial `NaN`, where the pair used to be lost together.
+>
+> **The third derivative is not implemented.** Its rules would be power's
+> third partials, and none of those exists; `PowerBaseBaseVJP`,
+> `PowerMixedVJP` and `PowerExponentExponentVJP` raise `NotImplementedError`
+> naming that limit. Differentiating a power three times previously failed
+> with a type error from the reverse pass instead.
 
 > **Consequence worth knowing.** The array `sum_to_shape` and
 > `sum_products_to_shape` kernels decline when a gradient contains an infinity

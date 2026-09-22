@@ -136,7 +136,7 @@ class AutogradTests(unittest.TestCase):
 
     def test_create_graph_grad_does_not_modify_grad_attributes(self):
         x = ts.Variable([2.0])
-        output = x ** 3.0
+        output = x**3.0
         previous_x_gradient = ts.Tensor([7.0])
         previous_output_gradient = ts.Tensor([8.0])
         x.grad = previous_x_gradient
@@ -386,9 +386,7 @@ class AdditionVjpTests(unittest.TestCase):
                     produced = result.data if create_graph else result
                     expected = [[5.0, 7.0, 9.0], [6.0, 15.0]][wanted_index]
                     self.assertEqual(produced.tolist(), expected)
-                    self.assertEqual(
-                        produced.shape, operands[wanted_index].data.shape
-                    )
+                    self.assertEqual(produced.shape, operands[wanted_index].data.shape)
                     self.assertIsNone(
                         ts.grad(
                             operands[0] + operands[1],
@@ -523,9 +521,7 @@ class AdditionSeedDerivativeTests(unittest.TestCase):
         seed = ts.Variable(
             ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=dtype), name="seed"
         )
-        left, right = ts.grad(
-            a + b, [a, b], grad_outputs=seed, create_graph=True
-        )
+        left, right = ts.grad(a + b, [a, b], grad_outputs=seed, create_graph=True)
         return left, right, seed
 
     def _leading_axis_gradient(self, dtype=ts.float64):
@@ -587,9 +583,7 @@ class AdditionSeedDerivativeTests(unittest.TestCase):
                             grad_outputs=ts.Tensor([[2.0], [3.0]]),
                             create_graph=create_graph,
                         )
-                        produced = (
-                            by_seed_right.data if create_graph else by_seed_right
-                        )
+                        produced = by_seed_right.data if create_graph else by_seed_right
                         self.assertProduced(
                             produced,
                             values=[2.0, 2.0, 2.0, 3.0, 3.0, 3.0],
@@ -677,9 +671,7 @@ class AdditionSeedDerivativeTests(unittest.TestCase):
                     back = ts.grad(
                         built,
                         second_seed,
-                        grad_outputs=ts.Tensor(
-                            [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]
-                        ),
+                        grad_outputs=ts.Tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]),
                     )
                     self.assertProduced(
                         back,
@@ -754,9 +746,7 @@ class AdditionSeedDerivativeTests(unittest.TestCase):
                         third = ts.grad(
                             built,
                             second_seed,
-                            grad_outputs=ts.Tensor(
-                                [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]
-                            ),
+                            grad_outputs=ts.Tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]),
                             create_graph=True,
                         )
                     self.assertProduced(
@@ -803,15 +793,13 @@ class AdditionVjpBoundaryTests(unittest.TestCase):
 
     def test_addition_and_its_dependencies_define_exactly_one_derivative(self):
         from tensors.operations.reductions.product_sum_to_shape import (
-    ProductSumToShape,
-)
+            ProductSumToShape,
+        )
         from tensors.operations.manipulation.reshape import Reshape
         from tensors.operations.reductions.sum import Sum
         from tensors.ops import Add, Mul, Neg, Pow, Sub
 
-        for operation in (
-            Add, Sum, Reshape, Mul, ProductSumToShape, Sub, Neg, Pow
-        ):
+        for operation in (Add, Sum, Reshape, Mul, ProductSumToShape, Sub, Neg, Pow):
             with self.subTest(operation=operation.name):
                 self.assertNotIn("backward_graph", vars(operation))
                 self.assertFalse(hasattr(operation, "backward_graph"))
@@ -1076,12 +1064,8 @@ class MultiplicationVjpTests(unittest.TestCase):
                         first = ts.grad(
                             x * x * x, x, grad_outputs=ones, create_graph=True
                         )
-                        second = ts.grad(
-                            first, x, grad_outputs=ones, create_graph=True
-                        )
-                        third = ts.grad(
-                            second, x, grad_outputs=ones, create_graph=True
-                        )
+                        second = ts.grad(first, x, grad_outputs=ones, create_graph=True)
+                        third = ts.grad(second, x, grad_outputs=ones, create_graph=True)
                     for level, expected in (
                         (first, 12.0),  # 3x^2 at x = 2
                         (second, 12.0),  # 6x   at x = 2
@@ -1134,9 +1118,7 @@ class MultiplicationVjpTests(unittest.TestCase):
                     a = ts.Variable(ts.Tensor([[1.5, -2.5, 3.0]]))
                     b = ts.Variable(ts.Tensor([[2.0], [-4.0]]), requires_grad=False)
                     seed = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]))
-                    first = ts.grad(
-                        a * b, a, grad_outputs=seed, create_graph=True
-                    )
+                    first = ts.grad(a * b, a, grad_outputs=seed, create_graph=True)
                     self.assertProduced(
                         first.data,
                         values=[-14.0, -16.0, -18.0],
@@ -1429,9 +1411,7 @@ class SubtractionVjpTests(unittest.TestCase):
                 with ts.use_backend(backend):
                     a = ts.Variable(ts.Tensor([[1.5, -2.5, 3.0]]))
                     b = ts.Variable(ts.Tensor([[2.0], [-4.0]]))
-                    seed = ts.Variable(
-                        ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-                    )
+                    seed = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]))
                     _, right = ts.grad(
                         a - b, [a, b], grad_outputs=seed, create_graph=True
                     )
@@ -1460,9 +1440,7 @@ class SubtractionVjpTests(unittest.TestCase):
                 with ts.use_backend(backend):
                     a = ts.Variable(ts.Tensor([[1.5, -2.5, 3.0]]))
                     b = ts.Variable(ts.Tensor([[2.0], [-4.0]]))
-                    seed = ts.Variable(
-                        ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-                    )
+                    seed = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]))
                     _, right = ts.grad(
                         a - b, [a, b], grad_outputs=seed, create_graph=True
                     )
@@ -1561,9 +1539,7 @@ class NegationVjpTests(unittest.TestCase):
                     first = ts.grad(-x, x, grad_outputs=seed, create_graph=True)
                     self.assertEqual(first.data.tolist(), [-1.0, -2.0])
 
-                    by_seed = ts.grad(
-                        first, seed, grad_outputs=ts.Tensor([3.0, 5.0])
-                    )
+                    by_seed = ts.grad(first, seed, grad_outputs=ts.Tensor([3.0, 5.0]))
                 self.assertEqual(by_seed.tolist(), [-3.0, -5.0])
                 self.assertEqual(by_seed.backend_storage.kind, backend)
 
@@ -1659,7 +1635,10 @@ class PowerVjpTests(unittest.TestCase):
                     self._require(backend)
                     reset_graph_state()
                     base, exponent = self._gradients(
-                        backend, [2.0, 3.0], [3.0, 2.0], [1.0, 1.0],
+                        backend,
+                        [2.0, 3.0],
+                        [3.0, 2.0],
+                        [1.0, 1.0],
                         create_graph=create_graph,
                     )
                     for produced, expected in (
@@ -1698,7 +1677,9 @@ class PowerVjpTests(unittest.TestCase):
             for create_graph in (False, True):
                 for b, e, seed, want_base, want_exp in cases:
                     with self.subTest(
-                        backend=backend, create_graph=create_graph, base=b[0],
+                        backend=backend,
+                        create_graph=create_graph,
+                        base=b[0],
                         exponent=e[0],
                     ):
                         self._require(backend)
@@ -1720,12 +1701,16 @@ class PowerVjpTests(unittest.TestCase):
         """
         for backend in self.BACKENDS:
             for create_graph in (False, True):
-                with self.subTest(case="small base", backend=backend,
-                                  create_graph=create_graph):
+                with self.subTest(
+                    case="small base", backend=backend, create_graph=create_graph
+                ):
                     self._require(backend)
                     reset_graph_state()
                     base, _ = self._gradients(
-                        backend, [1.0e-308], [2.0], [1.0e308],
+                        backend,
+                        [1.0e-308],
+                        [2.0],
+                        [1.0e308],
                         create_graph=create_graph,
                     )
                     self.assertTrue(
@@ -1733,11 +1718,15 @@ class PowerVjpTests(unittest.TestCase):
                     )
                     self.assertEqual(base.backend_storage.kind, backend)
 
-                with self.subTest(case="large base", backend=backend,
-                                  create_graph=create_graph):
+                with self.subTest(
+                    case="large base", backend=backend, create_graph=create_graph
+                ):
                     reset_graph_state()
                     base, _ = self._gradients(
-                        backend, [1.0e308], [-1.0], [1.0e308],
+                        backend,
+                        [1.0e308],
+                        [-1.0],
+                        [1.0e308],
                         create_graph=create_graph,
                     )
                     self.assertTrue(
@@ -1748,12 +1737,8 @@ class PowerVjpTests(unittest.TestCase):
         """``(1, 3) ** (2, 1)``: each operand reduces the other's axis."""
         bases = [2.0, 3.0, 4.0]
         exponents = [2.0, 3.0]
-        expected_base = [
-            sum(e * b ** (e - 1.0) for e in exponents) for b in bases
-        ]
-        expected_exponent = [
-            sum(b**e * math.log(b) for b in bases) for e in exponents
-        ]
+        expected_base = [sum(e * b ** (e - 1.0) for e in exponents) for b in bases]
+        expected_exponent = [sum(b**e * math.log(b) for b in bases) for e in exponents]
         for backend in self.BACKENDS:
             for create_graph in (False, True):
                 with self.subTest(backend=backend, create_graph=create_graph):
@@ -1860,21 +1845,59 @@ class PowerVjpTests(unittest.TestCase):
                 self.assertFalse(hasattr(module, name))
                 self.assertTrue(hasattr(kernel, "_base_gradient_value"))
 
-        for operation in (module.PowerBaseGradient, module.PowerExponentGradient):
+        # Each VJP is linear in the upstream gradient, so its derivative by
+        # that gradient is the VJP itself evaluated at the outer one. Asking
+        # for the value says so more firmly than reading the source does.
+        for operation in (module.PowerBaseVJP(), module.PowerExponentVJP()):
             with self.subTest(operation=operation.name):
-                source = inspect.getsource(operation.backward)
-                self.assertIn("self.forward(", source)
+                outer = ts.Tensor([2.0, 3.0], dtype=ts.float64)
+                grad = ts.Tensor([1.0, 1.0], dtype=ts.float64)
+                base = ts.Tensor([2.0, 5.0], dtype=ts.float64)
+                exponent = ts.Tensor([3.0, 2.0], dtype=ts.float64)
+                produced = operation.backward(
+                    outer,
+                    grad,
+                    base,
+                    exponent,
+                    needs_input_grad=(True, False, False),
+                )
+                self.assertEqual(
+                    produced[0].tolist(),
+                    operation.forward(outer, base, exponent).tolist(),
+                )
+                self.assertEqual(produced[1:], [None, None])
 
     def test_the_mixed_second_partial_is_stated_once(self):
-        """Both operations reach the same statement of it."""
+        """Both operations reach the same statement of it.
+
+        Differentiating the base VJP by the exponent and the exponent VJP by
+        the base give the same mixed partial. One operation states it, so the
+        two cannot drift apart, and it carries the dtype of whichever operand
+        is receiving the gradient (rule G5).
+        """
         import importlib
         import inspect
 
         module = importlib.import_module("tensors.operations.arithmetic.power")
-        for operation in (module.PowerBaseGradient, module.PowerExponentGradient):
+        for operation in (module.PowerBaseVJP, module.PowerExponentVJP):
             with self.subTest(operation=operation.name):
                 source = inspect.getsource(operation.backward)
-                self.assertIn("_mixed_power_derivative(", source)
+                self.assertIn("PowerMixedVJP(", source)
+
+        outer = ts.Tensor([1.0, 2.0], dtype=ts.float64)
+        grad = ts.Tensor([1.0, 1.0], dtype=ts.float64)
+        base = ts.Tensor([2.0, 5.0], dtype=ts.float64)
+        exponent = ts.Tensor([3.0, 2.0], dtype=ts.float64)
+        demand = (False, True, True)
+        from_base = module.PowerBaseVJP().backward(
+            outer, grad, base, exponent, needs_input_grad=demand
+        )
+        from_exponent = module.PowerExponentVJP().backward(
+            outer, grad, base, exponent, needs_input_grad=demand
+        )
+        # The base VJP's exponent slot and the exponent VJP's base slot are
+        # the one mixed partial, reached from either side.
+        self.assertEqual(from_base[2].tolist(), from_exponent[1].tolist())
 
     def test_the_gradient_primitives_do_not_expand_through_the_host(self):
         """Each backend's kernel broadcasts; expanding first read operands back."""
@@ -1886,7 +1909,7 @@ class PowerVjpTests(unittest.TestCase):
 
         module = importlib.import_module("tensors.operations.arithmetic.power")
 
-        for operation in (module.PowerBaseGradient, module.PowerExponentGradient):
+        for operation in (module.PowerBaseVJP, module.PowerExponentVJP):
             with self.subTest(operation=operation.name):
                 source = textwrap.dedent(inspect.getsource(operation.forward))
                 self.assertNotIn("_expanded_power_inputs", source)

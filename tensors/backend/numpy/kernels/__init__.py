@@ -93,6 +93,15 @@ from tensors.backend.numpy.kernels.elementwise.minimum_gradient import (
 )
 from tensors.backend.numpy.kernels.elementwise.negate import negate as negate
 from tensors.backend.numpy.kernels.elementwise.not_equal import not_equal as not_equal
+from tensors.backend.numpy.kernels.elementwise.power_base_base_gradient import (
+    power_base_base_gradient as power_base_base_gradient,
+)
+from tensors.backend.numpy.kernels.elementwise.power_exponent_exponent_gradient import (
+    power_exponent_exponent_gradient as power_exponent_exponent_gradient,
+)
+from tensors.backend.numpy.kernels.elementwise.power_mixed_gradient import (
+    power_mixed_gradient as power_mixed_gradient,
+)
 from tensors.backend.numpy.kernels.elementwise.power_base_gradient import (
     power_base_gradient as power_base_gradient,
 )

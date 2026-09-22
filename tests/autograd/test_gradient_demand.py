@@ -13,7 +13,7 @@ from tensors.operations.selection import Maximum, Minimum
 from tensors.operations.selection.where import Where
 from tensors.ops import Add, Div, Mul, Pow, Sub
 from tensors.operations.arithmetic.divide import DivisionDenominatorGradient
-from tensors.operations.arithmetic.power import PowerBaseGradient, PowerExponentGradient
+from tensors.operations.arithmetic.power import PowerBaseVJP, PowerExponentVJP
 
 
 class _Recorder:
@@ -64,8 +64,8 @@ class OperationConfigurationTests(unittest.TestCase):
             Mul(),
             Div(),
             Pow(),
-            PowerBaseGradient(),
-            PowerExponentGradient(),
+            PowerBaseVJP(),
+            PowerExponentVJP(),
             DivisionDenominatorGradient(),
             Where(),
             Maximum(),

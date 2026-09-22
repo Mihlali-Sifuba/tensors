@@ -403,16 +403,29 @@ class NegativeIntegerExponents(ArithmeticTestCase):
 
     @unittest.skipUnless("cuda" in BACKENDS, "CUDA backend is not installed")
     def test_the_cuda_check_materialises_nothing(self):
-        """A device exponent is reduced on the device, not copied to the host."""
-        from tensors.operations.arithmetic.power import _has_negative_exponent
+        """A device exponent is reduced on the device, not copied to the host.
 
+        The check is stated inside ``Pow.forward`` and ``power_scalar_base``
+        rather than in a helper of its own, so it is exercised the way a
+        caller reaches it: through the operation. What is being asserted is
+        unchanged — one reduction and one scalar transfer, never a copy of
+        the tensor — and both the accepting and the refusing path are
+        measured, since only the refusing one could be tempted to read.
+        """
         counting = ResultDtypeIgnoresValues._counting_device_reads
         with ts.use_backend("cuda"):
             # Arithmetic is bound to the selection, so this is device-resident.
             exponent = ts.full((4096,), 2, dtype=ts.int32) + 0
             self.assertEqual(type(exponent.backend_storage).__name__, "CudaStorage")
+            base = ts.full((4096,), 2, dtype=ts.int32) + 0
             with counting() as reads:
-                self.assertFalse(_has_negative_exponent(exponent))
+                accepted = base**exponent
+            self.assertEqual(type(accepted.backend_storage).__name__, "CudaStorage")
+            self.assertEqual(reads.count, 0)
+
+            with counting() as reads:
+                with self.assertRaises(ValueError):
+                    _ = 2 ** (ts.full((4096,), 2, dtype=ts.int32) - 3)
             self.assertEqual(reads.count, 0)
 
             negative = ts.full((4096,), 2, dtype=ts.int32) - 3

@@ -82,6 +82,11 @@ from tensors.backend.dispatch.elementwise.negate import execute_negate as execut
 from tensors.backend.dispatch.elementwise.not_equal import (
     execute_not_equal as execute_not_equal,
 )
+from tensors.backend.dispatch.elementwise.power_second_gradients import (
+    execute_power_base_base_gradient as execute_power_base_base_gradient,
+    execute_power_exponent_exponent_gradient as execute_power_exponent_exponent_gradient,
+    execute_power_mixed_gradient as execute_power_mixed_gradient,
+)
 from tensors.backend.dispatch.elementwise.power_base_gradient import (
     execute_power_base_gradient as execute_power_base_gradient,
 )

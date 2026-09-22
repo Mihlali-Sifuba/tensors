@@ -1239,7 +1239,7 @@ explicitly and give the outcome.
 | `tensors/backend/config.py`, `types.py` | Backend selection; strict mode has no representation today. `"auto"` resolves once, to NumPy when available and Python otherwise, and is then indistinguishable from naming that backend. |
 | `tests/backend/_support.py` — `NumPyParityTestCase` | Encodes Python-as-reference ([section 9.5](#95-the-existing-parity-helper)). **Not changed.** The conformance tests in `tests/operations/arithmetic/` compare against specified values instead, so the parity helper is no longer the only check; re-casting it is separate work. |
 | `tensors/backend/{python,numpy,cuda}/kernels/elementwise/division_denominator_gradient.py` | The division VJP raised, or declined and let the Python reference raise, where the forward pass returns an infinity. Its zero-denominator and finiteness tests also read device memory back to the host on every backward pass. **Re-audited at Phase 0:** the numerical behaviour was corrected with the division work and the finiteness read is gone, but its *dispatcher* still applied the workload threshold and fell back to the Python reference. **Closed:** the dispatcher is now strict, the three kernels take prepared native operands, and both broadcast reductions use the selected-backend reduction. See [section 7.5](#75-the-division-vjps). |
-| `tensors/backend/dispatch/reductions/`, `tensors/backend/dispatch/elementwise/`, `tensors/operations/gradient_primitives.py` | The `+`, `-` and `*` VJPs reduced and negated through entry points that applied the workload threshold, so a small backward pass under explicit NumPy returned `PythonStorage`. They now dispatch through `execute_vjp_sum_to_shape`, `execute_negate` and `execute_sum_products_to_shape`, which honour the selection at every size; negation needed no separate strict entry point once forward negation became strict itself. **Re-audited at Phase 0:** power's two gradient dispatchers are strict as well, so **2 of the 27 gradient dispatchers** meet the execution-location requirement. The other 25 — including the division VJP, which this table lists separately — still apply the workload threshold and fall back to the Python reference. Power's first derivative is closed as well: its broadcast reduction now asks for selected-backend execution rather than going through the shared `sum_to_shape`, so a small broadcast power backward pass no longer returns `PythonStorage`. Its *second* derivative is not: the two power gradient operations still carry a range-safe host loop and an ordinary-operation formula that do not agree about range safety or about raising at a zero base. |
+| `tensors/backend/dispatch/reductions/`, `tensors/backend/dispatch/elementwise/`, `tensors/operations/gradient_primitives.py` | The `+`, `-` and `*` VJPs reduced and negated through entry points that applied the workload threshold, so a small backward pass under explicit NumPy returned `PythonStorage`. They now dispatch through `execute_vjp_sum_to_shape`, `execute_negate` and `execute_sum_products_to_shape`, which honour the selection at every size; negation needed no separate strict entry point once forward negation became strict itself. **Re-audited at Phase 0:** power's two gradient dispatchers are strict as well, so **2 of the 27 gradient dispatchers** meet the execution-location requirement. The other 25 — including the division VJP, which this table lists separately — still apply the workload threshold and fall back to the Python reference. Power's first derivative is closed as well: its broadcast reduction now asks for selected-backend execution rather than going through the shared `sum_to_shape`, so a small broadcast power backward pass no longer returns `PythonStorage`. Its *second* derivative is now closed too: `PowerBaseVJP` and `PowerExponentVJP` each state one derivative rule, applied as operations over the three second partials, whose dispatchers in `power_second_gradients.py` are strict at every size. The host loop they replaced computed in Python whatever backend was selected and raised at a zero and at a negative base, discarding the partials that did exist. |
 | `tensors/operations/arithmetic/power.py` — `_power_dtype`, `_scalar_base_power_dtype` | Value-dependent result dtype, contradicting [section 6.4](#64-what-is-not-promoted); read `exponent._data`, a host transfer. **Done (D6).** Both functions are gone; `resolve_power` and `resolve_power_scalar_base` in `tensors/dtype.py` resolve from declared dtypes alone. |
 | `tensors/backend/python/kernels/elementwise/power_base_gradient.py` | Contained a **second copy** of `_power_dtype` with the same defect. **Done (D6).** No copy remains anywhere in `tensors/`. |
 | `tensors/operations/arithmetic/power.py` — `Pow.backward` | Value-reading domain checks that raised and discarded valid gradients (B27, B28). **Done (D7).** Both now apply the region table of [12.7.2](#1272-the-region-table); neither reads an operand. |
@@ -1968,6 +1968,45 @@ backward pass on CUDA, and the exponent-gradient kernel declined through
 backends; every region of [12.7.2](#1272-the-region-table) is reachable; no
 gradient reads an operand back to the host to classify it; and both power
 gradients execute on the selected backend or raise.
+
+#### 12.7.5 Second derivatives
+
+The three second partials of \(f(x, y) = x^{y}\) are
+
+$$\frac{\partial^{2} f}{\partial x^{2}} = y(y-1)x^{y-2}, \qquad
+  \frac{\partial^{2} f}{\partial x\,\partial y} = x^{y-1}(1 + y\ln x), \qquad
+  \frac{\partial^{2} f}{\partial y^{2}} = x^{y}(\ln x)^{2}$$
+
+**G1 to G6 govern these as they govern the first partials.** The rules are
+about the derivatives of `**`, not about the first of them, so a second
+derivative does not raise on a numerical condition, does not read an operand
+to classify one, carries its own operand's dtype, is reduced to that operand's
+shape, and executes on the selected backend at every size.
+
+No separate region table is stated here, and none is implied. Where a partial
+exists the formula is it; where it does not, the answer is NaN; and the
+divergences the formulas reach at a zero base are the IEEE values of those
+formulas, not approved conventions. The convention of
+[12.7.2](#1272-the-region-table) covers exactly the region that names it and
+is not extended to any second partial.
+
+Two rows do not follow from evaluating the formula and are stated:
+
+| region | ∂²f/∂x² | ∂²f/∂x∂y | ∂²f/∂y² |
+| --- | --- | --- | --- |
+| \(y = 0\) or \(y = 1\) | `0` | — | — |
+| \(x = 0\), \(y > 1\) | by the formula | `0` | `0` |
+| \(x = 0\), \(y \le 1\) | by the formula | `NaN` | `0` if \(y > 0\), else `NaN` |
+| \(x < 0\), \(y\) integral | by the formula | `NaN` | `NaN` |
+
+\(f\) is constant in \(x\) at \(y = 0\) and linear in it at \(y = 1\), so
+\(\partial^{2} f/\partial x^{2}\) is exactly zero rather than the
+\(0 \cdot \infty\) the formula produces at a zero base. And \(f(0, y)\) is
+zero for every \(y > 0\), so it is constant in \(y\) there and both partials
+taken by \(y\) are exactly zero.
+
+**The third derivative is not specified and not implemented.** Differentiating
+a power a third time reports that rather than answering.
 
 ### 12.8 Conformance requirements
 
