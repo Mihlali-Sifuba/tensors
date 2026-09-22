@@ -104,6 +104,51 @@ def sum_to_shape_graph(gradient, shape: tuple[int, ...]):
     return reshape(reduced, shape) if reduced.shape != shape else reduced
 
 
+def sum_to_shape_graph_on_selected_backend(gradient, shape):
+    """Reduce a broadcast gradient to ``shape``, on the selected backend.
+
+    The same reduction as :func:`sum_to_shape_graph`, asked for under the
+    execution contract of `docs/backends.md` rather than under the ordinary
+    summation policy: no workload-size threshold decides where it runs, and a
+    backend that cannot reduce conformingly reports that. The arithmetic VJPs
+    reduce this way because ``+``, ``-``, ``*``, ``/`` and ``**`` are inside
+    that contract; the operations outside it still use the other one.
+
+    Like that one it is written with the sum and reshape operations, so the
+    operands decide what the statements mean: given a Tensor they calculate,
+    and given a Variable they record a reduction that can be differentiated
+    again.
+
+    A forward broadcast prepends axes and stretches singleton ones. Those are
+    the axes along which one operand value fed several output positions, so
+    those are summed away and only those; reducing with ``keepdims`` leaves
+    them in place, and dropping them afterwards is a relabelling.
+    """
+    from tensors.graph.expression import apply_operation, is_graph_operand
+    from tensors.operations.manipulation.reshape import reshape
+    from tensors.operations.reductions.sum import Sum
+
+    shape = tuple(shape)
+    produced_shape = tuple(gradient.shape)
+    if produced_shape == shape:
+        return gradient
+    if len(shape) > len(produced_shape):
+        raise ValueError(f"Cannot reduce gradient shape {produced_shape} to {shape}")
+    padded = (1,) * (len(produced_shape) - len(shape)) + shape
+    axes = tuple(
+        axis
+        for axis, (produced, original) in enumerate(zip(produced_shape, padded))
+        if original == 1 and produced != 1
+    )
+    reduction = Sum(axis=axes, keepdims=True, on_selected_backend=True)
+    reduced = (
+        apply_operation(reduction, (gradient,))
+        if is_graph_operand(gradient)
+        else reduction.forward(gradient)
+    )
+    return reduced if tuple(reduced.shape) == shape else reshape(reduced, shape)
+
+
 class ProductSumToShape(Operation):
     """Fused differentiable product reduction used by broadcast VJPs."""
 
@@ -260,6 +305,7 @@ __all__ = [
     "sum_products_to_shape_graph",
     "sum_to_shape",
     "sum_to_shape_graph",
+    "sum_to_shape_graph_on_selected_backend",
     "ZeroLike",
     "zero_like_graph",
 ]

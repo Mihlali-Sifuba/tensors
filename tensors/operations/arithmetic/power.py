@@ -17,9 +17,11 @@ from tensors.utils.broadcasting import broadcast_to
 
 if TYPE_CHECKING:
     from tensors.variable import Variable
-from tensors.operations._gradient_shaping import sum_to_shape, sum_to_shape_graph
-from tensors.operations.manipulation.reshape import reshape
-from tensors.operations.reductions.sum import Sum
+from tensors.operations._gradient_shaping import (
+    sum_to_shape,
+    sum_to_shape_graph,
+    sum_to_shape_graph_on_selected_backend,
+)
 
 Scalar = Union[int, float]
 
@@ -213,33 +215,8 @@ class Pow(Operation):
                 if is_graph_operand(grad)
                 else operation.forward(grad, inputs[0], inputs[1])
             )
-            shape = operand.shape
-            if contribution.shape == shape:
-                gradients.append(contribution)
-                continue
-            if len(shape) > len(contribution.shape):
-                raise ValueError(
-                    f"Cannot reduce gradient shape {contribution.shape} to {shape}"
-                )
-            # A forward broadcast prepends axes and stretches singleton ones;
-            # those are the axes one operand value fed several outputs along,
-            # and the only ones summed away.
-            padded = (1,) * (len(contribution.shape) - len(shape)) + tuple(shape)
-            axes = tuple(
-                axis
-                for axis, (produced, original) in enumerate(
-                    zip(contribution.shape, padded)
-                )
-                if original == 1 and produced != 1
-            )
-            reduction = Sum(axis=axes, keepdims=True, on_selected_backend=True)
-            reduced = (
-                apply_operation(reduction, (contribution,))
-                if is_graph_operand(contribution)
-                else reduction.forward(contribution)
-            )
             gradients.append(
-                reduced if reduced.shape == shape else reshape(reduced, shape)
+                sum_to_shape_graph_on_selected_backend(contribution, operand.shape)
             )
         return gradients
 

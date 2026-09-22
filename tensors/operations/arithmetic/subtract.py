@@ -4,8 +4,9 @@ from typing import Union
 from tensors.backend import execute_subtract
 from tensors.dtype import convert_scalar, resolve_result_dtype
 from tensors.operations.base import Operation
-from tensors.operations.manipulation.reshape import reshape
-from tensors.operations.reductions.sum import Sum
+from tensors.operations._gradient_shaping import (
+    sum_to_shape_graph_on_selected_backend,
+)
 from tensors.tensor import Tensor
 
 Scalar = Union[int, float]
@@ -70,36 +71,8 @@ class Sub(Operation):
                 gradients.append(None)
                 continue
             contribution = -grad if negated else grad
-            shape = operand.shape
-            if contribution.shape == shape:
-                gradients.append(contribution)
-                continue
-            if len(shape) > len(contribution.shape):
-                raise ValueError(
-                    f"Cannot reduce gradient shape {contribution.shape} to {shape}"
-                )
-            # A forward broadcast prepends axes and stretches singleton ones.
-            # Those are exactly the axes along which one operand value fed
-            # several output positions, so those are the axes summed away and
-            # the only ones.
-            padded = (1,) * (len(contribution.shape) - len(shape)) + tuple(shape)
-            axes = tuple(
-                axis
-                for axis, (produced, original) in enumerate(
-                    zip(contribution.shape, padded)
-                )
-                if original == 1 and produced != 1
-            )
-            reduction = Sum(axis=axes, keepdims=True, on_selected_backend=True)
-            reduced = (
-                apply_operation(reduction, (contribution,))
-                if is_graph_operand(contribution)
-                else reduction.forward(contribution)
-            )
-            # Reducing with ``keepdims`` leaves the axes the broadcast added
-            # in place; dropping them is a relabelling, not arithmetic.
             gradients.append(
-                reduced if reduced.shape == shape else reshape(reduced, shape)
+                sum_to_shape_graph_on_selected_backend(contribution, operand.shape)
             )
         return gradients
 

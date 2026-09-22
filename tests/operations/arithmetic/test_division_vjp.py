@@ -206,11 +206,11 @@ class DivisionVjpBoundaryTests(unittest.TestCase):
 
         module = importlib.import_module("tensors.operations.arithmetic.divide")
         source = inspect.getsource(module)
-        self.assertIn("sum_to_shape_on_selected_backend", source)
-        # The legacy name may only appear as part of the strict one.
-        self.assertNotIn(
-            "sum_to_shape(", source.replace("sum_to_shape_on_selected_backend(", "")
-        )
+        self.assertIn("sum_to_shape_graph_on_selected_backend", source)
+        # Neither reduction that consults the workload policy may appear.
+        remainder = source.replace("sum_to_shape_graph_on_selected_backend(", "")
+        self.assertNotIn("sum_to_shape(", remainder)
+        self.assertNotIn("sum_to_shape_graph(", remainder)
 
     def test_the_denominator_vjp_does_not_scan_host_values(self):
         import ast
@@ -400,6 +400,139 @@ class DivisionVjpSemanticsTests(unittest.TestCase):
                     produced = computation.forward()
                 self.assertEqual(produced.tolist(), [-math.inf])
                 self.assertEqual(produced.backend_storage.kind, backend)
+
+
+class DivisionSingleBackwardTests(unittest.TestCase):
+    """Division defines one derivative, and it serves both reverse modes.
+
+    Section 7.2 fixes the values, so the expectations here are the quotient
+    rule — ``g / b`` and ``-g * a / b**2`` — with that section's conventions
+    at a zero denominator. No backend is read to judge another.
+    """
+
+    BACKENDS = ("python", "numpy", "cuda")
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def _require(self, backend):
+        if backend not in ts.available_backends():
+            self.skipTest(f"the {backend} backend is not available here")
+
+    def test_both_reverse_modes_give_the_same_gradients(self):
+        cases = {
+            "ordinary": ([6.0, -8.0], [2.0, 4.0], [1.0, 3.0],
+                         [0.5, 0.75], [-1.5, 1.5], (2,), (2,)),
+            "singleton": ([[6.0, 8.0]], [[2.0], [4.0]], [[1.0, 1.0], [1.0, 1.0]],
+                          [0.75, 0.75], [-3.5, -0.875], (1, 2), (2, 1)),
+            "leading": ([[6.0, 8.0], [10.0, 12.0]], [2.0, 4.0],
+                        [[1.0, 1.0], [1.0, 1.0]],
+                        [0.5, 0.25, 0.5, 0.25], [-4.0, -1.25], (2, 2), (2,)),
+        }
+        for backend in self.BACKENDS:
+            for name, (n, d, g, wn, wd, sn, sd) in cases.items():
+                for create_graph in (False, True):
+                    with self.subTest(backend=backend, case=name,
+                                      create_graph=create_graph):
+                        self._require(backend)
+                        reset_graph_state()
+                        with ts.use_backend(backend):
+                            a = ts.Variable(ts.Tensor(n, dtype=ts.float64))
+                            b = ts.Variable(ts.Tensor(d, dtype=ts.float64))
+                            gn, gd = ts.grad(
+                                a / b, [a, b],
+                                grad_outputs=ts.Tensor(g, dtype=ts.float64),
+                                create_graph=create_graph,
+                            )
+                            if create_graph:
+                                gn, gd = gn.data, gd.data
+                        for produced, want, shape in ((gn, wn, sn), (gd, wd, sd)):
+                            self.assertEqual(produced.tolist(), want)
+                            self.assertEqual(tuple(produced.shape), shape)
+                            self.assertIs(produced.dtype, ts.float64)
+                            self.assertEqual(produced.backend_storage.kind, backend)
+
+    def test_a_zero_denominator_keeps_its_section_7_2_values_in_both_modes(self):
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    with ts.use_backend(backend):
+                        a = ts.Variable(ts.Tensor([1.0], dtype=ts.float64))
+                        b = ts.Variable(ts.Tensor([0.0], dtype=ts.float64))
+                        gn, gd = ts.grad(
+                            a / b, [a, b],
+                            grad_outputs=ts.Tensor([1.0], dtype=ts.float64),
+                            create_graph=create_graph,
+                        )
+                        if create_graph:
+                            gn, gd = gn.data, gd.data
+                    self.assertEqual(gn.tolist(), [math.inf])
+                    self.assertEqual(gd.tolist(), [-math.inf])
+                    self.assertEqual(gn.backend_storage.kind, backend)
+
+    def test_the_range_safe_denominator_vjp_survives_both_modes(self):
+        """``b ** 2`` overflows here; the quotient is representable."""
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    with ts.use_backend(backend):
+                        a = ts.Variable(ts.Tensor([1.0e300], dtype=ts.float64))
+                        b = ts.Variable(ts.Tensor([1.0e200], dtype=ts.float64))
+                        _, gd = ts.grad(
+                            a / b, [a, b],
+                            grad_outputs=ts.Tensor([1.0], dtype=ts.float64),
+                            create_graph=create_graph,
+                        )
+                        if create_graph:
+                            gd = gd.data
+                    produced = gd.tolist()[0]
+                    self.assertTrue(math.isfinite(produced))
+                    self.assertAlmostEqual(produced / -1.0e-100, 1.0, places=9)
+
+    def test_the_second_derivative_and_replay(self):
+        """d2(a/b)/db2 is 2a/b**3, and the recorded first VJP re-runs."""
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    a = ts.Variable(ts.Tensor([6.0], dtype=ts.float64))
+                    b = ts.Variable(ts.Tensor([2.0], dtype=ts.float64))
+                    _, first = ts.grad(
+                        a / b, [a, b],
+                        grad_outputs=ts.Tensor([1.0], dtype=ts.float64),
+                        create_graph=True,
+                    )
+                    self.assertEqual(first.data.tolist(), [-1.5])
+                    second = ts.grad(
+                        first, b, grad_outputs=ts.Tensor([1.0], dtype=ts.float64)
+                    )
+                    self.assertAlmostEqual(
+                        second.tolist()[0], 2.0 * 6.0 / 2.0**3, places=12
+                    )
+
+                    program = ts.graph.Computation(first)
+                    self.assertEqual(program.forward().tolist(), [-1.5])
+                    b.data = ts.Tensor([4.0], dtype=ts.float64)
+                    replayed = program.forward()
+                self.assertEqual(replayed.tolist(), [-0.375])
+                self.assertEqual(replayed.backend_storage.kind, backend)
+
+    def test_division_defines_exactly_one_derivative(self):
+        from tensors.operations.arithmetic.divide import DivisionDenominatorGradient
+        from tensors.ops import Div, Operation
+
+        for operation in (Div, DivisionDenominatorGradient):
+            with self.subTest(operation=operation.name):
+                self.assertIs(operation.backward_graph, Operation.backward_graph)
+                self.assertNotIn("backward_graph", vars(operation))
 
 
 if __name__ == "__main__":
