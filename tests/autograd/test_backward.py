@@ -465,29 +465,6 @@ class AdditionVjpTests(unittest.TestCase):
         self.assertEqual(replayed_right.tolist(), [60.0, 150.0])
         self.assertEqual(tuple(replayed_right.shape), (2, 1))
 
-    def test_the_recorded_gradient_differentiates_by_its_upstream_seed(self):
-        """d(dz/da)/d(seed) across the broadcast reduction.
-
-        The left operand's VJP sums the seed down axis 0, so each seed
-        position contributes to exactly one reduced position, and the
-        derivative of that sum with respect to the seed is one everywhere.
-        """
-        a = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0]]))
-        b = ts.Variable(ts.Tensor([[10.0], [20.0]]))
-        seed = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]))
-        first, second = ts.grad(a + b, [a, b], grad_outputs=seed, create_graph=True)
-
-        by_seed = ts.grad(first, seed, grad_outputs=ts.Tensor([[1.0, 1.0, 1.0]]))
-        self.assertEqual(by_seed.tolist(), [1.0] * 6)
-        self.assertEqual(tuple(by_seed.shape), (2, 3))
-        self.assertEqual(by_seed.dtype, ts.float64)
-
-        # The right operand reduces the other axis, and a weighted cotangent
-        # spreads back over the positions each reduced value was summed from.
-        weighted = ts.grad(second, seed, grad_outputs=ts.Tensor([[2.0], [3.0]]))
-        self.assertEqual(weighted.tolist(), [2.0, 2.0, 2.0, 3.0, 3.0, 3.0])
-        self.assertEqual(tuple(weighted.shape), (2, 3))
-
     def test_a_seed_derivative_without_a_broadcast_is_the_identity(self):
         a = ts.Variable(ts.Tensor([1.0, 2.0]))
         b = ts.Variable(ts.Tensor([3.0, 4.0]))
@@ -499,14 +476,304 @@ class AdditionVjpTests(unittest.TestCase):
         self.assertEqual(tuple(by_seed.shape), (2,))
 
 
+class AdditionSeedDerivativeTests(unittest.TestCase):
+    """Differentiating addition's own broadcast gradient, on every backend.
+
+    Expected values are the derivative rules, not another backend's output.
+    For ``z = a + b`` the derivative with respect to either operand is one, so
+    a stretched operand's VJP is the sum of the output positions it fed. That
+    sum is linear, so differentiating it by the upstream seed spreads the
+    cotangent back over exactly the positions each sum consumed.
+
+    Two broadcasts are covered because they reach different dependencies. A
+    stretched singleton axis reduces to a shape the reduction already has, so
+    the VJP records the reduction alone. A removed leading axis reduces to a
+    lower rank, so the VJP records the reduction and then a relabelling, and
+    the recorded derivative has to pass through both.
+
+    Every stage is checked for value, shape, dtype and residency: the reverse
+    pass runs where the selection says, and a backend that is not installed is
+    reported rather than passed over.
+    """
+
+    BACKENDS = ("python", "numpy", "cuda")
+
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def _require(self, backend):
+        """Skip this subtest, visibly, when the backend is not installed."""
+        if backend not in ts.available_backends():
+            self.skipTest(f"the {backend} backend is not available here")
+
+    def assertProduced(self, produced, *, values, shape, backend, dtype=ts.float64):
+        self.assertEqual(produced.tolist(), values)
+        self.assertEqual(tuple(produced.shape), shape)
+        self.assertEqual(produced.dtype, dtype)
+        self.assertEqual(produced.backend_storage.kind, backend)
+
+    def _stretched_axis_gradient(self, dtype=ts.float64):
+        """``(1, 3) + (2, 1)``: each operand is stretched along one axis."""
+        a = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0]], dtype=dtype), name="a")
+        b = ts.Variable(ts.Tensor([[10.0], [20.0]], dtype=dtype), name="b")
+        seed = ts.Variable(
+            ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=dtype), name="seed"
+        )
+        left, right = ts.grad(
+            a + b, [a, b], grad_outputs=seed, create_graph=True
+        )
+        return left, right, seed
+
+    def _leading_axis_gradient(self, dtype=ts.float64):
+        """``(2, 3) + (3,)``: the vector's VJP loses the axis it gained."""
+        m = ts.Variable(
+            ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=dtype), name="m"
+        )
+        v = ts.Variable(ts.Tensor([1.0, 2.0, 3.0], dtype=dtype), name="v")
+        seed = ts.Variable(
+            ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=dtype), name="seed"
+        )
+        _, vector = ts.grad(m + v, [m, v], grad_outputs=seed, create_graph=True)
+        return vector, seed
+
+    def test_a_stretched_axis_gradient_differentiates_by_its_seed(self):
+        """Sum down axis 0, then its derivative spreads back up axis 0."""
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    with ts.use_backend(backend):
+                        left, right, seed = self._stretched_axis_gradient()
+                        self.assertProduced(
+                            left.data,
+                            values=[5.0, 7.0, 9.0],
+                            shape=(1, 3),
+                            backend=backend,
+                        )
+                        self.assertProduced(
+                            right.data,
+                            values=[6.0, 15.0],
+                            shape=(2, 1),
+                            backend=backend,
+                        )
+
+                        # Each seed position feeds exactly one summed
+                        # position, so the cotangent arrives unscaled and is
+                        # copied to every row the sum consumed.
+                        by_seed = ts.grad(
+                            left,
+                            seed,
+                            grad_outputs=ts.Tensor([[2.0, 3.0, 5.0]]),
+                            create_graph=create_graph,
+                        )
+                        produced = by_seed.data if create_graph else by_seed
+                        self.assertProduced(
+                            produced,
+                            values=[2.0, 3.0, 5.0, 2.0, 3.0, 5.0],
+                            shape=(2, 3),
+                            backend=backend,
+                        )
+
+                        # The other operand summed the other axis, so its
+                        # cotangent spreads along the columns instead.
+                        by_seed_right = ts.grad(
+                            right,
+                            seed,
+                            grad_outputs=ts.Tensor([[2.0], [3.0]]),
+                            create_graph=create_graph,
+                        )
+                        produced = (
+                            by_seed_right.data if create_graph else by_seed_right
+                        )
+                        self.assertProduced(
+                            produced,
+                            values=[2.0, 2.0, 2.0, 3.0, 3.0, 3.0],
+                            shape=(2, 3),
+                            backend=backend,
+                        )
+
+    def test_a_removed_leading_axis_gradient_differentiates_by_its_seed(self):
+        """The VJP reduced and then relabelled, so both are differentiated."""
+        for backend in self.BACKENDS:
+            for create_graph in (False, True):
+                with self.subTest(backend=backend, create_graph=create_graph):
+                    self._require(backend)
+                    reset_graph_state()
+                    with ts.use_backend(backend):
+                        vector, seed = self._leading_axis_gradient()
+                        self.assertProduced(
+                            vector.data,
+                            values=[5.0, 7.0, 9.0],
+                            shape=(3,),
+                            backend=backend,
+                        )
+
+                        by_seed = ts.grad(
+                            vector,
+                            seed,
+                            grad_outputs=ts.Tensor([2.0, 3.0, 5.0]),
+                            create_graph=create_graph,
+                        )
+                        produced = by_seed.data if create_graph else by_seed
+                        self.assertProduced(
+                            produced,
+                            values=[2.0, 3.0, 5.0, 2.0, 3.0, 5.0],
+                            shape=(2, 3),
+                            backend=backend,
+                        )
+
+    def test_float32_seed_derivatives_keep_their_dtype(self):
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    vector, seed = self._leading_axis_gradient(dtype=ts.float32)
+                    by_seed = ts.grad(
+                        vector,
+                        seed,
+                        grad_outputs=ts.Tensor([2.0, 3.0, 5.0], dtype=ts.float32),
+                        create_graph=True,
+                    )
+                    self.assertProduced(
+                        by_seed.data,
+                        values=[2.0, 3.0, 5.0, 2.0, 3.0, 5.0],
+                        shape=(2, 3),
+                        backend=backend,
+                        dtype=ts.float32,
+                    )
+
+    def test_the_recorded_seed_derivative_stays_connected_to_its_cotangent(self):
+        """A differentiable second seed must reach the new derivative.
+
+        The second derivative spreads the second seed over the two rows the
+        first sum consumed, so differentiating it back by that seed with a
+        cotangent of ones counts those rows: two per position.
+        """
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    left, _, seed = self._stretched_axis_gradient()
+                    second_seed = ts.Variable(
+                        ts.Tensor([[2.0, 3.0, 5.0]]), name="second_seed"
+                    )
+                    built = ts.grad(
+                        left, seed, grad_outputs=second_seed, create_graph=True
+                    )
+                    self.assertProduced(
+                        built.data,
+                        values=[2.0, 3.0, 5.0, 2.0, 3.0, 5.0],
+                        shape=(2, 3),
+                        backend=backend,
+                    )
+
+                    back = ts.grad(
+                        built,
+                        second_seed,
+                        grad_outputs=ts.Tensor(
+                            [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]
+                        ),
+                    )
+                    self.assertProduced(
+                        back,
+                        values=[2.0, 2.0, 2.0],
+                        shape=(1, 3),
+                        backend=backend,
+                    )
+
+    def test_the_recorded_seed_derivative_replays_with_a_changed_cotangent(self):
+        """Re-run the recorded second derivative; do not rebuild it."""
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    left, _, seed = self._stretched_axis_gradient()
+                    second_seed = ts.Variable(ts.Tensor([[2.0, 3.0, 5.0]]))
+                    built = ts.grad(
+                        left, seed, grad_outputs=second_seed, create_graph=True
+                    )
+                    program = Computation(built)
+                    self.assertProduced(
+                        program.forward(),
+                        values=[2.0, 3.0, 5.0, 2.0, 3.0, 5.0],
+                        shape=(2, 3),
+                        backend=backend,
+                    )
+
+                    second_seed.data = ts.Tensor([[7.0, 11.0, 13.0]])
+                    replayed = program.forward()
+                self.assertProduced(
+                    replayed,
+                    values=[7.0, 11.0, 13.0, 7.0, 11.0, 13.0],
+                    shape=(2, 3),
+                    backend=backend,
+                )
+
+    def test_a_removed_leading_axis_derivative_replays_with_a_changed_cotangent(
+        self,
+    ):
+        """The same, through the relabelling the lower-rank operand records."""
+        for backend in self.BACKENDS:
+            with self.subTest(backend=backend):
+                self._require(backend)
+                reset_graph_state()
+                with ts.use_backend(backend):
+                    vector, seed = self._leading_axis_gradient()
+                    second_seed = ts.Variable(ts.Tensor([2.0, 3.0, 5.0]))
+                    built = ts.grad(
+                        vector, seed, grad_outputs=second_seed, create_graph=True
+                    )
+                    program = Computation(built)
+                    self.assertProduced(
+                        program.forward(),
+                        values=[2.0, 3.0, 5.0, 2.0, 3.0, 5.0],
+                        shape=(2, 3),
+                        backend=backend,
+                    )
+
+                    second_seed.data = ts.Tensor([7.0, 11.0, 13.0])
+                    replayed = program.forward()
+                self.assertProduced(
+                    replayed,
+                    values=[7.0, 11.0, 13.0, 7.0, 11.0, 13.0],
+                    shape=(2, 3),
+                    backend=backend,
+                )
+
+
 class AdditionVjpBoundaryTests(unittest.TestCase):
     """What addition must not have grown back."""
 
-    def test_addition_defines_exactly_one_derivative(self):
+    def test_addition_and_its_dependencies_define_exactly_one_derivative(self):
+        from tensors.operations.manipulation.reshape import Reshape
+        from tensors.operations.reductions.sum import Sum
         from tensors.ops import Add
 
-        self.assertIs(Add.backward_graph, Operation.backward_graph)
-        self.assertNotIn("backward_graph", vars(Add))
+        for operation in (Add, Sum, Reshape):
+            with self.subTest(operation=operation.name):
+                self.assertIs(operation.backward_graph, Operation.backward_graph)
+                self.assertNotIn("backward_graph", vars(operation))
+
+    def test_the_sum_reduction_carries_no_separate_implementation(self):
+        """``Sum.forward`` holds the reduction; no helper stands beside it."""
+        import tensors.operations.reductions.sum as module
+
+        self.assertFalse(hasattr(module, "_sum_impl"))
+        self.assertEqual(
+            ts.sum(ts.Tensor([1.0, 2.0, 3.0])).tolist(), [6.0], "full reduction"
+        )
+        self.assertEqual(
+            tuple(ts.sum(ts.Tensor([1.0, 2.0, 3.0])).shape),
+            (1,),
+            "a full reduction without keepdims stays a one-element vector",
+        )
 
     def test_no_compatibility_marker_selects_the_reverse_method(self):
         """Both reverse modes call ``backward``; nothing chooses between them."""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, List, Tuple, overload
+from typing import TYPE_CHECKING, Tuple, overload
 
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
 from tensors.shape import Shape
@@ -47,22 +47,16 @@ class Reshape(Operation):
             storage.copy(), dtype=tensor.dtype, shape=shape
         )
 
-    def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
-    ) -> List[Tensor]:
-        """Restore the input shape without changing gradient values."""
-        return [Reshape(shape=inputs[0].shape).forward(grad)]
+    def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        """Restore the input shape without changing gradient values.
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
-        """Build a differentiable reshape VJP."""
+        Reshaping is its own inverse once the original shape is known, so the
+        VJP is a reshape back. It is written as the reshape operation rather
+        than as a call on a Tensor, so the operands decide what it means: a
+        Tensor is gathered in its own storage now, and a Variable records a
+        reshape that can be differentiated again. That is what lets the
+        relabelling inside the addition VJP be differentiated.
+        """
         return [reshape(grad, inputs[0].shape)]
 
 

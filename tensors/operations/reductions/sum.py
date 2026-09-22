@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from tensors.backend import dispatch as backend_dispatch
-from typing import TYPE_CHECKING, Any, List, overload
+from typing import TYPE_CHECKING, overload
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
@@ -17,18 +17,6 @@ from tensors.utils.reductions import (
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
-
-
-def _sum_impl(a: Tensor, axis: Axis = None, keepdims: bool = False) -> Tensor:
-    """Sum over one, several, or all axes."""
-    axes = normalize_axes(a.ndim, axis)
-    output_shape = reduction_shape(a.shape, axes, keepdims)
-    if axis is None and (not keepdims):
-        output_shape = (1,)
-    accelerated = backend_dispatch.execute_reduce_sum(
-        a, axes, keepdims=keepdims, dtype=a.dtype, output_shape=output_shape
-    )
-    return Tensor._from_owned_storage(accelerated, dtype=a.dtype, shape=output_shape)
 
 
 class Sum(Operation):
@@ -64,61 +52,73 @@ class Sum(Operation):
     def forward(self, a: Tensor) -> Tensor:
         axis = self.axis
         keepdims = self.keepdims
-        if not self.on_selected_backend:
-            return _sum_impl(a, axis=axis, keepdims=keepdims)
-        # The strict entry point names its reduction by the shape that keeps
-        # the reduced axes rather than by the axes themselves, and the two say
-        # the same thing. The collapsed shape is not one it could be given:
-        # ``(2, 3)`` reduced over axis 1 collapses to ``(2,)``, which aligns
-        # from the right against ``(2, 3)`` as a reduction it refuses. So the
-        # reduction is asked for in the form that keeps the axes, and the flat
-        # result it returns takes whichever shape ``keepdims`` asked for.
         axes = normalize_axes(a.ndim, axis)
         output_shape = reduction_shape(a.shape, axes, keepdims)
+        # Reducing every axis without keeping them answers as a one-element
+        # vector rather than as a rank-zero value.
         if axis is None and (not keepdims):
             output_shape = (1,)
-        accelerated = backend_dispatch.execute_vjp_sum_to_shape(
-            a, reduction_shape(a.shape, axes, True)
-        )
+        if self.on_selected_backend:
+            # The strict entry point names its reduction by the shape that
+            # keeps the reduced axes rather than by the axes themselves, and
+            # the two say the same thing. The collapsed shape is not one it
+            # could be given: ``(2, 3)`` reduced over axis 1 collapses to
+            # ``(2,)``, which aligns from the right against ``(2, 3)`` as a
+            # reduction it refuses. So the reduction is asked for in the form
+            # that keeps the axes, and the flat result it returns takes
+            # whichever shape ``keepdims`` asked for.
+            accelerated = backend_dispatch.execute_vjp_sum_to_shape(
+                a, reduction_shape(a.shape, axes, True)
+            )
+        else:
+            accelerated = backend_dispatch.execute_reduce_sum(
+                a, axes, keepdims=keepdims, dtype=a.dtype, output_shape=output_shape
+            )
         return Tensor._from_owned_storage(
             accelerated, dtype=a.dtype, shape=output_shape
         )
 
-    def backward(
-        self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
-    ) -> List[Tensor]:
-        a = inputs[0]
+    def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        """Spread the gradient back over the positions the sum consumed.
+
+        Every input value contributes to exactly one output value, so the
+        derivative of a sum with respect to any input is one and the whole
+        VJP is the upstream gradient broadcast back to the input's shape. A
+        reduction that did not keep its axes dropped them from the gradient,
+        so they are restored first; the multiplication by ones is what
+        performs the broadcast, and it is exact, because ``x * 1`` is ``x``
+        for every value a gradient can hold, infinities and NaN included.
+
+        This is the only derivative the sum defines. It is written against
+        operations rather than against Tensors, so the operands decide what
+        the statements mean: given Tensors they calculate, and given
+        Variables the same statements record a differentiable graph. That is
+        what lets the reduction inside the addition VJP be differentiated
+        again.
+
+        Both statements stay on the selected backend. Reshaping gathers in
+        the tensor's own storage, and multiplication is inside the arithmetic
+        execution contract, so neither consults a workload policy nor answers
+        from the Python reference.
+        """
+        from tensors.creation import ones
+        from tensors.operations.manipulation.reshape import reshape
+
+        value = inputs[0]
         axis = self.axis
         keepdims = self.keepdims
-        axes = normalize_axes(a.ndim, axis)
-        output_shape = reduction_shape(a.shape, axes, keepdims)
+        axes = normalize_axes(value.ndim, axis)
+        output_shape = reduction_shape(value.shape, axes, keepdims)
         if axis is None and (not keepdims):
             output_shape = (1,)
         if grad.shape != output_shape:
             raise ValueError(
                 f"Gradient shape {grad.shape} does not match output shape {output_shape}"
             )
-        accelerated = backend_dispatch.execute_reduce_sum_gradient(
-            grad, a, axes, keepdims=keepdims
-        )
-        return [
-            Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=a.shape)
-        ]
-
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build a differentiable VJP for an axis-aware sum."""
-        from tensors.creation import ones
-        from tensors.variable import Variable
-        from tensors.operations.manipulation.reshape import reshape
-
-        axis = self.axis
-        keepdims = self.keepdims
-        value = inputs[0]
         expanded = (
             grad if keepdims else reshape(grad, keepdims_shape(value.shape, axis))
         )
-        unit = Variable(ones(value.shape, dtype=grad.dtype), requires_grad=False)
-        return [expanded * unit]
+        return [expanded * ones(value.shape, dtype=grad.dtype)]
 
 
 @overload
