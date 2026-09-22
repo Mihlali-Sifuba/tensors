@@ -108,6 +108,88 @@ class WraparoundTests(ArithmeticTestCase):
                 self.assertIntegerResult(result, [low], dtype_name)
 
 
+class NegationTests(ArithmeticTestCase):
+    """Section 4.2 and rule B1 applied to unary ``-``.
+
+    Negation is arithmetic, so it wraps at the declared width like ``+``,
+    ``-`` and ``*`` rather than raising for a result the width cannot hold.
+    Only one value can overflow: a signed dtype's minimum has no positive
+    counterpart, so ``-(-128)`` in ``int8`` is ``-128``.
+
+    Every expectation comes from :mod:`_spec`'s wraparound rule applied to the
+    exact mathematical negation. No backend supplies one, and the declared
+    output dtype comes from ``negation_dtype`` rather than from a result.
+    """
+
+    def test_every_signed_dtype_negates_at_its_boundaries(self):
+        for dtype_name in ("int8", "int16", "int32", "int64"):
+            for backend in BACKENDS:
+                for value in boundary_values(dtype_name):
+                    with self.subTest(dtype=dtype_name, backend=backend, value=value):
+                        expected = _spec.wrap(-value, dtype_name)
+                        with ts.use_backend(backend):
+                            result = -tensor(dtype_name, [value])
+                        self.assertIntegerResult(result, [expected], dtype_name)
+
+    def test_negating_the_minimum_returns_the_minimum(self):
+        """The one overflow negation can produce, on every backend.
+
+        ``low * -1`` already covers the multiplication form; this is the
+        unary one, which used to raise ``OverflowError`` in Python and be
+        declined by the array kernels.
+        """
+        for dtype_name in ("int8", "int16", "int32", "int64"):
+            low, _ = _spec.integer_range(dtype_name)
+            for backend in BACKENDS:
+                with self.subTest(dtype=dtype_name, backend=backend):
+                    with ts.use_backend(backend):
+                        result = -tensor(dtype_name, [low])
+                    self.assertIntegerResult(result, [low], dtype_name)
+                    self.assertEqual(result.backend_storage.kind, backend)
+
+    def test_an_unsigned_dtype_negates_into_the_widened_dtype(self):
+        """``negation_dtype`` widens ``uint8`` so every value is representable.
+
+        The result therefore carries a different dtype from the operand, and
+        no value overflows: the whole ``uint8`` range negates exactly.
+        """
+        low, high = _spec.integer_range("uint8")
+        values = [low, 1, 127, 128, high]
+        for backend in BACKENDS:
+            with self.subTest(backend=backend):
+                with ts.use_backend(backend):
+                    result = -tensor("uint8", values)
+                self.assertIntegerResult(result, [-v for v in values], "int16")
+                self.assertEqual(result.backend_storage.kind, backend)
+
+    def test_integer_negation_stays_on_the_selected_backend(self):
+        """At every size, including below the threshold this path once had.
+
+        The dispatcher used to answer a small negation from the Python
+        reference, and the CUDA kernel refused integers outright, so an
+        integer ``-x`` under an explicit selection left that backend.
+        """
+        for dtype_name in ("int8", "int16", "int32", "int64", "uint8"):
+            for size in (1, 2, 31, 32, 64):
+                for backend in BACKENDS:
+                    with self.subTest(dtype=dtype_name, size=size, backend=backend):
+                        with ts.use_backend(backend):
+                            result = -tensor(dtype_name, [1] * size)
+                        self.assertEqual(result.backend_storage.kind, backend)
+                        self.assertEqual(result.tolist(), [-1] * size)
+
+    def test_every_backend_agrees_element_for_element(self):
+        """Section 4: integer results agree bit for bit across backends."""
+        for dtype_name in ("int8", "int16", "int32", "int64"):
+            values = boundary_values(dtype_name)
+            expected = [_spec.wrap(-value, dtype_name) for value in values]
+            for backend in BACKENDS:
+                with self.subTest(dtype=dtype_name, backend=backend):
+                    with ts.use_backend(backend):
+                        result = -tensor(dtype_name, values)
+                    self.assertIntegerResult(result, expected, dtype_name)
+
+
 class UnsignedWraparoundTests(ArithmeticTestCase):
     """Section 4.2: uint8 uses the unsigned rule, r mod 2**w."""
 

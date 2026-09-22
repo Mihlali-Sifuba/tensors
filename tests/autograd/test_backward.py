@@ -1565,32 +1565,28 @@ class NegationVjpTests(unittest.TestCase):
                 self.assertEqual(by_seed.tolist(), [-3.0, -5.0])
                 self.assertEqual(by_seed.backend_storage.kind, backend)
 
-    def test_a_backend_that_cannot_negate_a_dtype_says_so(self):
-        """CUDA keeps integers off the device, and now reports it.
+    def test_every_integer_dtype_negates_on_every_backend(self):
+        """Negation needs no precision beyond the operand's own width.
 
-        Its result conversion declines an integer dtype, which used to send
-        the work to the Python reference. Removing that fallback makes the
-        decline visible instead of silently relocating the computation.
+        The CUDA operand helper refuses integer dtypes, because the Python
+        reference computes integer arithmetic in arbitrary-precision Python
+        integers no device type can match. Negation does not reach that
+        reason — flipping a sign is exact in the declared width — so it
+        lowers directly and stays on the device, which is what section 10.1
+        rule B12 asks for.
+
+        The values themselves are covered against the wraparound rule in
+        ``tests/operations/arithmetic/test_integer_arithmetic.py``; this is
+        about every dtype being served, and served where it was selected.
         """
-        from tensors.backend.config import BackendOperationUnsupportedError
-
         for backend in self.BACKENDS:
-            with self.subTest(backend=backend):
-                self._require(backend)
-                with ts.use_backend(backend):
-                    values = ts.Tensor([1, -2, 3], dtype=ts.int64)
-                    if backend == "cuda":
-                        with self.assertRaises(
-                            BackendOperationUnsupportedError
-                        ) as raised:
-                            -values
-                        self.assertIn("cuda", str(raised.exception))
-                        self.assertIn("negate", str(raised.exception))
-                        return
-                    produced = -values
-                self.assertEqual(produced.tolist(), [-1, 2, -3])
-                self.assertIs(produced.dtype, ts.int64)
-                self.assertEqual(produced.backend_storage.kind, backend)
+            for dtype in (ts.int64, ts.int32, ts.int16, ts.int8, ts.uint8):
+                with self.subTest(backend=backend, dtype=dtype.name):
+                    self._require(backend)
+                    with ts.use_backend(backend):
+                        produced = -ts.Tensor([1, 2, 3], dtype=dtype)
+                    self.assertEqual(produced.tolist(), [-1, -2, -3])
+                    self.assertEqual(produced.backend_storage.kind, backend)
 
     def test_one_strict_entry_point_serves_both_uses(self):
         """The duplicate the subtraction VJP needed is gone."""

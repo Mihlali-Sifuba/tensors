@@ -11,7 +11,13 @@ if TYPE_CHECKING:
 
 
 def negate(value: Tensor, *, dtype: DataType) -> Storage | None:
-    """Return the additive inverse of every element."""
-    a = value
-    data = [-x for x in a._data]
-    return PythonStorage.from_values(data, dtype)
+    """Return the additive inverse of every element.
+
+    The result is retained as arithmetic rather than as construction, so an
+    integer that leaves the declared width wraps instead of raising. Only one
+    value can: a signed dtype's minimum has no positive counterpart, and
+    section 10.1 rule B1 makes ``-(-128)`` in ``int8`` be ``-128`` rather than
+    an error, as ``127 + 1`` already is.
+    """
+    data = [-x for x in value._data]
+    return PythonStorage.from_arithmetic(data, dtype)
