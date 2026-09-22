@@ -71,7 +71,7 @@ class Mean(Operation):
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable VJP for an axis-aware mean."""
         from tensors.creation import ones
-        from tensors.operations._gradient_shaping import zero_like_graph
+        from tensors.operations.vjp import zero_like_graph
         from tensors.variable import Variable
         from tensors.operations.manipulation.reshape import reshape
 

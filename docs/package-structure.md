@@ -141,7 +141,7 @@ tensors/
 │   └── slicing.py
 ├── operations/            # the semantic operation hierarchy (canonical)
 │   ├── base.py            # the Operation abstract base class, UNARY_DEMAND
-│   ├── _gradient_shaping.py  # cross-domain VJP shaping operations
+│   ├── vjp.py  # what a VJP cannot write the obvious way
 │   ├── arithmetic/        # add.py, subtract.py, multiply.py, divide.py,
 │   │                      # negate.py, power.py
 │   ├── elementary/        # abs.py, sign.py, sqrt.py, exp.py, log.py
@@ -304,11 +304,15 @@ The folders have deliberately narrow responsibilities:
   kernels; the semantic folder says what the operation means, the backend
   folder says how it runs.
 
-  Two modules start with an underscore because they are shared structure
-  rather than operations: `_gradient_shaping.py` holds the small graph
-  operations a VJP needs to broadcast a gradient back to an operand's shape,
-  and each `_extremum.py`, `_arg_extremum.py`, and `_operands.py` holds what a
-  pair or family of neighbouring operations genuinely shares.
+  `vjp.py` is shared structure rather than a domain: it holds the pieces a
+  vector-Jacobian product cannot write the obvious way, because the obvious
+  expression is wrong in shape or in floating point. It carries no underscore,
+  because the facades decide what is public and a leading underscore is not
+  allowed to make that decision
+  ([Naming and the public API boundary](backends.md#naming-and-the-public-api-boundary)).
+  Three modules still start with one — `_extremum.py`, `_arg_extremum.py` and
+  `_operands.py` — each holding what a pair or family of neighbouring
+  operations genuinely shares.
 - `ops`, `linalg`, and `math` are public facade packages. Each is a single
   `__init__.py` that re-exports names from `tensors.operations`; none of them
   holds an implementation. They exist because they are documented, familiar

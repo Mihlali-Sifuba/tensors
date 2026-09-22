@@ -1,26 +1,35 @@
-"""Gradient shaping that every differentiable domain needs.
+"""The pieces a vector-Jacobian product cannot write the obvious way.
 
-A reverse pass rarely produces a gradient in the shape its operand wants. A
-broadcast forward makes one value contribute to several output positions, so
-its gradient is the sum of those contributions; a masked or short-circuited
-forward makes some positions contribute nothing, so their gradient is a zero
-of the right shape and dtype. Reshaping a gradient that way is part of a
-derivative rule, not part of the operation being differentiated, and every
-domain that broadcasts needs the same rules.
+A derivative rule knows its own mathematics — the derivative of ``a * b``
+with respect to ``a`` is ``b`` — but the expression that states it is often
+wrong in floating point or in shape, and every differentiable domain hits the
+same three cases.
 
-These live in the operation layer rather than one level down or one level up:
+- **The gradient has the output's shape, not the operand's.** A forward
+  broadcast lets one value feed several output positions, so that value is
+  owed the sum of them: :func:`sum_to_shape`.
+- **Forming the products first loses the answer.** Multiplying before
+  reducing can overflow to infinities that cancel to NaN, or underflow to
+  zero, where the exact reduced result is representable:
+  :class:`ProductSumToShape`.
+- **A zero cannot be made by multiplying.** ``inf * 0`` is NaN, so a gradient
+  position that must be zero needs a real one, and a masked position needs a
+  select rather than a product: :class:`ZeroLike` and :class:`MaskedValue`.
 
-- They are not neutral utilities. ``ProductSumToShape``, ``ZeroLike``, and
-  ``MaskedValue`` are :class:`~tensors.operations.base.Operation` subclasses
-  with their own derivative rules, so a second-order pass can differentiate
-  through them. :mod:`tensors.utils` holds primitives that know nothing about
-  operations or gradients.
-- They are not backend kernels. They decide *what* to compute for a VJP and
-  hand the arithmetic to dispatch, exactly as any other operation does.
+Three of these are :class:`~tensors.operations.base.Operation` subclasses
+rather than functions because a recorded gradient must be differentiable
+again: they enter the graph as vertices carrying their own derivative rules.
+:func:`sum_to_shape` is a function because it composes ``sum`` and
+``reshape``, which already do.
 
-The module is private because these are not operations a user writes: they
-appear only inside the ``backward`` and ``backward_graph`` of operations that
-broadcast.
+They are not neutral utilities — :mod:`tensors.utils` holds primitives that
+know nothing about operations or gradients — and they are not backend
+kernels: they decide *what* to compute and hand the arithmetic to dispatch,
+exactly as any other operation does.
+
+Nothing here is an operation a user writes. No facade re-exports these, so
+they are internal whatever they are called; they appear only inside the
+``backward`` of an operation.
 """
 
 from __future__ import annotations

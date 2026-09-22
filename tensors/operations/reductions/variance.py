@@ -68,7 +68,7 @@ class Variance(Operation):
 
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable population-variance VJP."""
-        from tensors.operations._gradient_shaping import zero_like_graph
+        from tensors.operations.vjp import zero_like_graph
         from tensors.variable import Variable
         from tensors.operations.reductions.mean import mean
         from tensors.operations.manipulation.reshape import reshape

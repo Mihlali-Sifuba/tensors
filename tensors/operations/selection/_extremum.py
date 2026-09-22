@@ -14,7 +14,7 @@ from typing import Any, ClassVar, Optional
 
 from tensors.dtype import result_dtype
 from tensors.graph.expression import as_tensor_operand
-from tensors.operations._gradient_shaping import sum_to_shape
+from tensors.operations.vjp import sum_to_shape
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.utils.broadcasting import broadcast_tensors
@@ -107,7 +107,7 @@ class _ElementwiseExtremum(Operation):
         ]
 
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        from tensors.operations._gradient_shaping import (
+        from tensors.operations.vjp import (
             masked_value_graph,
             sum_to_shape,
             zero_like_graph,

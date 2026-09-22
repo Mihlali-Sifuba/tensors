@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional, overload
 from tensors._typing import TensorData, TensorLike, TensorResult
 from tensors.backend import execute_where, execute_where_gradient
 from tensors.dtype import result_dtype
-from tensors.operations._gradient_shaping import sum_to_shape
+from tensors.operations.vjp import sum_to_shape
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
@@ -86,7 +86,7 @@ class Where(Operation):
         ]
 
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        from tensors.operations._gradient_shaping import (
+        from tensors.operations.vjp import (
             masked_value_graph,
             sum_to_shape,
             zero_like_graph,

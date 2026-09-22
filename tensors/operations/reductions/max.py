@@ -70,7 +70,7 @@ class Max(Operation):
 
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable VJP where every maximum is unique."""
-        from tensors.operations._gradient_shaping import (
+        from tensors.operations.vjp import (
             masked_value_graph,
             zero_like_graph,
         )

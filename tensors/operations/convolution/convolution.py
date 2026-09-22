@@ -148,7 +148,7 @@ class ConvND(Operation):
         """Build a differentiable convolution VJP from primitive graph ops."""
         from tensors.operations.manipulation.reshape import reshape
         from tensors.operations.manipulation.stack import stack
-        from tensors.operations._gradient_shaping import zero_like_graph
+        from tensors.operations.vjp import zero_like_graph
 
         values, kernel = (inputs[0], inputs[1])
         bias = inputs[2] if len(inputs) > 2 else None

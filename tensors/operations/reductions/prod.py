@@ -73,7 +73,7 @@ class Prod(Operation):
 
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build the product VJP explicitly from products excluding each input."""
-        from tensors.operations._gradient_shaping import zero_like_graph
+        from tensors.operations.vjp import zero_like_graph
         from tensors.operations.manipulation.concat import concat
         from tensors.operations.manipulation.reshape import reshape
 

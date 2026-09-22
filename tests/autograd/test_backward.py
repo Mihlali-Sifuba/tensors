@@ -802,7 +802,7 @@ class AdditionVjpBoundaryTests(unittest.TestCase):
     """What addition must not have grown back."""
 
     def test_addition_and_its_dependencies_define_exactly_one_derivative(self):
-        from tensors.operations._gradient_shaping import ProductSumToShape
+        from tensors.operations.vjp import ProductSumToShape
         from tensors.operations.manipulation.reshape import Reshape
         from tensors.operations.reductions.sum import Sum
         from tensors.ops import Add, Mul, Neg, Pow, Sub

@@ -17,7 +17,7 @@ from tensors.utils.broadcasting import broadcast_to
 
 if TYPE_CHECKING:
     from tensors.variable import Variable
-from tensors.operations._gradient_shaping import (
+from tensors.operations.vjp import (
     sum_to_shape,
 )
 

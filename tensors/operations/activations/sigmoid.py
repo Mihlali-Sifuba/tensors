@@ -40,7 +40,7 @@ class Sigmoid(Operation):
 
     def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Build a differentiable VJP for sigmoid."""
-        from tensors.operations._gradient_shaping import masked_value_graph
+        from tensors.operations.vjp import masked_value_graph
         from tensors.operations.elementary.exp import exp
 
         value = inputs[0]
