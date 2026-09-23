@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 from tensors.backend import dispatch as backend_dispatch
-import math as _math
-from typing import TYPE_CHECKING, Any, List, overload
+from typing import TYPE_CHECKING, List, Optional, overload
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
 from tensors.dtype import float64
 from tensors.operations.base import Operation
@@ -21,20 +20,63 @@ class Log(Operation):
     name = "log"
 
     def forward(self, a: Tensor) -> Tensor:
+        """Take the logarithm of every element, promoting an integer operand.
+
+        The Tensor semantics are settled here — the shape is the operand's
+        and an integer operand promotes to ``float64``, because ``log`` has
+        no integral values to return — and `execute_log` owns where the
+        evaluation runs and where the domain is enforced. See
+        docs/log-semantics.md.
+        """
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
+        output_shape = a.shape
         return Tensor._from_owned_storage(
-            backend_dispatch.execute_log(a, dtype=dtype), dtype=dtype, shape=a.shape
+            backend_dispatch.execute_log(a, dtype=dtype, output_shape=output_shape),
+            dtype=dtype,
+            shape=output_shape,
         )
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
-    ) -> List[Tensor]:
+    ) -> List[Optional[Tensor]]:
+        """Divide the upstream gradient by the primal.
+
+        Shape and dtype agreement are Tensor semantics and are settled here;
+        `execute_log_gradient` owns where the evaluation runs. Only a
+        floating operand reaches this method — an integer Tensor cannot
+        require a gradient — so the promotion in ``forward`` has nothing to
+        undo and the gradient carries the operand's own dtype.
+
+        The domain is not re-checked. The forward refuses a non-positive
+        operand, so a primal arriving here from a completed forward pass is
+        positive; repeating the test would put a reduction, and on CUDA a
+        host round trip, on every reverse pass. See docs/log-semantics.md
+        section 6.
+
+        An unrequested gradient costs nothing: no kernel runs and ``None``
+        is returned, rather than a value the reverse pass would discard.
+        """
+        if not needs_input_grad[0]:
+            return [None]
         a = inputs[0]
+        if grad.shape != a.shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match value shape {a.shape}"
+            )
+        if grad.dtype is not a.dtype:
+            raise ValueError(
+                f"Gradient dtype {grad.dtype.name} does not match value dtype "
+                f"{a.dtype.name}"
+            )
+        dtype = a.dtype
+        output_shape = a.shape
         return [
             Tensor._from_owned_storage(
-                backend_dispatch.execute_log_gradient(grad, a),
-                dtype=grad.dtype,
-                shape=a.shape,
+                backend_dispatch.execute_log_gradient(
+                    grad, a, dtype=dtype, output_shape=output_shape
+                ),
+                dtype=dtype,
+                shape=output_shape,
             )
         ]
 
@@ -67,9 +109,3 @@ def log(value: TensorLike | VariableNode) -> TensorResult | VariableNode:
 
 
 __all__ = ["Log", "log"]
-
-
-def _log(value):
-    if value <= 0:
-        raise ValueError("log is only defined for positive values")
-    return _math.log(float(value))

@@ -1,27 +1,41 @@
 """NumPy implementation of the natural logarithm VJP."""
 
 from __future__ import annotations
+import math
 import numpy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
+from typing import TYPE_CHECKING, Any
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import tensor_to_logical_array
+from tensors.backend.numpy.storage import NumPyStorage
+from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
-def log_gradient(grad: Tensor, value: Tensor) -> Storage | None:
-    """Run the vector-Jacobian product for an elementwise unary operation."""
-    try:
-        upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
-        values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
-    except (TypeError, ValueError):
-        return None
-    if upstream.shape != values.shape:
-        return None
+def log_gradient(
+    grad_values: Any,
+    values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Return native storage at the declared dtype.
+
+    ``G / x``, an ordinary division, governed by
+    `docs/arithmetic-semantics.md` section 7.2: the IEEE result stands and
+    nothing raises. Dividing once is deliberate — forming ``1 / x`` and
+    multiplying rounds twice and loses a digit for no benefit.
+
+    No domain check runs here. The forward refuses a non-positive operand,
+    so a primal arriving from a completed forward pass is positive, and
+    repeating the test would cost a reduction on every reverse pass.
+    """
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        derivative = 1.0 / values
-        result = upstream * derivative
-    return _storage(result, dtype=grad.dtype, output_shape=value.shape)
+        upstream = numpy.asarray(grad_values, dtype=numpy.float64)
+        working = numpy.asarray(values, dtype=numpy.float64)
+        result = upstream / working
+        narrowed = result.astype(numpy.dtype(dtype.name), copy=False)
+    storage = NumPyStorage(narrowed, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("Log VJP kernel returned an unexpected result size")
+    return storage

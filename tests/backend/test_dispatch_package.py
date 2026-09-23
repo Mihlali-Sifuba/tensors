@@ -177,7 +177,10 @@ class DispatchFallbackTests(BackendTestCase):
                 PythonStorage,
             )
             self.assertIsInstance(
-                dispatch_package.execute_exp(value, dtype=ts.float64), PythonStorage
+                dispatch_package.execute_exp(
+                    value, dtype=ts.float64, output_shape=value.shape
+                ),
+                PythonStorage,
             )
             self.assertIsInstance(
                 dispatch_package.execute_full((4_096,), 1.0, dtype=ts.float64),
