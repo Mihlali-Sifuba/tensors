@@ -24,8 +24,16 @@ def where_gradient(
     needs_input_grad: tuple[bool, ...] = (True, True),
 ) -> tuple[Storage | None, Storage | None]:
     """Route device upstream values into the requested data branches."""
+    expected_shape = tuple(output_shape)
+    if any(
+        tuple(values.shape) != expected_shape
+        for values in (grad_values, condition_values)
+    ):
+        raise RuntimeError(
+            "where_gradient kernel received operands not prepared for output_shape"
+        )
     need_left, need_right = needs_input_grad
-    selected = cupy.broadcast_to(condition_values, output_shape) != 0
+    selected = condition_values != 0
     upstream = _widen(grad_values)
     left = None
     if need_left:

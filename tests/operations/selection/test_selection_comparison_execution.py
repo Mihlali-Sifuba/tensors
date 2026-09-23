@@ -117,6 +117,100 @@ class SelectionComparisonExecutionTests(unittest.TestCase):
 
         self.for_each_backend(body)
 
+    def test_dispatchers_prepare_broadcasted_native_operands_for_kernels(self):
+        def assert_prepared(arguments, backend, output_shape):
+            expected_size = math.prod(output_shape)
+            for argument in arguments:
+                if backend == "python":
+                    self.assertEqual(len(argument), expected_size)
+                else:
+                    self.assertEqual(tuple(argument.shape), output_shape)
+
+        def body(backend):
+            kernels = __import__(
+                f"tensors.backend.{backend}.kernels", fromlist=["kernels"]
+            )
+
+            cases = (
+                (
+                    "maximum",
+                    lambda: ts.maximum(
+                        1.5,
+                        ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),
+                    ),
+                    2,
+                ),
+                (
+                    "minimum",
+                    lambda: ts.minimum(
+                        ts.Tensor([[1.0], [4.0]]),
+                        ts.Tensor([[2.0, 3.0, 4.0]]),
+                    ),
+                    2,
+                ),
+                (
+                    "where",
+                    lambda: ts.where(
+                        ts.Tensor([[1], [0]], dtype=ts.uint8),
+                        ts.Tensor([[1.0, 2.0, 3.0]]),
+                        0.0,
+                    ),
+                    3,
+                ),
+                (
+                    "greater",
+                    lambda: ts.greater(
+                        ts.Tensor([[1.0], [4.0]]),
+                        ts.Tensor([[2.0, 3.0, 4.0]]),
+                    ),
+                    2,
+                ),
+            )
+            for name, build, operand_count in cases:
+                with self.subTest(backend=backend, operation=name):
+                    with patch.object(
+                        kernels, name, wraps=getattr(kernels, name)
+                    ) as kernel:
+                        backend_state._clear_backend_kernel_cache()
+                        result = build()
+                    self.assertEqual(result.shape, (2, 3))
+                    self.assertEqual(result.backend_storage.kind, backend)
+                    assert_prepared(
+                        kernel.call_args.args[:operand_count], backend, (2, 3)
+                    )
+
+            for name, operation in (
+                ("maximum_gradient", ts.maximum),
+                ("minimum_gradient", ts.minimum),
+            ):
+                reset_graph_state()
+                left = ts.Variable(ts.Tensor([[1.0], [4.0]]))
+                right = ts.Tensor([[2.0, 3.0, 4.0]])
+                with patch.object(
+                    kernels,
+                    name,
+                    wraps=getattr(kernels, name),
+                ) as kernel:
+                    backend_state._clear_backend_kernel_cache()
+                    gradient = ts.grad(ts.sum(operation(left, right)), left)
+                self.assertEqual(gradient.backend_storage.kind, backend)
+                assert_prepared(kernel.call_args.args[:3], backend, (2, 3))
+
+            reset_graph_state()
+            branch = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0]]))
+            condition = ts.Tensor([[1], [0]], dtype=ts.uint8)
+            with patch.object(
+                kernels,
+                "where_gradient",
+                wraps=kernels.where_gradient,
+            ) as kernel:
+                backend_state._clear_backend_kernel_cache()
+                gradient = ts.grad(ts.sum(ts.where(condition, branch, 0.0)), branch)
+            self.assertEqual(gradient.backend_storage.kind, backend)
+            assert_prepared(kernel.call_args.args[:2], backend, (2, 3))
+
+        self.for_each_backend(body)
+
     def test_first_order_vjps_stay_selected_and_reduce_broadcast_axes(self):
         def body(backend):
             cases = []
@@ -210,6 +304,21 @@ class SelectionComparisonExecutionTests(unittest.TestCase):
             right = ts.Variable([2.0, 2.0, 3.0])
             left_gradient = ts.grad(ts.sum(ts.maximum(left, right)), left)
             self.assertEqual(left_gradient.tolist(), [0.0, 0.5, 1.0])
+
+        self.for_each_backend(body)
+
+    def test_extrema_graph_validation_uses_each_selected_backend(self):
+        def body(backend):
+            for operation in (ts.maximum, ts.minimum):
+                reset_graph_state()
+                tied = ts.Variable(ts.Tensor([1.0], dtype=ts.float64))
+                with self.assertRaisesRegex(ValueError, "undefined at ties"):
+                    ts.grad(operation(tied, [1.0]), tied, create_graph=True)
+
+                reset_graph_state()
+                nan_value = ts.Variable(ts.Tensor([math.nan], dtype=ts.float64))
+                with self.assertRaisesRegex(ValueError, "undefined at NaN"):
+                    ts.grad(operation(nan_value, [1.0]), nan_value, create_graph=True)
 
         self.for_each_backend(body)
 
@@ -354,6 +463,34 @@ class SelectionComparisonExecutionTests(unittest.TestCase):
                 self.assertNotIn("kernels.elementwise", source)
                 self.assertIn("validate_backend_residency", source)
                 self.assertIn("BackendOperationUnsupportedError", source)
+
+    def test_kernels_contain_no_broadcasting_logic(self):
+        import importlib
+
+        names = (
+            "where",
+            "where_gradient",
+            "maximum",
+            "maximum_gradient",
+            "minimum",
+            "minimum_gradient",
+            "equal",
+            "not_equal",
+            "less",
+            "less_equal",
+            "greater",
+            "greater_equal",
+        )
+        for backend in BACKENDS:
+            for name in names:
+                with self.subTest(backend=backend, operation=name):
+                    module = importlib.import_module(
+                        f"tensors.backend.{backend}.kernels.elementwise.{name}"
+                    )
+                    source = inspect.getsource(module)
+                    self.assertNotIn("broadcast_to", source)
+                    self.assertNotIn("broadcast_arrays", source)
+                    self.assertNotIn("broadcast_tensors", source)
 
     def test_selection_nodes_remain_ordinary_boundaries_between_fused_runs(self):
         from tensors.graph.computation.fusion import _KERNEL_NAMES

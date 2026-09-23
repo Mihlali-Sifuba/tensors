@@ -22,6 +22,13 @@ def minimum(
     output_shape: tuple[int, ...],
 ) -> Storage:
     """Select smaller values, propagating NaN and choosing the left tie."""
+    expected_shape = tuple(output_shape)
+    if any(
+        tuple(values.shape) != expected_shape for values in (left_values, right_values)
+    ):
+        raise RuntimeError(
+            "minimum kernel received operands not prepared for output_shape"
+        )
     result = numpy.where(
         numpy.isnan(left_values),
         left_values,

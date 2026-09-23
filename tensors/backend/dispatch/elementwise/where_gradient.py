@@ -37,9 +37,12 @@ def execute_where_gradient(
         import numpy
 
         native = numpy.dtype(dtype.name)
-        lowered_grad = grad._logical_storage_for("numpy").buffer.reshape(grad.shape)
-        lowered_condition = condition._logical_storage_for("numpy").buffer.reshape(
-            condition.shape
+        lowered_grad = numpy.broadcast_to(
+            grad._logical_storage_for("numpy").buffer.reshape(grad.shape), output_shape
+        )
+        lowered_condition = numpy.broadcast_to(
+            condition._logical_storage_for("numpy").buffer.reshape(condition.shape),
+            output_shape,
         )
         if lowered_grad.dtype != native:
             lowered_grad = lowered_grad.astype(native, copy=False)
@@ -47,9 +50,12 @@ def execute_where_gradient(
         import cupy
 
         native = cupy.dtype(dtype.name)
-        lowered_grad = grad._logical_storage_for("cuda").buffer.reshape(grad.shape)
-        lowered_condition = condition._logical_storage_for("cuda").buffer.reshape(
-            condition.shape
+        lowered_grad = cupy.broadcast_to(
+            grad._logical_storage_for("cuda").buffer.reshape(grad.shape), output_shape
+        )
+        lowered_condition = cupy.broadcast_to(
+            condition._logical_storage_for("cuda").buffer.reshape(condition.shape),
+            output_shape,
         )
         if lowered_grad.dtype != native:
             lowered_grad = lowered_grad.astype(native, copy=False)

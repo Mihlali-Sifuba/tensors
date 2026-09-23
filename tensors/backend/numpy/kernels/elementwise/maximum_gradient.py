@@ -22,12 +22,29 @@ def maximum_gradient(
     dtype: DataType,
     output_shape: tuple[int, ...],
     needs_input_grad: tuple[bool, ...] = (True, True),
+    reject_nondifferentiable: bool = False,
 ) -> tuple[Storage | None, Storage | None]:
     """Route gradients to larger values and split exact ties equally."""
+    expected_shape = tuple(output_shape)
+    if any(
+        tuple(values.shape) != expected_shape
+        for values in (grad_values, left_values, right_values)
+    ):
+        raise RuntimeError(
+            "maximum_gradient kernel received operands not prepared for output_shape"
+        )
     need_left, need_right = needs_input_grad
-    left_values, right_values = numpy.broadcast_arrays(left_values, right_values)
     has_nan = numpy.isnan(left_values) | numpy.isnan(right_values)
     ties = left_values == right_values
+    if reject_nondifferentiable:
+        if bool(numpy.any(has_nan)):
+            raise ValueError(
+                "Higher-order derivatives of elementwise extrema are undefined at NaN"
+            )
+        if bool(numpy.any(ties)):
+            raise ValueError(
+                "Higher-order derivatives of elementwise extrema are undefined at ties"
+            )
     left_selected = left_values > right_values
     left = None
     if need_left:

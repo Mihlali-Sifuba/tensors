@@ -78,11 +78,14 @@ class Where(Operation):
                 gradients.append(None)
                 continue
             operation = WhereVJP(select_left=select_left, output_shape=output_shape)
-            contribution = (
-                apply_operation(operation, (grad, condition, branch))
-                if is_graph_operand(grad)
-                else operation.forward(grad, condition, branch)
-            )
+            if is_graph_operand(grad):
+                contribution = apply_operation(operation, (grad, condition))
+                # The routing value does not depend numerically on the branch,
+                # but this explicit zero keeps the first derivative connected
+                # to its primal without making it a kernel operand.
+                contribution = contribution + branch * 0.0
+            else:
+                contribution = operation.forward(grad, condition)
             gradients.append(sum_to_shape(contribution, branch.shape))
         return gradients
 
@@ -97,9 +100,9 @@ class WhereVJP(Operation):
         object.__setattr__(self, "select_left", select_left)
         object.__setattr__(self, "output_shape", output_shape)
 
-    def forward(self, grad: Tensor, condition: Tensor, branch: Tensor) -> Tensor:
+    def forward(self, grad: Tensor, condition: Tensor) -> Tensor:
         output_shape = self.output_shape
-        condition.shape.broadcast_with(branch.shape).broadcast_with(output_shape)
+        condition.shape.broadcast_with(output_shape)
         if grad.shape != output_shape:
             raise ValueError(
                 f"Gradient shape {grad.shape} does not match where branch shape "
@@ -122,28 +125,23 @@ class WhereVJP(Operation):
     ) -> list[Optional[Tensor]]:
         from tensors.graph.expression import apply_operation, is_graph_operand
 
-        _, condition, branch = inputs
+        _, condition = inputs
         grad_partial = None
         if needs_input_grad[0]:
             operation = WhereVJP(
                 select_left=self.select_left, output_shape=self.output_shape
             )
             grad_partial = (
-                apply_operation(operation, (outer_grad, condition, branch))
+                apply_operation(operation, (outer_grad, condition))
                 if is_graph_operand(outer_grad)
-                else operation.forward(outer_grad, condition, branch)
+                else operation.forward(outer_grad, condition)
             )
         condition_partial = (
             sum_to_shape(outer_grad * 0.0, condition.shape)
             if needs_input_grad[1]
             else None
         )
-        branch_partial = (
-            sum_to_shape(outer_grad * 0.0, branch.shape)
-            if needs_input_grad[2]
-            else None
-        )
-        return [grad_partial, condition_partial, branch_partial]
+        return [grad_partial, condition_partial]
 
 
 @overload

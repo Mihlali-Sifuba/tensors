@@ -23,6 +23,7 @@ def execute_minimum_gradient(
     dtype: DataType,
     output_shape: tuple[int, ...],
     needs_input_grad: tuple[bool, ...] = (True, True),
+    reject_nondifferentiable: bool = False,
 ) -> tuple[Storage | None, Storage | None]:
     """Run the minimum VJP on the selected backend without fallback."""
     selected = config.get_backend()
@@ -39,9 +40,16 @@ def execute_minimum_gradient(
         import numpy
 
         native = numpy.dtype(dtype.name)
-        lowered_grad = grad._logical_storage_for("numpy").buffer.reshape(grad.shape)
-        lowered_left = left._logical_storage_for("numpy").buffer.reshape(left.shape)
-        lowered_right = right._logical_storage_for("numpy").buffer.reshape(right.shape)
+        lowered_grad = numpy.broadcast_to(
+            grad._logical_storage_for("numpy").buffer.reshape(grad.shape), output_shape
+        )
+        lowered_left = numpy.broadcast_to(
+            left._logical_storage_for("numpy").buffer.reshape(left.shape), output_shape
+        )
+        lowered_right = numpy.broadcast_to(
+            right._logical_storage_for("numpy").buffer.reshape(right.shape),
+            output_shape,
+        )
         if lowered_grad.dtype != native:
             lowered_grad = lowered_grad.astype(native, copy=False)
         if lowered_left.dtype != native:
@@ -52,9 +60,15 @@ def execute_minimum_gradient(
         import cupy
 
         native = cupy.dtype(dtype.name)
-        lowered_grad = grad._logical_storage_for("cuda").buffer.reshape(grad.shape)
-        lowered_left = left._logical_storage_for("cuda").buffer.reshape(left.shape)
-        lowered_right = right._logical_storage_for("cuda").buffer.reshape(right.shape)
+        lowered_grad = cupy.broadcast_to(
+            grad._logical_storage_for("cuda").buffer.reshape(grad.shape), output_shape
+        )
+        lowered_left = cupy.broadcast_to(
+            left._logical_storage_for("cuda").buffer.reshape(left.shape), output_shape
+        )
+        lowered_right = cupy.broadcast_to(
+            right._logical_storage_for("cuda").buffer.reshape(right.shape), output_shape
+        )
         if lowered_grad.dtype != native:
             lowered_grad = lowered_grad.astype(native, copy=False)
         if lowered_left.dtype != native:
@@ -69,6 +83,7 @@ def execute_minimum_gradient(
         dtype=dtype,
         output_shape=output_shape,
         needs_input_grad=needs_input_grad,
+        reject_nondifferentiable=reject_nondifferentiable,
     )
     if result is None:
         raise BackendOperationUnsupportedError(

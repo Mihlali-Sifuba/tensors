@@ -36,8 +36,13 @@ def execute_maximum(
         import numpy
 
         native = numpy.dtype(dtype.name)
-        lowered_left = left._logical_storage_for("numpy").buffer.reshape(left.shape)
-        lowered_right = right._logical_storage_for("numpy").buffer.reshape(right.shape)
+        lowered_left = numpy.broadcast_to(
+            left._logical_storage_for("numpy").buffer.reshape(left.shape), output_shape
+        )
+        lowered_right = numpy.broadcast_to(
+            right._logical_storage_for("numpy").buffer.reshape(right.shape),
+            output_shape,
+        )
         if lowered_left.dtype != native:
             lowered_left = lowered_left.astype(native, copy=False)
         if lowered_right.dtype != native:
@@ -46,8 +51,12 @@ def execute_maximum(
         import cupy
 
         native = cupy.dtype(dtype.name)
-        lowered_left = left._logical_storage_for("cuda").buffer.reshape(left.shape)
-        lowered_right = right._logical_storage_for("cuda").buffer.reshape(right.shape)
+        lowered_left = cupy.broadcast_to(
+            left._logical_storage_for("cuda").buffer.reshape(left.shape), output_shape
+        )
+        lowered_right = cupy.broadcast_to(
+            right._logical_storage_for("cuda").buffer.reshape(right.shape), output_shape
+        )
         if lowered_left.dtype != native:
             lowered_left = lowered_left.astype(native, copy=False)
         if lowered_right.dtype != native:

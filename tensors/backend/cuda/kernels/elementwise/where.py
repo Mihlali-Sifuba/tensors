@@ -24,6 +24,14 @@ def where(
     output_shape: tuple[int, ...],
 ) -> Storage:
     """Select between device data arrays using a device condition array."""
+    expected_shape = tuple(output_shape)
+    if any(
+        tuple(values.shape) != expected_shape
+        for values in (condition_values, left_values, right_values)
+    ):
+        raise RuntimeError(
+            "where kernel received operands not prepared for output_shape"
+        )
     if left_values.dtype == cupy.float32:
         left_values = _widen(left_values)
     if right_values.dtype == cupy.float32:

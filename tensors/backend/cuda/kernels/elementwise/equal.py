@@ -17,6 +17,13 @@ def equal(
     left_values: Any, right_values: Any, *, output_shape: tuple[int, ...]
 ) -> Storage:
     """Evaluate the broadcasting equal comparison on device arrays."""
+    expected_shape = tuple(output_shape)
+    if any(
+        tuple(values.shape) != expected_shape for values in (left_values, right_values)
+    ):
+        raise RuntimeError(
+            "equal kernel received operands not prepared for output_shape"
+        )
     if left_values.dtype == cupy.float32:
         left_values = _widen(left_values)
     if right_values.dtype == cupy.float32:

@@ -2,22 +2,19 @@
 
 ``minimum`` and ``maximum`` select between two broadcast operands by the same
 rule, differing only in which comparison wins and which dispatch entry point
-evaluates it. The selection semantics, the tie and NaN handling, and the
-higher-order derivative construction live here; each operation owns its own
-module.
+evaluates it. The shared eager operand preparation and broadcast-gradient shaping live here;
+each operation owns its selection and derivative semantics.
 """
 
 from __future__ import annotations
 
-import math
-from typing import Any, ClassVar, Optional
+from typing import Any, Optional
 
 from tensors.dtype import result_dtype
 from tensors.graph.expression import as_tensor_operand
 from tensors.operations.gradient_primitives import sum_to_shape
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
-from tensors.utils.broadcasting import broadcast_tensors
 
 
 def _tensor(value: Any, *, dtype=None) -> Tensor:
@@ -35,47 +32,10 @@ def _tensor(value: Any, *, dtype=None) -> Tensor:
     return as_tensor_operand(value, dtype=scalar_dtype)
 
 
-def _is_nan(value: int | float) -> bool:
-    return isinstance(value, float) and math.isnan(value)
-
-
 class _ElementwiseExtremum(Operation):
     """Shared elementwise extremum forward and gradient rules."""
 
     __slots__ = ()
-    select_maximum: ClassVar[bool] = False
-
-    def _weights(
-        self, left: Tensor, right: Tensor, *, higher_order: bool
-    ) -> tuple[list[float], list[float]]:
-        expanded_left, expanded_right = broadcast_tensors(left, right)
-        left_weights = []
-        right_weights = []
-        for left_value, right_value in zip(expanded_left._data, expanded_right._data):
-            if _is_nan(left_value) or _is_nan(right_value):
-                if higher_order:
-                    raise ValueError(
-                        "Higher-order derivatives of elementwise extrema are undefined at NaN"
-                    )
-                left_weights.append(math.nan)
-                right_weights.append(math.nan)
-                continue
-            if left_value == right_value:
-                if higher_order:
-                    raise ValueError(
-                        "Higher-order derivatives of elementwise extrema are undefined at ties"
-                    )
-                left_weights.append(0.5)
-                right_weights.append(0.5)
-                continue
-            left_selected = (
-                left_value > right_value
-                if self.select_maximum
-                else left_value < right_value
-            )
-            left_weights.append(1.0 if left_selected else 0.0)
-            right_weights.append(0.0 if left_selected else 1.0)
-        return (left_weights, right_weights)
 
     @staticmethod
     def _gradients(

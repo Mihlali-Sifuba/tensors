@@ -23,6 +23,14 @@ def where(
     output_shape: tuple[int, ...],
 ) -> Storage:
     """Select between native data arrays using a native condition array."""
+    expected_shape = tuple(output_shape)
+    if any(
+        tuple(values.shape) != expected_shape
+        for values in (condition_values, left_values, right_values)
+    ):
+        raise RuntimeError(
+            "where kernel received operands not prepared for output_shape"
+        )
     result = numpy.where(condition_values != 0, left_values, right_values)
     narrowed = result.astype(numpy.dtype(dtype.name), copy=False)
     storage = NumPyStorage(narrowed, dtype)

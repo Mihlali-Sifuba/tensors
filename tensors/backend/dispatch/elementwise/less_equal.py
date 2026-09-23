@@ -31,11 +31,24 @@ def execute_less_equal(
         lowered_left = broadcast_to(left, output_shape)._data
         lowered_right = broadcast_to(right, output_shape)._data
     elif selected == "numpy":
-        lowered_left = left._logical_storage_for("numpy").buffer.reshape(left.shape)
-        lowered_right = right._logical_storage_for("numpy").buffer.reshape(right.shape)
+        import numpy
+
+        lowered_left = numpy.broadcast_to(
+            left._logical_storage_for("numpy").buffer.reshape(left.shape), output_shape
+        )
+        lowered_right = numpy.broadcast_to(
+            right._logical_storage_for("numpy").buffer.reshape(right.shape),
+            output_shape,
+        )
     else:
-        lowered_left = left._logical_storage_for("cuda").buffer.reshape(left.shape)
-        lowered_right = right._logical_storage_for("cuda").buffer.reshape(right.shape)
+        import cupy
+
+        lowered_left = cupy.broadcast_to(
+            left._logical_storage_for("cuda").buffer.reshape(left.shape), output_shape
+        )
+        lowered_right = cupy.broadcast_to(
+            right._logical_storage_for("cuda").buffer.reshape(right.shape), output_shape
+        )
 
     result = backend.less_equal(
         lowered_left,
