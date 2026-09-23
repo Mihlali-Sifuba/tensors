@@ -1,42 +1,62 @@
 """Elementwise inverse hyperbolic cosine and its differentiation rule."""
 
 from __future__ import annotations
-from tensors.backend import dispatch as backend_dispatch
-import math
-from typing import TYPE_CHECKING, Any, overload
+
+from typing import TYPE_CHECKING, Optional, overload
+
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
+from tensors.backend import dispatch as backend_dispatch
 from tensors.dtype import float64
+from tensors.graph.expression import as_tensor_operand
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
-from tensors.graph.expression import as_tensor_operand
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
 
 
 class ArcCosh(Operation):
-    """Elementwise inverse hyperbolic cosine on the real interval [1, infinity)."""
+    """Elementwise inverse hyperbolic cosine with a reverse-mode gradient rule."""
 
     __slots__ = ()
     name = "arccosh"
 
     def forward(self, value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
+        output_shape = value.shape
         return Tensor._from_owned_storage(
-            backend_dispatch.execute_arccosh(value, dtype=dtype),
+            backend_dispatch.execute_arccosh(
+                value, dtype=dtype, output_shape=output_shape
+            ),
             dtype=dtype,
-            shape=value.shape,
+            shape=output_shape,
         )
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
-    ) -> list[Tensor]:
+    ) -> list[Optional[Tensor]]:
+        """Apply the first-order VJP ``G / (sqrt(x - 1) * sqrt(x + 1))``."""
+        if not needs_input_grad[0]:
+            return [None]
         value = inputs[0]
+        if grad.shape != value.shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match value shape {value.shape}"
+            )
+        if grad.dtype is not value.dtype:
+            raise ValueError(
+                f"Gradient dtype {grad.dtype.name} does not match value dtype "
+                f"{value.dtype.name}"
+            )
+        dtype = value.dtype
+        output_shape = value.shape
         return [
             Tensor._from_owned_storage(
-                backend_dispatch.execute_arccosh_gradient(grad, value),
-                dtype=grad.dtype,
-                shape=value.shape,
+                backend_dispatch.execute_arccosh_gradient(
+                    grad, value, dtype=dtype, output_shape=output_shape
+                ),
+                dtype=dtype,
+                shape=output_shape,
             )
         ]
 
@@ -69,22 +89,3 @@ def arccosh(value: TensorLike | VariableNode) -> TensorResult | VariableNode:
 
 
 __all__ = ["ArcCosh", "arccosh"]
-
-
-def _arccosh(value):
-    if value < 1.0:
-        raise ValueError(
-            "arccosh is only defined for values greater than or equal to 1"
-        )
-    return math.acosh(float(value))
-
-
-def _gradient(upstream, value):
-    if value == 1.0:
-        raise ValueError("arccosh derivative is undefined at 1")
-    value = float(value)
-    if math.isinf(value):
-        derivative = 0.0
-    else:
-        derivative = 1.0 / (math.sqrt(value - 1.0) * math.sqrt(value + 1.0))
-    return upstream * derivative

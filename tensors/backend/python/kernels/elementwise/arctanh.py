@@ -1,24 +1,23 @@
-"""Reference inverse hyperbolic tangent for the Python backend."""
+"""Python implementation of arctanh."""
 
 from __future__ import annotations
+
+import math
+from collections.abc import Iterable
+
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
-import math
 
 
-def _arctanh(value):
-    value = float(value)
-    if not math.isnan(value) and (not -1.0 < value < 1.0):
-        raise ValueError("arctanh is only defined for values strictly between -1 and 1")
-    return math.atanh(value)
-
-
-def arctanh(value: Tensor, *, dtype: DataType) -> Storage:
-    """Return the inverse hyperbolic tangent of every element."""
-    evaluate = _arctanh
-    return PythonStorage.from_values([evaluate(item) for item in value._data], dtype)
+def arctanh(
+    values: Iterable[int | float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate arctanh on prepared native values."""
+    result = [math.atanh(float(item)) for item in values]
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("arctanh kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)

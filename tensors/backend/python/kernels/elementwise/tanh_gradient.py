@@ -1,26 +1,28 @@
-"""Reference the hyperbolic tangent VJP for the Python backend."""
+"""Python implementation of the tanh VJP."""
 
 from __future__ import annotations
+
+import math
+from collections.abc import Iterable
+
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
-import math as _math
+from tensors.dtype import DataType
 
 
-def _tanh_derivative(value: float) -> float:
-    """Return the tanh derivative without subtracting rounded values."""
-    z = _math.exp(-2.0 * abs(value))
-    denominator = 1.0 + z
-    return 4.0 * z / (denominator * denominator)
-
-
-def tanh_gradient(grad: Tensor, value: Tensor) -> Storage:
-    """Scale the upstream gradient by ``1 - tanh(x)**2``."""
-    evaluate = lambda upstream, value: upstream * _tanh_derivative(float(value))
-    return PythonStorage.from_values(
-        [evaluate(upstream, item) for upstream, item in zip(grad._data, value._data)],
-        grad.dtype,
-    )
+def tanh_gradient(
+    grad_values: Iterable[int | float],
+    values: Iterable[int | float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate the first-order tanh VJP on prepared native values."""
+    result = []
+    for upstream, item in zip(grad_values, values):
+        magnitude = math.exp(-2.0 * abs(float(item)))
+        denominator = 1.0 + magnitude
+        result.append(upstream * (4.0 * magnitude / (denominator * denominator)))
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("tanh VJP kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)

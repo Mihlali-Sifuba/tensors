@@ -1,42 +1,62 @@
 """Elementwise inverse hyperbolic sine and its differentiation rule."""
 
 from __future__ import annotations
-from tensors.backend import dispatch as backend_dispatch
-import math
-from typing import TYPE_CHECKING, Any, overload
+
+from typing import TYPE_CHECKING, Optional, overload
+
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
+from tensors.backend import dispatch as backend_dispatch
 from tensors.dtype import float64
+from tensors.graph.expression import as_tensor_operand
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
-from tensors.graph.expression import as_tensor_operand
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
 
 
 class ArcSinh(Operation):
-    """Elementwise inverse hyperbolic sine over the real numbers."""
+    """Elementwise inverse hyperbolic sine with a reverse-mode gradient rule."""
 
     __slots__ = ()
     name = "arcsinh"
 
     def forward(self, value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
+        output_shape = value.shape
         return Tensor._from_owned_storage(
-            backend_dispatch.execute_arcsinh(value, dtype=dtype),
+            backend_dispatch.execute_arcsinh(
+                value, dtype=dtype, output_shape=output_shape
+            ),
             dtype=dtype,
-            shape=value.shape,
+            shape=output_shape,
         )
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
-    ) -> list[Tensor]:
+    ) -> list[Optional[Tensor]]:
+        """Apply the first-order VJP ``G / sqrt(x**2 + 1)``."""
+        if not needs_input_grad[0]:
+            return [None]
         value = inputs[0]
+        if grad.shape != value.shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match value shape {value.shape}"
+            )
+        if grad.dtype is not value.dtype:
+            raise ValueError(
+                f"Gradient dtype {grad.dtype.name} does not match value dtype "
+                f"{value.dtype.name}"
+            )
+        dtype = value.dtype
+        output_shape = value.shape
         return [
             Tensor._from_owned_storage(
-                backend_dispatch.execute_arcsinh_gradient(grad, value),
-                dtype=grad.dtype,
-                shape=value.shape,
+                backend_dispatch.execute_arcsinh_gradient(
+                    grad, value, dtype=dtype, output_shape=output_shape
+                ),
+                dtype=dtype,
+                shape=output_shape,
             )
         ]
 
@@ -69,16 +89,3 @@ def arcsinh(value: TensorLike | VariableNode) -> TensorResult | VariableNode:
 
 
 __all__ = ["ArcSinh", "arcsinh"]
-
-
-def _gradient(upstream, value):
-    value = float(value)
-    magnitude = abs(value)
-    if math.isinf(magnitude):
-        derivative = 0.0
-    elif magnitude <= 1.0:
-        derivative = 1.0 / math.sqrt(1.0 + value * value)
-    else:
-        reciprocal = 1.0 / magnitude
-        derivative = reciprocal / math.sqrt(1.0 + reciprocal * reciprocal)
-    return upstream * derivative

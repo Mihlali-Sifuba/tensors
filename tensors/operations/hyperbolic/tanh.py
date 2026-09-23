@@ -1,14 +1,15 @@
 """Elementwise hyperbolic tangent and its differentiation rule."""
 
 from __future__ import annotations
-from tensors.backend import dispatch as backend_dispatch
-import math as _math
-from typing import TYPE_CHECKING, Any, List, overload
+
+from typing import TYPE_CHECKING, Optional, overload
+
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
+from tensors.backend import dispatch as backend_dispatch
 from tensors.dtype import float64
+from tensors.graph.expression import as_tensor_operand
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
-from tensors.graph.expression import as_tensor_operand
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
@@ -20,21 +21,42 @@ class Tanh(Operation):
     __slots__ = ()
     name = "tanh"
 
-    def forward(self, a: Tensor) -> Tensor:
-        dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
+    def forward(self, value: Tensor) -> Tensor:
+        dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
+        output_shape = value.shape
         return Tensor._from_owned_storage(
-            backend_dispatch.execute_tanh(a, dtype=dtype), dtype=dtype, shape=a.shape
+            backend_dispatch.execute_tanh(
+                value, dtype=dtype, output_shape=output_shape
+            ),
+            dtype=dtype,
+            shape=output_shape,
         )
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
-    ) -> List[Tensor]:
-        a = inputs[0]
+    ) -> list[Optional[Tensor]]:
+        """Apply the first-order VJP ``G * (1 - tanh(x)**2)``."""
+        if not needs_input_grad[0]:
+            return [None]
+        value = inputs[0]
+        if grad.shape != value.shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match value shape {value.shape}"
+            )
+        if grad.dtype is not value.dtype:
+            raise ValueError(
+                f"Gradient dtype {grad.dtype.name} does not match value dtype "
+                f"{value.dtype.name}"
+            )
+        dtype = value.dtype
+        output_shape = value.shape
         return [
             Tensor._from_owned_storage(
-                backend_dispatch.execute_tanh_gradient(grad, a),
-                dtype=grad.dtype,
-                shape=a.shape,
+                backend_dispatch.execute_tanh_gradient(
+                    grad, value, dtype=dtype, output_shape=output_shape
+                ),
+                dtype=dtype,
+                shape=output_shape,
             )
         ]
 
@@ -67,10 +89,3 @@ def tanh(value: TensorLike | VariableNode) -> TensorResult | VariableNode:
 
 
 __all__ = ["Tanh", "tanh"]
-
-
-def _tanh_derivative(value: float) -> float:
-    """Return the tanh derivative without subtracting rounded values."""
-    z = _math.exp(-2.0 * abs(value))
-    denominator = 1.0 + z
-    return 4.0 * z / (denominator * denominator)
