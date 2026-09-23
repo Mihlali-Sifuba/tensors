@@ -1,35 +1,46 @@
-"""Split maximum derivatives, sharing ties equally."""
+"""Python implementation of the maximum VJP."""
+
+from __future__ import annotations
 
 import math
+from collections.abc import Iterable
+
 from tensors.backend.python.storage import PythonStorage
-from tensors.utils.broadcasting import broadcast_tensors
+from tensors.backend.storage import Storage
+from tensors.dtype import DataType
 
 
-def maximum_gradient(grad, left, right, *, needs_input_grad=(True, True)):
-    """Route the upstream gradient to the larger operand, sharing ties."""
-    left, right = broadcast_tensors(left, right)
-    left_values, right_values = [], []
-    for upstream, a, b in zip(grad._data, left._data, right._data):
-        if math.isnan(a) or math.isnan(b):
-            lw = rw = math.nan
-        elif a == b:
-            lw = rw = 0.5
+def maximum_gradient(
+    grad_values: Iterable[int | float],
+    left_values: Iterable[int | float],
+    right_values: Iterable[int | float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+    needs_input_grad: tuple[bool, ...] = (True, True),
+) -> tuple[Storage | None, Storage | None]:
+    """Route gradients to larger values and split exact ties equally."""
+    need_left, need_right = needs_input_grad
+    left_result = []
+    right_result = []
+    for upstream, left, right in zip(grad_values, left_values, right_values):
+        if math.isnan(left) or math.isnan(right):
+            left_weight = right_weight = math.nan
+        elif left == right:
+            left_weight = right_weight = 0.5
         else:
-            lw = 1.0 if a > b else 0.0
-            rw = 1.0 - lw
-        if needs_input_grad[0]:
-            left_values.append(upstream * lw)
-        if needs_input_grad[1]:
-            right_values.append(upstream * rw)
+            left_weight = 1.0 if left > right else 0.0
+            right_weight = 1.0 - left_weight
+        if need_left:
+            left_result.append(upstream * left_weight)
+        if need_right:
+            right_result.append(upstream * right_weight)
+    expected = math.prod(output_shape)
+    if (need_left and len(left_result) != expected) or (
+        need_right and len(right_result) != expected
+    ):
+        raise RuntimeError("maximum VJP kernel returned an unexpected result size")
     return (
-        (
-            PythonStorage.from_values(left_values, grad.dtype)
-            if needs_input_grad[0]
-            else None
-        ),
-        (
-            PythonStorage.from_values(right_values, grad.dtype)
-            if needs_input_grad[1]
-            else None
-        ),
+        PythonStorage.from_values(left_result, dtype) if need_left else None,
+        PythonStorage.from_values(right_result, dtype) if need_right else None,
     )

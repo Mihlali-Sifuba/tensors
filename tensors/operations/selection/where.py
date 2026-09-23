@@ -1,15 +1,16 @@
 """Differentiable selection with a constant condition mask."""
 
 from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any, Optional, overload
+
 from tensors._typing import TensorData, TensorLike, TensorResult
 from tensors.backend import execute_where, execute_where_gradient
 from tensors.dtype import result_dtype
-from tensors.operations.gradient_primitives import sum_to_shape
-from tensors.operations.base import Operation
-from tensors.tensor import Tensor
 from tensors.graph.expression import as_tensor_operand
-from tensors.utils.broadcasting import broadcast_to
+from tensors.operations.base import Operation
+from tensors.operations.gradient_primitives import sum_to_shape
+from tensors.tensor import Tensor
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
@@ -40,50 +41,109 @@ class Where(Operation):
     def forward(self, condition: Tensor, left: Tensor, right: Tensor) -> Tensor:
         shape = condition.shape.broadcast_with(left.shape).broadcast_with(right.shape)
         dtype = result_dtype(left.dtype, right)
-        accelerated = execute_where(
-            condition, left, right, dtype=dtype, output_shape=shape
-        )
-        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
+        storage = execute_where(condition, left, right, dtype=dtype, output_shape=shape)
+        return Tensor._from_owned_storage(storage, dtype=dtype, shape=shape)
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Optional[Tensor]]:
+        """Route ``G`` to the selected data branch and reduce broadcast axes."""
+        from tensors.graph.expression import apply_operation, is_graph_operand
+
         condition, left, right = inputs
         need_condition, need_left, need_right = needs_input_grad
-        condition_gradient = (
-            Tensor._from_values(
-                [0.0] * condition.shape.size, grad.dtype, condition.shape
+        output_shape = condition.shape.broadcast_with(left.shape).broadcast_with(
+            right.shape
+        )
+        if grad.shape != output_shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match where shape "
+                f"{output_shape}"
             )
-            if need_condition
+        dtype = result_dtype(left.dtype, right)
+        if grad.dtype is not dtype:
+            raise ValueError(
+                f"Gradient dtype {grad.dtype.name} does not match where dtype "
+                f"{dtype.name}"
+            )
+        condition_gradient = (
+            sum_to_shape(grad * 0.0, condition.shape) if need_condition else None
+        )
+        gradients: list[Optional[Tensor]] = [condition_gradient]
+        for needed, branch, select_left in (
+            (need_left, left, True),
+            (need_right, right, False),
+        ):
+            if not needed:
+                gradients.append(None)
+                continue
+            operation = WhereVJP(select_left=select_left, output_shape=output_shape)
+            contribution = (
+                apply_operation(operation, (grad, condition, branch))
+                if is_graph_operand(grad)
+                else operation.forward(grad, condition, branch)
+            )
+            gradients.append(sum_to_shape(contribution, branch.shape))
+        return gradients
+
+
+class WhereVJP(Operation):
+    """Internal graph node for one backend-native branch of the where VJP."""
+
+    __slots__ = ("select_left", "output_shape")
+    name = "where_vjp"
+
+    def __init__(self, *, select_left: bool, output_shape: tuple[int, ...]) -> None:
+        object.__setattr__(self, "select_left", select_left)
+        object.__setattr__(self, "output_shape", output_shape)
+
+    def forward(self, grad: Tensor, condition: Tensor, branch: Tensor) -> Tensor:
+        output_shape = self.output_shape
+        condition.shape.broadcast_with(branch.shape).broadcast_with(output_shape)
+        if grad.shape != output_shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match where branch shape "
+                f"{output_shape}"
+            )
+        left_storage, right_storage = execute_where_gradient(
+            grad,
+            condition,
+            dtype=grad.dtype,
+            output_shape=output_shape,
+            needs_input_grad=(self.select_left, not self.select_left),
+        )
+        storage = left_storage if self.select_left else right_storage
+        if storage is None:
+            raise RuntimeError("where VJP did not return its requested branch")
+        return Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=output_shape)
+
+    def backward(
+        self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
+    ) -> list[Optional[Tensor]]:
+        from tensors.graph.expression import apply_operation, is_graph_operand
+
+        _, condition, branch = inputs
+        grad_partial = None
+        if needs_input_grad[0]:
+            operation = WhereVJP(
+                select_left=self.select_left, output_shape=self.output_shape
+            )
+            grad_partial = (
+                apply_operation(operation, (outer_grad, condition, branch))
+                if is_graph_operand(outer_grad)
+                else operation.forward(outer_grad, condition, branch)
+            )
+        condition_partial = (
+            sum_to_shape(outer_grad * 0.0, condition.shape)
+            if needs_input_grad[1]
             else None
         )
-        accelerated = execute_where_gradient(
-            grad, condition, needs_input_grad=(need_left, need_right)
+        branch_partial = (
+            sum_to_shape(outer_grad * 0.0, branch.shape)
+            if needs_input_grad[2]
+            else None
         )
-        left_storage, right_storage = accelerated
-        return [
-            condition_gradient,
-            (
-                sum_to_shape(
-                    Tensor._from_owned_storage(
-                        left_storage, dtype=grad.dtype, shape=grad.shape
-                    ),
-                    left.shape,
-                )
-                if left_storage is not None
-                else None
-            ),
-            (
-                sum_to_shape(
-                    Tensor._from_owned_storage(
-                        right_storage, dtype=grad.dtype, shape=grad.shape
-                    ),
-                    right.shape,
-                )
-                if right_storage is not None
-                else None
-            ),
-        ]
+        return [grad_partial, condition_partial, branch_partial]
 
 
 @overload

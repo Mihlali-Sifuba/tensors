@@ -1,28 +1,43 @@
-"""CuPy implementation of the elementwise minimum."""
+"""CUDA implementation of minimum."""
 
 from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Any
+
 import cupy
-from typing import TYPE_CHECKING
+
+from tensors.backend.cuda.conversion import _narrow, _widen
+from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.storage import Storage
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
 def minimum(
-    left: Tensor, right: Tensor, *, dtype: DataType, output_shape: tuple[int, ...]
-) -> Storage | None:
-    """Run a broadcasting elementwise minimum or maximum."""
-    function = cupy.minimum
-    try:
-        # Widened first: CuPy's binary32 elementwise code flushes a
-        # subnormal operand, so the comparison would be made between
-        # values the caller did not supply. In binary64 it is not,
-        # and _storage narrows the result back through PTX.
-        result = function(_working_values(left), _working_values(right))
-    except (TypeError, ValueError):
-        return None
-    return _storage(result, dtype=dtype, output_shape=output_shape)
+    left_values: Any,
+    right_values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Select smaller values, propagating NaN and choosing the left tie."""
+    if left_values.dtype == cupy.float32:
+        left_values = _widen(left_values)
+    if right_values.dtype == cupy.float32:
+        right_values = _widen(right_values)
+    result = cupy.where(
+        cupy.isnan(left_values),
+        left_values,
+        cupy.where(
+            cupy.isnan(right_values),
+            right_values,
+            cupy.where(left_values <= right_values, left_values, right_values),
+        ),
+    )
+    narrowed = _narrow(result, cupy.dtype(dtype.name))
+    storage = CudaStorage(narrowed, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("minimum kernel returned an unexpected result size")
+    return storage

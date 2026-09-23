@@ -10,9 +10,6 @@ class NumPyReductionTests(NumPyParityTestCase):
     """Reductions, selection, and broadcast gradient reductions."""
 
     def test_remaining_reductions_and_selection_dispatch_to_numpy(self):
-        value_data = ts.Tensor(
-            [1.0 + index % 8 / 10.0 for index in range(64)], shape=(8, 8)
-        )
         from contextlib import ExitStack
 
         with ExitStack() as stack:
@@ -51,6 +48,9 @@ class NumPyReductionTests(NumPyParityTestCase):
                 for name in names
             }
             with ts.use_backend("numpy"):
+                value_data = ts.Tensor(
+                    [1.0 + index % 8 / 10.0 for index in range(64)], shape=(8, 8)
+                )
                 for operation in (ts.std, ts.prod, ts.min, ts.max):
                     value = ts.Variable(value_data)
                     output = operation(value, axis=1)

@@ -1,34 +1,23 @@
-"""NumPy implementation of the greater-than comparison."""
+"""NumPy implementation of greater."""
 
 from __future__ import annotations
-import numpy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import tensor_to_logical_array
 
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+import math
+from typing import Any
+
+import numpy
+
+from tensors.backend.numpy.storage import NumPyStorage
+from tensors.backend.storage import Storage
+from tensors.dtype import uint8
 
 
 def greater(
-    left: Tensor, right: Tensor, *, output_shape: tuple[int, ...]
-) -> Storage | None:
-    """Run a broadcasting elementwise comparison."""
-    from tensors.dtype import uint8
-
-    functions = {
-        "equal": numpy.equal,
-        "not_equal": numpy.not_equal,
-        "less": numpy.less,
-        "less_equal": numpy.less_equal,
-        "greater": numpy.greater,
-        "greater_equal": numpy.greater_equal,
-    }
-    try:
-        result = functions["greater"](
-            tensor_to_logical_array(left), tensor_to_logical_array(right)
-        )
-    except (TypeError, ValueError):
-        return None
-    return _storage(result, dtype=uint8, output_shape=output_shape)
+    left_values: Any, right_values: Any, *, output_shape: tuple[int, ...]
+) -> Storage:
+    """Evaluate the broadcasting greater comparison on native arrays."""
+    result = numpy.greater(left_values, right_values).astype(numpy.uint8, copy=False)
+    storage = NumPyStorage(result, uint8)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("greater kernel returned an unexpected result size")
+    return storage

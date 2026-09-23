@@ -1,29 +1,43 @@
-"""CuPy implementation of the clipping VJP."""
+"""CUDA implementation of the clip VJP."""
 
 from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Any
+
 import cupy
-from typing import TYPE_CHECKING
+
+from tensors.backend.cuda.conversion import _errstate, _narrow, _widen
+from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.storage import Storage
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
 def clip_gradient(
-    grad: Tensor,
-    value: Tensor,
+    grad_values: Any,
+    values: Any,
     min_value: int | float | None,
     max_value: int | float | None,
-) -> Storage | None:
-    """Run the clipping VJP with zero boundary subgradients."""
-    values = _working_values(value)
-    upstream = _working_values(grad)
-    mask = cupy.ones(value.shape, dtype=bool)
-    if min_value is not None:
-        mask &= values > min_value
-    if max_value is not None:
-        mask &= values < max_value
-    result = cupy.where(cupy.isnan(values), cupy.nan, cupy.where(mask, upstream, 0.0))
-    return _storage(result, dtype=grad.dtype, output_shape=value.shape)
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Pass gradients strictly inside the bounds and zero the boundaries."""
+    with _errstate(over="ignore", under="ignore", invalid="ignore"):
+        upstream = _widen(grad_values)
+        working = _widen(values)
+        mask = cupy.ones(output_shape, dtype=bool)
+        if min_value is not None:
+            mask &= working > min_value
+        if max_value is not None:
+            mask &= working < max_value
+        result = cupy.where(
+            cupy.isnan(working), cupy.nan, cupy.where(mask, upstream, 0.0)
+        )
+        narrowed = _narrow(result, cupy.dtype(dtype.name))
+    storage = CudaStorage(narrowed, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("clip VJP kernel returned an unexpected result size")
+    return storage

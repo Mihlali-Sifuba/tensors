@@ -1,33 +1,52 @@
-"""Dispatch for elementwise operations and their VJPs."""
+"""Strict dispatch for greater_equal."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_ELEMENTWISE_MIN_SIZE,
-    _array_work_is_large_enough,
-    _shape_size,
-)
-from tensors.backend.storage import Storage
+
+from typing import TYPE_CHECKING, Any
+
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
+    from tensors.backend.storage import Storage
     from tensors.tensor import Tensor
 
 
 def execute_greater_equal(
-    left: Tensor, right: Tensor, *, output_shape: tuple[int, ...]
+    left: Tensor,
+    right: Tensor,
+    *,
+    output_shape: tuple[int, ...],
 ) -> Storage:
-    """Run an elementwise broadcasting comparison."""
-    from tensors.backend.python.kernels.elementwise.greater_equal import (
-        greater_equal as reference,
-    )
+    """Run greater_equal on the selected backend without fallback."""
+    selected = config.get_backend()
+    validate_backend_residency((left, right), selected)
+    backend: Any = load_backend(selected)
 
-    if not _array_work_is_large_enough(
-        _shape_size(output_shape), _NUMPY_ELEMENTWISE_MIN_SIZE
-    ):
-        return reference(left, right, output_shape=output_shape)
-    comparison = _backend_kernel("greater_equal")
-    result = comparison(left, right, output_shape=output_shape)
-    if result is not None:
-        return result
-    return reference(left, right, output_shape=output_shape)
+    if selected == "python":
+        from tensors.utils.broadcasting import broadcast_to
+
+        lowered_left = broadcast_to(left, output_shape)._data
+        lowered_right = broadcast_to(right, output_shape)._data
+    elif selected == "numpy":
+        lowered_left = left._logical_storage_for("numpy").buffer.reshape(left.shape)
+        lowered_right = right._logical_storage_for("numpy").buffer.reshape(right.shape)
+    else:
+        lowered_left = left._logical_storage_for("cuda").buffer.reshape(left.shape)
+        lowered_right = right._logical_storage_for("cuda").buffer.reshape(right.shape)
+
+    result = backend.greater_equal(
+        lowered_left,
+        lowered_right,
+        output_shape=output_shape,
+    )
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute greater_equal conformingly. "
+            f"greater_equal runs on the selected backend; select another backend "
+            f"to run it elsewhere."
+        )
+    validate_backend_residency((result,), selected)
+    return result

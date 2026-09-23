@@ -1,34 +1,28 @@
-"""CuPy implementation of the less-than comparison."""
+"""CUDA implementation of less."""
 
 from __future__ import annotations
-import cupy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import tensor_to_logical_array
 
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+import math
+from typing import Any
+
+import cupy
+
+from tensors.backend.cuda.conversion import _widen
+from tensors.backend.cuda.storage import CudaStorage
+from tensors.backend.storage import Storage
+from tensors.dtype import uint8
 
 
 def less(
-    left: Tensor, right: Tensor, *, output_shape: tuple[int, ...]
-) -> Storage | None:
-    """Run a broadcasting elementwise comparison."""
-    from tensors.dtype import uint8
-
-    functions = {
-        "equal": cupy.equal,
-        "not_equal": cupy.not_equal,
-        "less": cupy.less,
-        "less_equal": cupy.less_equal,
-        "greater": cupy.greater,
-        "greater_equal": cupy.greater_equal,
-    }
-    try:
-        result = functions["less"](
-            tensor_to_logical_array(left), tensor_to_logical_array(right)
-        )
-    except (TypeError, ValueError):
-        return None
-    return _storage(result, dtype=uint8, output_shape=output_shape)
+    left_values: Any, right_values: Any, *, output_shape: tuple[int, ...]
+) -> Storage:
+    """Evaluate the broadcasting less comparison on device arrays."""
+    if left_values.dtype == cupy.float32:
+        left_values = _widen(left_values)
+    if right_values.dtype == cupy.float32:
+        right_values = _widen(right_values)
+    result = cupy.less(left_values, right_values).astype(cupy.uint8, copy=False)
+    storage = CudaStorage(result, uint8)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("less kernel returned an unexpected result size")
+    return storage

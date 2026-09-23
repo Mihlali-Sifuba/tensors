@@ -1,47 +1,49 @@
-"""NumPy implementation of the elementwise selection VJP."""
+"""NumPy implementation of the where VJP."""
 
 from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Any
+
 import numpy
-from typing import TYPE_CHECKING
+
+from tensors.backend.numpy.storage import NumPyStorage
 from tensors.backend.storage import Storage
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
 def where_gradient(
-    grad: Tensor,
-    condition: Tensor,
+    grad_values: Any,
+    condition_values: Any,
     *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
     needs_input_grad: tuple[bool, ...] = (True, True),
-) -> tuple[Storage | None, Storage | None] | None:
-    """Split a selection VJP into the requested left and right terms."""
+) -> tuple[Storage | None, Storage | None]:
+    """Route native upstream values into the requested data branches."""
     need_left, need_right = needs_input_grad
-    try:
-        selected = (
-            numpy.broadcast_to(tensor_to_logical_array(condition), grad.shape) != 0
-        )
-    except ValueError:
-        return None
-    upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
+    selected = numpy.broadcast_to(condition_values, output_shape) != 0
     left = None
     if need_left:
-        left = _storage(
-            numpy.where(selected, upstream, 0.0),
-            dtype=grad.dtype,
-            output_shape=grad.shape,
+        left = NumPyStorage(
+            numpy.where(selected, grad_values, 0.0).astype(
+                numpy.dtype(dtype.name), copy=False
+            ),
+            dtype,
         )
-        if left is None:
-            return None
     right = None
     if need_right:
-        right = _storage(
-            numpy.where(selected, 0.0, upstream),
-            dtype=grad.dtype,
-            output_shape=grad.shape,
+        right = NumPyStorage(
+            numpy.where(selected, 0.0, grad_values).astype(
+                numpy.dtype(dtype.name), copy=False
+            ),
+            dtype,
         )
-        if right is None:
-            return None
-    return (left, right)
+    expected = math.prod(output_shape)
+    if (left is not None and left.size != expected) or (
+        right is not None and right.size != expected
+    ):
+        raise RuntimeError("where VJP kernel returned an unexpected result size")
+    return left, right

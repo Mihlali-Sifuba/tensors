@@ -1,35 +1,28 @@
-"""Reference elementwise selection for the Python backend."""
+"""Python implementation of where."""
 
 from __future__ import annotations
+
+import math
+from collections.abc import Iterable
+
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from tensors.utils.broadcasting import broadcast_to
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.dtype import DataType
-    from tensors.tensor import Tensor
+from tensors.dtype import DataType
 
 
 def where(
-    condition: Tensor,
-    left: Tensor,
-    right: Tensor,
+    condition_values: Iterable[int | float],
+    left_values: Iterable[int | float],
+    right_values: Iterable[int | float],
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
-) -> Storage | None:
-    """Select elementwise from two operands by a condition mask."""
-    shape = output_shape
-    expanded_condition = broadcast_to(condition, shape)
-    expanded_left = broadcast_to(left, shape)
-    expanded_right = broadcast_to(right, shape)
-    return PythonStorage.from_values(
-        [
-            left_value if selected != 0 else right_value
-            for selected, left_value, right_value in zip(
-                expanded_condition._data, expanded_left._data, expanded_right._data
-            )
-        ],
-        dtype,
-    )
+) -> Storage:
+    """Select from prepared value pairs using a prepared condition mask."""
+    result = [
+        left if condition != 0 else right
+        for condition, left, right in zip(condition_values, left_values, right_values)
+    ]
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("where kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)

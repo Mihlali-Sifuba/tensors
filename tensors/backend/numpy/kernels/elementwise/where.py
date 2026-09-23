@@ -1,32 +1,31 @@
-"""NumPy implementation of elementwise selection."""
+"""NumPy implementation of where."""
 
 from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Any
+
 import numpy
-from typing import TYPE_CHECKING
+
+from tensors.backend.numpy.storage import NumPyStorage
 from tensors.backend.storage import Storage
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
 def where(
-    condition: Tensor,
-    left: Tensor,
-    right: Tensor,
+    condition_values: Any,
+    left_values: Any,
+    right_values: Any,
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
-) -> Storage | None:
-    """Run broadcasting elementwise selection."""
-    try:
-        result = numpy.where(
-            tensor_to_logical_array(condition) != 0,
-            tensor_to_logical_array(left),
-            tensor_to_logical_array(right),
-        )
-    except (TypeError, ValueError):
-        return None
-    return _storage(result, dtype=dtype, output_shape=output_shape)
+) -> Storage:
+    """Select between native data arrays using a native condition array."""
+    result = numpy.where(condition_values != 0, left_values, right_values)
+    narrowed = result.astype(numpy.dtype(dtype.name), copy=False)
+    storage = NumPyStorage(narrowed, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("where kernel returned an unexpected result size")
+    return storage
