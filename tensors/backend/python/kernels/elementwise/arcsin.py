@@ -1,23 +1,23 @@
-"""Reference arcsine for the Python backend."""
+"""Python implementation of arcsin."""
 
 from __future__ import annotations
+
+import math
+from collections.abc import Iterable
+
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
-import math
 
 
-def _arcsin(value):
-    if value < -1.0 or value > 1.0:
-        raise ValueError("arcsin is only defined for values between -1 and 1")
-    return math.asin(float(value))
-
-
-def arcsin(value: Tensor, *, dtype: DataType) -> Storage:
-    """Return the arcsine of every element, in radians."""
-    evaluate = _arcsin
-    return PythonStorage.from_values([evaluate(item) for item in value._data], dtype)
+def arcsin(
+    values: Iterable[int | float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate arcsin on prepared native values."""
+    result = [math.asin(float(item)) for item in values]
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("arcsin kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)

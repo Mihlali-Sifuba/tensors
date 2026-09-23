@@ -1,17 +1,23 @@
-"""Reference cosine for the Python backend."""
+"""Python implementation of cos."""
 
 from __future__ import annotations
+
+import math
+from collections.abc import Iterable
+
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
-import math as _math
 
 
-def cos(value: Tensor, *, dtype: DataType) -> Storage:
-    """Return the cosine of every element."""
-    evaluate = lambda value: _math.cos(float(value))
-    return PythonStorage.from_values([evaluate(item) for item in value._data], dtype)
+def cos(
+    values: Iterable[int | float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate cos on prepared native values."""
+    result = [math.cos(float(item)) for item in values]
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("cos kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)

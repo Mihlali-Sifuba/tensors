@@ -1,29 +1,34 @@
-"""NumPy implementation of the cosine VJP."""
+"""NumPy implementation of the cos VJP."""
 
 from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Any
+
 import numpy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
+
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import tensor_to_logical_array
+from tensors.backend.numpy.storage import NumPyStorage
+from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
-def cos_gradient(grad: Tensor, value: Tensor) -> Storage | None:
-    """Run the vector-Jacobian product for an elementwise unary operation."""
-    try:
-        upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
-        values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
-    except (TypeError, ValueError):
-        return None
-    if upstream.shape != values.shape:
-        return None
-    if bool(numpy.any(numpy.isinf(values))):
-        return None
+def cos_gradient(
+    grad_values: Any,
+    values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate the first-order cos VJP on prepared native values."""
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        derivative = -numpy.sin(values)
-        result = upstream * derivative
-    return _storage(result, dtype=grad.dtype, output_shape=value.shape)
+        upstream = numpy.asarray(grad_values, dtype=numpy.float64)
+        working = numpy.asarray(values, dtype=numpy.float64)
+        result = -upstream * numpy.sin(working)
+        narrowed = result.astype(numpy.dtype(dtype.name), copy=False)
+    storage = NumPyStorage(narrowed, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("cos VJP kernel returned an unexpected result size")
+    return storage

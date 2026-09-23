@@ -1,39 +1,60 @@
-"""Elementwise cosine and its differentiation rule."""
+"""Elementwise cos and its differentiation rule."""
 
 from __future__ import annotations
-from tensors.backend import dispatch as backend_dispatch
-from typing import TYPE_CHECKING, Any, List, overload
+
+from typing import TYPE_CHECKING, Optional, overload
+
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
+from tensors.backend import dispatch as backend_dispatch
 from tensors.dtype import float64
+from tensors.graph.expression import as_tensor_operand
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
-from tensors.graph.expression import as_tensor_operand
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
 
 
 class Cos(Operation):
-    """Elementwise cosine with a reverse-mode gradient rule."""
+    """Elementwise cos with a reverse-mode gradient rule."""
 
     __slots__ = ()
     name = "cos"
 
-    def forward(self, a: Tensor) -> Tensor:
-        dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
+    def forward(self, value: Tensor) -> Tensor:
+        dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
+        output_shape = value.shape
         return Tensor._from_owned_storage(
-            backend_dispatch.execute_cos(a, dtype=dtype), dtype=dtype, shape=a.shape
+            backend_dispatch.execute_cos(value, dtype=dtype, output_shape=output_shape),
+            dtype=dtype,
+            shape=output_shape,
         )
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
-    ) -> List[Tensor]:
-        a = inputs[0]
+    ) -> list[Optional[Tensor]]:
+        """Apply the first-order VJP ``-G * sin(x)``."""
+        if not needs_input_grad[0]:
+            return [None]
+        value = inputs[0]
+        if grad.shape != value.shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match value shape {value.shape}"
+            )
+        if grad.dtype is not value.dtype:
+            raise ValueError(
+                f"Gradient dtype {grad.dtype.name} does not match value dtype "
+                f"{value.dtype.name}"
+            )
+        dtype = value.dtype
+        output_shape = value.shape
         return [
             Tensor._from_owned_storage(
-                backend_dispatch.execute_cos_gradient(grad, a),
-                dtype=grad.dtype,
-                shape=a.shape,
+                backend_dispatch.execute_cos_gradient(
+                    grad, value, dtype=dtype, output_shape=output_shape
+                ),
+                dtype=dtype,
+                shape=output_shape,
             )
         ]
 
@@ -51,12 +72,7 @@ def cos(value: TensorData) -> Tensor: ...
 
 
 def cos(value: TensorLike | VariableNode) -> TensorResult | VariableNode:
-    """Return the elementwise cosine of a graph value or Tensor.
-
-    A graph value is applied through the graph: a Variable calculates the
-    result now, and a vertex records the operation for a program that runs
-    later.
-    """
+    """Return the elementwise cos of a graph value or Tensor."""
     from tensors.graph.expression import apply_operation, is_graph_operand
 
     if is_graph_operand(value):

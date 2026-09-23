@@ -1,36 +1,44 @@
-"""NumPy implementation of the arctangent VJP."""
+"""NumPy implementation of the arctan VJP."""
 
 from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Any
+
 import numpy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
+
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import tensor_to_logical_array
+from tensors.backend.numpy.storage import NumPyStorage
+from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
-def arctan_gradient(grad: Tensor, value: Tensor) -> Storage | None:
-    """Run the vector-Jacobian product for an elementwise unary operation."""
-    try:
-        upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
-        values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
-    except (TypeError, ValueError):
-        return None
-    if upstream.shape != values.shape:
-        return None
+def arctan_gradient(
+    grad_values: Any,
+    values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate the first-order arctan VJP on prepared native values."""
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        reciprocal = 1.0 / numpy.abs(values)
+        upstream = numpy.asarray(grad_values, dtype=numpy.float64)
+        working = numpy.asarray(values, dtype=numpy.float64)
+        reciprocal = 1.0 / numpy.abs(working)
         derivative = numpy.where(
-            numpy.isinf(values),
+            numpy.isinf(working),
             0.0,
             numpy.where(
-                numpy.abs(values) <= 1.0,
-                1.0 / (1.0 + values * values),
+                numpy.abs(working) <= 1.0,
+                1.0 / (1.0 + working * working),
                 reciprocal * reciprocal / (1.0 + reciprocal * reciprocal),
             ),
         )
         result = upstream * derivative
-    return _storage(result, dtype=grad.dtype, output_shape=value.shape)
+        narrowed = result.astype(numpy.dtype(dtype.name), copy=False)
+    storage = NumPyStorage(narrowed, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("arctan VJP kernel returned an unexpected result size")
+    return storage

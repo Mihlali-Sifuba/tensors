@@ -1,47 +1,34 @@
-"""CuPy implementation of cosine."""
+"""CUDA implementation of cos."""
 
 from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Any
+
 import cupy
-from typing import TYPE_CHECKING
+
+from tensors.backend.cuda.conversion import _errstate, _narrow, _widen
+from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.storage import Storage
-from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
-def cos(value: Tensor, *, dtype: DataType) -> Storage | None:
-    """Run an elementwise unary kernel while preserving public domains."""
-    if dtype.kind == "integer":
-        return None
-    try:
-        values = _working_values(value)
-    except (TypeError, ValueError):
-        return None
-    if bool(cupy.any(cupy.isinf(values))):
-        return None
-    functions = {
-        "abs": cupy.abs,
-        "sqrt": cupy.sqrt,
-        "exp": cupy.exp,
-        "log": cupy.log,
-        "sin": cupy.sin,
-        "cos": cupy.cos,
-        "tan": cupy.tan,
-        "arcsin": cupy.arcsin,
-        "arccos": cupy.arccos,
-        "arctan": cupy.arctan,
-        "sinh": cupy.sinh,
-        "cosh": cupy.cosh,
-        "arcsinh": cupy.arcsinh,
-        "arccosh": cupy.arccosh,
-        "arctanh": cupy.arctanh,
-        "sign": cupy.sign,
-        "tanh": cupy.tanh,
-    }
+def cos(
+    values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate cos on prepared device values."""
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        result = functions["cos"](values)
-    return _storage(result, dtype=dtype, output_shape=value.shape)
+        if values.dtype.kind in "iu":
+            values = values.astype(cupy.float64, copy=False)
+        working = _widen(values)
+        result = cupy.cos(working)
+        narrowed = _narrow(result, cupy.dtype(dtype.name))
+    storage = CudaStorage(narrowed, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("cos kernel returned an unexpected result size")
+    return storage

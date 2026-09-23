@@ -1,23 +1,23 @@
-"""Reference arccosine for the Python backend."""
+"""Python implementation of arccos."""
 
 from __future__ import annotations
+
+import math
+from collections.abc import Iterable
+
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
-import math
 
 
-def _arccos(value):
-    if value < -1.0 or value > 1.0:
-        raise ValueError("arccos is only defined for values between -1 and 1")
-    return math.acos(float(value))
-
-
-def arccos(value: Tensor, *, dtype: DataType) -> Storage:
-    """Return the arccosine of every element, in radians."""
-    evaluate = _arccos
-    return PythonStorage.from_values([evaluate(item) for item in value._data], dtype)
+def arccos(
+    values: Iterable[int | float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate arccos on prepared native values."""
+    result = [math.acos(float(item)) for item in values]
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("arccos kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)
