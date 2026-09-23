@@ -232,7 +232,7 @@ tests; **Fus** is a fused-vs-eager requirement.
 | Trigonometric | — | — | traps | — | no | no | **Spec missing** |
 | Hyperbolic | — | — | traps | — | no | no | **Spec missing** |
 | Activations `relu` (forward) | [relu-semantics.md](relu-semantics.md) | n/a (class E) | n/a (§1.6) | §1.4 | yes | yes | **Governed.** Forward only; `relu`'s differentiation remains ungoverned |
-| Activations `sigmoid` `softplus` | — | — | — | — | no | no | **Spec missing** |
+| Activations `sigmoid` `softplus` | — | — | — | — | yes | yes | **Spec missing.** Execution is now governed by [backends.md](backends.md#execution-requirements) — selected backend at every size, forward and first-order gradient — and both are covered across the three backends and against fused execution. What is still missing is the numerical specification: no stated error bound, no exceptional-value contract and no subnormal requirement, so the behaviour the tests pin is the implementation's rather than a document's |
 | Comparison | — | n/a | — | n/a | no | n/a | **Spec missing** |
 | Selection | — | n/a | — | n/a | no | n/a | **Spec missing**, see D-2 |
 | Reductions | — | — | — | — | no | n/a | **Spec missing** |
@@ -502,7 +502,8 @@ values, maximum ULP:
 | | float64 | float32 |
 | --- | --- | --- |
 | `exp` `log` `sin` `cos` `tan` `arccos` `arctan` `sinh` `cosh` `tanh` `softmax` | 1 | 0 |
-| `arcsin` `arcsinh` `arctanh` `arccosh` `sigmoid` `softplus` `norm` | 2 | 0 |
+| `arcsin` `arcsinh` `arctanh` `arccosh` `norm` | 2 | 0 |
+| `sigmoid` `softplus` | 2 (CUDA only; NumPy is now 0) | 0 |
 | `sqrt` `abs` `sign` `relu` `max` `min` `std` `variance` `log_softmax` `logsumexp` | 0 | 0 |
 
 These differences are **permitted by legitimate algorithmic variation** and

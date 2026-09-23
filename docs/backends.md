@@ -164,6 +164,16 @@ what an underscore is allowed to mean, not a renaming sweep.
 > NumPy or CUDA selection it used to hand the next operation a host-resident
 > tensor and fail residency validation before comparing any derivative.
 >
+> **Also implemented for the activations `relu`, `sigmoid` and `softplus`
+> and their first-order gradients.** Each executes on the selected backend at
+> every tensor size or raises, and none declines by reading operand values.
+> Under the policy they left, a NumPy tensor of fewer than 32 elements ran
+> the Python reference and came back in `PythonStorage`, so an activation in
+> a small network handed host residency to everything downstream of it.
+> `sigmoid` and `softplus` also stopped constructing their results through
+> the declining conversion path, which read the device back to the host on
+> every `float32` call to decide whether to decline.
+>
 > **Every other operation still follows the workload policy** described
 > further down, and may still run the Python reference under an explicit
 > selection. That includes every other operation's vector-Jacobian products.

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 from tensors.backend import dispatch as backend_dispatch
-import math as _math
-from typing import TYPE_CHECKING, Any, List, overload
+from typing import TYPE_CHECKING, List, overload
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
 from tensors.dtype import float64
 from tensors.operations.base import Operation
@@ -21,22 +20,53 @@ class Softplus(Operation):
     name = "softplus"
 
     def forward(self, a: Tensor) -> Tensor:
+        """Apply softplus, promoting an integer operand.
+
+        The Tensor semantics are settled here — the shape is the operand's
+        and an integer operand promotes to ``float64``, because the result
+        has no integral values to return — and `execute_softplus` owns where
+        the evaluation runs.
+        """
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
+        output_shape = a.shape
         return Tensor._from_owned_storage(
-            backend_dispatch.execute_softplus(a, dtype=dtype),
+            backend_dispatch.execute_softplus(
+                a, dtype=dtype, output_shape=output_shape
+            ),
             dtype=dtype,
-            shape=a.shape,
+            shape=output_shape,
         )
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Tensor]:
+        """Scale the upstream gradient by the logistic function.
+
+        Shape and dtype agreement are Tensor semantics and are settled here;
+        `execute_softplus_gradient` owns where the evaluation runs. Only a
+        floating operand reaches this method — an integer Tensor cannot
+        require a gradient — so the promotion in ``forward`` has nothing to
+        undo and the gradient carries the operand's own dtype.
+        """
         a = inputs[0]
+        if grad.shape != a.shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match value shape {a.shape}"
+            )
+        if grad.dtype is not a.dtype:
+            raise ValueError(
+                f"Gradient dtype {grad.dtype.name} does not match value dtype "
+                f"{a.dtype.name}"
+            )
+        dtype = a.dtype
+        output_shape = a.shape
         return [
             Tensor._from_owned_storage(
-                backend_dispatch.execute_softplus_gradient(grad, a),
-                dtype=grad.dtype,
-                shape=a.shape,
+                backend_dispatch.execute_softplus_gradient(
+                    grad, a, dtype=dtype, output_shape=output_shape
+                ),
+                dtype=dtype,
+                shape=output_shape,
             )
         ]
 
@@ -69,16 +99,3 @@ def softplus(value: TensorLike | VariableNode) -> TensorResult | VariableNode:
 
 
 __all__ = ["Softplus", "softplus"]
-
-
-def _sigmoid(value: float) -> float:
-    if value >= 0:
-        z = _math.exp(-value)
-        return 1.0 / (1.0 + z)
-    z = _math.exp(value)
-    return z / (1.0 + z)
-
-
-def _softplus(value):
-    value = float(value)
-    return _math.log1p(_math.exp(-abs(value))) + max(value, 0.0)

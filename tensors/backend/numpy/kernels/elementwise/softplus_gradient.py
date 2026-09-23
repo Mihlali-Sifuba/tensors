@@ -1,30 +1,39 @@
 """NumPy implementation of the softplus VJP."""
 
 from __future__ import annotations
+import math
 import numpy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
+from typing import TYPE_CHECKING, Any
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import tensor_to_logical_array
+from tensors.backend.numpy.storage import NumPyStorage
+from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
-def softplus_gradient(grad: Tensor, value: Tensor) -> Storage | None:
-    """Run the vector-Jacobian product for an elementwise unary operation."""
-    try:
-        upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
-        values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
-    except (TypeError, ValueError):
-        return None
-    if upstream.shape != values.shape:
-        return None
+def softplus_gradient(
+    grad_values: Any,
+    values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Return native storage at the declared dtype.
+
+    Softplus is the integral of the logistic function, so its derivative is
+    that function exactly. The branch is the sigmoid kernel's, taken for the
+    same range reason: each side is evaluated where its exponent is negative.
+    """
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        magnitude = numpy.exp(-numpy.abs(values))
+        upstream = numpy.asarray(grad_values, dtype=numpy.float64)
+        working = numpy.asarray(values, dtype=numpy.float64)
+        magnitude = numpy.exp(-numpy.abs(working))
         derivative = numpy.where(
-            values >= 0.0, 1.0 / (1.0 + magnitude), magnitude / (1.0 + magnitude)
+            working >= 0.0, 1.0 / (1.0 + magnitude), magnitude / (1.0 + magnitude)
         )
         result = upstream * derivative
-    return _storage(result, dtype=grad.dtype, output_shape=value.shape)
+    storage = NumPyStorage(result, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("Softplus VJP kernel returned an unexpected result size")
+    return storage
