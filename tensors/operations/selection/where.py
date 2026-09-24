@@ -80,10 +80,6 @@ class Where(Operation):
             operation = WhereVJP(select_left=select_left, output_shape=output_shape)
             if is_graph_operand(grad):
                 contribution = apply_operation(operation, (grad, condition))
-                # The routing value does not depend numerically on the branch,
-                # but this explicit zero keeps the first derivative connected
-                # to its primal without making it a kernel operand.
-                contribution = contribution + branch * 0.0
             else:
                 contribution = operation.forward(grad, condition)
             gradients.append(sum_to_shape(contribution, branch.shape))

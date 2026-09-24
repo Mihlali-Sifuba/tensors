@@ -23,7 +23,6 @@ def execute_maximum_gradient(
     dtype: DataType,
     output_shape: tuple[int, ...],
     needs_input_grad: tuple[bool, ...] = (True, True),
-    reject_nondifferentiable: bool = False,
 ) -> tuple[Storage | None, Storage | None]:
     """Run the maximum VJP on the selected backend without fallback."""
     selected = config.get_backend()
@@ -83,7 +82,6 @@ def execute_maximum_gradient(
         dtype=dtype,
         output_shape=output_shape,
         needs_input_grad=needs_input_grad,
-        reject_nondifferentiable=reject_nondifferentiable,
     )
     if result is None:
         raise BackendOperationUnsupportedError(

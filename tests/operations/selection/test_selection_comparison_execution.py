@@ -256,6 +256,23 @@ class SelectionComparisonExecutionTests(unittest.TestCase):
 
         self.for_each_backend(body)
 
+    def test_nonfinite_where_branch_does_not_corrupt_first_gradient(self):
+        def body(backend):
+            for nonfinite in (math.inf, math.nan):
+                for condition, selected_left in (([1], True), ([0], False)):
+                    reset_graph_state()
+                    branch = ts.Variable(ts.Tensor([nonfinite], dtype=ts.float64))
+                    output = (
+                        ts.where(condition, branch, 0.0)
+                        if selected_left
+                        else ts.where(condition, 0.0, branch)
+                    )
+                    gradient = ts.grad(ts.sum(output), branch, create_graph=True)
+                    self.assertEqual(gradient.data.backend_storage.kind, backend)
+                    self.assertEqual(gradient.data.tolist(), [1.0])
+
+        self.for_each_backend(body)
+
     def test_vjps_obey_the_selection_at_old_threshold_sizes(self):
         def body(backend):
             for size in SIZES:
@@ -304,21 +321,6 @@ class SelectionComparisonExecutionTests(unittest.TestCase):
             right = ts.Variable([2.0, 2.0, 3.0])
             left_gradient = ts.grad(ts.sum(ts.maximum(left, right)), left)
             self.assertEqual(left_gradient.tolist(), [0.0, 0.5, 1.0])
-
-        self.for_each_backend(body)
-
-    def test_extrema_graph_validation_uses_each_selected_backend(self):
-        def body(backend):
-            for operation in (ts.maximum, ts.minimum):
-                reset_graph_state()
-                tied = ts.Variable(ts.Tensor([1.0], dtype=ts.float64))
-                with self.assertRaisesRegex(ValueError, "undefined at ties"):
-                    ts.grad(operation(tied, [1.0]), tied, create_graph=True)
-
-                reset_graph_state()
-                nan_value = ts.Variable(ts.Tensor([math.nan], dtype=ts.float64))
-                with self.assertRaisesRegex(ValueError, "undefined at NaN"):
-                    ts.grad(operation(nan_value, [1.0]), nan_value, create_graph=True)
 
         self.for_each_backend(body)
 

@@ -18,7 +18,6 @@ def maximum_gradient(
     dtype: DataType,
     output_shape: tuple[int, ...],
     needs_input_grad: tuple[bool, ...] = (True, True),
-    reject_nondifferentiable: bool = False,
 ) -> tuple[Storage | None, Storage | None]:
     """Route gradients to larger values and split exact ties equally."""
     need_left, need_right = needs_input_grad
@@ -26,16 +25,8 @@ def maximum_gradient(
     right_result = []
     for upstream, left, right in zip(grad_values, left_values, right_values):
         if math.isnan(left) or math.isnan(right):
-            if reject_nondifferentiable:
-                raise ValueError(
-                    "Higher-order derivatives of elementwise extrema are undefined at NaN"
-                )
             left_weight = right_weight = math.nan
         elif left == right:
-            if reject_nondifferentiable:
-                raise ValueError(
-                    "Higher-order derivatives of elementwise extrema are undefined at ties"
-                )
             left_weight = right_weight = 0.5
         else:
             left_weight = 1.0 if left > right else 0.0

@@ -64,7 +64,7 @@ class Maximum(_ElementwiseExtremum):
                     gradients.append(None)
                     continue
                 contribution = apply_operation(
-                    MaximumVJP(select_left=select_left, reject_nondifferentiable=True),
+                    MaximumVJP(select_left=select_left),
                     (grad, left, right),
                 )
                 gradients.append(sum_to_shape(contribution, operand.shape))
@@ -83,14 +83,11 @@ class Maximum(_ElementwiseExtremum):
 class MaximumVJP(Operation):
     """Internal graph node for one backend-native maximum VJP branch."""
 
-    __slots__ = ("select_left", "reject_nondifferentiable")
+    __slots__ = ("select_left",)
     name = "maximum_vjp"
 
-    def __init__(
-        self, *, select_left: bool, reject_nondifferentiable: bool = False
-    ) -> None:
+    def __init__(self, *, select_left: bool) -> None:
         object.__setattr__(self, "select_left", select_left)
-        object.__setattr__(self, "reject_nondifferentiable", reject_nondifferentiable)
 
     def forward(self, grad: Tensor, left: Tensor, right: Tensor) -> Tensor:
         output_shape = left.shape.broadcast_with(right.shape)
@@ -112,7 +109,6 @@ class MaximumVJP(Operation):
             dtype=grad.dtype,
             output_shape=output_shape,
             needs_input_grad=(self.select_left, not self.select_left),
-            reject_nondifferentiable=self.reject_nondifferentiable,
         )
         storage = left_storage if self.select_left else right_storage
         if storage is None:
