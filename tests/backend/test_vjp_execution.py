@@ -124,8 +124,8 @@ class SmallVjpsReachTheProviderKernel(unittest.TestCase):
     """The kernel is called, rather than the size sending work elsewhere."""
 
     KERNEL_FOR = {
-        "+": "sum_to_shape",
-        "-": "sum_to_shape",
+        "+": "reduce_sum",
+        "-": "reduce_sum",
         "*": "sum_products_to_shape",
     }
 
@@ -168,11 +168,11 @@ class ADecliningBackendRaises(unittest.TestCase):
         self.assertIn(kernel_name, message)
 
     @requires_numpy
-    def test_numpy_declining_sum_to_shape_raises(self):
+    def test_numpy_declining_reduce_sum_raises(self):
         for symbol in ("+", "-"):
             with self.subTest(op=symbol):
                 self._assert_raises_when_declining(
-                    "numpy", "sum_to_shape", OPERATIONS[symbol], broadcast=True
+                    "numpy", "reduce_sum", OPERATIONS[symbol], broadcast=True
                 )
 
     @requires_numpy
@@ -275,9 +275,7 @@ class RecordedAdditionVjpExecutesOnTheSelectedBackend(unittest.TestCase):
         for backend in ts.available_backends():
             for size in SMALL + LARGE:
                 for broadcast in (False, True):
-                    with self.subTest(
-                        backend=backend, size=size, broadcast=broadcast
-                    ):
+                    with self.subTest(backend=backend, size=size, broadcast=broadcast):
                         numerical = addition_gradients(
                             backend, size, broadcast, create_graph=False
                         )
@@ -320,7 +318,7 @@ class RecordedAdditionVjpExecutesOnTheSelectedBackend(unittest.TestCase):
         """A decline is an error in the recorded pass as in the value pass."""
         for create_graph in (False, True):
             with self.subTest(create_graph=create_graph):
-                with patch.object(numpy_kernels, "sum_to_shape", return_value=None):
+                with patch.object(numpy_kernels, "reduce_sum", return_value=None):
                     backend_state._clear_backend_kernel_cache()
                     try:
                         with self.assertRaises(
@@ -333,14 +331,12 @@ class RecordedAdditionVjpExecutesOnTheSelectedBackend(unittest.TestCase):
                         backend_state._clear_backend_kernel_cache()
                 message = str(raised.exception)
                 self.assertIn("numpy", message)
-                self.assertIn("sum_to_shape", message)
+                self.assertIn("reduce_sum", message)
 
     @requires_numpy
     def test_a_small_recorded_broadcast_reaches_the_numpy_kernel(self):
-        original = numpy_kernels.sum_to_shape
-        with patch.object(
-            numpy_kernels, "sum_to_shape", wraps=original
-        ) as kernel:
+        original = numpy_kernels.reduce_sum
+        with patch.object(numpy_kernels, "reduce_sum", wraps=original) as kernel:
             backend_state._clear_backend_kernel_cache()
             addition_gradients("numpy", 4, broadcast=True, create_graph=True)
         backend_state._clear_backend_kernel_cache()

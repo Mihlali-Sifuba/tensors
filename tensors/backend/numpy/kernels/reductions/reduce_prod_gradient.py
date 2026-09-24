@@ -2,49 +2,67 @@
 
 from __future__ import annotations
 import numpy
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 from tensors.backend.storage import Storage
+from tensors.dtype import DataType
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import tensor_to_logical_array
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+from tensors.backend.numpy.conversion import _arithmetic_storage as _storage
 
 
 def reduce_prod_gradient(
-    grad: Tensor, value: Tensor, axes: tuple[int, ...], *, keepdims: bool
+    upstream: Any,
+    values: Any,
+    input_shape: tuple[int, ...],
+    axes: tuple[int, ...],
+    *,
+    keepdims: bool,
+    dtype: DataType,
 ) -> Storage | None:
     """Run fused VJPs for reductions with regular native fast paths."""
-    values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
-    upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
+    values = values.astype(numpy.float64, copy=False)
+    upstream = upstream.astype(numpy.float64, copy=False)
     expanded_shape = tuple(
-        (1 if dimension in axes else size for dimension, size in enumerate(value.shape))
+        (1 if dimension in axes else size for dimension, size in enumerate(input_shape))
     )
-    try:
-        expanded = upstream.reshape(expanded_shape)
-    except ValueError:
-        return None
-    count = 1
-    for axis in axes:
-        count *= value.shape[axis]
+    expanded = upstream.reshape(expanded_shape)
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        if not bool(numpy.all(numpy.isfinite(values))):
-            return None
-        zero_count = numpy.sum(values == 0.0, axis=axes, keepdims=True)
+        is_nan = numpy.isnan(values)
+        is_infinite = numpy.isinf(values)
+        is_zero = values == 0.0
+        ordinary = ~(is_nan | is_infinite | is_zero)
+        nan_count = numpy.sum(is_nan, axis=axes, keepdims=True)
+        infinity_count = numpy.sum(is_infinite, axis=axes, keepdims=True)
+        zero_count = numpy.sum(is_zero, axis=axes, keepdims=True)
+        other_nan = nan_count - is_nan
+        other_infinity = infinity_count - is_infinite
+        other_zero = zero_count - is_zero
+        log_magnitude = numpy.sum(
+            numpy.where(ordinary, numpy.log(numpy.abs(values)), 0.0),
+            axis=axes,
+            keepdims=True,
+        )
+        other_log_magnitude = log_magnitude - numpy.where(
+            ordinary, numpy.log(numpy.abs(values)), 0.0
+        )
+        signs = numpy.copysign(1.0, values)
+        sign = numpy.prod(signs, axis=axes, keepdims=True) * signs
+        magnitude = numpy.exp(other_log_magnitude)
+        magnitude = numpy.where(other_zero > 0, 0.0, magnitude)
+        magnitude = numpy.where(other_infinity > 0, numpy.inf, magnitude)
+        undefined = (other_nan > 0) | ((other_zero > 0) & (other_infinity > 0))
+        guarded_derivative = numpy.where(undefined, numpy.nan, sign * magnitude)
         product = numpy.prod(values, axis=axes, keepdims=True)
         nonzero_product = numpy.prod(
-            numpy.where(values == 0.0, 1.0, values), axis=axes, keepdims=True
+            numpy.where(is_zero, 1.0, values), axis=axes, keepdims=True
         )
-        unsafe = (zero_count == 0) & ((product == 0.0) | ~numpy.isfinite(product)) | (
-            zero_count == 1
-        ) & ((nonzero_product == 0.0) | ~numpy.isfinite(nonzero_product))
-        if bool(numpy.any(unsafe)):
-            return None
-        derivative = numpy.where(
+        direct_derivative = numpy.where(
             zero_count == 0,
             product / values,
-            numpy.where((zero_count == 1) & (values == 0.0), nonzero_product, 0.0),
+            numpy.where((zero_count == 1) & is_zero, nonzero_product, 0.0),
         )
+        unsafe = (~numpy.isfinite(direct_derivative)) | (
+            (direct_derivative == 0.0) & (guarded_derivative != 0.0)
+        )
+        derivative = numpy.where(unsafe, guarded_derivative, direct_derivative)
         result = expanded * derivative
-    return _storage(result, dtype=grad.dtype, output_shape=value.shape)
+    return _storage(result, dtype=dtype, output_shape=input_shape)

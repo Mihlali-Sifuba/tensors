@@ -51,7 +51,7 @@ def sum_to_shape(gradient, shape):
     if tuple(gradient.shape) == shape:
         return gradient
     axes = Shape.from_iterable(gradient.shape).stretched_axes_from(shape)
-    reduction = Sum(axis=axes, keepdims=True, on_selected_backend=True)
+    reduction = Sum(axis=axes, keepdims=True)
     reduced = (
         apply_operation(reduction, (gradient,))
         if is_graph_operand(gradient)

@@ -2,31 +2,35 @@
 
 from __future__ import annotations
 import cupy
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 from tensors.backend.storage import Storage
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
+from tensors.dtype import DataType
+from tensors.backend.cuda.conversion import _arithmetic_storage as _storage
+from tensors.backend.cuda.conversion import _widen
 from tensors.backend.cuda.kernels.reductions.stability import _scaled_sum
 from tensors.backend.cuda.kernels.reductions.stability import _stable_sum_candidate
 from tensors.backend.cuda.kernels.reductions.stability import _sum_axes
 
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
 
-
-def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Storage | None:
+def sum_to_shape(
+    values: Any,
+    input_shape: tuple[int, ...],
+    shape: tuple[int, ...],
+    *,
+    dtype: DataType,
+) -> Storage | None:
     """Reduce a broadcast gradient using guarded native summation."""
-    if gradient.dtype.kind == "integer":
-        return None
-    axes = _sum_axes(gradient.shape, shape)
+    axes = _sum_axes(input_shape, shape)
     if axes is None:
         return None
-    values = _working_values(gradient)
-    safe = _stable_sum_candidate(values, axes)
+    if dtype.kind == "integer":
+        result = cupy.sum(values, axis=axes, keepdims=True, dtype=cupy.int64)
+        return _storage(result.reshape(shape), dtype=dtype, output_shape=shape)
+    values = _widen(values)
+    direct = cupy.sum(values, axis=axes, keepdims=True)
     result = _scaled_sum(values, axes)
-    valid = safe & ~cupy.any(cupy.isnan(result))
-    if not bool(valid):
-        return None
+    finite_group = cupy.all(cupy.isfinite(values), axis=axes, keepdims=True)
+    result = cupy.where(finite_group, result, direct)
     return _storage(
-        cupy.asarray(result).reshape(shape), dtype=gradient.dtype, output_shape=shape
+        cupy.asarray(result).reshape(shape), dtype=dtype, output_shape=shape
     )

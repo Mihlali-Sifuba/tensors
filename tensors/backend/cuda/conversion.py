@@ -100,7 +100,7 @@ def _storage(
 ) -> Storage | None:
     """Retain a device result, or decline when it cannot be represented."""
     if dtype.kind == "integer":
-        # Matches _operand: exact integer semantics stay on the Python kernel.
+        # Exact integer semantics stay in kernels that explicitly support them.
         return None
     flattened = cupy.asarray(result).reshape(-1)
     try:
@@ -165,7 +165,7 @@ def _arithmetic_storage(
     flattened = cupy.asarray(result).reshape(-1)
     if flattened.dtype != native:
         with _errstate(over="ignore", under="ignore", invalid="ignore"):
-            flattened = flattened.astype(native, copy=False)
+            flattened = _narrow(flattened, native)
     storage = CudaStorage(cupy.ascontiguousarray(flattened), dtype)
     if storage.size != _shape_size(output_shape):
         raise RuntimeError("Array kernel returned an unexpected result size")

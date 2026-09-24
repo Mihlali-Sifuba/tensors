@@ -229,6 +229,9 @@ from tensors.backend.python.kernels.reductions.reduce_min_gradient import (
 from tensors.backend.python.kernels.reductions.reduce_norm import (
     reduce_norm as reduce_norm,
 )
+from tensors.backend.python.kernels.reductions.reduce_norm_gradient import (
+    reduce_norm_gradient as reduce_norm_gradient,
+)
 from tensors.backend.python.kernels.reductions.reduce_prod import (
     reduce_prod as reduce_prod,
 )
@@ -243,9 +246,6 @@ from tensors.backend.python.kernels.reductions.reduce_std_gradient import (
 )
 from tensors.backend.python.kernels.reductions.reduce_sum import (
     reduce_sum as reduce_sum,
-)
-from tensors.backend.python.kernels.reductions.reduce_sum_gradient import (
-    reduce_sum_gradient as reduce_sum_gradient,
 )
 from tensors.backend.python.kernels.reductions.reduce_variance import (
     reduce_variance as reduce_variance,

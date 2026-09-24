@@ -49,9 +49,8 @@ class NumPyDispatchBoundaryTests(NumPyParityTestCase):
         def gradients(backend):
             with ts.use_backend(backend):
                 left = ts.Variable([[1.0, 2.0], [3.0, 4.0]])
-                right = ts.Variable([[5.0], [6.0]])
-                ts.backward(ts.sum(left @ right))
-                return (left.grad.tolist(), right.grad.tolist())
+                ts.backward(ts.sum(left * left))
+                return left.grad.tolist()
 
         self.assertEqual(gradients("numpy"), gradients("python"))
 

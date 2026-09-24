@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 import cupy
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
+from tensors.backend.cuda.conversion import _arithmetic_storage as _storage
+from tensors.backend.cuda.conversion import _widen
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
 def reduce_norm(
-    value: Tensor,
+    values: Any,
+    input_shape: tuple[int, ...],
     axes: tuple[int, ...],
     *,
     keepdims: bool,
@@ -22,10 +22,12 @@ def reduce_norm(
     output_shape: tuple[int, ...],
 ) -> Storage | None:
     """Run a numerically guarded NumPy reduction."""
-    if value.size == 0:
-        return None
+    if values.size == 0:
+        return _storage(
+            cupy.full(output_shape, 0.0), dtype=dtype, output_shape=output_shape
+        )
     axis = axes
-    values = _working_values(value)
+    values = _widen(values)
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
         absolute = cupy.abs(values)
         scale = cupy.max(absolute, axis=axis, keepdims=True)
@@ -36,7 +38,7 @@ def reduce_norm(
         )
         output_scale = scale if keepdims else cupy.squeeze(scale, axis=axis)
         result = output_scale * normalized_magnitude
-    valid = cupy.all(cupy.isfinite(values)) & cupy.all(cupy.isfinite(result))
-    if not bool(valid):
-        return None
+    has_nan = cupy.any(cupy.isnan(values), axis=axis, keepdims=keepdims)
+    has_infinity = cupy.any(cupy.isinf(values), axis=axis, keepdims=keepdims)
+    result = cupy.where(has_nan, cupy.nan, cupy.where(has_infinity, cupy.inf, result))
     return _storage(result, dtype=dtype, output_shape=output_shape)

@@ -121,54 +121,66 @@ class NumPyReductionTests(NumPyParityTestCase):
                 self.assertAlmostEqual(actual_item, expected_item)
 
     def test_reductions_dispatch_to_numpy(self):
-        value = ts.Tensor([float(index + 1) for index in range(512)])
         for name in ("sum", "mean", "variance", "norm"):
             with self.subTest(operation=name):
                 kernel_name = "reduce_" + name
-                with patch.object(
-                    numpy_backend,
-                    kernel_name,
-                    wraps=getattr(numpy_backend, kernel_name),
-                ) as kernel:
-                    with ts.use_backend("numpy"):
-                        getattr(ts, name)(value)
+                with (
+                    patch.object(
+                        numpy_backend,
+                        kernel_name,
+                        wraps=getattr(numpy_backend, kernel_name),
+                    ) as kernel,
+                    ts.use_backend("numpy"),
+                ):
+                    value = ts.Tensor([float(index + 1) for index in range(512)])
+                    getattr(ts, name)(value)
                 kernel.assert_called_once()
 
     def test_axis_reductions_match_python_backend(self):
-        value = ts.Tensor([float(index + 1) for index in range(24)], shape=(2, 3, 4))
+        def evaluate(backend, operation):
+            with ts.use_backend(backend):
+                value = ts.Tensor(
+                    [float(index + 1) for index in range(24)], shape=(2, 3, 4)
+                )
+                return operation(value, axis=(0, 2), keepdims=True).tolist()
+
         for operation in (ts.sum, ts.mean, ts.variance, ts.norm):
             with self.subTest(operation=operation.__name__):
-                self.assertOperationParity(
-                    lambda operation=operation: operation(
-                        value, axis=(0, 2), keepdims=True
-                    )
+                self.assertEqual(
+                    evaluate("numpy", operation), evaluate("python", operation)
                 )
 
-    def test_stable_reductions_fall_back_without_changing_results(self):
-        value = ts.Tensor([1e308, 1e308, -1e308, -1e308])
-        smallest = ts.Tensor([5e-324, 5e-324])
-        self.assertOperationParity(lambda: ts.sum(value))
-        self.assertOperationParity(lambda: ts.mean(smallest))
-        self.assertOperationParity(lambda: ts.variance(value))
-        self.assertOperationParity(lambda: ts.norm(value))
+    def test_stable_reductions_execute_natively_without_changing_results(self):
+        def evaluate(backend):
+            with ts.use_backend(backend):
+                value = ts.Tensor([1e308, 1e308, -1e308, -1e308])
+                smallest = ts.Tensor([5e-324, 5e-324])
+                return (
+                    ts.sum(value).tolist(),
+                    ts.mean(smallest).tolist(),
+                    ts.variance(value).tolist(),
+                    ts.norm(value).tolist(),
+                )
+
+        self.assertEqual(evaluate("numpy"), evaluate("python"))
 
     def test_broadcast_gradient_reductions_dispatch_to_numpy(self):
-        left = ts.Variable(ts.full((64, 1), 2.0))
-        right = ts.Variable(ts.full((1, 64), 3.0))
         with (
             patch.object(
-                numpy_backend, "sum_to_shape", wraps=numpy_backend.sum_to_shape
+                numpy_backend, "reduce_sum", wraps=numpy_backend.reduce_sum
             ) as sum_kernel,
             patch.object(
                 numpy_backend,
                 "sum_products_to_shape",
                 wraps=numpy_backend.sum_products_to_shape,
             ) as product_kernel,
+            ts.use_backend("numpy"),
         ):
-            with ts.use_backend("numpy"):
-                ts.grad(ts.sum(left + right), (left, right))
-                ts.grad(ts.sum(left * right), (left, right))
-        self.assertGreaterEqual(sum_kernel.call_count, 2)
+            left = ts.Variable(ts.full((64, 1), 2.0))
+            right = ts.Variable(ts.full((1, 64), 3.0))
+            ts.grad(ts.sum(left + right), (left, right))
+            ts.grad(ts.sum(left * right), (left, right))
+        self.assertGreaterEqual(sum_kernel.call_count, 3)
         self.assertGreaterEqual(product_kernel.call_count, 2)
 
     def test_broadcast_gradient_reductions_match_python_backend(self):

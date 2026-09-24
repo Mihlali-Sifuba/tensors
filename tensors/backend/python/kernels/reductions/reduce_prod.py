@@ -4,10 +4,7 @@ from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
 from tensors.utils.reductions import reduction_groups
 
 
@@ -19,7 +16,8 @@ def _product(values: list[int | float]) -> int | float:
 
 
 def reduce_prod(
-    value: Tensor,
+    value_values,
+    input_shape: tuple[int, ...],
     axes: tuple[int, ...],
     *,
     keepdims: bool,
@@ -28,7 +26,7 @@ def reduce_prod(
 ) -> Storage:
     """Return the product of each group."""
     _, output_shape, groups = reduction_groups(
-        value.shape, axes, keepdims, scalar_as_vector=True
+        input_shape, axes, keepdims, scalar_as_vector=True
     )
-    values = [_product([value._data[index] for index in group]) for group in groups]
+    values = [_product([value_values[index] for index in group]) for group in groups]
     return PythonStorage.from_values(values, dtype)

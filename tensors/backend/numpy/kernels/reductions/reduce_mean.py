@@ -3,21 +3,20 @@
 from __future__ import annotations
 import numpy
 import math
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import tensor_to_logical_array
+from tensors.backend.numpy.conversion import _arithmetic_storage as _storage
 from tensors.backend.numpy.kernels.reductions.stability import _scaled_sum
 from tensors.backend.numpy.kernels.reductions.stability import _summation_guard
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
 def reduce_mean(
-    value: Tensor,
+    values: Any,
+    input_shape: tuple[int, ...],
     axes: tuple[int, ...],
     *,
     keepdims: bool,
@@ -25,13 +24,15 @@ def reduce_mean(
     output_shape: tuple[int, ...],
 ) -> Storage | None:
     """Run a numerically guarded NumPy reduction."""
-    if value.size == 0:
-        return None
+    if values.size == 0:
+        return _storage(
+            numpy.full(output_shape, numpy.nan), dtype=dtype, output_shape=output_shape
+        )
     axis = axes
-    values = tensor_to_logical_array(value).astype(numpy.float64, copy=False)
+    values = values.astype(numpy.float64, copy=False)
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
         direct = numpy.sum(values, axis=axis, keepdims=True)
-        count = math.prod((value.shape[item] for item in axis))
+        count = math.prod((input_shape[item] for item in axis))
         direct = direct / count
     ordinary = False
     minimum = numpy.min(values, axis=axis, keepdims=True)
@@ -53,9 +54,8 @@ def reduce_mean(
         safe = _summation_guard(values, axes=axis, keepdims=True)
         direct_safe = safe & numpy.all(numpy.isfinite(direct))
         result = numpy.where(direct_safe, direct, scaled)
-        valid = safe & ~numpy.any(numpy.isnan(result))
-        if not bool(valid):
-            return None
+        finite_group = numpy.all(numpy.isfinite(values), axis=axis, keepdims=True)
+        result = numpy.where(finite_group, result, direct)
     if not keepdims and axis:
         result = numpy.squeeze(result, axis=axis)
     return _storage(result, dtype=dtype, output_shape=output_shape)

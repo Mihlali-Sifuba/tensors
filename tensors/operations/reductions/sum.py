@@ -20,34 +20,14 @@ if TYPE_CHECKING:
 
 
 class Sum(Operation):
-    """Sum with a reverse-mode gradient rule.
+    """Sum with a reverse-mode gradient rule."""
 
-    ``on_selected_backend`` chooses where the reduction runs, not what it
-    calculates. Off, the forward pass consults the workload-size policy and
-    answers from the Python reference when the accelerated kernel declines,
-    which is what ``ts.sum`` has always done. On, it runs under the execution
-    contract of `docs/backends.md`: no policy, no reference, and a backend
-    that cannot reduce conformingly reports that rather than letting another
-    one answer. The addition VJP asks for it, because the broadcast gradient
-    reduction is inside the arithmetic contract. It is the operation's own
-    state, so a recorded reduction replays under the contract it was written
-    with. It governs this forward reduction only; differentiating a sum is a
-    different computation and keeps its own dispatch.
-    """
-
-    __slots__ = ("axis", "keepdims", "on_selected_backend")
+    __slots__ = ("axis", "keepdims")
     name = "sum"
 
-    def __init__(
-        self,
-        *,
-        axis: Axis = None,
-        keepdims: bool = False,
-        on_selected_backend: bool = False,
-    ) -> None:
+    def __init__(self, *, axis: Axis = None, keepdims: bool = False) -> None:
         object.__setattr__(self, "axis", axis)
         object.__setattr__(self, "keepdims", keepdims)
-        object.__setattr__(self, "on_selected_backend", on_selected_backend)
 
     def forward(self, a: Tensor) -> Tensor:
         axis = self.axis
@@ -58,22 +38,9 @@ class Sum(Operation):
         # vector rather than as a rank-zero value.
         if axis is None and (not keepdims):
             output_shape = (1,)
-        if self.on_selected_backend:
-            # The strict entry point names its reduction by the shape that
-            # keeps the reduced axes rather than by the axes themselves, and
-            # the two say the same thing. The collapsed shape is not one it
-            # could be given: ``(2, 3)`` reduced over axis 1 collapses to
-            # ``(2,)``, which aligns from the right against ``(2, 3)`` as a
-            # reduction it refuses. So the reduction is asked for in the form
-            # that keeps the axes, and the flat result it returns takes
-            # whichever shape ``keepdims`` asked for.
-            accelerated = backend_dispatch.execute_vjp_sum_to_shape(
-                a, reduction_shape(a.shape, axes, True)
-            )
-        else:
-            accelerated = backend_dispatch.execute_reduce_sum(
-                a, axes, keepdims=keepdims, dtype=a.dtype, output_shape=output_shape
-            )
+        accelerated = backend_dispatch.execute_reduce_sum(
+            a, axes, keepdims=keepdims, dtype=a.dtype, output_shape=output_shape
+        )
         return Tensor._from_owned_storage(
             accelerated, dtype=a.dtype, shape=output_shape
         )

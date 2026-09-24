@@ -1,4 +1,4 @@
-"""Strict selected-backend dispatch for reduce_min_gradient."""
+"""Strict selected-backend dispatch for reduce_norm_gradient."""
 
 from __future__ import annotations
 
@@ -14,10 +14,10 @@ if TYPE_CHECKING:
     from tensors.tensor import Tensor
 
 
-def execute_reduce_min_gradient(
+def execute_reduce_norm_gradient(
     grad: Tensor, value: Tensor, axes: tuple[int, ...], *, keepdims: bool
 ) -> Storage:
-    """Run reduce_min_gradient on the selected backend without fallback."""
+    """Run reduce_norm_gradient on the selected backend without fallback."""
     selected = config.get_backend()
     validate_backend_residency((grad, value), selected)
     backend: Any = load_backend(selected)
@@ -27,7 +27,7 @@ def execute_reduce_min_gradient(
         grad_buffer if selected == "python" else grad_buffer.reshape(grad.shape)
     )
     values = value_buffer if selected == "python" else value_buffer.reshape(value.shape)
-    result = backend.reduce_min_gradient(
+    result = backend.reduce_norm_gradient(
         grad_values,
         values,
         value.shape,
@@ -37,7 +37,7 @@ def execute_reduce_min_gradient(
     )
     if result is None:
         raise BackendOperationUnsupportedError(
-            f"The {selected} backend cannot execute reduce_min_gradient conformingly. "
+            f"The {selected} backend cannot execute reduce_norm_gradient conformingly. "
             "The VJP runs on the selected backend; select another backend "
             "to run it elsewhere."
         )

@@ -3,18 +3,14 @@
 from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
+from tensors.dtype import DataType
 import math
-from tensors.tensor import Tensor
 from tensors.utils.reductions import reduction_groups
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.dtype import DataType
 
 
-def _scaled_norm(value: Tensor, group: list[int]) -> tuple[float, list[float], float]:
+def _scaled_norm(value_values, group: list[int]) -> tuple[float, list[float], float]:
     """Return a safe scale, scaled values, and their Euclidean norm."""
-    values = [float(value._data[index]) for index in group]
+    values = [float(value_values[index]) for index in group]
     if any((math.isinf(item) for item in values)):
         return (1.0, [math.nan] * len(values), math.inf)
     if any((math.isnan(item) for item in values)):
@@ -28,7 +24,8 @@ def _scaled_norm(value: Tensor, group: list[int]) -> tuple[float, list[float], f
 
 
 def reduce_norm(
-    value: Tensor,
+    value_values,
+    input_shape: tuple[int, ...],
     axes: tuple[int, ...],
     *,
     keepdims: bool,
@@ -37,9 +34,9 @@ def reduce_norm(
 ) -> Storage | None:
     """Return the Euclidean norm of each group without overflow."""
     axis = axes
-    _, output_shape, groups = reduction_groups(value.shape, axis, keepdims)
+    _, output_shape, groups = reduction_groups(input_shape, axis, keepdims)
     results = []
     for group in groups:
-        scale, _, normalized_magnitude = _scaled_norm(value, group)
+        scale, _, normalized_magnitude = _scaled_norm(value_values, group)
         results.append(scale * normalized_magnitude)
     return PythonStorage.from_values(results, dtype)

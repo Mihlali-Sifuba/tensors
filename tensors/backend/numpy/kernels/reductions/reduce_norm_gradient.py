@@ -1,4 +1,4 @@
-"""NumPy implementation of the maximum VJP."""
+"""NumPy implementation of the Euclidean norm VJP."""
 
 from __future__ import annotations
 import numpy
@@ -9,7 +9,7 @@ from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _arithmetic_storage as _storage
 
 
-def reduce_max_gradient(
+def reduce_norm_gradient(
     upstream: Any,
     values: Any,
     input_shape: tuple[int, ...],
@@ -20,22 +20,20 @@ def reduce_max_gradient(
 ) -> Storage | None:
     """Run fused VJPs for reductions with regular native fast paths."""
     values = values.astype(numpy.float64, copy=False)
+    if values.size == 0:
+        return _storage(values, dtype=dtype, output_shape=input_shape)
     upstream = upstream.astype(numpy.float64, copy=False)
     expanded_shape = tuple(
         (1 if dimension in axes else size for dimension, size in enumerate(input_shape))
     )
-    try:
-        expanded = upstream.reshape(expanded_shape)
-    except ValueError:
-        return None
-    count = 1
-    for axis in axes:
-        count *= input_shape[axis]
+    expanded = upstream.reshape(expanded_shape)
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        has_nan = numpy.any(numpy.isnan(values), axis=axes, keepdims=True)
-        function = numpy.max
-        extreme = function(values, axis=axes, keepdims=True)
-        selected = values == extreme
-        ties = numpy.sum(selected, axis=axes, keepdims=True)
-        result = numpy.where(has_nan, numpy.nan, expanded * selected / ties)
+        scale = numpy.max(numpy.abs(values), axis=axes, keepdims=True)
+        safe_scale = numpy.where(scale == 0.0, 1.0, scale)
+        normalized = values / safe_scale
+        magnitude = numpy.sqrt(
+            numpy.sum(normalized * normalized, axis=axes, keepdims=True)
+        )
+        derivative = numpy.where(magnitude == 0.0, 0.0, normalized / magnitude)
+        result = expanded * derivative
     return _storage(result, dtype=dtype, output_shape=input_shape)

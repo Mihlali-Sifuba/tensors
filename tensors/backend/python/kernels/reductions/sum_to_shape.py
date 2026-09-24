@@ -3,30 +3,36 @@
 from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
+from tensors.dtype import DataType
 from tensors.shape import Shape
-from tensors.tensor import Tensor
 from tensors.utils.coordinates import (
     coordinates_to_linear_index,
     linear_index_to_coordinates,
 )
 
 
-def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Storage | None:
+def sum_to_shape(
+    gradient_values,
+    input_shape: tuple[int, ...],
+    shape: tuple[int, ...],
+    *,
+    dtype: DataType,
+) -> Storage | None:
     """Sum broadcast contributions back down to the original shape."""
     target = Shape.from_iterable(shape)
     if target.size == 1:
-        if gradient.dtype.kind == "floating":
+        if dtype.kind == "floating":
             from tensors.utils.summation import stable_float_sum
 
-            total = stable_float_sum([float(value) for value in gradient._data])
+            total = stable_float_sum([float(value) for value in gradient_values])
         else:
-            total = sum(gradient._data)
-        return Tensor._from_values([total], gradient.dtype, target).backend_storage
-    padded_shape = (1,) * (gradient.ndim - len(shape)) + shape
+            total = sum(gradient_values)
+        return PythonStorage.from_values([total], dtype)
+    padded_shape = (1,) * (len(input_shape) - len(shape)) + shape
     groups: list[list[int | float]] = [[] for _ in range(target.size)]
-    padding = gradient.ndim - len(shape)
-    for index, value in enumerate(gradient._data):
-        gradient_coordinates = linear_index_to_coordinates(index, gradient.shape)
+    padding = len(input_shape) - len(shape)
+    for index, value in enumerate(gradient_values):
+        gradient_coordinates = linear_index_to_coordinates(index, input_shape)
         source_coordinates = tuple(
             (
                 0 if source_dimension == 1 else coordinate
@@ -36,7 +42,7 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Storage | None:
             )
         )[padding:]
         groups[coordinates_to_linear_index(source_coordinates, shape)].append(value)
-    if gradient.dtype.kind == "floating":
+    if dtype.kind == "floating":
         from tensors.utils.summation import stable_float_sum
 
         values = [
@@ -44,4 +50,4 @@ def sum_to_shape(gradient: Tensor, shape: tuple[int, ...]) -> Storage | None:
         ]
     else:
         values = [sum(group) for group in groups]
-    return PythonStorage.from_values(values, gradient.dtype)
+    return PythonStorage.from_values(values, dtype)

@@ -79,16 +79,9 @@ class OperationContractTests(unittest.TestCase):
         operation = Sum(axis=None, keepdims=False)
         operation.forward(ts.Tensor([1.0, 2.0]))
 
-        # Every slot is configuration the operation was built with.
-        # ``on_selected_backend`` is one: it is the execution contract the
-        # addition VJP asks its reduction for, held here so a recorded
-        # reduction replays under the same contract. None of them may hold a
-        # value the forward pass produced.
-        self.assertEqual(
-            sorted(type(operation).__slots__),
-            ["axis", "keepdims", "on_selected_backend"],
-        )
-        self.assertFalse(Sum(axis=None, keepdims=False).on_selected_backend)
+        # Every slot is configuration the operation was built with; the
+        # selected backend is now the sole execution contract.
+        self.assertEqual(sorted(type(operation).__slots__), ["axis", "keepdims"])
         for name in type(operation).__slots__:
             self.assertNotIsInstance(getattr(operation, name), ts.Tensor)
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 from tensors.backend import dispatch as backend_dispatch
 import math
-from typing import TYPE_CHECKING, Any, List, overload
+from typing import TYPE_CHECKING, List, overload
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
 from tensors.dtype import float64
 from tensors.operations.base import Operation
@@ -20,21 +20,6 @@ from tensors.utils.reductions import (
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
-
-
-def _scaled_norm(value: Tensor, group: list[int]) -> tuple[float, list[float], float]:
-    """Return a safe scale, scaled values, and their Euclidean norm."""
-    values = [float(value._data[index]) for index in group]
-    if any((math.isinf(item) for item in values)):
-        return (1.0, [math.nan] * len(values), math.inf)
-    if any((math.isnan(item) for item in values)):
-        return (1.0, [math.nan] * len(values), math.nan)
-    scale = max((abs(item) for item in values), default=0.0)
-    if scale == 0.0:
-        return (0.0, [0.0] * len(values), 0.0)
-    normalized = [item / scale for item in values]
-    normalized_magnitude = math.sqrt(math.fsum((item * item for item in normalized)))
-    return (scale, normalized, normalized_magnitude)
 
 
 class Norm(Operation):
@@ -64,24 +49,18 @@ class Norm(Operation):
     ) -> List[Tensor]:
         """Differentiate the Euclidean norm with respect to its input."""
         value = inputs[0]
-        axis = self.axis
-        keepdims = self.keepdims
-        _, output_shape, groups = reduction_groups(value.shape, axis, keepdims)
+        axes = normalize_axes(value.ndim, self.axis)
+        output_shape = reduction_shape(value.shape, axes, self.keepdims)
         if grad.shape != output_shape:
             raise ValueError(
                 f"Gradient shape {grad.shape} does not match output shape {output_shape}"
             )
-        values = [0.0] * value.size
-        for output_index, group in enumerate(groups):
-            _, normalized, normalized_magnitude = _scaled_norm(value, group)
-            if normalized_magnitude == 0:
-                continue
-            upstream = grad._data[output_index]
-            for input_index, normalized_value in zip(group, normalized):
-                values[input_index] = upstream * (
-                    normalized_value / normalized_magnitude
-                )
-        return [Tensor(values, dtype=grad.dtype, shape=value.shape)]
+        storage = backend_dispatch.execute_reduce_norm_gradient(
+            grad, value, axes, keepdims=self.keepdims
+        )
+        return [
+            Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=value.shape)
+        ]
 
 
 @overload
