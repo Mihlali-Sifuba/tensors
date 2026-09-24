@@ -273,6 +273,60 @@ class SelectionComparisonExecutionTests(unittest.TestCase):
 
         self.for_each_backend(body)
 
+    def test_higher_order_constant_zeros_ignore_nonfinite_outer_gradients(self):
+        from tensors.operations.selection.where import Where, WhereVJP
+
+        def body(backend):
+            for outer_value in (math.inf, -math.inf, math.nan, 2.0):
+                for operation in (
+                    lambda value: ts.clip(value, -1.0, 1.0),
+                    lambda value: ts.maximum(value, 0.0),
+                    lambda value: ts.minimum(value, 1.0),
+                ):
+                    for create_graph in (False, True):
+                        reset_graph_state()
+                        value = ts.Variable(ts.Tensor([0.5], dtype=ts.float64))
+                        first = ts.grad(
+                            ts.sum(operation(value)), value, create_graph=True
+                        )
+                        second = ts.grad(
+                            first,
+                            value,
+                            grad_outputs=ts.Tensor([outer_value], dtype=ts.float64),
+                            create_graph=create_graph,
+                        )
+                        result = second.data if create_graph else second
+                        self.assertEqual(result.backend_storage.kind, backend)
+                        self.assertEqual(result.tolist(), [0.0])
+
+                outer_grad = ts.Tensor([outer_value], dtype=ts.float64)
+                condition = ts.Tensor([1], dtype=ts.uint8)
+                upstream = ts.Tensor([1.0], dtype=ts.float64)
+                condition_partial = WhereVJP(
+                    select_left=True, output_shape=(1,)
+                ).backward(
+                    outer_grad,
+                    upstream,
+                    condition,
+                    needs_input_grad=(False, True),
+                )[
+                    1
+                ]
+                self.assertEqual(condition_partial.backend_storage.kind, backend)
+                self.assertEqual(condition_partial.tolist(), [0.0])
+
+                first_condition_partial = Where().backward(
+                    outer_grad,
+                    condition,
+                    upstream,
+                    ts.Tensor([0.0], dtype=ts.float64),
+                    needs_input_grad=(True, False, False),
+                )[0]
+                self.assertEqual(first_condition_partial.backend_storage.kind, backend)
+                self.assertEqual(first_condition_partial.tolist(), [0.0])
+
+        self.for_each_backend(body)
+
     def test_vjps_obey_the_selection_at_old_threshold_sizes(self):
         def body(backend):
             for size in SIZES:

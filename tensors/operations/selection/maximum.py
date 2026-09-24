@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Optional, overload
 
 from tensors._typing import TensorData, TensorLike, TensorResult
 from tensors.backend import execute_maximum, execute_maximum_gradient
+from tensors.creation import zeros
 from tensors.dtype import result_dtype
 from tensors.operations.base import Operation
 from tensors.operations.gradient_primitives import sum_to_shape
@@ -118,7 +119,11 @@ class MaximumVJP(Operation):
     def backward(
         self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Optional[Tensor]]:
-        from tensors.graph.expression import apply_operation, is_graph_operand
+        from tensors.graph.expression import (
+            apply_operation,
+            as_graph_operand,
+            is_graph_operand,
+        )
 
         _, left, right = inputs
         grad_partial = None
@@ -129,12 +134,18 @@ class MaximumVJP(Operation):
                 if is_graph_operand(outer_grad)
                 else operation.forward(outer_grad, left, right)
             )
-        left_partial = (
-            sum_to_shape(outer_grad * 0.0, left.shape) if needs_input_grad[1] else None
-        )
-        right_partial = (
-            sum_to_shape(outer_grad * 0.0, right.shape) if needs_input_grad[2] else None
-        )
+        left_partial = None
+        if needs_input_grad[1]:
+            zero = zeros(left.shape, dtype=outer_grad.dtype)
+            left_partial = (
+                as_graph_operand(zero) if is_graph_operand(outer_grad) else zero
+            )
+        right_partial = None
+        if needs_input_grad[2]:
+            zero = zeros(right.shape, dtype=outer_grad.dtype)
+            right_partial = (
+                as_graph_operand(zero) if is_graph_operand(outer_grad) else zero
+            )
         return [grad_partial, left_partial, right_partial]
 
 

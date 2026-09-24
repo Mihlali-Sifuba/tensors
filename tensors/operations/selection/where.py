@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Optional, overload
 
 from tensors._typing import TensorData, TensorLike, TensorResult
 from tensors.backend import execute_where, execute_where_gradient
+from tensors.creation import zeros
 from tensors.dtype import result_dtype
 from tensors.graph.expression import as_tensor_operand
 from tensors.operations.base import Operation
@@ -48,7 +49,11 @@ class Where(Operation):
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Optional[Tensor]]:
         """Route ``G`` to the selected data branch and reduce broadcast axes."""
-        from tensors.graph.expression import apply_operation, is_graph_operand
+        from tensors.graph.expression import (
+            apply_operation,
+            as_graph_operand,
+            is_graph_operand,
+        )
 
         condition, left, right = inputs
         need_condition, need_left, need_right = needs_input_grad
@@ -66,9 +71,12 @@ class Where(Operation):
                 f"Gradient dtype {grad.dtype.name} does not match where dtype "
                 f"{dtype.name}"
             )
-        condition_gradient = (
-            sum_to_shape(grad * 0.0, condition.shape) if need_condition else None
-        )
+        condition_gradient = None
+        if need_condition:
+            zero = zeros(condition.shape, dtype=grad.dtype)
+            condition_gradient = (
+                as_graph_operand(zero) if is_graph_operand(grad) else zero
+            )
         gradients: list[Optional[Tensor]] = [condition_gradient]
         for needed, branch, select_left in (
             (need_left, left, True),
@@ -119,7 +127,11 @@ class WhereVJP(Operation):
     def backward(
         self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> list[Optional[Tensor]]:
-        from tensors.graph.expression import apply_operation, is_graph_operand
+        from tensors.graph.expression import (
+            apply_operation,
+            as_graph_operand,
+            is_graph_operand,
+        )
 
         _, condition = inputs
         grad_partial = None
@@ -132,11 +144,12 @@ class WhereVJP(Operation):
                 if is_graph_operand(outer_grad)
                 else operation.forward(outer_grad, condition)
             )
-        condition_partial = (
-            sum_to_shape(outer_grad * 0.0, condition.shape)
-            if needs_input_grad[1]
-            else None
-        )
+        condition_partial = None
+        if needs_input_grad[1]:
+            zero = zeros(condition.shape, dtype=outer_grad.dtype)
+            condition_partial = (
+                as_graph_operand(zero) if is_graph_operand(outer_grad) else zero
+            )
         return [grad_partial, condition_partial]
 
 

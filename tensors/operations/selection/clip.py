@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING, Optional, overload
 
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
 from tensors.backend import execute_clip, execute_clip_gradient
+from tensors.creation import zeros
 from tensors.dtype import result_dtype
-from tensors.graph.expression import as_tensor_operand
+from tensors.graph.expression import as_graph_operand, as_tensor_operand
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 
@@ -137,7 +138,12 @@ class ClipVJP(Operation):
                 if is_graph_operand(outer_grad)
                 else operation.forward(outer_grad, value)
             )
-        value_partial = outer_grad * 0.0 if needs_input_grad[1] else None
+        value_partial = None
+        if needs_input_grad[1]:
+            zero = zeros(value.shape, dtype=outer_grad.dtype)
+            value_partial = (
+                as_graph_operand(zero) if is_graph_operand(outer_grad) else zero
+            )
         return [grad_partial, value_partial]
 
 
