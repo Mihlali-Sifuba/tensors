@@ -3,12 +3,13 @@
 The numerical contract for floating reductions, and the algorithm intended
 to implement it.
 
-**Status: specification and validated algorithm; not yet implemented.** The
-contract below is decided. The algorithm below is prototyped and checked
-against an exact oracle. What is *not* settled is the cost, measured in §5,
-and §6 states the one decision that blocks implementation. Nothing in the
-package delivers this contract yet; `reduce_sum` and `sum_to_shape` behave
-as §7 describes.
+**Status: specification and validated algorithm; exact accumulation is not yet
+implemented.** The contract below is decided. The algorithm below is prototyped
+and checked against an exact oracle. NumPy and CUDA currently use the sound
+native certification boundary described in §7: they return a value only when
+correct rounding is established, and otherwise report the operation as
+unsupported. The cost measured in §5 and the product decision in §6 still
+block a complete native implementation.
 
 ## 1. The contract
 
@@ -182,17 +183,23 @@ option 1 and needs its own soundness argument.
 
 ## 7. What the package does today
 
-Until this is implemented:
+Until the exact accumulator is implemented:
 
-- `execute_reduce_sum` applies a workload threshold and, above it, a
-  native kernel that **declines** when its stability guard is not satisfied;
-  a decline falls back to the stable Python reference. So an accurate value
-  can arrive in Python-resident storage under an explicit NumPy or CUDA
-  selection.
-- `execute_vjp_sum_to_shape` is strict, so the same decline becomes
-  `BackendOperationUnsupportedError`. A broadcast `Add` backward over
-  accumulation-hostile values therefore **raises** on NumPy and CUDA today
-  while succeeding on Python.
+- The Python backend uses its stable reference summation, including the exact
+  ratio recovery needed when a temporary binary64 total would overflow.
+- NumPy and CUDA perform the reduction on their own native values only when a
+  sound certificate proves the provider result conforming. The certificate
+  accepts IEEE non-finite classifications, empty and zero groups, a single
+  correctly rounded addition, finite groups whose exact binary lattice sum fits
+  both the dtype significand and its intermediate range, and ordinary groups
+  whose error-free residual enclosure lies wholly within one output rounding
+  bin.
+- A finite group that is not certified returns `None`; strict dispatch turns
+  that into `BackendOperationUnsupportedError`. There is no Python fallback.
+- `reduce_sum`, `sum_to_shape`, and gradient accumulation through `Sum` share
+  this boundary, so an uncertified broadcast gradient fails explicitly rather
+  than returning an inaccurate derivative.
 
-Both are consequences of having no exact native summation, and both are
-resolved by implementing this contract.
+This preserves the numerical contract and selected-backend residency while
+leaving full support for all finite groups to the exact accumulator described
+above.

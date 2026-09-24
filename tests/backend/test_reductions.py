@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 import tensors as ts
 import tensors.backend.numpy.kernels as numpy_backend
+from tensors.backend.config import BackendOperationUnsupportedError
 from tests.backend._support import NumPyParityTestCase, requires_numpy
 
 
@@ -155,8 +156,12 @@ class NumPyReductionTests(NumPyParityTestCase):
             with ts.use_backend(backend):
                 value = ts.Tensor([1e308, 1e308, -1e308, -1e308])
                 smallest = ts.Tensor([5e-324, 5e-324])
+                if backend == "python":
+                    self.assertEqual(ts.sum(value).tolist(), [0.0])
+                else:
+                    with self.assertRaises(BackendOperationUnsupportedError):
+                        ts.sum(value)
                 return (
-                    ts.sum(value).tolist(),
                     ts.mean(smallest).tolist(),
                     ts.variance(value).tolist(),
                     ts.norm(value).tolist(),
@@ -198,7 +203,7 @@ class NumPyReductionTests(NumPyParityTestCase):
 
         self.assertEqual(gradients("numpy"), gradients("python"))
 
-    def test_product_reduction_preserves_exact_cancellation(self):
+    def test_uncertified_product_cancellation_is_reported(self):
 
         def gradient(backend):
             with ts.use_backend(backend):
@@ -206,7 +211,9 @@ class NumPyReductionTests(NumPyParityTestCase):
                 right = ts.Variable(ts.Tensor([[1e308, -1e308]]))
                 return ts.grad(ts.sum(left * right), left)
 
-        self.assertEqual(gradient("numpy").tolist(), gradient("python").tolist())
+        self.assertEqual(gradient("python").tolist(), [0.0, 0.0])
+        with self.assertRaises(BackendOperationUnsupportedError):
+            gradient("numpy")
 
 
 if __name__ == "__main__":

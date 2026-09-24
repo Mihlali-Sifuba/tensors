@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import tensors as ts
 import tensors.backend.numpy.kernels as numpy_backend
+from tensors.backend import dispatch as backend_dispatch
 import tensors.backend.python.kernels as python_backend
 from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.graph.computation.gradients import sum_gradient_values
@@ -124,10 +125,12 @@ class ReductionBackendExecutionTests(unittest.TestCase):
 
     def test_stability_ties_zeros_and_subnormals(self):
         def body(backend):
-            self.assertEqual(
-                ts.sum(ts.Tensor([1e308, 1e308, -1e308, -1e308])).tolist(),
-                [0.0],
-            )
+            difficult = ts.Tensor([1e308, 1e308, -1e308, -1e308])
+            if backend == "python":
+                self.assertEqual(ts.sum(difficult).tolist(), [0.0])
+            else:
+                with self.assertRaises(BackendOperationUnsupportedError):
+                    ts.sum(difficult)
             tiny = ts.Tensor([1.401298464324817e-45] * 2, dtype=ts.float32)
             self.assertEqual(ts.sum(tiny).tolist(), [2.802596928649634e-45])
             tied = ts.Variable(ts.Tensor([1.0, 1.0, 2.0]))
@@ -141,6 +144,90 @@ class ReductionBackendExecutionTests(unittest.TestCase):
             self.assertEqual(produced[2], math.inf)
 
         self.for_each_backend(body)
+
+    def test_sum_obeys_the_documented_numerical_contract(self):
+        difficult = (
+            ("lost units", [1e16, 1.0, -1e16, 1.0] * 8, 16.0),
+            ("temporary overflow", [1e308, 1e308, -1e308, -1e308], 0.0),
+            ("mixed magnitudes", [1e300, 1.0, -1e300, 2.0], 3.0),
+        )
+        supported = (
+            ("canonical zero", [1.0, -1.0, -0.0], 0.0),
+            ("positive infinity", [math.inf, 1.0], math.inf),
+            ("negative infinity", [-math.inf, 1.0], -math.inf),
+            ("both infinities", [math.inf, -math.inf], math.nan),
+            ("NaN", [math.nan, 1.0], math.nan),
+            ("empty", [], 0.0),
+        )
+        for backend in BACKENDS:
+            if backend not in ts.available_backends():
+                continue
+            with ts.use_backend(backend):
+                for name, values, expected in difficult:
+                    with self.subTest(backend=backend, case=name):
+                        if backend == "python":
+                            self.assertEqual(ts.sum(ts.Tensor(values)).item(), expected)
+                        else:
+                            with self.assertRaises(BackendOperationUnsupportedError):
+                                ts.sum(ts.Tensor(values))
+                for name, values, expected in supported:
+                    with self.subTest(backend=backend, case=name):
+                        result = ts.sum(ts.Tensor(values)).item()
+                        if math.isnan(expected):
+                            self.assertTrue(math.isnan(result))
+                        else:
+                            self.assertEqual(result, expected)
+                zero = ts.sum(ts.Tensor([1.0, -1.0, -0.0])).item()
+                self.assertEqual(math.copysign(1.0, zero), 1.0)
+                smallest = math.ulp(0.0)
+                self.assertEqual(
+                    ts.sum(ts.Tensor([smallest, smallest])).item(), smallest * 2
+                )
+
+    def test_integer_sum_preserves_int64_and_reduction_overflow_raises(self):
+        def body(backend):
+            exact = ts.Tensor([9007199254740993, 1], dtype=ts.int64)
+            self.assertEqual(ts.sum(exact).item(), 9007199254740994)
+            maximum = 2**63 - 1
+            cancellation = ts.Tensor(
+                [maximum, maximum, -maximum, -maximum], dtype=ts.int64
+            )
+            self.assertEqual(ts.sum(cancellation).item(), 0)
+            with self.assertRaises(OverflowError):
+                ts.sum(ts.Tensor([2**31 - 1, 1], dtype=ts.int32))
+            with self.assertRaises(OverflowError):
+                ts.prod(ts.Tensor([2**30, 2], dtype=ts.int32))
+            with self.assertRaises(OverflowError):
+                ts.sum(ts.Tensor([2**63 - 1, 1], dtype=ts.int64))
+            with self.assertRaises(OverflowError):
+                ts.prod(ts.Tensor([2**62, 2], dtype=ts.int64))
+
+        self.for_each_backend(body)
+
+    def test_uncertified_broadcast_sums_raise_instead_of_corrupting_gradients(self):
+        hostile = [1e16, 1.0, -1e16, 1.0] * 8
+        for backend in BACKENDS:
+            if backend not in ts.available_backends():
+                continue
+            reset_graph_state()
+            with ts.use_backend(backend):
+                gradient = ts.Tensor(hostile)
+                contributions = [ts.Tensor([value]) for value in hostile]
+                value = ts.Variable(ts.Tensor([1.0]))
+                output = value + ts.Tensor([0.0] * len(hostile))
+                if backend == "python":
+                    storage = backend_dispatch.execute_sum_to_shape(gradient, (1,))
+                    self.assertEqual(list(storage.buffer), [16.0])
+                    self.assertEqual(sum_gradient_values(contributions).item(), 16.0)
+                    derivative = ts.grad(output, value, grad_outputs=gradient)
+                    self.assertEqual(derivative.item(), 16.0)
+                else:
+                    with self.assertRaises(BackendOperationUnsupportedError):
+                        backend_dispatch.execute_sum_to_shape(gradient, (1,))
+                    with self.assertRaises(BackendOperationUnsupportedError):
+                        sum_gradient_values(contributions)
+                    with self.assertRaises(BackendOperationUnsupportedError):
+                        ts.grad(output, value, grad_outputs=gradient)
 
     @unittest.skipUnless("numpy" in ts.available_backends(), "NumPy unavailable")
     def test_dispatch_lowers_to_native_values_and_never_calls_python(self):

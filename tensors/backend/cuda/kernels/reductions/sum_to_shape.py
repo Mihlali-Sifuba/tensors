@@ -1,15 +1,19 @@
-"""CuPy implementation of summation down to a broadcast shape."""
+"""CUDA implementation of summation down to a broadcast shape."""
 
 from __future__ import annotations
+
+from typing import Any
+
 import cupy
-from typing import Any, TYPE_CHECKING
+
+from tensors.backend.cuda.conversion import _arithmetic_storage as _storage
+from tensors.backend.cuda.kernels.reductions.exact import (
+    certified_float_sum,
+    exact_integer_sum,
+)
+from tensors.backend.cuda.kernels.reductions.stability import _sum_axes
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
-from tensors.backend.cuda.conversion import _arithmetic_storage as _storage
-from tensors.backend.cuda.conversion import _widen
-from tensors.backend.cuda.kernels.reductions.stability import _scaled_sum
-from tensors.backend.cuda.kernels.reductions.stability import _stable_sum_candidate
-from tensors.backend.cuda.kernels.reductions.stability import _sum_axes
 
 
 def sum_to_shape(
@@ -19,18 +23,18 @@ def sum_to_shape(
     *,
     dtype: DataType,
 ) -> Storage | None:
-    """Reduce a broadcast gradient using guarded native summation."""
+    """Reduce a broadcast gradient only when its native sum is conforming."""
     axes = _sum_axes(input_shape, shape)
     if axes is None:
         return None
-    if dtype.kind == "integer":
-        result = cupy.sum(values, axis=axes, keepdims=True, dtype=cupy.int64)
-        return _storage(result.reshape(shape), dtype=dtype, output_shape=shape)
-    values = _widen(values)
-    direct = cupy.sum(values, axis=axes, keepdims=True)
-    result = _scaled_sum(values, axes)
-    finite_group = cupy.all(cupy.isfinite(values), axis=axes, keepdims=True)
-    result = cupy.where(finite_group, result, direct)
+    if values.size == 0:
+        result = cupy.zeros(shape, dtype=cupy.dtype(dtype.name))
+    elif dtype.kind == "integer":
+        result = exact_integer_sum(values, axes, keepdims=True, dtype=dtype)
+    else:
+        result = certified_float_sum(values, axes)
+    if result is None:
+        return None
     return _storage(
         cupy.asarray(result).reshape(shape), dtype=dtype, output_shape=shape
     )
