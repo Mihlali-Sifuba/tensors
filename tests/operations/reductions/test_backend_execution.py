@@ -1,8 +1,12 @@
 """Reduction operations under strict selected-backend execution."""
 
+import ast
 import math
+from pathlib import Path
 import unittest
 from unittest.mock import patch
+
+import numpy
 
 import tensors as ts
 import tensors.backend.numpy.kernels as numpy_backend
@@ -201,6 +205,11 @@ class ReductionBackendExecutionTests(unittest.TestCase):
                 ts.sum(ts.Tensor([2**63 - 1, 1], dtype=ts.int64))
             with self.assertRaises(OverflowError):
                 ts.prod(ts.Tensor([2**62, 2], dtype=ts.int64))
+            with self.assertRaises(OverflowError):
+                ts.prod(ts.Tensor([2**32, 2**32], dtype=ts.int64))
+            self.assertEqual(
+                ts.prod(ts.Tensor([2**62, 2, 0], dtype=ts.int64)).item(), 0
+            )
 
         self.for_each_backend(body)
 
@@ -228,6 +237,42 @@ class ReductionBackendExecutionTests(unittest.TestCase):
                         sum_gradient_values(contributions)
                     with self.assertRaises(BackendOperationUnsupportedError):
                         ts.grad(output, value, grad_outputs=gradient)
+
+    def test_accelerated_exact_reductions_have_no_python_control_flow_loops(self):
+        repository = Path(__file__).resolve().parents[3]
+        for backend in ("numpy", "cuda"):
+            with self.subTest(backend=backend):
+                source = (
+                    repository
+                    / "tensors"
+                    / "backend"
+                    / backend
+                    / "kernels"
+                    / "reductions"
+                    / "exact.py"
+                ).read_text(encoding="utf-8")
+                tree = ast.parse(source)
+                loops = [
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, (ast.For, ast.AsyncFor, ast.While))
+                ]
+                self.assertEqual(loops, [])
+
+    @unittest.skipUnless("numpy" in ts.available_backends(), "NumPy unavailable")
+    def test_integer_product_uses_native_cumulative_accumulation(self):
+        with (
+            patch.object(numpy, "cumprod", wraps=numpy.cumprod) as cumulative,
+            patch.object(
+                python_backend,
+                "reduce_prod",
+                side_effect=AssertionError("Python fallback executed"),
+            ),
+            ts.use_backend("numpy"),
+        ):
+            value = ts.Tensor([2**62, 2, 0], dtype=ts.int64)
+            self.assertEqual(ts.prod(value).item(), 0)
+        cumulative.assert_called_once()
 
     @unittest.skipUnless("numpy" in ts.available_backends(), "NumPy unavailable")
     def test_dispatch_lowers_to_native_values_and_never_calls_python(self):

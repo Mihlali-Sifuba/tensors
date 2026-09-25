@@ -191,9 +191,9 @@ Until the exact accumulator is implemented:
   sound certificate proves the provider result conforming. The certificate
   accepts IEEE non-finite classifications, empty and zero groups, a single
   correctly rounded addition, finite groups whose exact binary lattice sum fits
-  both the dtype significand and its intermediate range, and ordinary groups
-  whose error-free residual enclosure lies wholly within one output rounding
-  bin.
+  both the dtype significand and its intermediate range. The certificate uses
+  only a bounded number of provider-native array operations; it never iterates
+  over reduction elements in Python.
 - A finite group that is not certified returns `None`; strict dispatch turns
   that into `BackendOperationUnsupportedError`. There is no Python fallback.
 - `reduce_sum`, `sum_to_shape`, and gradient accumulation through `Sum` share

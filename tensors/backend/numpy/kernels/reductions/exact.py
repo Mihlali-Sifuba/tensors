@@ -13,66 +13,6 @@ if TYPE_CHECKING:
     from tensors.dtype import DataType
 
 
-def _compensated_candidate(
-    values: Any, axes: tuple[int, ...], target_dtype: Any
-) -> tuple[Any, Any]:
-    """Enclose the exact sum of finite binary64 groups and certify rounding."""
-    remaining = tuple(axis for axis in range(values.ndim) if axis not in axes)
-    order = remaining + axes
-    group_shape = tuple(values.shape[axis] for axis in remaining)
-    kept_shape = tuple(
-        1 if axis in axes else values.shape[axis] for axis in range(values.ndim)
-    )
-    grouped = numpy.transpose(values, order).reshape(
-        math.prod(group_shape), math.prod((values.shape[axis] for axis in axes))
-    )
-    finite = numpy.all(numpy.isfinite(grouped), axis=1)
-    grouped = numpy.where(numpy.isfinite(grouped), grouped, 0.0)
-    total = numpy.zeros(grouped.shape[0], dtype=values.dtype)
-    lower_error = numpy.zeros_like(total)
-    upper_error = numpy.zeros_like(total)
-    valid = finite.copy()
-    with _errstate(over="ignore", under="ignore", invalid="ignore"):
-        for index in range(grouped.shape[1]):
-            item = grouped[:, index]
-            updated = total + item
-            virtual_item = updated - total
-            virtual_total = updated - virtual_item
-            error = (total - virtual_total) + (item - virtual_item)
-            valid &= numpy.isfinite(updated) & numpy.isfinite(error)
-            lower_error = numpy.nextafter(lower_error + error, -numpy.inf)
-            upper_error = numpy.nextafter(upper_error + error, numpy.inf)
-            total = updated
-        midpoint_error = lower_error + (upper_error - lower_error) * 0.5
-        approximate = total + midpoint_error
-        candidate_native = numpy.asarray(approximate, dtype=target_dtype)
-        candidate = candidate_native.astype(values.dtype, copy=False)
-        previous = numpy.nextafter(
-            candidate_native, numpy.asarray(-numpy.inf, dtype=target_dtype)
-        ).astype(values.dtype, copy=False)
-        following = numpy.nextafter(
-            candidate_native, numpy.asarray(numpy.inf, dtype=target_dtype)
-        ).astype(values.dtype, copy=False)
-        offset = candidate - total
-        virtual_negative_total = offset - candidate
-        virtual_candidate = offset - virtual_negative_total
-        offset_error = (candidate - virtual_candidate) + (
-            -total - virtual_negative_total
-        )
-        lower_limit = numpy.nextafter(offset + (previous - candidate) * 0.5, numpy.inf)
-        upper_limit = numpy.nextafter(
-            offset + (following - candidate) * 0.5, -numpy.inf
-        )
-    certified = (
-        valid
-        & numpy.isfinite(candidate)
-        & (offset_error == 0.0)
-        & (lower_error > lower_limit)
-        & (upper_error < upper_limit)
-    )
-    return candidate.reshape(kept_shape), certified.reshape(kept_shape)
-
-
 def certified_float_sum(values: Any, axes: tuple[int, ...]) -> Any | None:
     """Return a correctly rounded native sum, or decline without guessing."""
     if not axes:
@@ -137,16 +77,10 @@ def certified_float_sum(values: Any, axes: tuple[int, ...]) -> Any | None:
         same_sign_overflow = numpy.isinf(direct) & ((minimum >= 0.0) | (maximum <= 0.0))
     nonfinite = nan | positive_infinity | negative_infinity
     at_most_one_addition = math.prod((values.shape[axis] for axis in axes)) <= 2
-    basic_finite = at_most_one_addition | exact_lattice | same_sign_overflow
-    compensated_working = values.astype(numpy.float64, copy=False)
-    compensated, compensated_safe = _compensated_candidate(
-        compensated_working, axes, values.dtype
-    )
-    finite_safe = basic_finite | compensated_safe
+    finite_safe = at_most_one_addition | exact_lattice | same_sign_overflow
     certified = nonfinite | (finite & finite_safe)
     if not bool(numpy.all(certified)):
         return None
-    finite_result = numpy.where(basic_finite, direct, compensated)
     both_infinities = positive_infinity & negative_infinity
     result = numpy.where(
         nan | both_infinities,
@@ -154,7 +88,7 @@ def certified_float_sum(values: Any, axes: tuple[int, ...]) -> Any | None:
         numpy.where(
             positive_infinity,
             numpy.inf,
-            numpy.where(negative_infinity, -numpy.inf, finite_result),
+            numpy.where(negative_infinity, -numpy.inf, direct),
         ),
     )
     return numpy.where(finite & (result == 0.0), 0.0, result)
@@ -251,14 +185,17 @@ def exact_integer_product(
     negative = grouped < 0
     magnitude = numpy.where(negative, (~unsigned) + numpy.uint64(1), unsigned)
     negative_result = numpy.count_nonzero(negative, axis=1) % 2 == 1
-    accumulator = numpy.ones(grouped.shape[0], dtype=numpy.uint64)
-    overflow = numpy.zeros(grouped.shape[0], dtype=numpy.bool_)
-    maximum = numpy.uint64(2**64 - 1)
-    for index in range(grouped.shape[1]):
-        factor = numpy.where(zero, numpy.uint64(1), magnitude[:, index])
-        safe_factor = numpy.where(factor == 0, numpy.uint64(1), factor)
-        overflow |= accumulator > maximum // safe_factor
-        accumulator = numpy.where(overflow, numpy.uint64(0), accumulator * factor)
+    factors = numpy.where(zero[:, None], numpy.uint64(1), magnitude)
+    cumulative = numpy.cumprod(factors, axis=1, dtype=numpy.uint64)
+    previous = numpy.concatenate(
+        (
+            numpy.ones((grouped.shape[0], 1), dtype=numpy.uint64),
+            cumulative[:, :-1],
+        ),
+        axis=1,
+    )
+    overflow = numpy.any(cumulative // factors != previous, axis=1)
+    accumulator = cumulative[:, -1]
     accumulator = numpy.where(zero, numpy.uint64(0), accumulator)
     if bool(numpy.any(overflow)):
         raise OverflowError(f"integer product exceeds {dtype.name}")

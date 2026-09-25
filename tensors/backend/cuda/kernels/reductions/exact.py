@@ -8,71 +8,10 @@ from typing import Any, TYPE_CHECKING
 import cupy
 
 from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.conversion import _narrow
 from tensors.backend.cuda.conversion import _widen
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-
-
-def _compensated_candidate(
-    values: Any, axes: tuple[int, ...], target_dtype: Any
-) -> tuple[Any, Any]:
-    """Enclose the exact sum of finite binary64 groups and certify rounding."""
-    remaining = tuple(axis for axis in range(values.ndim) if axis not in axes)
-    order = remaining + axes
-    group_shape = tuple(values.shape[axis] for axis in remaining)
-    kept_shape = tuple(
-        1 if axis in axes else values.shape[axis] for axis in range(values.ndim)
-    )
-    grouped = cupy.transpose(values, order).reshape(
-        math.prod(group_shape), math.prod((values.shape[axis] for axis in axes))
-    )
-    finite = cupy.all(cupy.isfinite(grouped), axis=1)
-    grouped = cupy.where(cupy.isfinite(grouped), grouped, 0.0)
-    total = cupy.zeros(grouped.shape[0], dtype=values.dtype)
-    lower_error = cupy.zeros_like(total)
-    upper_error = cupy.zeros_like(total)
-    valid = finite.copy()
-    with _errstate(over="ignore", under="ignore", invalid="ignore"):
-        for index in range(grouped.shape[1]):
-            item = grouped[:, index]
-            updated = total + item
-            virtual_item = updated - total
-            virtual_total = updated - virtual_item
-            error = (total - virtual_total) + (item - virtual_item)
-            valid &= cupy.isfinite(updated) & cupy.isfinite(error)
-            lower_error = cupy.nextafter(lower_error + error, -cupy.inf)
-            upper_error = cupy.nextafter(upper_error + error, cupy.inf)
-            total = updated
-        midpoint_error = lower_error + (upper_error - lower_error) * 0.5
-        approximate = total + midpoint_error
-        candidate_native = _narrow(approximate, target_dtype)
-        candidate = _widen(candidate_native)
-        previous = _widen(
-            cupy.nextafter(
-                candidate_native, cupy.asarray(-cupy.inf, dtype=target_dtype)
-            )
-        )
-        following = _widen(
-            cupy.nextafter(candidate_native, cupy.asarray(cupy.inf, dtype=target_dtype))
-        )
-        offset = candidate - total
-        virtual_negative_total = offset - candidate
-        virtual_candidate = offset - virtual_negative_total
-        offset_error = (candidate - virtual_candidate) + (
-            -total - virtual_negative_total
-        )
-        lower_limit = cupy.nextafter(offset + (previous - candidate) * 0.5, cupy.inf)
-        upper_limit = cupy.nextafter(offset + (following - candidate) * 0.5, -cupy.inf)
-    certified = (
-        valid
-        & cupy.isfinite(candidate)
-        & (offset_error == 0.0)
-        & (lower_error > lower_limit)
-        & (upper_error < upper_limit)
-    )
-    return candidate.reshape(kept_shape), certified.reshape(kept_shape)
 
 
 def certified_float_sum(values: Any, axes: tuple[int, ...]) -> Any | None:
@@ -142,13 +81,10 @@ def certified_float_sum(values: Any, axes: tuple[int, ...]) -> Any | None:
         same_sign_overflow = cupy.isinf(direct) & ((minimum >= 0.0) | (maximum <= 0.0))
     nonfinite = nan | positive_infinity | negative_infinity
     at_most_one_addition = math.prod((values.shape[axis] for axis in axes)) <= 2
-    basic_finite = at_most_one_addition | exact_lattice | same_sign_overflow
-    compensated, compensated_safe = _compensated_candidate(working, axes, values.dtype)
-    finite_safe = basic_finite | compensated_safe
+    finite_safe = at_most_one_addition | exact_lattice | same_sign_overflow
     certified = nonfinite | (finite & finite_safe)
     if not bool(cupy.all(certified)):
         return None
-    finite_result = cupy.where(basic_finite, direct, compensated)
     both_infinities = positive_infinity & negative_infinity
     result = cupy.where(
         nan | both_infinities,
@@ -156,7 +92,7 @@ def certified_float_sum(values: Any, axes: tuple[int, ...]) -> Any | None:
         cupy.where(
             positive_infinity,
             cupy.inf,
-            cupy.where(negative_infinity, -cupy.inf, finite_result),
+            cupy.where(negative_infinity, -cupy.inf, direct),
         ),
     )
     return cupy.where(finite & (result == 0.0), 0.0, result)
@@ -249,14 +185,17 @@ def exact_integer_product(
     negative = grouped < 0
     magnitude = cupy.where(negative, (~unsigned) + cupy.uint64(1), unsigned)
     negative_result = cupy.count_nonzero(negative, axis=1) % 2 == 1
-    accumulator = cupy.ones(grouped.shape[0], dtype=cupy.uint64)
-    overflow = cupy.zeros(grouped.shape[0], dtype=cupy.bool_)
-    maximum = cupy.uint64(2**64 - 1)
-    for index in range(grouped.shape[1]):
-        factor = cupy.where(zero, cupy.uint64(1), magnitude[:, index])
-        safe_factor = cupy.where(factor == 0, cupy.uint64(1), factor)
-        overflow |= accumulator > maximum // safe_factor
-        accumulator = cupy.where(overflow, cupy.uint64(0), accumulator * factor)
+    factors = cupy.where(zero[:, None], cupy.uint64(1), magnitude)
+    cumulative = cupy.cumprod(factors, axis=1, dtype=cupy.uint64)
+    previous = cupy.concatenate(
+        (
+            cupy.ones((grouped.shape[0], 1), dtype=cupy.uint64),
+            cumulative[:, :-1],
+        ),
+        axis=1,
+    )
+    overflow = cupy.any(cumulative // factors != previous, axis=1)
+    accumulator = cumulative[:, -1]
     accumulator = cupy.where(zero, cupy.uint64(0), accumulator)
     if bool(cupy.any(overflow)):
         raise OverflowError(f"integer product exceeds {dtype.name}")
