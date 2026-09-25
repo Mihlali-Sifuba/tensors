@@ -194,6 +194,29 @@ class CrossEntropy(Operation):
             raise TypeError("cross_entropy axis must be an integer")
         _validate_reduction(reduction)
         axis = _normalize_axis(logits, axis)
+        from tensors.graph.expression import apply_operation, is_graph_operand
+
+        if any(is_graph_operand(value) for value in (grad, logits, targets)):
+            gradients: List[Optional[Tensor]] = []
+            for needed, operand, select_logits in (
+                (need_logits, logits, True),
+                (need_targets, targets, False),
+            ):
+                if not needed:
+                    gradients.append(None)
+                    continue
+                contribution = apply_operation(
+                    CrossEntropyVJP(
+                        axis=axis,
+                        reduction=reduction,
+                        select_logits=select_logits,
+                        targets_from_variable=self.targets_from_variable,
+                    ),
+                    (grad, logits, targets),
+                )
+                gradients.append(sum_to_shape(contribution, operand.shape))
+            return gradients
+
         target_shape = targets.shape
         targets, from_class_indices = _dense_targets(logits, targets, axis)
         if from_class_indices and (need_targets or self.targets_from_variable):
@@ -206,7 +229,7 @@ class CrossEntropy(Operation):
             raise ValueError(
                 f"Gradient shape {grad.shape} does not match output shape {expected_shape}"
             )
-        accelerated = execute_cross_entropy_gradient(
+        logits_storage, targets_storage = execute_cross_entropy_gradient(
             grad,
             expanded_logits,
             expanded_targets,
@@ -214,7 +237,6 @@ class CrossEntropy(Operation):
             reduction=reduction,
             needs_input_grad=needs_input_grad,
         )
-        logits_storage, targets_storage = accelerated
         expanded_shape = expanded_logits.shape
         return [
             (
@@ -238,6 +260,182 @@ class CrossEntropy(Operation):
                 else None
             ),
         ]
+
+
+class CrossEntropyVJP(Operation):
+    """One differentiable branch of the fused cross-entropy VJP."""
+
+    __slots__ = (
+        "axis",
+        "reduction",
+        "select_logits",
+        "targets_from_variable",
+    )
+    name = "cross_entropy_vjp"
+
+    def __init__(
+        self,
+        *,
+        axis: int,
+        reduction: Reduction,
+        select_logits: bool,
+        targets_from_variable: bool,
+    ) -> None:
+        object.__setattr__(self, "axis", axis)
+        object.__setattr__(self, "reduction", reduction)
+        object.__setattr__(self, "select_logits", select_logits)
+        object.__setattr__(self, "targets_from_variable", targets_from_variable)
+
+    def forward(self, grad: Tensor, logits: Tensor, targets: Tensor) -> Tensor:
+        axis = _normalize_axis(logits, self.axis)
+        targets, from_class_indices = _dense_targets(logits, targets, axis)
+        if from_class_indices and (
+            (not self.select_logits) or self.targets_from_variable
+        ):
+            _reject_variable_class_indices()
+        expanded_logits, expanded_targets = broadcast_tensors(logits, targets)
+        _validate_distributions(expanded_targets, axis)
+        sample_shape = expanded_logits.shape[:axis] + expanded_logits.shape[axis + 1 :]
+        expected_shape = sample_shape if self.reduction == "none" else (1,)
+        if grad.shape != expected_shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match output shape "
+                f"{expected_shape}"
+            )
+        storages = execute_cross_entropy_gradient(
+            grad,
+            expanded_logits,
+            expanded_targets,
+            axis,
+            reduction=self.reduction,
+            needs_input_grad=(self.select_logits, not self.select_logits),
+        )
+        storage = storages[0] if self.select_logits else storages[1]
+        if storage is None:
+            raise RuntimeError("cross-entropy VJP omitted its requested branch")
+        return Tensor._from_owned_storage(
+            storage, dtype=grad.dtype, shape=expanded_logits.shape
+        )
+
+    def backward(
+        self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
+    ) -> List[Optional[Tensor]]:
+        from tensors.creation import zeros
+        from tensors.operations.normalization.log_softmax import (
+            _log_softmax_vjp_tensor,
+        )
+        from tensors.operations.normalization.softmax import (
+            Softmax,
+            _softmax_vjp_tensor,
+        )
+        from tensors.utils.reductions import reduction_groups
+
+        grad, logits, targets = inputs
+        axis = _normalize_axis(logits, self.axis)
+        original_target_shape = targets.shape
+        targets, _ = _dense_targets(logits, targets, axis)
+        expanded_logits, expanded_targets = broadcast_tensors(logits, targets)
+        _, sample_shape, groups = reduction_groups(
+            expanded_logits.shape, axis, keepdims=False
+        )
+        if self.reduction == "none":
+            upstream = [float(value) for value in grad._data]
+        else:
+            scale = 1.0 / len(groups) if self.reduction == "mean" and groups else 1.0
+            upstream = [float(grad._data[0]) * scale] * len(groups)
+        expanded_upstream = [0.0] * expanded_logits.size
+        for output_index, group in enumerate(groups):
+            for index in group:
+                expanded_upstream[index] = upstream[output_index]
+        upstream_tensor = Tensor(
+            expanded_upstream,
+            dtype=outer_grad.dtype,
+            shape=expanded_logits.shape,
+        )
+
+        need_grad, need_logits, need_targets = needs_input_grad
+        grad_partial = None
+        if need_grad:
+            if self.reduction == "none":
+                unit = Tensor(
+                    [1.0] * len(groups),
+                    dtype=grad.dtype,
+                    shape=sample_shape,
+                )
+                local = self.forward(unit, logits, inputs[2])
+                contributions = [
+                    math.fsum(
+                        float(outer_grad._data[index]) * float(local._data[index])
+                        for index in group
+                    )
+                    for group in groups
+                ]
+                grad_partial = Tensor(
+                    contributions, dtype=outer_grad.dtype, shape=grad.shape
+                )
+            else:
+                local = self.forward(Tensor([1.0], dtype=grad.dtype), logits, inputs[2])
+                grad_partial = Tensor(
+                    [
+                        math.fsum(
+                            float(outer) * float(value)
+                            for outer, value in zip(outer_grad._data, local._data)
+                        )
+                    ],
+                    dtype=outer_grad.dtype,
+                    shape=grad.shape,
+                )
+
+        logits_partial = None
+        targets_partial = None
+        if self.select_logits:
+            if need_logits:
+                masses = [0.0] * expanded_logits.size
+                for group in groups:
+                    mass = math.fsum(
+                        float(expanded_targets._data[index]) for index in group
+                    )
+                    for index in group:
+                        masses[index] = mass
+                mass_tensor = Tensor(
+                    masses, dtype=outer_grad.dtype, shape=expanded_logits.shape
+                )
+                vector = outer_grad * upstream_tensor * mass_tensor
+                logits_partial = sum_to_shape(
+                    _softmax_vjp_tensor(vector, expanded_logits, axis),
+                    logits.shape,
+                )
+            if need_targets:
+                probabilities = Softmax(axis=axis).forward(expanded_logits)
+                values = [0.0] * expanded_logits.size
+                for group in groups:
+                    expectation = math.fsum(
+                        float(outer_grad._data[index])
+                        * float(probabilities._data[index])
+                        for index in group
+                    )
+                    for index in group:
+                        values[index] = (
+                            expectation - float(outer_grad._data[index])
+                        ) * expanded_upstream[index]
+                targets_partial = sum_to_shape(
+                    Tensor(
+                        values,
+                        dtype=outer_grad.dtype,
+                        shape=expanded_logits.shape,
+                    ),
+                    original_target_shape,
+                )
+        else:
+            if need_logits:
+                vector = -(outer_grad * upstream_tensor)
+                logits_partial = sum_to_shape(
+                    _log_softmax_vjp_tensor(vector, expanded_logits, axis),
+                    logits.shape,
+                )
+            if need_targets:
+                targets_partial = zeros(original_target_shape, dtype=outer_grad.dtype)
+        return [grad_partial, logits_partial, targets_partial]
 
 
 @overload

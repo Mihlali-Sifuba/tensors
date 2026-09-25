@@ -10,9 +10,9 @@ class NumPyLossTests(NumPyParityTestCase):
     """Normalization and cross-entropy kernels and their guards."""
 
     def test_fused_probability_loss_rejects_nonfinite_probabilities(self):
-        probabilities = ts.Tensor([float("nan")] * 64)
-        targets = ts.full((64,), 0.5)
         with ts.use_backend("numpy"):
+            probabilities = ts.Tensor([float("nan")] * 64)
+            targets = ts.full((64,), 0.5)
             with self.assertRaisesRegex(
                 ValueError, "probabilities must be between 0 and 1"
             ):

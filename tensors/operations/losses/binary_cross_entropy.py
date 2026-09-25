@@ -90,14 +90,35 @@ class BinaryCrossEntropy(Operation):
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
     ) -> List[Optional[Tensor]]:
         prediction, target = inputs
-        need_prediction, need_target = needs_input_grad
         from_logits = self.from_logits
         _validate_from_logits(from_logits)
         reduction = self.reduction
         if not isinstance(reduction, str):
             raise TypeError("reduction must be a string")
+        from tensors.graph.expression import apply_operation, is_graph_operand
+
+        if any(is_graph_operand(value) for value in (grad, prediction, target)):
+            gradients: List[Optional[Tensor]] = []
+            for needed, operand, select_prediction in (
+                (needs_input_grad[0], prediction, True),
+                (needs_input_grad[1], target, False),
+            ):
+                if not needed:
+                    gradients.append(None)
+                    continue
+                contribution = apply_operation(
+                    BinaryCrossEntropyVJP(
+                        from_logits=from_logits,
+                        reduction=reduction,
+                        select_prediction=select_prediction,
+                    ),
+                    (grad, prediction, target),
+                )
+                gradients.append(sum_to_shape(contribution, operand.shape))
+            return gradients
+
         expanded_prediction, expanded_target = broadcast_tensors(prediction, target)
-        accelerated = execute_binary_cross_entropy_gradient(
+        prediction_storage, target_storage = execute_binary_cross_entropy_gradient(
             grad,
             expanded_prediction,
             expanded_target,
@@ -105,7 +126,6 @@ class BinaryCrossEntropy(Operation):
             reduction=reduction,
             needs_input_grad=needs_input_grad,
         )
-        prediction_storage, target_storage = accelerated
         expanded_shape = expanded_prediction.shape
         return [
             (
@@ -129,6 +149,160 @@ class BinaryCrossEntropy(Operation):
                 else None
             ),
         ]
+
+
+class BinaryCrossEntropyVJP(Operation):
+    """One differentiable branch of the fused binary cross-entropy VJP."""
+
+    __slots__ = ("from_logits", "reduction", "select_prediction")
+    name = "binary_cross_entropy_vjp"
+
+    def __init__(
+        self,
+        *,
+        from_logits: bool,
+        reduction: Reduction,
+        select_prediction: bool,
+    ) -> None:
+        object.__setattr__(self, "from_logits", from_logits)
+        object.__setattr__(self, "reduction", reduction)
+        object.__setattr__(self, "select_prediction", select_prediction)
+
+    def forward(self, grad: Tensor, prediction: Tensor, target: Tensor) -> Tensor:
+        expanded_prediction, expanded_target = broadcast_tensors(prediction, target)
+        _validate_targets(expanded_target)
+        if (
+            (not self.select_prediction)
+            and (not self.from_logits)
+            and any(not 0.0 < float(value) < 1.0 for value in expanded_prediction._data)
+        ):
+            raise ValueError(
+                "Higher-order binary cross-entropy target derivatives require "
+                "probabilities strictly between 0 and 1"
+            )
+        expected_shape = expanded_prediction.shape if self.reduction == "none" else (1,)
+        if grad.shape != expected_shape:
+            raise ValueError(
+                f"Gradient shape {grad.shape} does not match output shape "
+                f"{expected_shape}"
+            )
+        storages = execute_binary_cross_entropy_gradient(
+            grad,
+            expanded_prediction,
+            expanded_target,
+            from_logits=self.from_logits,
+            reduction=self.reduction,
+            needs_input_grad=(
+                self.select_prediction,
+                not self.select_prediction,
+            ),
+        )
+        storage = storages[0] if self.select_prediction else storages[1]
+        if storage is None:
+            raise RuntimeError("binary cross-entropy VJP omitted its requested branch")
+        return Tensor._from_owned_storage(
+            storage, dtype=grad.dtype, shape=expanded_prediction.shape
+        )
+
+    def backward(
+        self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
+    ) -> List[Optional[Tensor]]:
+        from tensors.creation import ones, zeros
+        from tensors.operations.activations.sigmoid import sigmoid
+        from tensors.utils.broadcasting import broadcast_to
+
+        grad, prediction, target = inputs
+        expanded_prediction, expanded_target = broadcast_tensors(prediction, target)
+        shape = expanded_prediction.shape
+        if self.reduction == "none":
+            expanded_grad = grad
+        else:
+            expanded_grad = broadcast_to(grad, shape)
+            if self.reduction == "mean" and expanded_prediction.size:
+                expanded_grad = expanded_grad / expanded_prediction.size
+
+        need_grad, need_prediction, need_target = needs_input_grad
+        grad_partial = None
+        if need_grad:
+            unit = (
+                ones(grad.shape, dtype=grad.dtype)
+                if self.reduction == "none"
+                else Tensor([1.0], dtype=grad.dtype)
+            )
+            local = self.forward(unit, prediction, target)
+            grad_partial = sum_to_shape(outer_grad * local, grad.shape)
+
+        prediction_partial = None
+        target_partial = None
+        if self.select_prediction:
+            if need_prediction:
+                if self.from_logits:
+                    probability = sigmoid(expanded_prediction)
+                    second = probability * (1.0 - probability)
+                    prediction_partial = sum_to_shape(
+                        outer_grad * expanded_grad * second,
+                        prediction.shape,
+                    )
+                else:
+                    values = []
+                    for raw_probability, raw_target in zip(
+                        expanded_prediction._data, expanded_target._data
+                    ):
+                        probability = float(raw_probability)
+                        target_value = float(raw_target)
+                        if probability == 0.0 and target_value == 0.0:
+                            values.append(1.0)
+                        elif probability == 1.0 and target_value == 1.0:
+                            values.append(1.0)
+                        else:
+                            values.append(
+                                target_value / (probability * probability)
+                                + (1.0 - target_value)
+                                / ((1.0 - probability) * (1.0 - probability))
+                            )
+                    second = Tensor(values, dtype=outer_grad.dtype, shape=shape)
+                    prediction_partial = sum_to_shape(
+                        outer_grad * expanded_grad * second,
+                        prediction.shape,
+                    )
+            if need_target:
+                if self.from_logits:
+                    mixed = broadcast_to(Tensor([-1.0], dtype=outer_grad.dtype), shape)
+                else:
+                    values = []
+                    for raw_probability in expanded_prediction._data:
+                        probability = float(raw_probability)
+                        values.append(
+                            -math.inf
+                            if probability in {0.0, 1.0}
+                            else -1.0 / (probability * (1.0 - probability))
+                        )
+                    mixed = Tensor(values, dtype=outer_grad.dtype, shape=shape)
+                target_partial = sum_to_shape(
+                    outer_grad * expanded_grad * mixed,
+                    target.shape,
+                )
+        else:
+            if need_prediction:
+                if self.from_logits:
+                    mixed = broadcast_to(Tensor([-1.0], dtype=outer_grad.dtype), shape)
+                else:
+                    values = []
+                    for raw_probability in expanded_prediction._data:
+                        probability = float(raw_probability)
+                        values.append(
+                            -math.inf
+                            if probability in {0.0, 1.0}
+                            else -1.0 / (probability * (1.0 - probability))
+                        )
+                    mixed = Tensor(values, dtype=outer_grad.dtype, shape=shape)
+                prediction_partial = sum_to_shape(
+                    outer_grad * expanded_grad * mixed,
+                    prediction.shape,
+                )
+            if need_target:
+                target_partial = zeros(target.shape, dtype=outer_grad.dtype)
+        return [grad_partial, prediction_partial, target_partial]
 
 
 @overload

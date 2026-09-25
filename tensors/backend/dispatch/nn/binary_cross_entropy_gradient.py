@@ -1,16 +1,17 @@
-"""Dispatch for normalization, probability, and loss kernels."""
+"""Strict selected-backend dispatch for the binary cross-entropy VJP."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_ELEMENTWISE_MIN_SIZE,
-    _array_work_is_large_enough,
-)
-from tensors.backend.storage import Storage
-from tensors.backend.types import LossReduction
+
+from typing import TYPE_CHECKING, Any
+
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
+    from tensors.backend.storage import Storage
+    from tensors.backend.types import LossReduction
     from tensors.tensor import Tensor
 
 
@@ -23,36 +24,43 @@ def execute_binary_cross_entropy_gradient(
     reduction: LossReduction,
     needs_input_grad: tuple[bool, ...] = (True, True),
 ) -> tuple[Storage | None, Storage | None]:
-    """Run the requested binary cross-entropy VJPs."""
-    from tensors.backend.python.kernels.nn.binary_cross_entropy_gradient import (
-        binary_cross_entropy_gradient as reference,
+    """Run requested binary cross-entropy VJPs without fallback."""
+    selected = config.get_backend()
+    validate_backend_residency((grad, prediction, target), selected)
+    backend: Any = load_backend(selected)
+    grad_buffer = grad._logical_storage_for(selected).buffer
+    prediction_buffer = prediction._logical_storage_for(selected).buffer
+    target_buffer = target._logical_storage_for(selected).buffer
+    grad_values = (
+        grad_buffer if selected == "python" else grad_buffer.reshape(grad.shape)
     )
-
-    if not _array_work_is_large_enough(prediction.size, _NUMPY_ELEMENTWISE_MIN_SIZE):
-        return reference(
-            grad,
-            prediction,
-            target,
-            from_logits=from_logits,
-            reduction=reduction,
-            needs_input_grad=needs_input_grad,
+    prediction_values = (
+        prediction_buffer
+        if selected == "python"
+        else prediction_buffer.reshape(prediction.shape)
+    )
+    target_values = (
+        target_buffer if selected == "python" else target_buffer.reshape(target.shape)
+    )
+    result = backend.binary_cross_entropy_gradient(
+        grad_values,
+        prediction_values,
+        target_values,
+        grad.shape,
+        prediction.shape,
+        target.shape,
+        from_logits=from_logits,
+        reduction=reduction,
+        dtype=grad.dtype,
+        needs_input_grad=needs_input_grad,
+    )
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute binary_cross_entropy_gradient "
+            f"at dtype {grad.dtype.name} conformingly. The VJP runs on the "
+            "selected backend; select another backend to run it elsewhere."
         )
-    binary_cross_entropy_gradient = _backend_kernel("binary_cross_entropy_gradient")
-    result = binary_cross_entropy_gradient(
-        grad,
-        prediction,
-        target,
-        from_logits=from_logits,
-        reduction=reduction,
-        needs_input_grad=needs_input_grad,
+    validate_backend_residency(
+        (storage for storage in result if storage is not None), selected
     )
-    if result is not None:
-        return result
-    return reference(
-        grad,
-        prediction,
-        target,
-        from_logits=from_logits,
-        reduction=reduction,
-        needs_input_grad=needs_input_grad,
-    )
+    return result

@@ -14,6 +14,8 @@ def _reduce_losses(values: Any, reduction: LossReduction) -> Any:
     """Reduce non-negative losses without overflowing an ordinary mean."""
     if reduction == "none":
         return values
+    if values.size == 0:
+        return numpy.asarray([0.0 if reduction == "sum" else numpy.nan])
     if reduction == "sum":
         with _errstate(over="ignore", invalid="ignore"):
             return numpy.asarray([numpy.sum(values)])

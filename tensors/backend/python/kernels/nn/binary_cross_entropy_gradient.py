@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
-from tensors.backend.python.storage import PythonStorage
-from tensors.backend.storage import Storage
 from tensors.backend.python.kernels.elementwise.sigmoid import _sigmoid
+from tensors.backend.python.storage import PythonStorage
 
 if TYPE_CHECKING:
+    from tensors.backend.storage import Storage
     from tensors.backend.types import LossReduction
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
 def _probability_gradient(probability: float, target: float) -> float:
-    """Return the prediction derivative for a probability input."""
     if probability == 0.0:
         return 1.0 if target == 0.0 else -math.inf
     if probability == 1.0:
@@ -24,18 +24,12 @@ def _probability_gradient(probability: float, target: float) -> float:
 
 
 def _logit_gradient(value: float, target: float) -> float:
-    """Return the prediction derivative for a logit input.
-
-    ``sigmoid(x) - t`` is evaluated from whichever side keeps the subtraction
-    away from a saturated sigmoid.
-    """
     if value >= 0.0:
         return 1.0 - target - _sigmoid(-value)
     return _sigmoid(value) - target
 
 
 def _target_gradient(probability: float) -> float:
-    """Return the target derivative for a probability input."""
     if probability == 0.0:
         return math.inf
     if probability == 1.0:
@@ -44,28 +38,36 @@ def _target_gradient(probability: float) -> float:
 
 
 def binary_cross_entropy_gradient(
-    grad: Tensor,
-    prediction: Tensor,
-    target: Tensor,
+    grad_values: Sequence[Any],
+    prediction_values: Sequence[Any],
+    target_values: Sequence[Any],
+    grad_shape: tuple[int, ...],
+    prediction_shape: tuple[int, ...],
+    target_shape: tuple[int, ...],
     *,
     from_logits: bool,
     reduction: LossReduction,
+    dtype: DataType,
     needs_input_grad: tuple[bool, ...] = (True, True),
-) -> tuple[Storage | None, Storage | None]:
-    """Return the requested prediction and target gradients."""
-    need_prediction, need_target = needs_input_grad
-    size = prediction.size
+) -> tuple[Storage | None, Storage | None] | None:
+    """Return requested VJPs from backend-native values."""
+    if prediction_shape != target_shape:
+        return None
+    size = math.prod(prediction_shape)
     if reduction == "none":
-        upstream = list(grad._data)
+        if grad_shape != prediction_shape:
+            return None
+        upstream = list(grad_values)
     else:
+        if math.prod(grad_shape) != 1:
+            return None
         scale = 1.0 / size if reduction == "mean" and size else 1.0
-        upstream = [grad._data[0] * scale] * size
+        upstream = [grad_values[0] * scale] * size
+    need_prediction, need_target = needs_input_grad
     prediction_gradients = []
     target_gradients = []
     for upstream_value, raw_prediction, raw_target in zip(
-        upstream,
-        prediction._data,
-        target._data,
+        upstream, prediction_values, target_values
     ):
         if upstream_value == 0:
             if need_prediction:
@@ -74,12 +76,12 @@ def binary_cross_entropy_gradient(
                 target_gradients.append(0.0)
             continue
         value = float(raw_prediction)
-        target_value = float(raw_target)
+        target = float(raw_target)
         if need_prediction:
             derivative = (
-                _logit_gradient(value, target_value)
+                _logit_gradient(value, target)
                 if from_logits
-                else _probability_gradient(value, target_value)
+                else _probability_gradient(value, target)
             )
             prediction_gradients.append(upstream_value * derivative)
         if need_target:
@@ -88,13 +90,9 @@ def binary_cross_entropy_gradient(
             )
     return (
         (
-            PythonStorage.from_values(prediction_gradients, grad.dtype)
+            PythonStorage.from_values(prediction_gradients, dtype)
             if need_prediction
             else None
         ),
-        (
-            PythonStorage.from_values(target_gradients, grad.dtype)
-            if need_target
-            else None
-        ),
+        PythonStorage.from_values(target_gradients, dtype) if need_target else None,
     )
