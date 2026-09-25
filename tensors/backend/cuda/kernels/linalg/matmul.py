@@ -6,12 +6,13 @@ from typing import TYPE_CHECKING, Any
 
 import cupy
 
-from tensors.backend.cuda.conversion import _errstate, _storage, _widen
+from tensors.backend.cuda.conversion import _storage, _widen
+from tensors.backend.cuda.kernels.linalg.contraction import certified_matmul
 
 if TYPE_CHECKING:
     from tensors.backend.storage import Storage
-    from tensors.dtype import DataType
     from tensors.backend.types import MatmulMetadata
+    from tensors.dtype import DataType
 
 
 def matmul(
@@ -22,18 +23,23 @@ def matmul(
     dtype: DataType,
     output_shape: tuple[int, ...],
 ) -> Storage | None:
-    """Execute a floating matrix product with CUDA-native values."""
+    """Execute a certified floating matrix product with CUDA-native values."""
     if dtype.kind != "floating":
         return None
     try:
         left = _widen(left_values)
         right = _widen(right_values)
-        with _errstate(over="ignore", under="ignore", invalid="ignore"):
-            result = cupy.matmul(left, right)
+        left_vector, right_vector = metadata[:2]
+        left_matrix = left.reshape((1, left.shape[0])) if left_vector else left
+        right_matrix = right.reshape((right.shape[0], 1)) if right_vector else right
+        result = certified_matmul(left_matrix, right_matrix)
     except (TypeError, ValueError):
         return None
-    finite_operands = cupy.all(cupy.isfinite(left)) & cupy.all(cupy.isfinite(right))
-    if bool(finite_operands & cupy.any(~cupy.isfinite(result))):
+    if result is None:
         return None
+    if left_vector:
+        result = cupy.squeeze(result, axis=-2)
+    if right_vector:
+        result = cupy.squeeze(result, axis=-1)
     result = cupy.where(result == 0.0, 0.0, result)
     return _storage(result, dtype=dtype, output_shape=output_shape)

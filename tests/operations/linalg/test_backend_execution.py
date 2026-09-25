@@ -346,6 +346,7 @@ class LinearAlgebraBackendExecutionTests(unittest.TestCase):
         repository = Path(__file__).resolve().parents[3]
         for backend in ("numpy", "cuda"):
             for filename in (
+                "contraction.py",
                 "matmul.py",
                 "matmul_gradient.py",
                 "outer.py",
