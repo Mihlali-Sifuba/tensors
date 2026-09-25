@@ -33,21 +33,23 @@ class CudaExtremeGradientTests(unittest.TestCase):
             )
             with self.assertRaises(BackendOperationUnsupportedError):
                 ts.sum(ts.Tensor([1e308, 1e308, -1e308, -1e308]))
-            matrix_product = ts.Tensor([1e308, 1e308, -1e308, -1e308]) @ ts.ones((4,))
+            with self.assertRaises(BackendOperationUnsupportedError):
+                ts.Tensor([1e308, 1e308, -1e308, -1e308]) @ ts.ones((4,))
             batched_left = ts.Variable(
                 ts.Tensor([1e308, 1e308, -1e308, -1e308], shape=(4, 1, 1))
             )
             shared_right = ts.Variable([[1.0]])
-            matrix_gradient = ts.grad(
-                batched_left @ shared_right, shared_right, ts.ones((4, 1, 1))
-            )
+            with self.assertRaises(BackendOperationUnsupportedError):
+                ts.grad(
+                    batched_left @ shared_right,
+                    shared_right,
+                    ts.ones((4, 1, 1)),
+                )
         for gradient in (
             division_gradient,
             base_gradient,
             exponent_gradient,
             cancellation,
-            matrix_product,
-            matrix_gradient,
         ):
             self.assertIsInstance(gradient.backend_storage, CudaStorage)
         self.assertEqual(division_gradient.tolist()[0], -1.0)
@@ -61,8 +63,6 @@ class CudaExtremeGradientTests(unittest.TestCase):
             )
         )
         self.assertEqual(cancellation.tolist(), [0.0])
-        self.assertEqual(matrix_product.item(), 0.0)
-        self.assertEqual(matrix_gradient.tolist(), [0.0])
 
 
 @requires_numpy

@@ -198,7 +198,11 @@ class DispatchFallbackTests(BackendTestCase):
             )
             self.assertIsInstance(
                 dispatch_package.execute_matmul(
-                    matrix, matrix, dtype=ts.float64, output_shape=(2, 2)
+                    matrix,
+                    matrix,
+                    metadata=(False, False, (), 2, 2, 2, (), ()),
+                    dtype=ts.float64,
+                    output_shape=(2, 2),
                 ),
                 PythonStorage,
             )
@@ -257,7 +261,11 @@ class NumPyDispatchTests(BackendTestCase):
                     value, (0,), keepdims=False, dtype=ts.float64, output_shape=()
                 ),
                 "linalg": dispatch_package.execute_matmul(
-                    matrix, matrix, dtype=ts.float64, output_shape=(64, 64)
+                    matrix,
+                    matrix,
+                    metadata=(False, False, (), 64, 64, 64, (), ()),
+                    dtype=ts.float64,
+                    output_shape=(64, 64),
                 ),
                 "nn": dispatch_package.execute_softmax(value, 0, dtype=ts.float64),
             }
@@ -299,7 +307,11 @@ class CudaDispatchTests(BackendTestCase):
                     value, (0,), keepdims=False, dtype=ts.float64, output_shape=()
                 ),
                 "linalg": dispatch_package.execute_matmul(
-                    matrix, matrix, dtype=ts.float64, output_shape=(64, 64)
+                    matrix,
+                    matrix,
+                    metadata=(False, False, (), 64, 64, 64, (), ()),
+                    dtype=ts.float64,
+                    output_shape=(64, 64),
                 ),
             }
         for domain, storage in results.items():

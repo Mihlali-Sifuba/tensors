@@ -10,7 +10,6 @@ import unittest
 
 import tensors as ts
 
-
 requires_numpy = unittest.skipUnless(
     "numpy" in ts.available_backends(),
     "NumPy is not installed",
@@ -37,7 +36,11 @@ class NumPyParityTestCase(BackendTestCase):
 
     def _matmul(self, backend, left, right):
         with ts.use_backend(backend):
-            return ts.matmul(left, right)
+            selected_left = ts.Tensor(left.tolist(), dtype=left.dtype, shape=left.shape)
+            selected_right = ts.Tensor(
+                right.tolist(), dtype=right.dtype, shape=right.shape
+            )
+            return ts.matmul(selected_left, selected_right)
 
     def assertBackendParity(self, left, right):
         expected = self._matmul("python", left, right)

@@ -1,32 +1,53 @@
-"""Dispatch for matrix and vector products and their VJPs."""
+"""Strict selected-backend dispatch for matrix products."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_MATMUL_MIN_WORK,
-    _array_work_is_large_enough,
-    _shape_size,
-)
-from tensors.backend.storage import Storage
+
+from typing import TYPE_CHECKING, Any
+
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
+    from tensors.backend.storage import Storage
     from tensors.dtype import DataType
+    from tensors.backend.types import MatmulMetadata
     from tensors.tensor import Tensor
 
 
 def execute_matmul(
-    left: Tensor, right: Tensor, *, dtype: DataType, output_shape: tuple[int, ...]
+    left: Tensor,
+    right: Tensor,
+    *,
+    metadata: MatmulMetadata,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
 ) -> Storage:
-    """Run an accelerated matrix product, or the Python reference."""
-    from tensors.backend.python.kernels.linalg.matmul import matmul as reference
-
-    contraction_size = left.shape[-1]
-    work = _shape_size(output_shape) * contraction_size
-    if not _array_work_is_large_enough(work, _NUMPY_MATMUL_MIN_WORK):
-        return reference(left, right, dtype=dtype, output_shape=output_shape)
-    matmul = _backend_kernel("matmul")
-    result = matmul(left, right, dtype=dtype, output_shape=output_shape)
-    if result is not None:
-        return result
-    return reference(left, right, dtype=dtype, output_shape=output_shape)
+    """Run matmul on the selected backend without fallback."""
+    selected = config.get_backend()
+    validate_backend_residency((left, right), selected)
+    backend: Any = load_backend(selected)
+    left_buffer = left._logical_storage_for(selected).buffer
+    right_buffer = right._logical_storage_for(selected).buffer
+    left_values = (
+        left_buffer if selected == "python" else left_buffer.reshape(left.shape)
+    )
+    right_values = (
+        right_buffer if selected == "python" else right_buffer.reshape(right.shape)
+    )
+    result = backend.matmul(
+        left_values,
+        right_values,
+        metadata=metadata,
+        dtype=dtype,
+        output_shape=output_shape,
+    )
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute matmul conformingly. "
+            "The matrix product runs on the selected backend; select another "
+            "backend to run it elsewhere."
+        )
+    validate_backend_residency((result,), selected)
+    return result

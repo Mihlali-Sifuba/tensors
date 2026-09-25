@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 import tensors as ts
 import tensors.backend.numpy.kernels as numpy_backend
+from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.backend.cuda.storage import CudaStorage
 from tests.backend._support import NumPyParityTestCase, requires_cuda, requires_numpy
 
@@ -11,19 +12,22 @@ class CudaMatmulTests(unittest.TestCase):
     """Device matrix products agree with the Python reference."""
 
     def test_cuda_matmul_matches_python(self):
-        left = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
-        right = ts.Tensor([[2.0, 0.0], [1.0, 2.0]])
         with ts.use_backend("python"):
-            expected = (left @ right).tolist()
+            expected = (
+                ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
+                @ ts.Tensor([[2.0, 0.0], [1.0, 2.0]])
+            ).tolist()
         with ts.use_backend("cuda"):
-            actual = left @ right
+            actual = ts.Tensor([[1.0, 2.0], [3.0, 4.0]]) @ ts.Tensor(
+                [[2.0, 0.0], [1.0, 2.0]]
+            )
         self.assertIsInstance(actual.backend_storage, CudaStorage)
         self.assertEqual(actual.tolist(), expected)
 
 
 @requires_numpy
 class NumPyMatmulTests(NumPyParityTestCase):
-    """Matrix-product kernels, their VJPs, and their fallbacks."""
+    """Matrix-product kernels, their VJPs, and strict declines."""
 
     def test_numpy_kernel_is_used_for_floating_point_matmul(self):
         import numpy
@@ -90,17 +94,19 @@ class NumPyMatmulTests(NumPyParityTestCase):
         for actual_value, expected_value in zip(actual.tolist(), expected.tolist()):
             self.assertAlmostEqual(actual_value, expected_value, places=12)
 
-    def test_integer_product_uses_compatible_fallback(self):
-        self.assertBackendParity(
-            ts.Tensor([[1, 2], [3, 4]], dtype=ts.int32),
-            ts.Tensor([[5, 6], [7, 8]], dtype=ts.int32),
-        )
+    def test_integer_product_is_explicitly_unsupported(self):
+        with ts.use_backend("numpy"):
+            left = ts.Tensor([[1, 2], [3, 4]], dtype=ts.int32)
+            right = ts.Tensor([[5, 6], [7, 8]], dtype=ts.int32)
+            with self.assertRaises(BackendOperationUnsupportedError):
+                ts.matmul(left, right)
 
-    def test_temporary_overflow_uses_stable_fallback(self):
-        left = ts.Tensor([1e308, 1e308, -1e308, -1e308])
-        right = ts.Tensor([1.0, 1.0, 1.0, 1.0])
-        result = self._matmul("numpy", left, right)
-        self.assertEqual(result.item(), 0.0)
+    def test_temporary_overflow_is_explicitly_unsupported(self):
+        with ts.use_backend("numpy"):
+            left = ts.Tensor([1e308, 1e308, -1e308, -1e308])
+            right = ts.Tensor([1.0, 1.0, 1.0, 1.0])
+            with self.assertRaises(BackendOperationUnsupportedError):
+                ts.matmul(left, right)
 
 
 if __name__ == "__main__":

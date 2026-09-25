@@ -24,7 +24,7 @@ class Outer(Operation):
         if a.ndim != 1 or b.ndim != 1:
             raise ValueError("outer requires two 1D vectors")
         dtype = result_dtype(a.dtype, b)
-        accelerated = execute_outer(a, b, dtype=dtype)
+        accelerated = execute_outer(a, b, dtype=dtype, output_shape=(a.size, b.size))
         return Tensor._from_owned_storage(
             accelerated, dtype=dtype, shape=(a.size, b.size)
         )
@@ -34,7 +34,6 @@ class Outer(Operation):
     ) -> List[Optional[Tensor]]:
         """Differentiate an outer product with respect to requested vectors."""
         left, right = inputs
-        need_left, need_right = needs_input_grad
         expected_shape = (left.size, right.size)
         if grad.shape != expected_shape:
             raise ValueError(

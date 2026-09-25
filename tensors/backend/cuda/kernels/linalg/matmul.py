@@ -1,40 +1,39 @@
-"""CuPy implementation of the matrix product."""
+"""CUDA implementation of matrix products."""
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 import cupy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
-from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
+
+from tensors.backend.cuda.conversion import _errstate, _storage, _widen
 
 if TYPE_CHECKING:
+    from tensors.backend.storage import Storage
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
-from tensors.backend.cuda.kernels.linalg.matmul_ops import _comparable_finite_values
-from tensors.backend.cuda.kernels.linalg.matmul_ops import _scaled_matmul
+    from tensors.backend.types import MatmulMetadata
 
 
 def matmul(
-    left: Tensor, right: Tensor, *, dtype: DataType, output_shape: tuple[int, ...]
+    left_values: Any,
+    right_values: Any,
+    *,
+    metadata: MatmulMetadata,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
 ) -> Storage | None:
-    """Return a NumPy matrix product or defer to the reference implementation."""
+    """Execute a floating matrix product with CUDA-native values."""
     if dtype.kind != "floating":
         return None
     try:
-        left_array = _working_values(left)
-        right_array = _working_values(right)
-    except ValueError:
+        left = _widen(left_values)
+        right = _widen(right_values)
+        with _errstate(over="ignore", under="ignore", invalid="ignore"):
+            result = cupy.matmul(left, right)
+    except (TypeError, ValueError):
         return None
-    with _errstate(over="ignore", under="ignore", invalid="ignore"):
-        result = cupy.matmul(left_array, right_array)
-    if not bool(cupy.all(cupy.isfinite(result))):
-        if not (
-            _comparable_finite_values(left_array)
-            and _comparable_finite_values(right_array)
-        ):
-            return None
-        result = _scaled_matmul(left_array, right_array)
-        if bool(cupy.any(cupy.isnan(result))):
-            return None
+    finite_operands = cupy.all(cupy.isfinite(left)) & cupy.all(cupy.isfinite(right))
+    if bool(finite_operands & cupy.any(~cupy.isfinite(result))):
+        return None
+    result = cupy.where(result == 0.0, 0.0, result)
     return _storage(result, dtype=dtype, output_shape=output_shape)

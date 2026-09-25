@@ -1,52 +1,69 @@
-"""NumPy implementation of the vector outer product VJP."""
+"""NumPy implementation of outer-product VJPs."""
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 import numpy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
-from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _finite_operands
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import tensor_to_logical_array
-from tensors.backend.numpy.kernels.reductions.stability import _stable_sum_candidate
+
+from tensors.backend.numpy.conversion import _errstate, _storage
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.backend.storage import Storage
+    from tensors.dtype import DataType
 
 
 def outer_gradient(
-    grad: Tensor,
-    left: Tensor,
-    right: Tensor,
+    grad_values: Any,
+    left_values: Any,
+    right_values: Any,
     *,
+    left_shape: tuple[int, ...],
+    right_shape: tuple[int, ...],
+    dtype: DataType,
     needs_input_grad: tuple[bool, ...] = (True, True),
 ) -> tuple[Storage | None, Storage | None] | None:
-    """Run the requested stable native outer-product VJPs."""
-    upstream = tensor_to_logical_array(grad).astype(numpy.float64, copy=False)
-    left_values = tensor_to_logical_array(left).astype(numpy.float64, copy=False)
-    right_values = tensor_to_logical_array(right).astype(numpy.float64, copy=False)
-    if not _finite_operands(upstream, left_values, right_values):
+    """Execute requested outer VJPs with NumPy-native contractions."""
+    if dtype.kind != "floating":
+        return None
+    try:
+        upstream = grad_values.astype(numpy.float64, copy=False)
+        left = left_values.astype(numpy.float64, copy=False)
+        right = right_values.astype(numpy.float64, copy=False)
+    except (TypeError, ValueError):
+        return None
+    if not bool(
+        numpy.all(numpy.isfinite(upstream))
+        & numpy.all(numpy.isfinite(left))
+        & numpy.all(numpy.isfinite(right))
+    ):
         return None
     need_left, need_right = needs_input_grad
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
-        left_terms = upstream * right_values if need_left else None
-        right_terms = upstream * left_values[:, None] if need_right else None
-    if left_terms is not None and (not _stable_sum_candidate(left_terms, (1,))):
+        left_result = numpy.matmul(upstream, right) if need_left else None
+        right_result = numpy.matmul(left, upstream) if need_right else None
+    if left_result is not None and bool(numpy.any(~numpy.isfinite(left_result))):
         return None
-    if right_terms is not None and (not _stable_sum_candidate(right_terms, (0,))):
+    if right_result is not None and bool(numpy.any(~numpy.isfinite(right_result))):
         return None
-    left_storage = None
-    if left_terms is not None:
-        left_storage = _storage(
-            numpy.sum(left_terms, axis=1), dtype=grad.dtype, output_shape=left.shape
+    left_storage = (
+        _storage(
+            numpy.where(left_result == 0.0, 0.0, left_result),
+            dtype=dtype,
+            output_shape=left_shape,
         )
-        if left_storage is None:
-            return None
-    right_storage = None
-    if right_terms is not None:
-        right_storage = _storage(
-            numpy.sum(right_terms, axis=0), dtype=grad.dtype, output_shape=right.shape
+        if left_result is not None
+        else None
+    )
+    right_storage = (
+        _storage(
+            numpy.where(right_result == 0.0, 0.0, right_result),
+            dtype=dtype,
+            output_shape=right_shape,
         )
-        if right_storage is None:
-            return None
+        if right_result is not None
+        else None
+    )
+    if (need_left and left_storage is None) or (need_right and right_storage is None):
+        return None
     return (left_storage, right_storage)
