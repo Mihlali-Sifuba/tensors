@@ -98,6 +98,7 @@ def cross_entropy_gradient(
             )
             nan_group = cupy.any(cupy.isnan(values), axis=axis, keepdims=True)
             log_probabilities = cupy.where(nan_group, cupy.nan, log_probabilities)
+            log_probabilities = _widen(_narrow(log_probabilities, probability_dtype))
             targets_result = cupy.where(
                 zero_upstream, 0.0, -expanded_upstream * log_probabilities
             )

@@ -166,6 +166,35 @@ class LossBackendExecutionTests(unittest.TestCase):
 
         self.for_each_backend(body)
 
+    def test_target_vjp_rounds_log_probabilities_to_logits_dtype(self):
+        results = {}
+        for backend in self.BACKENDS:
+            if backend not in ts.available_backends():
+                continue
+            with ts.use_backend(backend):
+                grad = ts.Tensor([1.0000000000000002], dtype=ts.float64)
+                logits = ts.Tensor([[0.0, -1.0e-8]], dtype=ts.float32)
+                targets = ts.Tensor([[0.25, 0.75]], dtype=ts.float32)
+                logits_storage, targets_storage = (
+                    backend_dispatch.execute_cross_entropy_gradient(
+                        grad,
+                        logits,
+                        targets,
+                        1,
+                        reduction="sum",
+                        needs_input_grad=(False, True),
+                    )
+                )
+                self.assertIsNone(logits_storage)
+                self.assertIsNotNone(targets_storage)
+                self.assertIs(targets_storage.dtype, ts.float64)
+                results[backend] = [float(value) for value in targets_storage.buffer]
+
+        expected = results["python"]
+        for backend, actual in results.items():
+            with self.subTest(backend=backend):
+                self.assertEqual(actual, expected)
+
     def test_bce_boundaries_extremes_and_validation(self):
         def body(backend):
             probabilities = ts.Variable(ts.Tensor([0.0, 1.0], dtype=ts.float64))

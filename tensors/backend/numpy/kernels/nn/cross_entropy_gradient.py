@@ -96,6 +96,9 @@ def cross_entropy_gradient(
             )
             nan_group = numpy.any(numpy.isnan(values), axis=axis, keepdims=True)
             log_probabilities = numpy.where(nan_group, numpy.nan, log_probabilities)
+            log_probabilities = log_probabilities.astype(probability_dtype).astype(
+                numpy.float64
+            )
             targets_result = numpy.where(
                 zero_upstream, 0.0, -expanded_upstream * log_probabilities
             )
