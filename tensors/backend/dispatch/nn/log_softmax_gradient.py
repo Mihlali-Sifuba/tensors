@@ -1,30 +1,44 @@
-"""Dispatch for normalization, probability, and loss kernels."""
+"""Strict selected-backend dispatch for the log-softmax VJP."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_ELEMENTWISE_MIN_SIZE,
-    _array_work_is_large_enough,
-)
-from tensors.backend.storage import Storage
+
+from typing import TYPE_CHECKING, Any
+
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
+    from tensors.backend.storage import Storage
     from tensors.tensor import Tensor
 
 
 def execute_log_softmax_gradient(grad: Tensor, value: Tensor, axis: int) -> Storage:
-    """Run a fused softmax-family VJP when cancellation risk is low."""
-    from tensors.backend.python.kernels.nn.log_softmax_gradient import (
-        log_softmax_gradient as reference,
+    """Run the log-softmax VJP on the selected backend without fallback."""
+    selected = config.get_backend()
+    validate_backend_residency((grad, value), selected)
+    backend: Any = load_backend(selected)
+    grad_buffer = grad._logical_storage_for(selected).buffer
+    value_buffer = value._logical_storage_for(selected).buffer
+    grad_values = (
+        grad_buffer if selected == "python" else grad_buffer.reshape(grad.shape)
     )
-
-    if not _array_work_is_large_enough(
-        max(grad.size, value.size), _NUMPY_ELEMENTWISE_MIN_SIZE
-    ):
-        return reference(grad, value, axis)
-    normalization_gradient = _backend_kernel("log_softmax_gradient")
-    result = normalization_gradient(grad, value, axis)
-    if result is not None:
-        return result
-    return reference(grad, value, axis)
+    values = value_buffer if selected == "python" else value_buffer.reshape(value.shape)
+    result = backend.log_softmax_gradient(
+        grad_values,
+        values,
+        grad.shape,
+        value.shape,
+        axis,
+        dtype=grad.dtype,
+        value_dtype=value.dtype,
+    )
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute log_softmax_gradient at "
+            f"dtype {grad.dtype.name} conformingly. The VJP runs on the "
+            "selected backend; select another backend to run it elsewhere."
+        )
+    validate_backend_residency((result,), selected)
+    return result

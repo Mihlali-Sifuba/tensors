@@ -70,6 +70,12 @@ class Softmax(Operation):
         if not isinstance(axis, int):
             raise TypeError("softmax axis must be an integer")
         axis = _normalize_axis(a, axis)
+        if not needs_input_grad[0]:
+            return [None]
+        from tensors.variable import Variable
+
+        if isinstance(grad, Variable) or isinstance(a, Variable):
+            return [_softmax_vjp(grad, a, axis)]
         return [_softmax_vjp_tensor(grad, a, axis)]
 
 
@@ -216,6 +222,27 @@ class SoftmaxGradient(Operation):
         need_grad, need_value = needs_input_grad
         axis = self.axis
         assert isinstance(axis, int)
+        from tensors.variable import Variable
+
+        if isinstance(outer_grad, Variable):
+            value_gradient = None
+            if need_value:
+                from tensors.operations.reductions.sum import sum as reduce_sum
+
+                probabilities = softmax(value, axis=axis)
+                centered = grad - reduce_sum(
+                    grad * probabilities, axis=axis, keepdims=True
+                )
+                projection = reduce_sum(
+                    outer_grad * probabilities, axis=axis, keepdims=True
+                )
+                vector = outer_grad * centered - grad * projection
+                value_gradient = _softmax_vjp(vector, value, axis)
+            return [
+                _softmax_vjp(outer_grad, value, axis) if need_grad else None,
+                value_gradient,
+            ]
+
         value_gradient = None
         if need_value:
             centered = _centered_softmax_tensor(grad, value, axis)

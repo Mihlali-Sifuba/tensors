@@ -12,7 +12,6 @@ from tensors.operations.normalization.softmax import (
     _axis_layout,
     _centered_softmax_tensor,
     _normalize_axis,
-    _softmax_centered,
     _softmax_vjp,
     _softmax_vjp_tensor,
 )
@@ -48,6 +47,12 @@ class LogSoftmax(Operation):
         if isinstance(axis, bool) or not isinstance(axis, int):
             raise TypeError("log_softmax axis must be an integer")
         axis = _normalize_axis(a, axis)
+        if not needs_input_grad[0]:
+            return [None]
+        from tensors.variable import Variable
+
+        if isinstance(grad, Variable) or isinstance(a, Variable):
+            return [_log_softmax_vjp(grad, a, axis)]
         return [_log_softmax_vjp_tensor(grad, a, axis)]
 
 
@@ -80,6 +85,25 @@ class LogSoftmaxGradient(Operation):
         need_grad, need_value = needs_input_grad
         axis = self.axis
         assert isinstance(axis, int)
+        from tensors.variable import Variable
+
+        if isinstance(outer_grad, Variable):
+            from tensors.operations.reductions.sum import sum as reduce_sum
+
+            grad_gradient = None
+            if need_grad:
+                from tensors.operations.normalization.softmax import softmax
+
+                probabilities = softmax(value, axis=axis)
+                grad_gradient = outer_grad - reduce_sum(
+                    outer_grad * probabilities, axis=axis, keepdims=True
+                )
+            value_gradient = None
+            if need_value:
+                total = reduce_sum(grad, axis=axis, keepdims=True)
+                value_gradient = -total * _softmax_vjp(outer_grad, value, axis)
+            return [grad_gradient, value_gradient]
+
         value_gradient = None
         if need_value:
             total = Sum(axis=axis, keepdims=True).forward(grad)

@@ -3,23 +3,28 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 from tensors.backend.python.kernels.nn._normalization import _axis_positions
 from tensors.backend.python.storage import PythonStorage
-from tensors.backend.storage import Storage
 from tensors.utils.normalization import shifted_normalization
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
-def softmax(value: Tensor, axis: int, *, dtype: DataType) -> Storage:
+def softmax(
+    value_values: Sequence[Any],
+    input_shape: tuple[int, ...],
+    axis: int,
+    *,
+    dtype: DataType,
+) -> PythonStorage:
     """Compute numerically stable softmax probabilities along ``axis``."""
-    values = [0.0] * value.size
-    for positions in _axis_positions(value, axis):
-        group = [float(value._data[position]) for position in positions]
+    values = [0.0] * math.prod(input_shape)
+    for positions in _axis_positions(input_shape, axis):
+        group = [float(value_values[position]) for position in positions]
         if any(math.isnan(item) for item in group):
             for position in positions:
                 values[position] = math.nan

@@ -1,27 +1,33 @@
-"""Dispatch for normalization, probability, and loss kernels."""
+"""Strict selected-backend dispatch for softmax."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_ELEMENTWISE_MIN_SIZE,
-    _array_work_is_large_enough,
-)
-from tensors.backend.storage import Storage
+
+from typing import TYPE_CHECKING, Any
+
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
+    from tensors.backend.storage import Storage
     from tensors.dtype import DataType
     from tensors.tensor import Tensor
 
 
 def execute_softmax(value: Tensor, axis: int, *, dtype: DataType) -> Storage:
-    """Run a fused softmax-family transform on ordinary finite inputs."""
-    from tensors.backend.python.kernels.nn.softmax import softmax as reference
-
-    if not _array_work_is_large_enough(value.size, _NUMPY_ELEMENTWISE_MIN_SIZE):
-        return reference(value, axis, dtype=dtype)
-    normalization = _backend_kernel("softmax")
-    result = normalization(value, axis, dtype=dtype)
-    if result is not None:
-        return result
-    return reference(value, axis, dtype=dtype)
+    """Run softmax on the selected backend without size-based fallback."""
+    selected = config.get_backend()
+    validate_backend_residency((value,), selected)
+    backend: Any = load_backend(selected)
+    buffer = value._logical_storage_for(selected).buffer
+    values = buffer if selected == "python" else buffer.reshape(value.shape)
+    result = backend.softmax(values, value.shape, axis, dtype=dtype)
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute softmax at dtype "
+            f"{dtype.name} conformingly. Softmax runs on the selected backend; "
+            "select another backend to run it elsewhere."
+        )
+    validate_backend_residency((result,), selected)
+    return result
