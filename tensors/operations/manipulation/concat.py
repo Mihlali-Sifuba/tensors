@@ -1,15 +1,16 @@
 """Tensor concatenation and its differentiation rule."""
 
 from __future__ import annotations
-from array import array
+
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, List, Optional, overload
+
 from tensors._typing import TensorData, TensorLike, TensorResult
 from tensors.backend import execute_concat
 from tensors.dtype import result_dtype
+from tensors.graph.expression import as_tensor_operand
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
-from tensors.graph.expression import as_tensor_operand
 
 if TYPE_CHECKING:
     from tensors.graph.node import VariableNode
@@ -17,12 +18,7 @@ if TYPE_CHECKING:
 
 
 def _operands(tensors: Sequence[Any]) -> tuple[Any, ...]:
-    """Read a lone list argument as the operands it holds.
-
-    A caller may name one tensor per argument or pass a single list of
-    them; both the public function and :meth:`Concat.forward` read that
-    shape the same way.
-    """
+    """Read a lone list argument as the operands it holds."""
     if len(tensors) == 1 and isinstance(tensors[0], list):
         return tuple(tensors[0])
     return tuple(tensors)
@@ -39,7 +35,7 @@ class Concat(Operation):
         object.__setattr__(self, "keepdims", keepdims)
 
     def forward(self, *tensors: Tensor | list[Tensor]) -> Tensor:
-        """Concatenate one or more tensors along ``axis``."""
+        """Concatenate one or more tensors along the configured axis."""
         axis = self.axis
         keepdims = self.keepdims
         if not isinstance(keepdims, bool):
@@ -57,47 +53,46 @@ class Concat(Operation):
                 axis += 1
             if axis != 0:
                 raise ValueError("Axis out of bounds for scalar tensor concat")
-            if any((tensor.ndim != 0 for tensor in converted[1:])):
+            if any(tensor.ndim != 0 for tensor in converted[1:]):
                 raise ValueError("All tensors must have the same rank")
-            dtype = reference.dtype
-            for tensor in converted[1:]:
-                dtype = result_dtype(dtype, tensor)
-            values = array(dtype.typecode, [tensor._data[0] for tensor in converted])
-            return Tensor(values, dtype=dtype, shape=(len(converted),))
-        if axis < 0:
-            axis += reference.ndim
-        if not 0 <= axis < reference.ndim:
-            raise ValueError(f"Axis {axis} out of bounds for {reference.ndim}D tensor")
-        for tensor in converted[1:]:
-            if tensor.ndim != reference.ndim:
+            output_shape = (len(converted),)
+        else:
+            if axis < 0:
+                axis += reference.ndim
+            if not 0 <= axis < reference.ndim:
                 raise ValueError(
-                    f"All tensors must have the same rank; got {reference.ndim} and {tensor.ndim}"
+                    f"Axis {axis} out of bounds for {reference.ndim}D tensor"
                 )
-            for dimension in range(reference.ndim):
-                if (
-                    dimension != axis
-                    and tensor.shape[dimension] != reference.shape[dimension]
-                ):
+            for tensor in converted[1:]:
+                if tensor.ndim != reference.ndim:
                     raise ValueError(
-                        f"Tensors must match on all non-concat axes; axis {dimension}: {reference.shape[dimension]} vs {tensor.shape[dimension]}"
+                        "All tensors must have the same rank; got "
+                        f"{reference.ndim} and {tensor.ndim}"
                     )
-        output_shape = list(reference.shape)
-        output_shape[axis] = sum((tensor.shape[axis] for tensor in converted))
-        trailing_size = 1
-        for dimension in reference.shape[axis + 1 :]:
-            trailing_size *= dimension
-        groups = 1
-        for dimension in reference.shape[:axis]:
-            groups *= dimension
+                for dimension in range(reference.ndim):
+                    if (
+                        dimension != axis
+                        and tensor.shape[dimension] != reference.shape[dimension]
+                    ):
+                        raise ValueError(
+                            "Tensors must match on all non-concat axes; axis "
+                            f"{dimension}: {reference.shape[dimension]} vs "
+                            f"{tensor.shape[dimension]}"
+                        )
+            shape = list(reference.shape)
+            shape[axis] = sum(tensor.shape[axis] for tensor in converted)
+            output_shape = tuple(shape)
         dtype = reference.dtype
         for tensor in converted[1:]:
             dtype = result_dtype(dtype, tensor)
+        promoted = tuple(
+            tensor if tensor.dtype == dtype else tensor.astype(dtype)
+            for tensor in converted
+        )
         accelerated = execute_concat(
-            converted, axis, dtype=dtype, output_shape=tuple(output_shape)
+            promoted, axis, dtype=dtype, output_shape=output_shape
         )
-        return Tensor._from_owned_storage(
-            accelerated, dtype=dtype, shape=tuple(output_shape)
-        )
+        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
@@ -109,12 +104,15 @@ class Concat(Operation):
         if axis < 0:
             axis += grad.ndim
         if inputs[0].ndim == 0:
+            from tensors.variable import Variable
+
+            if isinstance(grad, Variable):
+                return [
+                    grad[index] if wanted else None
+                    for index, wanted in enumerate(needs_input_grad)
+                ]
             return [
-                (
-                    Tensor([grad._data[index]], dtype=grad.dtype, shape=())
-                    if wanted
-                    else None
-                )
+                (Tensor([grad[index]], dtype=grad.dtype, shape=()) if wanted else None)
                 for index, wanted in enumerate(needs_input_grad)
             ]
         offset = 0
@@ -155,24 +153,16 @@ def concat(
 def concat(
     tensors: Sequence[TensorLike | VariableNode], axis: int = 0
 ) -> TensorResult | VariableNode:
-    """Concatenate graph values, Tensors or Variables along an existing axis.
-
-    The operands are a sequence, so the graph is asked about each element
-    rather than about the sequence itself. One graph value anywhere in it
-    applies the whole expression through the graph, contributing one
-    operand per element in the order given: Variables calculate the result
-    now, a vertex records the operation for a program that runs later, and
-    a Tensor beside either enters the graph as a non-gradient leaf.
-    """
+    """Concatenate graph values, Tensors or Variables along an existing axis."""
     from tensors.graph.expression import (
         apply_operation,
         as_graph_operand,
         is_graph_operand,
     )
 
-    if any((is_graph_operand(value) for value in tensors)):
+    if any(is_graph_operand(value) for value in tensors):
         return apply_operation(
-            Concat(axis=axis), tuple((as_graph_operand(value) for value in tensors))
+            Concat(axis=axis), tuple(as_graph_operand(value) for value in tensors)
         )
     return Concat(axis=axis).forward(
         *(as_tensor_operand(value) for value in _operands(tensors))

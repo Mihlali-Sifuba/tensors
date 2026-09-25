@@ -1,14 +1,14 @@
-"""Dispatch for shape, layout, indexing, and representation changes."""
+"""Strict selected-backend dispatch for slice scattering."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_ELEMENTWISE_MIN_SIZE,
-    _array_work_is_large_enough,
-    _shape_size,
-)
+
+from typing import TYPE_CHECKING, Any
+
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -17,17 +17,23 @@ if TYPE_CHECKING:
 def execute_slice_scatter(
     value: Tensor, indices: list[int], *, output_shape: tuple[int, ...]
 ) -> Storage:
-    """Run accelerated slice scattering, or the Python reference."""
-    from tensors.backend.python.kernels.manipulation.slice_scatter import (
-        slice_scatter as reference,
+    """Scatter a slice VJP on the selected backend without fallback."""
+    selected = config.get_backend()
+    validate_backend_residency((value,), selected)
+    backend: Any = load_backend(selected)
+    buffer = value._logical_storage_for(selected).buffer
+    lowered = buffer if selected == "python" else buffer.reshape(value.shape)
+    result = backend.slice_scatter(
+        lowered,
+        indices,
+        dtype=value.dtype,
+        output_shape=output_shape,
     )
-
-    if not _array_work_is_large_enough(
-        _shape_size(output_shape), _NUMPY_ELEMENTWISE_MIN_SIZE
-    ):
-        return reference(value, indices, output_shape=output_shape)
-    slice_scatter = _backend_kernel("slice_scatter")
-    result = slice_scatter(value, indices, output_shape=output_shape)
-    if result is not None:
-        return result
-    return reference(value, indices, output_shape=output_shape)
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute slice_scatter at dtype "
+            f"{value.dtype.name} conformingly. This computation runs on the "
+            "selected backend; select another backend to run it elsewhere."
+        )
+    validate_backend_residency((result,), selected)
+    return result

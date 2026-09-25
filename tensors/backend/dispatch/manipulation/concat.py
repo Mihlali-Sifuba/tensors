@@ -1,15 +1,15 @@
-"""Dispatch for shape, layout, indexing, and representation changes."""
+"""Strict selected-backend dispatch for concatenation."""
 
 from __future__ import annotations
+
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_ELEMENTWISE_MIN_SIZE,
-    _array_work_is_large_enough,
-    _shape_size,
-)
+from typing import TYPE_CHECKING, Any
+
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -23,15 +23,28 @@ def execute_concat(
     dtype: DataType,
     output_shape: tuple[int, ...],
 ) -> Storage:
-    """Join tensor storage along an existing axis with an accelerated backend."""
-    from tensors.backend.python.kernels.manipulation.concat import concat as reference
-
-    if not _array_work_is_large_enough(
-        _shape_size(output_shape), _NUMPY_ELEMENTWISE_MIN_SIZE
-    ):
-        return reference(values, axis, dtype=dtype, output_shape=output_shape)
-    concat = _backend_kernel("concat")
-    result = concat(values, axis, dtype=dtype, output_shape=output_shape)
-    if result is not None:
-        return result
-    return reference(values, axis, dtype=dtype, output_shape=output_shape)
+    """Concatenate on the selected backend without size-based fallback."""
+    selected = config.get_backend()
+    validate_backend_residency(values, selected)
+    backend: Any = load_backend(selected)
+    lowered = []
+    shapes = []
+    for value in values:
+        buffer = value._logical_storage_for(selected).buffer
+        lowered.append(buffer if selected == "python" else buffer.reshape(value.shape))
+        shapes.append(tuple(value.shape))
+    result = backend.concat(
+        tuple(lowered),
+        tuple(shapes),
+        axis,
+        dtype=dtype,
+        output_shape=output_shape,
+    )
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute concat at dtype "
+            f"{dtype.name} conformingly. This computation runs on the selected "
+            "backend; select another backend to run it elsewhere."
+        )
+    validate_backend_residency((result,), selected)
+    return result

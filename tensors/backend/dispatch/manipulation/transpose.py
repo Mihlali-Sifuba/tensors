@@ -1,13 +1,14 @@
-"""Dispatch for shape, layout, indexing, and representation changes."""
+"""Strict selected-backend dispatch for axis permutation."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_ELEMENTWISE_MIN_SIZE,
-    _array_work_is_large_enough,
-)
+
+from typing import TYPE_CHECKING, Any
+
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -16,15 +17,24 @@ if TYPE_CHECKING:
 def execute_transpose(
     value: Tensor, permutation: tuple[int, ...], *, output_shape: tuple[int, ...]
 ) -> Storage:
-    """Run a storage permutation with an accelerated backend."""
-    from tensors.backend.python.kernels.manipulation.transpose import (
-        transpose as reference,
+    """Copy an axis permutation on the selected backend without fallback."""
+    selected = config.get_backend()
+    validate_backend_residency((value,), selected)
+    backend: Any = load_backend(selected)
+    buffer = value._logical_storage_for(selected).buffer
+    lowered = buffer if selected == "python" else buffer.reshape(value.shape)
+    result = backend.transpose(
+        lowered,
+        permutation,
+        input_shape=tuple(value.shape),
+        dtype=value.dtype,
+        output_shape=output_shape,
     )
-
-    if not _array_work_is_large_enough(value.size, _NUMPY_ELEMENTWISE_MIN_SIZE):
-        return reference(value, permutation, output_shape=output_shape)
-    transpose = _backend_kernel("transpose")
-    result = transpose(value, permutation, output_shape=output_shape)
-    if result is not None:
-        return result
-    return reference(value, permutation, output_shape=output_shape)
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute transpose at dtype "
+            f"{value.dtype.name} conformingly. This computation runs on the "
+            "selected backend; select another backend to run it elsewhere."
+        )
+    validate_backend_residency((result,), selected)
+    return result

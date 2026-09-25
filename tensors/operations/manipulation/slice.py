@@ -1,8 +1,10 @@
 """Differentiable tensor indexing and slicing."""
 
-from typing import List
+from __future__ import annotations
+
+from typing import Any, List, Optional
+
 from tensors.backend import execute_slice_scatter
-from tensors.shape import Shape
 from tensors.operations.base import Operation
 from tensors.tensor import Tensor
 from tensors.utils.slicing import (
@@ -11,11 +13,11 @@ from tensors.utils.slicing import (
 )
 
 
-def _logical_linear_indices(tensor: Tensor, key) -> tuple[List[int], Shape]:
+def _logical_linear_indices(shape, key):
     """Return selected logical linear indices and the selection shape."""
     keys = key if isinstance(key, tuple) else (key,)
-    ranges, selection_shape = slice_ranges_and_shape_from_key(keys, tensor.shape)
-    return (logical_linear_indices_from_ranges(ranges, tensor.shape), selection_shape)
+    ranges, selection_shape = slice_ranges_and_shape_from_key(keys, shape)
+    return (logical_linear_indices_from_ranges(ranges, shape), selection_shape)
 
 
 class Slice(Operation):
@@ -36,13 +38,14 @@ class Slice(Operation):
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
-    ) -> List[Tensor]:
-        source = inputs[0]
-        selected, _ = _logical_linear_indices(source, self.key)
-        values = [0.0] * source.size
-        for logical_linear_index, grad_value in zip(selected, grad._data):
-            values[logical_linear_index] += grad_value
-        return [Tensor(values, dtype=grad.dtype, shape=source.shape)]
+    ) -> List[Optional[Any]]:
+        """Scatter the requested slice gradient through the selected backend."""
+        if not needs_input_grad[0]:
+            return [None]
+        source_shape = tuple(inputs[0].shape)
+        if isinstance(grad, Tensor):
+            return [SliceScatter(source_shape=source_shape, key=self.key).forward(grad)]
+        return [_slice_scatter(grad, source_shape, self.key)]
 
 
 class SliceScatter(Operation):
@@ -56,14 +59,8 @@ class SliceScatter(Operation):
         object.__setattr__(self, "key", key)
 
     def forward(self, grad: Tensor) -> Tensor:
-        key = self.key
         source_shape = self.source_shape
-        template = Tensor(
-            [0.0] * Shape.from_iterable(source_shape).size,
-            dtype=grad.dtype,
-            shape=source_shape,
-        )
-        selected, selection_shape = _logical_linear_indices(template, key)
+        selected, selection_shape = _logical_linear_indices(source_shape, self.key)
         if selection_shape.size != grad.size:
             raise ValueError(
                 f"Slice gradient has {grad.size} values; expected {selection_shape.size}"
@@ -75,8 +72,13 @@ class SliceScatter(Operation):
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
-    ) -> List[Tensor]:
-        return [Slice(key=self.key).forward(grad)]
+    ) -> List[Optional[Any]]:
+        """Select the requested cotangent, preserving graph construction."""
+        if not needs_input_grad[0]:
+            return [None]
+        if isinstance(grad, Tensor):
+            return [Slice(key=self.key).forward(grad)]
+        return [grad[self.key]]
 
 
 def _slice_scatter(grad, source_shape: tuple[int, ...], key):

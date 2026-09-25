@@ -1,30 +1,42 @@
-"""CuPy implementation of concatenation along an existing axis."""
+"""CUDA-native concatenation along an existing axis."""
 
 from __future__ import annotations
-import cupy
+
+import math
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
+
+import cupy
+
+from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.storage import Storage
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
 def concat(
-    values: Sequence[Tensor],
+    values: Sequence[Any],
+    shapes: Sequence[tuple[int, ...]],
     axis: int,
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
 ) -> Storage | None:
-    """Concatenate tensors along an existing axis."""
+    """Concatenate compact CUDA values into independently owned storage."""
+    native_dtype = cupy.dtype(dtype.name)
     try:
-        result = cupy.concatenate(
-            [tensor_to_logical_array(value) for value in values], axis=axis
+        prepared = tuple(
+            value.reshape(shape).astype(native_dtype, copy=False)
+            for value, shape in zip(values, shapes)
+        )
+        result = (
+            cupy.stack(prepared, axis=0)
+            if not shapes[0]
+            else cupy.concatenate(prepared, axis=axis)
         )
     except (TypeError, ValueError):
         return None
-    return _storage(result, dtype=dtype, output_shape=output_shape)
+    if result.size != math.prod(output_shape):
+        raise RuntimeError("concat kernel returned an unexpected result size")
+    return CudaStorage(result, dtype)
