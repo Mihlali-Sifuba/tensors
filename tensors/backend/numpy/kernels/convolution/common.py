@@ -5,15 +5,12 @@ import numpy
 import itertools
 from typing import Any
 from typing import TYPE_CHECKING
-from tensors.backend.numpy.storage import NumPyStorage
 from tensors.backend.storage import Storage
-from tensors.backend.numpy.conversion import _finite_operands
 from tensors.backend.numpy.conversion import _shape_size
-from tensors.backend.numpy.conversion import tensor_to_logical_array
+from tensors.backend.numpy.conversion import _storage
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 _CONVOLUTION_COLUMN_MAX_ELEMENTS = 4 * 1_024 * 1_024
 
 
@@ -26,7 +23,7 @@ def _convolution_tile_shape(
     """Choose a spatial and batch tile bounded by the column memory budget."""
     patch = channels * _shape_size(kernel_spatial)
     max_positions = max(1, _CONVOLUTION_COLUMN_MAX_ELEMENTS // max(patch, 1))
-    extents = list(output_spatial)
+    extents = [max(1, size) for size in output_spatial]
     while _shape_size(tuple(extents)) > max_positions:
         axis = max(range(len(extents)), key=extents.__getitem__)
         extents[axis] = max(1, (extents[axis] + 1) // 2)
@@ -96,32 +93,20 @@ def _convolution_columns(
 
 
 def _convolution_operands(
-    inputs: Tensor, kernel: Tensor, dtype: DataType
+    input_values: Any,
+    kernel_values: Any,
 ) -> tuple[Any, Any] | None:
-    """Return finite convolution operands in the requested working dtype."""
-    provider_dtype = numpy.dtype(dtype.name)
+    """Return already-native convolution values in binary64 working precision."""
     try:
-        input_values = tensor_to_logical_array(inputs).astype(
-            provider_dtype, copy=False
-        )
-        kernel_values = tensor_to_logical_array(kernel).astype(
-            provider_dtype, copy=False
-        )
+        inputs = numpy.asarray(input_values).astype(numpy.float64)
+        kernel = numpy.asarray(kernel_values).astype(numpy.float64)
     except (TypeError, ValueError):
         return None
-    if not _finite_operands(input_values, kernel_values):
-        return None
-    return (input_values, kernel_values)
+    return inputs, kernel
 
 
 def _convolution_storage(
     result: Any, *, dtype: DataType, output_shape: tuple[int, ...]
-) -> Storage:
-    """Retain a finite native convolution result without precision round trips."""
-    target_dtype = numpy.dtype(dtype.name)
-    contiguous = numpy.ascontiguousarray(result, dtype=target_dtype).reshape(-1)
-    storage: Storage
-    storage = NumPyStorage(contiguous, dtype)
-    if storage.size != _shape_size(output_shape):
-        raise RuntimeError("Convolution kernel returned an unexpected result size")
-    return storage
+) -> Storage | None:
+    """Narrow once through the shared safe native-storage boundary."""
+    return _storage(result, dtype=dtype, output_shape=output_shape)
