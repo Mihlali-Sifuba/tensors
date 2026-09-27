@@ -7,9 +7,7 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _shape_size
 from tensors.backend.cuda.conversion import _widen
-from tensors.backend.cuda.kernels.convolution.common import (
-    _CONVOLUTION_COLUMN_MAX_ELEMENTS,
-)
+from tensors.backend.cuda.kernels.convolution import common as convolution_common
 from tensors.backend.cuda.kernels.convolution.common import _convolution_columns
 from tensors.backend.cuda.kernels.convolution.common import _convolution_operands
 from tensors.backend.cuda.kernels.convolution.common import _convolution_storage
@@ -86,23 +84,20 @@ def convolution(
             )
             tile_batch = int(columns.shape[0])
             positions = _shape_size(output_extent)
-            column_matrix = columns.reshape(
-                tile_batch, groups, group_patch, positions
-            )
+            column_matrix = columns.reshape(tile_batch, groups, group_patch, positions)
             column_elements = int(column_matrix.size)
             channel_extent = max(
                 1,
                 min(
                     group_outputs,
-                    _CONVOLUTION_COLUMN_MAX_ELEMENTS // max(column_elements, 1),
+                    convolution_common._CONVOLUTION_COLUMN_MAX_ELEMENTS
+                    // max(column_elements, 1),
                 ),
             )
             for group in range(groups):
                 channel_base = group * group_outputs
                 for channel_start in range(0, group_outputs, channel_extent):
-                    channel_stop = min(
-                        channel_start + channel_extent, group_outputs
-                    )
+                    channel_stop = min(channel_start + channel_extent, group_outputs)
                     tile = certified_matmul(
                         matrix[group : group + 1, channel_start:channel_stop],
                         column_matrix[:, group : group + 1],

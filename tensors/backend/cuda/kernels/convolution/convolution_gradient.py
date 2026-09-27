@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import itertools
+import math
 import cupy
 from typing import Any
 from typing import TYPE_CHECKING
@@ -9,11 +10,9 @@ from typing import cast
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _widen
+from tensors.backend.cuda.kernels.convolution import common as convolution_common
 from tensors.backend.cuda.kernels.convolution.common import _convolution_operands
 from tensors.backend.cuda.kernels.convolution.common import _convolution_storage
-from tensors.backend.cuda.kernels.convolution.common import (
-    _CONVOLUTION_COLUMN_MAX_ELEMENTS,
-)
 from tensors.backend.cuda.kernels.linalg.contraction import certified_matmul
 from tensors.backend.cuda.kernels.reductions.exact import certified_float_sum
 
@@ -70,25 +69,31 @@ def convolution_gradient(
     group_outputs = out_channels // groups
     group_channels = in_channels // groups
     offsets = tuple(itertools.product(*(range(size) for size in kernel_spatial)))
-    positions = tuple(itertools.product(*(range(size) for size in output_spatial)))
-    input_result = cupy.zeros((batch, in_channels) + spatial, dtype=cupy.float64)
-    kernel_result = cupy.zeros(kernel_shape, dtype=cupy.float64)
+    output_position_count = math.prod(output_spatial)
+    input_result = (
+        cupy.zeros((batch, in_channels) + spatial, dtype=cupy.float64)
+        if need_input
+        else None
+    )
+    kernel_result = (
+        cupy.zeros(kernel_shape, dtype=cupy.float64) if need_kernel else None
+    )
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
         if need_input:
-            destinations = list(
-                itertools.product(
-                    range(batch), range(in_channels), *map(range, spatial)
-                )
-            )
+            assert input_result is not None
             width = group_outputs * len(offsets)
             if width == 0:
                 input_result.fill(0.0)
-            elif width > _CONVOLUTION_COLUMN_MAX_ELEMENTS:
+            elif width > convolution_common._CONVOLUTION_COLUMN_MAX_ELEMENTS:
                 return None
             else:
-                tile_size = max(1, _CONVOLUTION_COLUMN_MAX_ELEMENTS // width)
-                for start in range(0, len(destinations), tile_size):
-                    tile = destinations[start : start + tile_size]
+                tile_size = max(
+                    1, convolution_common._CONVOLUTION_COLUMN_MAX_ELEMENTS // width
+                )
+                destinations = itertools.product(
+                    range(batch), range(in_channels), *map(range, spatial)
+                )
+                while tile := list(itertools.islice(destinations, tile_size)):
                     left = cupy.zeros((len(tile), width), dtype=cupy.float64)
                     right = cupy.zeros_like(left)
                     for row, (batch_index, channel, *coordinate) in enumerate(tile):
@@ -114,7 +119,9 @@ def convolution_gradient(
                                 output_position.append(position)
                             for local_output in range(group_outputs):
                                 if valid:
-                                    output_channel = group * group_outputs + local_output
+                                    output_channel = (
+                                        group * group_outputs + local_output
+                                    )
                                     left[row, term] = upstream[
                                         (batch_index, output_channel, *output_position)
                                     ]
@@ -122,41 +129,47 @@ def convolution_gradient(
                                         (output_channel, local_channel, *offset)
                                     ]
                                 term += 1
-                    certified = certified_matmul(
-                        left[:, None, :], right[:, :, None]
-                    )
+                    certified = certified_matmul(left[:, None, :], right[:, :, None])
                     if certified is None:
                         return None
                     for destination, value in zip(tile, certified.reshape(-1)):
                         input_result[destination] = value
 
         if need_kernel:
-            contribution_count = batch * len(positions)
-            kernel_destinations = list(
-                itertools.product(
-                    range(out_channels), range(group_channels), *map(range, kernel_spatial)
-                )
-            )
+            assert kernel_result is not None
+            contribution_count = batch * output_position_count
             if contribution_count == 0:
                 kernel_result.fill(0.0)
-            elif contribution_count > _CONVOLUTION_COLUMN_MAX_ELEMENTS:
+            elif (
+                contribution_count > convolution_common._CONVOLUTION_COLUMN_MAX_ELEMENTS
+            ):
                 return None
             else:
                 tile_size = max(
-                    1, _CONVOLUTION_COLUMN_MAX_ELEMENTS // contribution_count
+                    1,
+                    convolution_common._CONVOLUTION_COLUMN_MAX_ELEMENTS
+                    // contribution_count,
                 )
-                for start in range(0, len(kernel_destinations), tile_size):
-                    tile = kernel_destinations[start : start + tile_size]
+                kernel_destinations = itertools.product(
+                    range(out_channels),
+                    range(group_channels),
+                    *map(range, kernel_spatial),
+                )
+                while tile := list(itertools.islice(kernel_destinations, tile_size)):
                     left = cupy.zeros(
                         (len(tile), contribution_count), dtype=cupy.float64
                     )
                     right = cupy.zeros_like(left)
-                    for row, (output_channel, local_channel, *offset) in enumerate(tile):
+                    for row, (output_channel, local_channel, *offset) in enumerate(
+                        tile
+                    ):
                         group = output_channel // group_outputs
                         input_channel = group * group_channels + local_channel
                         term = 0
                         for batch_index in range(batch):
-                            for position in positions:
+                            for position in itertools.product(
+                                *(range(size) for size in output_spatial)
+                            ):
                                 source = tuple(
                                     position[axis] * stride[axis]
                                     - padding[axis]
@@ -174,9 +187,7 @@ def convolution_gradient(
                                         (batch_index, input_channel, *source)
                                     ]
                                 term += 1
-                    certified = certified_matmul(
-                        left[:, None, :], right[:, :, None]
-                    )
+                    certified = certified_matmul(left[:, None, :], right[:, :, None])
                     if certified is None:
                         return None
                     for destination, value in zip(tile, certified.reshape(-1)):
@@ -189,7 +200,7 @@ def convolution_gradient(
         if include_bias:
             if not need_bias:
                 results.append(None)
-            elif out_channels == 0 or batch * len(positions) == 0:
+            elif out_channels == 0 or batch * output_position_count == 0:
                 results.append(cupy.zeros((out_channels,), dtype=cupy.float64))
             else:
                 grouped = cupy.moveaxis(upstream, 1, 0).reshape(out_channels, -1)
@@ -198,16 +209,19 @@ def convolution_gradient(
                     return None
                 results.append(bias_result.reshape(out_channels))
     shapes: list[tuple[int, ...]] = [input_shape, kernel_shape]
+    requested = [need_input, need_kernel]
     if include_bias:
         shapes.append((out_channels,))
-    storages = tuple(
-        (
-            (
-                _convolution_storage(value, dtype=dtype, output_shape=shape)
-                if value is not None
-                else None
-            )
-            for value, shape in zip(results, shapes)
-        )
-    )
-    return cast("tuple[Storage | None, ...]", storages)
+        requested.append(need_bias)
+    storages: list[Storage | None] = []
+    for value, shape, branch_requested in zip(results, shapes, requested):
+        if not branch_requested:
+            storages.append(None)
+            continue
+        if value is None:
+            return None
+        storage = _convolution_storage(value, dtype=dtype, output_shape=shape)
+        if storage is None:
+            return None
+        storages.append(storage)
+    return cast("tuple[Storage | None, ...]", tuple(storages))

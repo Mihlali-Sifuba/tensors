@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 from tensors.backend.python.storage import PythonStorage
+from tensors.backend.storage import Storage
 from tensors.utils.convolution import (
     contributions as _contributions,
     resolve_geometry,
