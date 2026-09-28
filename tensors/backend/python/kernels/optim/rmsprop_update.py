@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 import math
+from collections.abc import Iterable
 from tensors.backend.python.storage import PythonStorage
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tensors.backend.storage import Storage
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
 def _stable_weighted_sum(
@@ -64,21 +65,23 @@ def _product_quotient(numerators: list[float], denominators: list[float]) -> flo
 
 
 def rmsprop_update(
-    parameter: Tensor,
-    gradient: Tensor,
-    scale: Tensor,
-    scaled: Tensor,
+    parameter_values: Iterable[int | float],
+    gradient_values: Iterable[int | float],
+    scale_values: Iterable[int | float],
+    scaled_values: Iterable[int | float],
     *,
     rho: float,
     learning_rate: float,
     epsilon: float,
+    dtype: DataType,
+    shape: tuple[int, ...],
 ) -> tuple[Storage, Storage, Storage] | None:
     """Apply one RMSprop step to a parameter."""
     new_scales = []
     new_scaled_values = []
-    parameter_values = []
+    new_parameter_values = []
     for parameter_value, gradient_value, scale, scaled in zip(
-        parameter._data, gradient._data, scale._data, scaled._data
+        parameter_values, gradient_values, scale_values, scaled_values
     ):
         gradient_value = float(gradient_value)
         new_scale, new_scaled = _scaled_second_moment(
@@ -88,9 +91,9 @@ def rmsprop_update(
         update = learning_rate * (gradient_value / (root_moment + epsilon))
         new_scales.append(new_scale)
         new_scaled_values.append(new_scaled)
-        parameter_values.append(float(parameter_value) - update)
+        new_parameter_values.append(float(parameter_value) - update)
     return (
-        PythonStorage.from_values(parameter_values, parameter.dtype),
-        PythonStorage.from_values(new_scales, gradient.dtype),
-        PythonStorage.from_values(new_scaled_values, gradient.dtype),
+        PythonStorage.from_values(new_parameter_values, dtype),
+        PythonStorage.from_values(new_scales, dtype),
+        PythonStorage.from_values(new_scaled_values, dtype),
     )

@@ -3,7 +3,8 @@
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
-from ..backend import execute_sgd_update, execute_sgd_updates
+from ..backend import execute_sgd_update, execute_sgd_updates, get_backend
+from ..backend.validation import validate_backend_residency
 from ..tensor import Tensor
 from .optimizer import Optimizer
 
@@ -21,6 +22,15 @@ class SGD(Optimizer):
     def step(self) -> None:
         """Apply one in-place parameter update using current gradients."""
         prepared = self._prepared_gradients()
+        selected = get_backend()
+        validate_backend_residency(
+            tuple(
+                value
+                for parameter, gradient in prepared
+                for value in (parameter.data, gradient)
+            ),
+            selected,
+        )
         if len(prepared) > 1:
             parameters = tuple(parameter.data for parameter, _ in prepared)
             gradients = tuple(gradient for _, gradient in prepared)

@@ -6,8 +6,11 @@ import math
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
-from ..backend import execute_adam_update, execute_adam_updates
+from ..backend import execute_adam_update, execute_adam_updates, get_backend
+from ..backend.validation import validate_backend_residency
 from ..creation import zeros
+from ..operations.comparison.not_equal import not_equal
+from ..operations.elementary.sqrt import sqrt
 from ..tensor import Tensor
 from .optimizer import Optimizer
 
@@ -98,19 +101,42 @@ class Adam(Optimizer):
         if len(prepared) < 2:
             return False
         records = []
+        selected = get_backend()
         for parameter, gradient in prepared:
             identity = id(parameter)
             state = self._state.get(identity)
             if state is not None:
+                validate_backend_residency(
+                    tuple(
+                        value for value in state.values() if isinstance(value, Tensor)
+                    ),
+                    selected,
+                )
                 current_m = state["m"]
                 current_v = state["v"]
                 assert isinstance(current_m, Tensor)
                 assert isinstance(current_v, Tensor)
+                current_scale = state.get("v_scale")
+                current_scaled = state.get("v_scaled")
                 if (
                     current_m.shape != gradient.shape
                     or current_m.dtype != gradient.dtype
                     or current_v.shape != gradient.shape
                     or current_v.dtype != gradient.dtype
+                    or (
+                        isinstance(current_scale, Tensor)
+                        and (
+                            current_scale.shape != gradient.shape
+                            or current_scale.dtype != gradient.dtype
+                        )
+                    )
+                    or (
+                        isinstance(current_scaled, Tensor)
+                        and (
+                            current_scaled.shape != gradient.shape
+                            or current_scaled.dtype != gradient.dtype
+                        )
+                    )
                 ):
                     state = None
             if state is None:
@@ -136,17 +162,8 @@ class Adam(Optimizer):
                 scaled_values,
                 Tensor,
             ):
-                scale_data = [math.sqrt(float(value)) for value in visible._data]
-                scales = Tensor(
-                    scale_data,
-                    dtype=gradient.dtype,
-                    shape=gradient.shape,
-                )
-                scaled_values = Tensor(
-                    [1.0 if value else 0.0 for value in scale_data],
-                    dtype=gradient.dtype,
-                    shape=gradient.shape,
-                )
+                scales = sqrt(visible)
+                scaled_values = not_equal(scales, 0.0).astype(gradient.dtype)
             beta1_product = (
                 float(state.get("beta1_product", beta1 ** (step_count - 1))) * beta1
             )
@@ -260,6 +277,15 @@ class Adam(Optimizer):
         eps = self.eps
 
         prepared = self._prepared_gradients()
+        selected = get_backend()
+        validate_backend_residency(
+            tuple(
+                value
+                for parameter, gradient in prepared
+                for value in (parameter.data, gradient)
+            ),
+            selected,
+        )
         if self._batched_step(
             prepared,
             beta1=b1,
@@ -270,20 +296,41 @@ class Adam(Optimizer):
             return
 
         pending = []
-        reusable_pending = []
         for param, grad in prepared:
             sid = id(param)
             state = self._state.get(sid)
             if state is not None:
+                validate_backend_residency(
+                    tuple(
+                        value for value in state.values() if isinstance(value, Tensor)
+                    ),
+                    selected,
+                )
                 current_m = state["m"]
                 current_v = state["v"]
                 assert isinstance(current_m, Tensor)
                 assert isinstance(current_v, Tensor)
+                current_scale = state.get("v_scale")
+                current_scaled = state.get("v_scaled")
                 if (
                     current_m.shape != grad.shape
                     or current_m.dtype != grad.dtype
                     or current_v.shape != grad.shape
                     or current_v.dtype != grad.dtype
+                    or (
+                        isinstance(current_scale, Tensor)
+                        and (
+                            current_scale.shape != grad.shape
+                            or current_scale.dtype != grad.dtype
+                        )
+                    )
+                    or (
+                        isinstance(current_scaled, Tensor)
+                        and (
+                            current_scaled.shape != grad.shape
+                            or current_scaled.dtype != grad.dtype
+                        )
+                    )
                 ):
                     state = None
 
@@ -309,13 +356,8 @@ class Adam(Optimizer):
             scales = current_state.get("v_scale")
             scaled_values = current_state.get("v_scaled")
             if not isinstance(scales, Tensor) or not isinstance(scaled_values, Tensor):
-                scale_data = [math.sqrt(float(value)) for value in v._data]
-                scales = Tensor(scale_data, dtype=grad.dtype, shape=grad.shape)
-                scaled_values = Tensor(
-                    [1.0 if value else 0.0 for value in scale_data],
-                    dtype=grad.dtype,
-                    shape=grad.shape,
-                )
+                scales = sqrt(v)
+                scaled_values = not_equal(scales, 0.0).astype(grad.dtype)
 
             beta1_product = (
                 float(current_state.get("beta1_product", b1 ** (step_count - 1))) * b1
@@ -346,37 +388,6 @@ class Adam(Optimizer):
                 scale_storage,
                 scaled_storage,
             ) = accelerated
-            if (
-                state is not None
-                and len(
-                    {
-                        id(m),
-                        id(v),
-                        id(scales),
-                        id(scaled_values),
-                    }
-                )
-                == 4
-            ):
-                reusable_pending.append(
-                    (
-                        param,
-                        current_state,
-                        m,
-                        v,
-                        scales,
-                        scaled_values,
-                        parameter_storage,
-                        moment_storage,
-                        visible_storage,
-                        scale_storage,
-                        scaled_storage,
-                        step_count,
-                        beta1_product,
-                        beta2_product,
-                    )
-                )
-                continue
             accelerated_state: dict[str, Tensor | int | float] = {
                 "step": step_count,
                 "m": Tensor._from_owned_storage(
@@ -412,30 +423,6 @@ class Adam(Optimizer):
         for param, sid, new_parameter, new_state in pending:
             self._state[sid] = new_state
             param.data = new_parameter
-        for (
-            param,
-            state,
-            moment,
-            visible,
-            scales,
-            scaled_values,
-            parameter_storage,
-            moment_storage,
-            visible_storage,
-            scale_storage,
-            scaled_storage,
-            step_count,
-            beta1_product,
-            beta2_product,
-        ) in reusable_pending:
-            param.data._replace_owned_storage(parameter_storage)
-            moment._replace_owned_storage(moment_storage)
-            visible._replace_owned_storage(visible_storage)
-            scales._replace_owned_storage(scale_storage)
-            scaled_values._replace_owned_storage(scaled_storage)
-            state["step"] = step_count
-            state["beta1_product"] = beta1_product
-            state["beta2_product"] = beta2_product
 
 
 def _stable_weighted_sum(

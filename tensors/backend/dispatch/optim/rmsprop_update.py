@@ -1,15 +1,15 @@
 """Dispatch for optimizer updates."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_ELEMENTWISE_MIN_SIZE,
-    _array_work_is_large_enough,
-)
-from tensors.backend.storage import Storage
+from typing import TYPE_CHECKING, Any
+
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
+    from tensors.backend.storage import Storage
     from tensors.tensor import Tensor
 
 
@@ -23,39 +23,29 @@ def execute_rmsprop_update(
     learning_rate: float,
     epsilon: float,
 ) -> tuple[Storage, Storage, Storage]:
-    """Run a fused RMSprop update on ordinary finite optimizer state."""
-    from tensors.backend.python.kernels.optim.rmsprop_update import (
-        rmsprop_update as reference,
+    """Run one RMSprop update on the selected backend without fallback."""
+    tensors = (parameter, gradient, scale, scaled)
+    selected = config.get_backend()
+    validate_backend_residency(tensors, selected)
+    backend: Any = load_backend(selected)
+    buffers = tuple(tensor._logical_storage_for(selected).buffer for tensor in tensors)
+    values = tuple(
+        buffer if selected == "python" else buffer.reshape(tensor.shape)
+        for tensor, buffer in zip(tensors, buffers)
     )
-
-    if not _array_work_is_large_enough(parameter.size, _NUMPY_ELEMENTWISE_MIN_SIZE):
-        return reference(
-            parameter,
-            gradient,
-            scale,
-            scaled,
-            rho=rho,
-            learning_rate=learning_rate,
-            epsilon=epsilon,
+    result = backend.rmsprop_update(
+        *values,
+        rho=rho,
+        learning_rate=learning_rate,
+        epsilon=epsilon,
+        dtype=parameter.dtype,
+        shape=tuple(parameter.shape),
+    )
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute rmsprop_update at dtype "
+            f"{parameter.dtype.name} conformingly. Optimizer updates run on "
+            "the selected backend; select another backend to run it elsewhere."
         )
-    rmsprop_update = _backend_kernel("rmsprop_update")
-    result = rmsprop_update(
-        parameter,
-        gradient,
-        scale,
-        scaled,
-        rho=rho,
-        learning_rate=learning_rate,
-        epsilon=epsilon,
-    )
-    if result is not None:
-        return result
-    return reference(
-        parameter,
-        gradient,
-        scale,
-        scaled,
-        rho=rho,
-        learning_rate=learning_rate,
-        epsilon=epsilon,
-    )
+    validate_backend_residency(result, selected)
+    return result

@@ -256,6 +256,10 @@ The folders have deliberately narrow responsibilities:
   imports a sibling dispatch module. The two exceptions that may still return
   `None` are optional optimizations whose alternative is ordinary execution
   rather than a reference kernel: `fusion` and the batched `optim` updates.
+  An individual optimizer dispatcher is strict: it validates selected-backend
+  residency, lowers native operands, and raises when that backend's kernel
+  declines. A batched optimizer decline may retry only those individual
+  kernels on the same selected backend.
 - `backend.python`, `backend.numpy`, and `backend.cuda` each own one backend
   end to end: its `storage`, its array boundary (`conversion`, for the two
   array backends), and a `kernels` package holding one module per operation

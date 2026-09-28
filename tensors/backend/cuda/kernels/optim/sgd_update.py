@@ -7,22 +7,27 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _finite_operands
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
+from tensors.backend.cuda.conversion import _widen
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
 def sgd_update(
-    parameter: Tensor, gradient: Tensor, learning_rate: float
+    parameter_values,
+    gradient_values,
+    learning_rate: float,
+    *,
+    dtype: DataType,
+    shape: tuple[int, ...],
 ) -> Storage | None:
     """Apply one fused SGD update."""
-    values = _working_values(parameter)
-    gradients = _working_values(gradient)
+    values = _widen(cupy.asarray(parameter_values))
+    gradients = _widen(cupy.asarray(gradient_values))
     if not _finite_operands(values, gradients):
         return None
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
         result = values - learning_rate * gradients
     if not bool(cupy.all(cupy.isfinite(result))):
         return None
-    return _storage(result, dtype=parameter.dtype, output_shape=parameter.shape)
+    return _storage(result, dtype=dtype, output_shape=shape)

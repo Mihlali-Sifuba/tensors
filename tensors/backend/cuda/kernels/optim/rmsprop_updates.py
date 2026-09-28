@@ -14,23 +14,25 @@ from tensors.backend.cuda.kernels.optim.batching import _split_optimizer_storage
 from tensors.backend.cuda.kernels.optim.batch_kernels import _cuda_rmsprop_batch_kernel
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
 def rmsprop_updates(
-    parameters: Sequence[Tensor],
-    gradients: Sequence[Tensor],
-    scales: Sequence[Tensor],
-    scaled_values: Sequence[Tensor],
+    parameters: Sequence[Any],
+    gradients: Sequence[Any],
+    scales: Sequence[Any],
+    scaled_values: Sequence[Any],
     *,
     rho: float,
     learning_rate: float,
     epsilon: float,
+    dtypes: Sequence[DataType],
+    shapes: Sequence[tuple[int, ...]],
 ) -> tuple[tuple[Storage, ...], ...] | None:
     """Apply RMSprop to several parameters with one group of array operations."""
     groups = (parameters, gradients, scales, scaled_values)
     partitions = _optimizer_batch_partitions(
-        parameters, gradients, scales, scaled_values
+        dtypes, shapes, parameters, gradients, scales, scaled_values
     )
     if partitions is None:
         return None
@@ -44,6 +46,8 @@ def rmsprop_updates(
                 rho=rho,
                 learning_rate=learning_rate,
                 epsilon=epsilon,
+                dtypes=_optimizer_partition(dtypes, indices),
+                shapes=_optimizer_partition(shapes, indices),
             )
             if result is None:
                 return None
@@ -83,9 +87,9 @@ def rmsprop_updates(
     if bool(invalid[0]):
         return None
     results = (
-        _split_optimizer_storage(parameter_result, parameters),
-        _split_optimizer_storage(new_scales, gradients),
-        _split_optimizer_storage(new_scaled, gradients),
+        _split_optimizer_storage(parameter_result, dtypes, shapes),
+        _split_optimizer_storage(new_scales, dtypes, shapes),
+        _split_optimizer_storage(new_scaled, dtypes, shapes),
     )
     if any((result is None for result in results)):
         return None

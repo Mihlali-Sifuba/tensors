@@ -6,7 +6,8 @@ import math
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
-from ..backend import execute_rmsprop_update, execute_rmsprop_updates
+from ..backend import execute_rmsprop_update, execute_rmsprop_updates, get_backend
+from ..backend.validation import validate_backend_residency
 from ..creation import zeros
 from ..tensor import Tensor
 from .optimizer import Optimizer
@@ -94,9 +95,12 @@ class RMSprop(Optimizer):
         if len(prepared) < 2:
             return False
         records = []
+        selected = get_backend()
         for parameter, gradient in prepared:
             identity = id(parameter)
             scaled_state = self._scaled_state.get(identity)
+            if scaled_state is not None:
+                validate_backend_residency(scaled_state, selected)
             if scaled_state is None or any(
                 value.shape != gradient.shape or value.dtype != gradient.dtype
                 for value in scaled_state
@@ -173,6 +177,15 @@ class RMSprop(Optimizer):
     def step(self) -> None:
         """Apply one RMSprop update to every managed parameter."""
         prepared = self._prepared_gradients()
+        selected = get_backend()
+        validate_backend_residency(
+            tuple(
+                value
+                for parameter, gradient in prepared
+                for value in (parameter.data, gradient)
+            ),
+            selected,
+        )
         if self._batched_step(prepared):
             return
 
@@ -180,6 +193,8 @@ class RMSprop(Optimizer):
         for param, grad in prepared:
             sid = id(param)
             scaled_state = self._scaled_state.get(sid)
+            if scaled_state is not None:
+                validate_backend_residency(scaled_state, selected)
             if scaled_state is None or any(
                 value.shape != grad.shape or value.dtype != grad.dtype
                 for value in scaled_state

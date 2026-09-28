@@ -9,10 +9,11 @@ from typing import TYPE_CHECKING
 from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
+from tensors.backend.cuda.conversion import _widen
+from tensors.shape import Shape
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 _optimizer_workspace = threading.local()
 
 
@@ -31,35 +32,39 @@ def _optimizer_workspace_buffer(*, slot: str, size: int, dtype: Any) -> Any:
     return buffer
 
 
-def _optimizer_batch_values(tensors: Sequence[Tensor], *, slot: str) -> Any | None:
-    """Pack compatible optimizer tensors into reusable native storage."""
-    if not tensors:
+def _optimizer_batch_values(values: Sequence[Any], *, slot: str) -> Any | None:
+    """Pack compatible native optimizer arrays into reusable storage."""
+    if not values:
         return None
-    dtype = tensors[0].dtype
-    if any((tensor.dtype != dtype for tensor in tensors)):
-        return None
-    arrays = tuple((_working_values(tensor).reshape(-1) for tensor in tensors))
+    arrays = tuple(_widen(cupy.asarray(value)).reshape(-1) for value in values)
     buffer = _optimizer_workspace_buffer(
-        slot=slot, size=sum((tensor.size for tensor in tensors)), dtype=cupy.float64
+        slot=slot, size=sum(array.size for array in arrays), dtype=cupy.float64
     )
     cupy.concatenate(arrays, out=buffer)
     return buffer
 
 
 def _optimizer_batch_partitions(
-    *groups: Sequence[Tensor],
+    dtypes: Sequence[DataType],
+    shapes: Sequence[tuple[int, ...]],
+    *groups: Sequence[Any],
 ) -> tuple[tuple[int, ...], ...] | None:
     """Group structurally compatible optimizer records by dtype."""
-    if not groups or not groups[0]:
+    if not dtypes:
         return None
-    count = len(groups[0])
-    if any((len(group) != count for group in groups)):
+    count = len(dtypes)
+    if len(shapes) != count or any(len(group) != count for group in groups):
         return None
     partitions: dict[Any, list[int]] = {}
-    for index, tensors in enumerate(zip(*groups)):
-        shape = tensors[0].shape
-        dtype = tensors[0].dtype
-        if any((tensor.shape != shape or tensor.dtype != dtype for tensor in tensors)):
+    for index, arrays in enumerate(zip(*groups)):
+        shape = shapes[index]
+        dtype = dtypes[index]
+        native_dtype = cupy.dtype(dtype.name)
+        if any(
+            cupy.asarray(array).shape != shape
+            or cupy.asarray(array).dtype != native_dtype
+            for array in arrays
+        ):
             return None
         partitions.setdefault(dtype, []).append(index)
     return tuple((tuple(indices) for indices in partitions.values()))
@@ -80,33 +85,36 @@ def _optimizer_invalid_flag() -> Any:
 
 
 def _split_optimizer_storage(
-    result: Any, references: Sequence[Tensor]
+    result: Any,
+    dtypes: Sequence[DataType],
+    shapes: Sequence[tuple[int, ...]],
 ) -> tuple[Storage, ...] | None:
     """Retain slices of one batched result without copying them again."""
-    if not references:
+    if not dtypes:
         return ()
-    dtype = references[0].dtype
-    total = sum((reference.size for reference in references))
+    dtype = dtypes[0]
+    sizes = tuple(Shape.from_iterable(shape).size for shape in shapes)
+    total = sum(sizes)
     storage = _storage(result, dtype=dtype, output_shape=(total,))
     if storage is None:
         return None
     storages: list[Storage] = []
     offset = 0
-    for reference in references:
-        end = offset + reference.size
+    for size in sizes:
+        end = offset + size
         storages.append(CudaStorage(storage.buffer[offset:end], dtype))
         offset = end
     return tuple(storages)
 
 
 def _optimizer_scalar_batch(
-    values: Sequence[float], references: Sequence[Tensor]
+    values: Sequence[float], shapes: Sequence[tuple[int, ...]]
 ) -> Any:
     """Expand one scalar per parameter into its batched element layout."""
     if values and all((value == values[0] for value in values[1:])):
         return float(values[0])
     scalars = cupy.asarray(tuple(values), dtype=cupy.float64)
     counts = cupy.asarray(
-        tuple((reference.size for reference in references)), dtype=cupy.int64
+        tuple(Shape.from_iterable(shape).size for shape in shapes), dtype=cupy.int64
     )
     return cupy.repeat(scalars, counts)

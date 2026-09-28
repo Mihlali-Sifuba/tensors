@@ -394,6 +394,14 @@ alternative is ordinary execution rather than a reference kernel: elementwise
 fusion falls back to running the steps separately, and a batched optimizer
 update falls back to updating each parameter individually.
 
+Optimizer updates themselves are strict selected-backend computations. Their
+dispatchers validate parameter, gradient, and persistent state residency,
+lower those Tensors to native values, and raise
+`BackendOperationUnsupportedError` when an individual selected-backend kernel
+declines. A grouped NumPy or CUDA optimizer kernel may decline only to the
+individual kernels of that same selected backend; it never authorizes Python
+execution.
+
 Small NumPy workloads may use Python when array setup would cost more than the
 numerical work. Explicit CUDA selection keeps supported floating-point work on
 the device, although launch and synchronization overhead can make small
@@ -433,8 +441,14 @@ on the selected optional backend when their stable native path is valid, and
 SGD, Adam, and RMSprop batch compatible parameter updates to reduce repeated
 dispatch and launch overhead.
 
-These optimizations do not bypass the behaviour contract. Numerically delicate
-or unsupported cases still use the stable Python implementation.
+These optimizations do not bypass the behaviour contract. Fusion may still
+execute its ordinary unfused steps, and grouped optimizer execution may retry
+individual kernels on the same selected backend. A numerically unsupported
+individual optimizer update raises rather than silently executing in Python.
+`RMSprop._state` remains a private host-materializing inspection view; the
+persistent `(scale, normalized)` state and every active RMSprop update stay on
+the selected backend. Removing that diagnostic materialization is separate
+post-migration cleanup rather than a new optimizer execution surface.
 
 Use the benchmark attribution suites instead of one small operation to choose a
 backend:

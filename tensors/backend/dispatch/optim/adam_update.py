@@ -1,15 +1,15 @@
 """Dispatch for optimizer updates."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_ELEMENTWISE_MIN_SIZE,
-    _array_work_is_large_enough,
-)
-from tensors.backend.storage import Storage
+from typing import TYPE_CHECKING, Any
+
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
+    from tensors.backend.storage import Storage
     from tensors.tensor import Tensor
 
 
@@ -27,51 +27,32 @@ def execute_adam_update(
     first_correction: float,
     second_correction: float,
 ) -> tuple[Storage, Storage, Storage, Storage, Storage]:
-    """Run a fused Adam update on ordinary finite optimizer state."""
-    from tensors.backend.python.kernels.optim.adam_update import (
-        adam_update as reference,
+    """Run one Adam update on the selected backend without fallback."""
+    tensors = (parameter, gradient, moment, scale, scaled)
+    selected = config.get_backend()
+    validate_backend_residency(tensors, selected)
+    backend: Any = load_backend(selected)
+    buffers = tuple(tensor._logical_storage_for(selected).buffer for tensor in tensors)
+    values = tuple(
+        buffer if selected == "python" else buffer.reshape(tensor.shape)
+        for tensor, buffer in zip(tensors, buffers)
     )
-
-    if not _array_work_is_large_enough(parameter.size, _NUMPY_ELEMENTWISE_MIN_SIZE):
-        return reference(
-            parameter,
-            gradient,
-            moment,
-            scale,
-            scaled,
-            beta1=beta1,
-            beta2=beta2,
-            learning_rate=learning_rate,
-            epsilon=epsilon,
-            first_correction=first_correction,
-            second_correction=second_correction,
+    result = backend.adam_update(
+        *values,
+        beta1=beta1,
+        beta2=beta2,
+        learning_rate=learning_rate,
+        epsilon=epsilon,
+        first_correction=first_correction,
+        second_correction=second_correction,
+        dtype=parameter.dtype,
+        shape=tuple(parameter.shape),
+    )
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute adam_update at dtype "
+            f"{parameter.dtype.name} conformingly. Optimizer updates run on "
+            "the selected backend; select another backend to run it elsewhere."
         )
-    adam_update = _backend_kernel("adam_update")
-    result = adam_update(
-        parameter,
-        gradient,
-        moment,
-        scale,
-        scaled,
-        beta1=beta1,
-        beta2=beta2,
-        learning_rate=learning_rate,
-        epsilon=epsilon,
-        first_correction=first_correction,
-        second_correction=second_correction,
-    )
-    if result is not None:
-        return result
-    return reference(
-        parameter,
-        gradient,
-        moment,
-        scale,
-        scaled,
-        beta1=beta1,
-        beta2=beta2,
-        learning_rate=learning_rate,
-        epsilon=epsilon,
-        first_correction=first_correction,
-        second_correction=second_correction,
-    )
+    validate_backend_residency(result, selected)
+    return result
