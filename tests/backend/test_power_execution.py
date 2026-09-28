@@ -34,7 +34,7 @@ SIZES = (1, 4, 31, 32, 64, 1000)
 
 
 def storage_name(tensor) -> str:
-    return type(tensor._storage).__name__
+    return type(tensor.backend_storage).__name__
 
 
 def python_reference():
@@ -93,12 +93,12 @@ class ForwardPowerExecutesOnTheSelectedBackend(unittest.TestCase):
 
         Everything happens inside one patched block. The simulated absence is
         asserted first, so the test fails loudly if the patch ever stops
-        reaching :func:`_resolve_backend`, rather than quietly measuring a
+        reaching :func:`resolve_backend`, rather than quietly measuring a
         machine that has NumPy after all. Resolution and execution are checked
         in the same context for the same reason: a patch that covered only the
         resolution check would leave the exponentiation running on NumPy.
         """
-        with patch.object(config, "_numpy_available", return_value=False):
+        with patch.object(config, "numpy_available", return_value=False):
             self.assertNotIn("numpy", ts.available_backends())
 
             with ts.use_backend("auto"):
@@ -278,7 +278,7 @@ class ExecutionLocationHarness(unittest.TestCase):
             f"{context}: expected {calls} {selection} power calls, "
             f"got {accelerated.call_count}",
         )
-        if result is not None and hasattr(result, "_storage"):
+        if result is not None and hasattr(result, "backend_storage"):
             self.assertEqual(storage_name(result), STORAGE_FOR[selection], context)
         return result
 
@@ -570,8 +570,16 @@ class TheProviderNoLongerDeclines(unittest.TestCase):
             with self.subTest(case=label):
                 with ts.use_backend("numpy"):
                     base = ts.Tensor(values * 64, dtype=dtype)
+                    import numpy
+
+                    from tensors.backend.numpy.conversion import tensor_to_logical_array
+
+                    native = numpy.dtype(dtype.name)
                     storage = numpy_kernels.power(
-                        base, exponent, dtype=dtype, output_shape=(64,)
+                        tensor_to_logical_array(base).astype(native, copy=False),
+                        native.type(exponent),
+                        dtype=dtype,
+                        output_shape=(64,),
                     )
                 self.assertIsNotNone(
                     storage, f"{label} still declines to the reference"

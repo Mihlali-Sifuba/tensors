@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, List, Tuple, overload
+from typing import TYPE_CHECKING, Tuple, overload
 
 from tensors._typing import TensorData, TensorLike, TensorResult, TensorValue
 from tensors.shape import Shape
@@ -32,24 +32,31 @@ class Reshape(Operation):
                 f"Cannot reshape tensor of size {current_element_count} "
                 f"to shape {shape}"
             )
-        return Tensor(tensor._data, dtype=tensor.dtype, shape=shape)
+        # Gather the logical values in the tensor's own backend rather than
+        # through ``_data``, which materialises them on the host: reshaping a
+        # device tensor used to cost a device-to-host-to-device round trip
+        # for values the operation never inspects. ``_logical_storage_for``
+        # resolves a non-compact layout natively, so a view reshapes by its
+        # logical element order rather than by its flat buffer.
+        kind = tensor.backend_storage.kind
+        storage = tensor._logical_storage_for(kind)
+        # Reshape returns an independently owned compact tensor, and the
+        # gather may have handed back the source's own storage when it was
+        # already compact, so the result takes its own copy.
+        return Tensor._from_owned_storage(
+            storage.copy(), dtype=tensor.dtype, shape=shape
+        )
 
-    def backward(
-        self,
-        grad: Tensor,
-        *inputs: Tensor,
-        needs_input_grad: tuple[bool, ...],
-    ) -> List[Tensor]:
-        """Restore the input shape without changing gradient values."""
-        return [Reshape(shape=inputs[0].shape).forward(grad)]
+    def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
+        """Restore the input shape without changing gradient values.
 
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
-        """Build a differentiable reshape VJP."""
+        Reshaping is its own inverse once the original shape is known, so the
+        VJP is a reshape back. It is written as the reshape operation rather
+        than as a call on a Tensor, so the operands decide what it means: a
+        Tensor is gathered in its own storage now, and a Variable records a
+        reshape that can be differentiated again. That is what lets the
+        relabelling inside the addition VJP be differentiated.
+        """
         return [reshape(grad, inputs[0].shape)]
 
 

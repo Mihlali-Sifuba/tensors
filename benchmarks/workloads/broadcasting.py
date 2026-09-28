@@ -10,6 +10,7 @@ provider operation that performs the same expansion or reduction.
 
 from __future__ import annotations
 from collections.abc import Sequence
+import importlib
 from typing import Any
 import tensors as ts
 from tensors.backend.loading import load_backend
@@ -99,9 +100,23 @@ def _forward_cases(
             )
         )
 
+        # Prepared once, outside the timed call: the kernel rung measures
+        # the kernel, and operand preparation is a separate boundary.
+        conversion = importlib.import_module(
+            f"tensors.backend.{backend}.conversion"
+        )
+        array_module = importlib.import_module(
+            "numpy" if backend == "numpy" else "cupy"
+        )
+        native = array_module.dtype(ts.float64.name)
+        prepared = (
+            conversion.tensor_to_logical_array(left).astype(native, copy=False),
+            conversion.tensor_to_logical_array(right).astype(native, copy=False),
+        )
+
         def run_kernel() -> Any:
             return kernels.multiply(
-                left, right, dtype=ts.float64, output_shape=output_shape
+                *prepared, dtype=ts.float64, output_shape=output_shape
             )
 
         def validate_kernel() -> None:
@@ -125,11 +140,17 @@ def _forward_cases(
             Case(
                 name=f"dispatch.broadcast_multiply/{pattern}",
                 run=lambda: execute_multiply(
-                    left, right, dtype=ts.float64, output_shape=output_shape
+                    left,
+                    right,
+                    dtype=ts.float64,
+                    output_shape=output_shape,
                 ),
                 layer="dispatch",
                 validate=lambda: execute_multiply(
-                    left, right, dtype=ts.float64, output_shape=output_shape
+                    left,
+                    right,
+                    dtype=ts.float64,
+                    output_shape=output_shape,
                 ),
                 description="execute_multiply over a broadcast",
                 backends=ACCELERATED,

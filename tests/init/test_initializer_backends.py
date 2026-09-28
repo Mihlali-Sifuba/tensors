@@ -21,9 +21,9 @@ class NumPyInitializerTests(unittest.TestCase):
             normal = ts.init.he_normal((128, 64))
             truncated = ts.init.truncated_normal((128, 64))
             orthogonal = ts.init.orthogonal((128, 64))
-        self.assertIsInstance(normal._storage, NumPyStorage)
-        self.assertIsInstance(truncated._storage, NumPyStorage)
-        self.assertIsInstance(orthogonal._storage, NumPyStorage)
+        self.assertIsInstance(normal.backend_storage, NumPyStorage)
+        self.assertIsInstance(truncated.backend_storage, NumPyStorage)
+        self.assertIsInstance(orthogonal.backend_storage, NumPyStorage)
 
     def test_numpy_statistics_match_reference_semantics(self):
         with ts.use_backend("numpy"):
@@ -44,9 +44,9 @@ class CudaInitializerTests(unittest.TestCase):
             normal = ts.init.he_normal((128, 64))
             truncated = ts.init.truncated_normal((128, 64))
             orthogonal = ts.init.orthogonal((128, 64))
-        self.assertIsInstance(normal._storage, CudaStorage)
-        self.assertIsInstance(truncated._storage, CudaStorage)
-        self.assertIsInstance(orthogonal._storage, CudaStorage)
+        self.assertIsInstance(normal.backend_storage, CudaStorage)
+        self.assertIsInstance(truncated.backend_storage, CudaStorage)
+        self.assertIsInstance(orthogonal.backend_storage, CudaStorage)
 
     def test_cuda_statistics_match_reference_semantics(self):
         with ts.use_backend("cuda"):

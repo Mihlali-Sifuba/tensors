@@ -1,47 +1,43 @@
 """CuPy implementation of the natural logarithm."""
 
 from __future__ import annotations
+import math
 import cupy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+from tensors.backend.cuda.conversion import _errstate, _narrow, _widen
+from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.storage import Storage
-from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
-def log(value: Tensor, *, dtype: DataType) -> Storage | None:
-    """Run an elementwise unary kernel while preserving public domains."""
-    if dtype.kind == "integer":
-        return None
-    try:
-        values = _working_values(value)
-    except (TypeError, ValueError):
-        return None
-    if bool(cupy.any(values <= 0.0)):
-        raise ValueError("log is only defined for positive values")
-    functions = {
-        "abs": cupy.abs,
-        "sqrt": cupy.sqrt,
-        "exp": cupy.exp,
-        "log": cupy.log,
-        "sin": cupy.sin,
-        "cos": cupy.cos,
-        "tan": cupy.tan,
-        "arcsin": cupy.arcsin,
-        "arccos": cupy.arccos,
-        "arctan": cupy.arctan,
-        "sinh": cupy.sinh,
-        "cosh": cupy.cosh,
-        "arcsinh": cupy.arcsinh,
-        "arccosh": cupy.arccosh,
-        "arctanh": cupy.arctanh,
-        "sign": cupy.sign,
-        "tanh": cupy.tanh,
-    }
+def log(
+    values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Return device storage at the declared dtype.
+
+    The domain is settled before this runs, in the dispatcher, which is also
+    where the one host synchronisation the refusal needs is paid. Nothing
+    here inspects a value, so this kernel adds no second reduction.
+
+    Evaluated in binary64 and narrowed once. Both format crossings go
+    through the PTX conversions, because a binary32 subnormal *operand*
+    would otherwise arrive as zero — and zero is precisely the value the
+    dispatcher just established was not there, so flushing it would turn a
+    legitimate operand into one with no logarithm. ``_widen`` and
+    ``_narrow`` are no-ops for any dtype that is not binary32.
+    """
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        result = functions["log"](values)
-    return _storage(result, dtype=dtype, output_shape=value.shape)
+        if values.dtype.kind in "iu":
+            values = values.astype(cupy.float64, copy=False)
+        working = _widen(values)
+        result = cupy.log(working)
+        narrowed = _narrow(result, cupy.dtype(dtype.name))
+    storage = CudaStorage(narrowed, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("Log kernel returned an unexpected result size")
+    return storage

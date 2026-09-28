@@ -409,7 +409,7 @@ class ResidencyAndHostTransfers(unittest.TestCase):
                         operand = ts.Tensor([SMALLEST] * size, dtype=ts.float32)
                         produced = function(operand)
                         self.assertEqual(
-                            type(produced._storage).__name__, "CudaStorage"
+                            type(produced.backend_storage).__name__, "CudaStorage"
                         )
                         self.assertIs(produced.dtype, ts.float32)
 
@@ -421,7 +421,7 @@ class ResidencyAndHostTransfers(unittest.TestCase):
                     with self._counting_device_reads() as reads:
                         produced = function(operand)
                         self.assertEqual(
-                            type(produced._storage).__name__, "CudaStorage"
+                            type(produced.backend_storage).__name__, "CudaStorage"
                         )
                 self.assertEqual(
                     reads.count, 0, f"{name} materialised an operand on the host"
@@ -656,9 +656,11 @@ class TheOtherFiveConversions(unittest.TestCase):
 
         with ts.use_backend("cuda"):
             tensor = ts.Tensor([SMALLEST], dtype=ts.float32)
-            from tensors.backend.cuda.conversion import _view
+            from tensors.backend.cuda.conversion import tensor_to_logical_array
 
-            flushed = cupy.asnumpy(_view(tensor).astype(cupy.float64, copy=False))
+            flushed = cupy.asnumpy(
+                tensor_to_logical_array(tensor).astype(cupy.float64, copy=False)
+            )
         self.assertEqual(
             float(flushed[0]), 0.0, "astype no longer flushes; this test is obsolete"
         )
@@ -694,7 +696,7 @@ class TheOtherFiveConversions(unittest.TestCase):
                             ts.Tensor([operand] * size, dtype=ts.float32)
                         )
                         self.assertEqual(
-                            type(produced._storage).__name__, "CudaStorage"
+                            type(produced.backend_storage).__name__, "CudaStorage"
                         )
                         self.assertIs(produced.dtype, ts.float32)
 
@@ -726,7 +728,7 @@ class TheOtherFiveConversions(unittest.TestCase):
                     with counting() as reads:
                         produced = function(values)
                         self.assertEqual(
-                            type(produced._storage).__name__, "CudaStorage"
+                            type(produced.backend_storage).__name__, "CudaStorage"
                         )
                 self.assertEqual(
                     len(reads), 0, f"{name} materialised an operand on the host"
@@ -991,19 +993,19 @@ class GradientBoundariesAndExistingConventions(unittest.TestCase):
                                     bits32(got), bits32(reference), backend
                                 )
 
-    def test_a_zero_gradients_sign_differs_across_backends(self):
-        """An open question, recorded rather than decided.
+    def test_a_zero_gradients_sign_now_agrees_across_backends(self):
+        """The open question this test recorded has since been decided.
 
-        ``relu'(x)`` is zero for ``x < 0``, and CUDA forms the VJP as
-        ``upstream * derivative``. With a negative upstream gradient that
-        product is ``-2.0 * 0.0``, which IEEE gives as ``-0.0``. The Python
-        reference returns ``+0.0``.
+        It used to assert the divergence: ``relu'(x)`` is zero for
+        ``x < 0``, CUDA formed the VJP as ``upstream * derivative``, and
+        ``-2.0 * 0.0`` is ``-0.0`` by IEEE while the Python reference
+        returned ``+0.0``. Which sign was correct was audit finding
+        **S-4**, signed zero being unspecified outside arithmetic.
 
-        This predates the conversion fix — it is identical before and after,
-        and neither operand is subnormal — and which sign is correct is
-        audit finding **S-4**, signed zero being unspecified outside
-        arithmetic. The test asserts the magnitude, which is agreed, and
-        records the divergence so it is not mistaken for a regression.
+        docs/relu-semantics.md section 6.1 decides it: the VJP **routes**
+        rather than multiplies, so the inactive side is canonical ``+0.0``
+        on every backend whatever the upstream is. The test now asserts the
+        agreement it once recorded the absence of.
         """
         produced = {}
         for backend in ts.available_backends():
@@ -1014,13 +1016,11 @@ class GradientBoundariesAndExistingConventions(unittest.TestCase):
         for backend, got in produced.items():
             with self.subTest(backend=backend):
                 self.assertEqual(got, 0.0, f"{backend} gave {got!r}")
-
-        signs = {backend: math.copysign(1.0, got) for backend, got in produced.items()}
-        self.assertEqual(signs["python"], 1.0, "the reference returns +0.0")
-        if "cuda" in signs:
-            self.assertEqual(
-                signs["cuda"], -1.0, "CUDA returns -0.0; S-4 has not decided which"
-            )
+                self.assertEqual(
+                    math.copysign(1.0, got),
+                    1.0,
+                    f"{backend} must give canonical +0.0, not -0.0",
+                )
 
 
 @requires_cuda
@@ -1056,7 +1056,7 @@ class GradientExecution(unittest.TestCase):
                             requires_grad=True,
                         )
                         (produced,) = ts.grad(function(variable), [variable])
-                        residency = type(produced._storage).__name__
+                        residency = type(produced.backend_storage).__name__
                 self.assertTrue(calls, f"{name} never ran")
                 self.assertTrue(all(calls), f"{name} declined to the reference")
                 self.assertEqual(residency, "CudaStorage")
@@ -1071,7 +1071,9 @@ class GradientExecution(unittest.TestCase):
                             requires_grad=True,
                         )
                         (produced,) = ts.grad(function(variable), [variable])
-                    self.assertEqual(type(produced._storage).__name__, "CudaStorage")
+                    self.assertEqual(
+                        type(produced.backend_storage).__name__, "CudaStorage"
+                    )
                     self.assertIs(produced.dtype, ts.float32)
 
     def test_no_operand_is_read_back_to_the_host(self):
@@ -1105,7 +1107,7 @@ class GradientExecution(unittest.TestCase):
                     with counting() as reads:
                         (produced,) = ts.grad(output, [variable])
                         self.assertEqual(
-                            type(produced._storage).__name__, "CudaStorage"
+                            type(produced.backend_storage).__name__, "CudaStorage"
                         )
                 self.assertEqual(
                     len(reads), 0, f"{name} materialised a tensor on the host"

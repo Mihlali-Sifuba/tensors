@@ -17,7 +17,12 @@ def _power_values(base, exponent):
     # The same resolution the forward operation uses, so a gradient never
     # disagrees with the value it differentiates (section 12.5).
     dtype, exponent = resolve_power(base.dtype, exponent)
-    storage = power(base, exponent, dtype=dtype, output_shape=base.shape)
+    storage = power(
+        base._data,
+        exponent._data,
+        dtype=dtype,
+        output_shape=base.shape,
+    )
     return Tensor._from_owned_storage(storage, dtype=dtype, shape=base.shape)
 
 

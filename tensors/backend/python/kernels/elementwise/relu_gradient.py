@@ -1,25 +1,35 @@
-"""Reference the rectified linear unit VJP for the Python backend."""
+"""Reference the ReLU VJP for the Python backend."""
 
 from __future__ import annotations
+from collections.abc import Iterable
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+from tensors.dtype import DataType
 import math
 
 
-def _gradient(upstream, value):
-    if isinstance(value, float) and math.isnan(value):
-        return math.nan
-    return upstream if value > 0 else 0
+def relu_gradient(
+    grad_values: Iterable[float],
+    values: Iterable[float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Pass the upstream gradient where the primal is positive.
 
-
-def relu_gradient(grad: Tensor, value: Tensor) -> Storage:
-    """Pass the upstream gradient only where the input was positive."""
-    evaluate = _gradient
-    return PythonStorage.from_values(
-        [evaluate(upstream, item) for upstream, item in zip(grad._data, value._data)],
-        grad.dtype,
-    )
+    **Routing, not multiplication.** On the inactive side the result is
+    canonical ``+0.0`` whatever the upstream is, so an infinite or NaN
+    upstream cannot manufacture a NaN there. See docs/relu-semantics.md
+    section 6.
+    """
+    result = []
+    for upstream, item in zip(grad_values, values):
+        if isinstance(item, float) and math.isnan(item):
+            result.append(math.nan)
+        elif item > 0:
+            result.append(upstream)
+        else:
+            result.append(0.0)
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("ReLU VJP kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)

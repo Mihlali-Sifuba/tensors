@@ -1,34 +1,48 @@
-"""CuPy implementation of the rectified linear unit VJP."""
+"""CuPy implementation of the ReLU VJP."""
 
 from __future__ import annotations
+import math
 import cupy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
+from typing import TYPE_CHECKING, Any
 from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
+from tensors.backend.cuda.kernels.arithmetic import ieee32
+from tensors.backend.cuda.storage import CudaStorage
+from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
-def relu_gradient(grad: Tensor, value: Tensor) -> Storage | None:
-    """Run the vector-Jacobian product for an elementwise unary operation."""
-    try:
-        # Both operands cross into the binary64 working precision, and both
-        # carry values the crossing must not lose: the original operand
-        # decides the local derivative, and the upstream gradient is what
-        # that derivative scales. astype flushes a binary32 subnormal on the
-        # way up, so either one arriving as zero is a wrong answer.
-        upstream = _working_values(grad)
-        values = _working_values(value)
-    except (TypeError, ValueError):
-        return None
-    if upstream.shape != values.shape:
-        return None
+def relu_gradient(
+    grad_values: Any,
+    values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Return device storage at the declared dtype.
+
+    **Routing, not multiplication**, so an infinite or NaN upstream on the
+    inactive side cannot manufacture a NaN. See docs/relu-semantics.md
+    section 6.
+
+    Only the **predicate** is widened, and that is the whole of what binary32
+    needs here. Measured on this toolchain, ``x > 0`` is false for every
+    positive binary32 subnormal, because flush-to-zero reaches the
+    comparison's operand — so the entire subnormal band would be routed to
+    the inactive branch. Widening through the PTX conversion restores it.
+
+    The upstream gradient is *not* widened, deliberately: this VJP only ever
+    selects it, and a selection is not arithmetic, so a subnormal upstream
+    passes through a native ``where`` unchanged. That is what separates this
+    kernel from the abs VJP, which negates on one branch and therefore has
+    to route in binary64.
+    """
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        derivative = cupy.where(
-            cupy.isnan(values), cupy.nan, cupy.where(values > 0.0, 1.0, 0.0)
-        )
-        result = upstream * derivative
-    return _storage(result, dtype=grad.dtype, output_shape=value.shape)
+        primal = ieee32.widen(values) if dtype.typecode == "f" else values
+        rectified = cupy.where(primal > 0, grad_values, 0)
+        result = cupy.where(cupy.isnan(primal), values, rectified)
+    storage = CudaStorage(result, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("ReLU VJP kernel returned an unexpected result size")
+    return storage

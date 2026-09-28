@@ -538,7 +538,9 @@ class ConversionInspectsNoTensor(S3TestCase):
                         lambda t, s: s**t,
                     ):
                         result = form(base, value)
-                        self.assertEqual(type(result._storage).__name__, "CudaStorage")
+                        self.assertEqual(
+                            type(result.backend_storage).__name__, "CudaStorage"
+                        )
             finally:
                 tensor_module.Tensor._data = property(original)
         self.assertEqual(reads, 0, "scalar conversion materialised a tensor")

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 from tensors.backend.numpy.kernels.reductions.stability import _scaled_product_sum
 from tensors.backend.numpy.kernels.reductions.stability import _stable_sum_candidate
 from tensors.backend.numpy.kernels.reductions.stability import _sum_axes
@@ -24,15 +24,14 @@ def sum_products_to_shape(
         return None
     try:
         left, right = numpy.broadcast_arrays(
-            _view(gradient).astype(numpy.float64, copy=False),
-            _view(factor).astype(numpy.float64, copy=False),
+            tensor_to_logical_array(gradient).astype(numpy.float64, copy=False),
+            tensor_to_logical_array(factor).astype(numpy.float64, copy=False),
         )
     except ValueError:
         return None
-    layout = _sum_axes(tuple(left.shape), shape)
-    if layout is None:
+    axes = _sum_axes(tuple(left.shape), shape)
+    if axes is None:
         return None
-    _, axes = layout
     finite = numpy.all(numpy.isfinite(left)) & numpy.all(numpy.isfinite(right))
     nonzero = (left != 0.0) & (right != 0.0)
     reduction_axes: tuple[int, ...] | None = axes if axes else None

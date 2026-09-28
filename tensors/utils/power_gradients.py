@@ -14,9 +14,15 @@ and hoping IEEE arrives at the right answer does not work: at ``x = 0`` with
 second gives ``0 * (-inf)``. Both are NaN in IEEE, and neither is the
 specified result. The table is therefore applied, not inferred.
 
-This module holds the scalar form, shared by the Python backend kernels and by
-the second-order rules in :mod:`tensors.operations.arithmetic.power`. The
-array backends state the same table over masks, in their own kernels.
+This module holds the scalar form, shared by the Python backend kernels for
+the first derivatives and for the three second partials. The array backends
+state the same table over masks, in their own kernels.
+
+:func:`power_product` is here for the same reason. Every one of those
+derivatives is a few small factors times a power, and it is the power that
+leaves the representable range while the whole expression stays inside it, so
+the grouping that protects it is one computation stated once rather than six
+copies that could drift.
 
 Nothing here raises on a numerical condition (rule G2), and nothing here reads
 a tensor (rule G3): the callers pass scalars they already hold.
@@ -86,6 +92,112 @@ def exponent_derivative(base: float, exponent: float) -> tuple[float, str]:
     return (None, EXISTS)
 
 
+def _real_power(base: float, exponent: float) -> float:
+    """Return ``base ** exponent`` as a real value, or an infinity.
+
+    ``math.pow`` raises for a domain error and for an overflow; neither is a
+    condition this module may report as an exception (rule G2), so both come
+    back as the value IEEE would give. A domain error is NaN and an overflow
+    is a signed infinity.
+    """
+    try:
+        return math.pow(base, exponent)
+    except OverflowError:
+        return _INFINITY if base > 0.0 or is_integral(exponent) else _NAN
+    except ValueError:
+        # ``pow(0, negative)`` is a pole, which IEEE reports as an infinity;
+        # a negative base with a non-integral exponent has no real value.
+        if base == 0.0:
+            return _INFINITY
+        return _NAN
+
+
+def product_quotient(
+    numerators: list[float], denominators: list[float] | None = None
+) -> float:
+    """Evaluate a product quotient without avoidable range loss.
+
+    Multiplying left to right can overflow or underflow on an intermediate
+    where the result is representable. Every finite float is a rational, so
+    the factors are combined exactly as one ratio of integers and divided
+    once, which rounds once and only at the end.
+    """
+    denominators = [] if denominators is None else denominators
+    if any((math.isnan(value) for value in numerators + denominators)):
+        return _NAN
+    if any((value == 0.0 for value in denominators)):
+        raise ZeroDivisionError("Division by zero")
+    if any((value == 0.0 for value in numerators)):
+        return 0.0
+    if all((math.isfinite(value) for value in numerators + denominators)):
+        numerator = 1
+        denominator = 1
+        for value in numerators:
+            value_numerator, value_denominator = value.as_integer_ratio()
+            numerator *= value_numerator
+            denominator *= value_denominator
+        for value in denominators:
+            value_numerator, value_denominator = value.as_integer_ratio()
+            numerator *= value_denominator
+            denominator *= value_numerator
+        try:
+            return numerator / denominator
+        except OverflowError:
+            return _INFINITY if numerator * denominator > 0 else -_INFINITY
+    result = 1.0
+    for value in numerators:
+        result *= value
+    for value in denominators:
+        result /= value
+    return result
+
+
+def power_product(factors: list[float], base: float, exponent: float) -> float:
+    """Return ``product(factors) * base ** exponent`` without range loss.
+
+    Every second partial derivative of ``x ** y`` has this shape — a few
+    small factors times a power — and the power is the part that leaves the
+    representable range while the product does not. Forming it first would
+    round to an infinity or to nothing and lose a result that exists, so the
+    power is used directly only where it is finite and non-zero, and the
+    logarithms carry the magnitude otherwise.
+
+    An exactly zero factor short-circuits to zero. That is a range guard and
+    also the reason ``y = 0`` and ``y = 1`` give an exactly zero second
+    derivative rather than the ``0 * inf`` the unguarded formula produces.
+
+    Nothing here raises on a numerical condition (rule G2).
+    """
+    if any((value == 0.0 for value in factors)):
+        return 0.0
+    power = _real_power(base, exponent)
+    if power != 0.0 and math.isfinite(power):
+        return product_quotient(factors + [power])
+    if (
+        base != 0.0
+        and all((math.isfinite(value) for value in factors))
+        and math.isfinite(base)
+        and math.isfinite(exponent)
+    ):
+        sign = -1.0 if sum((value < 0.0 for value in factors)) % 2 else 1.0
+        if base < 0.0:
+            if not is_integral(exponent):
+                # Section 12.3.3 gives NaN rather than an error here.
+                return _NAN
+            if int(exponent) % 2:
+                sign = -sign
+        logarithm = math.fsum(
+            [math.log(abs(value)) for value in factors]
+            + [exponent * math.log(abs(base))]
+        )
+        try:
+            magnitude = math.exp(logarithm)
+        except OverflowError:
+            magnitude = _INFINITY
+        return math.copysign(magnitude, sign)
+    return product_quotient(factors + [power])
+
+
 __all__ = [
     "CONVENTION",
     "EXISTS",
@@ -93,4 +205,6 @@ __all__ = [
     "base_derivative",
     "exponent_derivative",
     "is_integral",
+    "power_product",
+    "product_quotient",
 ]

@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 import tensors as ts
 import tensors.backend.numpy.kernels as numpy_backend
+from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.backend.cuda.storage import CudaStorage
 from tests.backend._support import NumPyParityTestCase, requires_cuda, requires_numpy
 
@@ -11,27 +12,32 @@ class CudaMatmulTests(unittest.TestCase):
     """Device matrix products agree with the Python reference."""
 
     def test_cuda_matmul_matches_python(self):
-        left = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
-        right = ts.Tensor([[2.0, 0.0], [1.0, 2.0]])
         with ts.use_backend("python"):
-            expected = (left @ right).tolist()
+            expected = (
+                ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
+                @ ts.Tensor([[2.0, 0.0], [1.0, 2.0]])
+            ).tolist()
         with ts.use_backend("cuda"):
-            actual = left @ right
-        self.assertIsInstance(actual._storage, CudaStorage)
+            actual = ts.Tensor([[1.0, 2.0], [3.0, 4.0]]) @ ts.Tensor(
+                [[2.0, 0.0], [1.0, 2.0]]
+            )
+        self.assertIsInstance(actual.backend_storage, CudaStorage)
         self.assertEqual(actual.tolist(), expected)
 
 
 @requires_numpy
 class NumPyMatmulTests(NumPyParityTestCase):
-    """Matrix-product kernels, their VJPs, and their fallbacks."""
+    """Matrix-product kernels, their VJPs, and strict declines."""
 
-    def test_numpy_kernel_is_used_for_floating_point_matmul(self):
-        import numpy
+    def test_numpy_native_certificate_is_used_for_floating_point_matmul(self):
+        import tensors.backend.numpy.kernels.linalg.contraction as contraction
 
-        original_matmul = numpy.matmul
-        with patch.object(numpy, "matmul", wraps=original_matmul) as matmul:
+        original_sum = contraction.certified_float_sum
+        with patch.object(
+            contraction, "certified_float_sum", wraps=original_sum
+        ) as certified_sum:
             self._matmul("numpy", ts.full((4, 4), 2.0), ts.full((4, 4), 3.0))
-        matmul.assert_called_once()
+        certified_sum.assert_called_once()
 
     def test_numpy_kernel_is_used_for_floating_point_matmul_gradient(self):
         with patch.object(
@@ -81,26 +87,31 @@ class NumPyMatmulTests(NumPyParityTestCase):
             ts.Tensor([[3.0], [4.0]], dtype=ts.float64),
         )
 
-    def test_non_integer_values_agree_within_float_tolerance(self):
+    def test_non_integer_values_are_conforming_or_explicitly_unsupported(self):
         left = ts.Tensor([[0.1, -2.75, 3.125], [4.2, 0.3, -0.625]])
         right = ts.Tensor([[1.2, 0.5], [-0.2, 2.1], [3.4, -1.25]])
         expected = self._matmul("python", left, right)
-        actual = self._matmul("numpy", left, right)
+        try:
+            actual = self._matmul("numpy", left, right)
+        except BackendOperationUnsupportedError:
+            return
         self.assertEqual(actual.shape, expected.shape)
         for actual_value, expected_value in zip(actual.tolist(), expected.tolist()):
-            self.assertAlmostEqual(actual_value, expected_value, places=12)
+            self.assertEqual(actual_value, expected_value)
 
-    def test_integer_product_uses_compatible_fallback(self):
-        self.assertBackendParity(
-            ts.Tensor([[1, 2], [3, 4]], dtype=ts.int32),
-            ts.Tensor([[5, 6], [7, 8]], dtype=ts.int32),
-        )
+    def test_integer_product_is_explicitly_unsupported(self):
+        with ts.use_backend("numpy"):
+            left = ts.Tensor([[1, 2], [3, 4]], dtype=ts.int32)
+            right = ts.Tensor([[5, 6], [7, 8]], dtype=ts.int32)
+            with self.assertRaises(BackendOperationUnsupportedError):
+                ts.matmul(left, right)
 
-    def test_temporary_overflow_uses_stable_fallback(self):
-        left = ts.Tensor([1e308, 1e308, -1e308, -1e308])
-        right = ts.Tensor([1.0, 1.0, 1.0, 1.0])
-        result = self._matmul("numpy", left, right)
-        self.assertEqual(result.item(), 0.0)
+    def test_temporary_overflow_is_explicitly_unsupported(self):
+        with ts.use_backend("numpy"):
+            left = ts.Tensor([1e308, 1e308, -1e308, -1e308])
+            right = ts.Tensor([1.0, 1.0, 1.0, 1.0])
+            with self.assertRaises(BackendOperationUnsupportedError):
+                ts.matmul(left, right)
 
 
 if __name__ == "__main__":

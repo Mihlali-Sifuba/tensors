@@ -1,27 +1,36 @@
 """Reference the sign function VJP for the Python backend."""
 
 from __future__ import annotations
+from collections.abc import Iterable
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+from tensors.dtype import DataType
 import math
 
 
-def _gradient(upstream, value):
-    if value == 0:
-        raise ValueError("sign derivative is undefined at zero")
-    if isinstance(value, float) and math.isnan(value):
-        return math.nan
-    return 0.0
+def sign_gradient(
+    grad_values: Iterable[float],
+    values: Iterable[float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Route each element; the sign function is piecewise constant.
 
-
-def sign_gradient(grad: Tensor, value: Tensor) -> Storage:
-    """Return a zero gradient: the sign function is piecewise constant."""
-    evaluate = _gradient
-    return PythonStorage.from_values(
-        [evaluate(upstream, item) for upstream, item in zip(grad._data, value._data)],
-        grad.dtype,
-    )
+    The result is **routed, not multiplied**. Away from zero the derivative
+    is zero, and the specification makes the result canonical ``+0.0``
+    whatever the upstream gradient is — so a negative upstream cannot make it
+    ``-0.0`` and an infinite or NaN upstream cannot make it NaN. See
+    docs/sign-semantics.md §6.
+    """
+    result = []
+    for item in values:
+        if item == 0:
+            raise ValueError("sign derivative is undefined at zero")
+        if isinstance(item, float) and math.isnan(item):
+            result.append(math.nan)
+        else:
+            result.append(0.0)
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("Sign VJP kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)

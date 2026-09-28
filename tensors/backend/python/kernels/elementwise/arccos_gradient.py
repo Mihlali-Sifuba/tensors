@@ -1,25 +1,27 @@
-"""Reference the arccosine VJP for the Python backend."""
+"""Python implementation of the arccos VJP."""
 
 from __future__ import annotations
+
+import math
+from collections.abc import Iterable
+
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
-import math
+from tensors.dtype import DataType
 
 
-def _arccos_gradient(upstream, value):
-    if value == -1.0 or value == 1.0:
-        raise ValueError("arccos derivative is undefined at -1 and 1")
-    return -upstream / math.sqrt(1.0 - float(value) ** 2.0)
-
-
-def arccos_gradient(grad: Tensor, value: Tensor) -> Storage:
-    """Scale the upstream gradient by ``-1 / sqrt(1 - x**2)``."""
-    evaluate = _arccos_gradient
-    return PythonStorage.from_values(
-        [evaluate(upstream, item) for upstream, item in zip(grad._data, value._data)],
-        grad.dtype,
-    )
+def arccos_gradient(
+    grad_values: Iterable[float],
+    values: Iterable[float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate the first-order arccos VJP on prepared native values."""
+    result = [
+        -upstream / math.sqrt(1.0 - float(item) ** 2.0)
+        for upstream, item in zip(grad_values, values)
+    ]
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("arccos VJP kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)

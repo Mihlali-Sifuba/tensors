@@ -13,13 +13,18 @@ a call arrives the selection names one backend.
 """
 
 from __future__ import annotations
+
+from itertools import repeat
 from typing import TYPE_CHECKING, Any
-from tensors.backend.config import BackendOperationUnsupportedError, get_backend
+
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.backend.loading import load_backend
-from tensors.backend.storage import Storage
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
     from tensors._typing import Scalar
+    from tensors.backend.storage import Storage
     from tensors.dtype import DataType
     from tensors.tensor import Tensor
 
@@ -32,20 +37,87 @@ def execute_divide(
     output_shape: tuple[int, ...],
 ) -> Storage:
     """Run divide on the selected backend, or report that it cannot run there."""
-    selected = get_backend()
-    if selected == "python":
-        from tensors.backend.python.kernels.arithmetic.divide import (
-            divide as reference,
-        )
-
-        return reference(left, right, dtype=dtype, output_shape=output_shape)
-
+    selected = config.get_backend()
+    validate_backend_residency((left, right), selected)
     backend: Any = load_backend(selected)
-    result = backend.divide(left, right, dtype=dtype, output_shape=output_shape)
+
+    if selected == "python":
+        from tensors.tensor import Tensor
+        from tensors.utils.broadcasting import broadcast_to
+
+        left_is_tensor = isinstance(left, Tensor)
+        right_is_tensor = isinstance(right, Tensor)
+        if left_is_tensor and right_is_tensor:
+            lowered_left = broadcast_to(left, output_shape)._data
+            lowered_right = broadcast_to(right, output_shape)._data
+        elif left_is_tensor:
+            lowered_left = left._data
+            lowered_right = repeat(right)
+        elif right_is_tensor:
+            lowered_left = repeat(left)
+            lowered_right = right._data
+        else:
+            lowered_left = (left,)
+            lowered_right = (right,)
+    elif selected == "numpy":
+        import numpy
+
+        from tensors.tensor import Tensor
+
+        # Storage owns a flat native buffer and the Tensor owns the layout, so
+        # lowering is: take the logical values, give them the Tensor's shape,
+        # and place them in the declared dtype. A scalar becomes a typed
+        # zero-dimensional value rather than a Python number, so NumPy cannot
+        # widen the result on its account.
+        native = numpy.dtype(dtype.name)
+        if isinstance(left, Tensor):
+            storage = left._logical_storage_for("numpy")
+            lowered_left = storage.buffer.reshape(left.shape)
+            if lowered_left.dtype != native:
+                lowered_left = lowered_left.astype(native, copy=False)
+        else:
+            lowered_left = native.type(left)
+        if isinstance(right, Tensor):
+            storage = right._logical_storage_for("numpy")
+            lowered_right = storage.buffer.reshape(right.shape)
+            if lowered_right.dtype != native:
+                lowered_right = lowered_right.astype(native, copy=False)
+        else:
+            lowered_right = native.type(right)
+    else:
+        import cupy
+
+        from tensors.tensor import Tensor
+
+        # The same lowering on the device. Nothing is read back to the host:
+        # reshape and astype both stay in device memory.
+        native = cupy.dtype(dtype.name)
+        if isinstance(left, Tensor):
+            storage = left._logical_storage_for("cuda")
+            lowered_left = storage.buffer.reshape(left.shape)
+            if lowered_left.dtype != native:
+                lowered_left = lowered_left.astype(native, copy=False)
+        else:
+            lowered_left = native.type(left)
+        if isinstance(right, Tensor):
+            storage = right._logical_storage_for("cuda")
+            lowered_right = storage.buffer.reshape(right.shape)
+            if lowered_right.dtype != native:
+                lowered_right = lowered_right.astype(native, copy=False)
+        else:
+            lowered_right = native.type(right)
+
+    result = backend.divide(
+        lowered_left,
+        lowered_right,
+        dtype=dtype,
+        output_shape=output_shape,
+    )
     if result is None:
         raise BackendOperationUnsupportedError(
             f"The {selected} backend cannot execute divide at dtype "
             f"{dtype.name} conformingly. Arithmetic runs on the selected "
             f"backend; select another backend to run it elsewhere."
         )
+    validate_backend_residency((result,), selected)
     return result

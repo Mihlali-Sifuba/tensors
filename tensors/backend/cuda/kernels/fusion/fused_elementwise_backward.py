@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import cupy
 
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import tensor_to_logical_array
 from tensors.backend.cuda.kernels.fusion.common import _fused_arrays
 from tensors.backend.cuda.kernels.fusion.errors import (
     _fused_backward_checks,
@@ -165,7 +165,11 @@ def fused_elementwise_backward(
         return tuple(CudaStorage(result[index], dtype) for index in range(row_count))
     try:
         arrays = _fused_arrays(values, dtype)
-        gradient = _view(grad).astype(cupy.dtype(dtype.name), copy=False).reshape(-1)
+        gradient = (
+            tensor_to_logical_array(grad)
+            .astype(cupy.dtype(dtype.name), copy=False)
+            .reshape(-1)
+        )
         kernel, validate_errors = _cuda_fused_elementwise_backward_kernel(
             steps,
             dtype.name,

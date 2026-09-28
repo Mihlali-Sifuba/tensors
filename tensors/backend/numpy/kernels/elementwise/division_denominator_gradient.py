@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 import numpy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _arithmetic_operand
 from tensors.backend.numpy.conversion import _arithmetic_storage
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
 def division_denominator_gradient(
-    grad: Tensor, numerator: Tensor, denominator: Tensor
-) -> Storage | None:
+    grad_values: Any,
+    numerator_values: Any,
+    denominator_values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+    grad_shape: tuple[int, ...],
+    numerator_shape: tuple[int, ...],
+    denominator_shape: tuple[int, ...],
+) -> Storage:
     """Calculate ``-grad * numerator / denominator**2``.
 
     ``direct`` is the expression evaluated as written, which is the specified
@@ -25,11 +32,12 @@ def division_denominator_gradient(
     although the true quotient is representable. ``stable`` recovers those in
     the logarithm, and the selection below picks it only for them. The
     operands are never read back to the host: the choice is made elementwise
-    on the device.
+    on the device, and the native arrays broadcast directly from their logical
+    shapes.
     """
-    upstream = _arithmetic_operand(grad, grad.dtype)
-    values = _arithmetic_operand(numerator, grad.dtype)
-    divisors = _arithmetic_operand(denominator, grad.dtype)
+    upstream = grad_values
+    values = numerator_values
+    divisors = denominator_values
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
         squares = numpy.square(divisors)
         direct = -upstream * values / squares
@@ -60,4 +68,4 @@ def division_denominator_gradient(
         sign = numpy.where(numpy.signbit(upstream) ^ numpy.signbit(values), 1.0, -1.0)
         stable = sign * numpy.exp(log_magnitude)
         result = numpy.where(lost, stable, direct)
-    return _arithmetic_storage(result, dtype=grad.dtype, output_shape=grad.shape)
+    return _arithmetic_storage(result, dtype=dtype, output_shape=output_shape)

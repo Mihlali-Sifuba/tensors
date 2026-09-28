@@ -103,6 +103,45 @@ Calling `ts.random.seed` resets independent backend streams without changing
 the provider-global RNGs. See [Parameter initialization](initialization.md) for
 the mathematical definitions and reproducibility contract.
 
+## Naming and the public API boundary
+
+Whether a name is supported and whether a name is well chosen are two
+questions, and a leading underscore is not a good answer to either.
+
+**The re-export surface decides what is public.**
+`tensors/backend/__init__.py` is the facade the rest of the package imports
+from: what it re-exports is what is supported, and its `__all__` narrows that
+further to the user-facing selection API. The root facade and `ts.ops`,
+`ts.linalg` and `ts.math` do the same job for operations, as described in
+[Package structure](package-structure.md). A helper no facade re-exports is
+internal — reachable through its own module, not part of the supported
+API — whatever it is called.
+
+**A leading underscore must not be what makes that decision.** It is a weak
+convention, and nothing here relies on it to mark the boundary. Underscores
+are kept for state no caller may touch.
+
+From those two statements:
+
+- **Internal functions and methods still get clear, descriptive names**, to
+  the same standard as public ones.
+- **An underscore is not a substitute for a precise name.** `_view` said only
+  "not yours"; `tensor_to_logical_array` — the Tensor-to-native-array
+  boundary in the NumPy and CUDA `conversion` modules — says what the call
+  returns.
+- **Say in the docstring when a function or method is internal.** Someone
+  reading the function is not reading the facade and cannot see the re-export
+  surface, so the constraint has to be stated where they are.
+- **Renaming an internal helper does not widen the API.** The facades decide
+  the surface and a rename does not change what they export, so clarity costs
+  nothing.
+- **Do not re-export an internal helper** unless the project intends to
+  support it as public API. A re-export is a commitment to the name, the
+  signature and the behaviour.
+
+Helpers that still begin with an underscore keep their names; the rule governs
+what an underscore is allowed to mean, not a renaming sweep.
+
 ## Execution requirements
 
 > **Status: implemented for `+`, `-`, `*`, `/` and `**`, and for `**`'s two
@@ -110,6 +149,30 @@ the mathematical definitions and reproducibility contract.
 > `"auto"` resolved to — or raise `BackendOperationUnsupportedError`. No
 > workload-size threshold applies to them under any selection, and none of
 > them declines by reading operand values.
+>
+> **Also implemented for `negate`, `stack` and tensor indexing**, which a
+> reverse pass reaches: negation is the gradient of `a - b` by `b`, and a
+> repeated operand's contributions are stacked, reduced and sliced apart
+> again. A gradient that met one of those below its former size threshold
+> used to come back in `PythonStorage`.
+>
+> **Also implemented for in-place assignment**, which answers to the tensor
+> rather than to the selection: a write goes to the backend the destination
+> already lives on, at any size, and never migrates it to the host. See
+> [backend-storage-architecture.md §5.4](backend-storage-architecture.md#54-mutation).
+> `ts.gradcheck` perturbs its inputs by assignment, so under an explicit
+> NumPy or CUDA selection it used to hand the next operation a host-resident
+> tensor and fail residency validation before comparing any derivative.
+>
+> **Also implemented for the activations `relu`, `sigmoid` and `softplus`
+> and their first-order gradients.** Each executes on the selected backend at
+> every tensor size or raises, and none declines by reading operand values.
+> Under the policy they left, a NumPy tensor of fewer than 32 elements ran
+> the Python reference and came back in `PythonStorage`, so an activation in
+> a small network handed host residency to everything downstream of it.
+> `sigmoid` and `softplus` also stopped constructing their results through
+> the declining conversion path, which read the device back to the host on
+> every `float32` call to decide whether to decline.
 >
 > **Every other operation still follows the workload policy** described
 > further down, and may still run the Python reference under an explicit
@@ -308,14 +371,19 @@ they execute on the selected backend at every size
 threshold is gone, and no kernel reads operand values back to the host to
 decide whether to decline.
 
-Other operations' vector-Jacobian products still use the older arrangement,
-through `dispatch/_selected.py`.
+Other operations' vector-Jacobian products still use the older arrangement.
+Every strict dispatcher writes the same decision out in its own module — read
+the selection, check operand residency, load that backend's package, call its
+kernel, and raise when the kernel declines — so the operation being dispatched
+and the kernel being called are visible in one place rather than named by a
+string handed to a shared helper.
 Where a VJP's computation shares an entry point with something outside the
 contract — the broadcast reduction is also used by `power`, `where` and the
-losses, and negation is also a forward operation — a second entry point named
-`execute_vjp_*` carries the strict policy and the original keeps the old one.
-Both call the same kernel; they differ only in what they do when the workload
-is small or the kernel declines. Operations therefore receive a result, not a decision: the
+losses — a second entry point named `execute_vjp_*` carries the strict policy
+and the original keeps the old one. Both call the same kernel; they differ only
+in what they do when the workload is small or the kernel declines. A duplicate
+disappears once the shared entry point is itself strict, as negation's did:
+`-x` and the gradient of `a - b` by `b` are one operation under one contract. Operations therefore receive a result, not a decision: the
 choice of fallback belongs to dispatch. An array kernel declines for edge cases
 needing stable reference algorithms or exact Python integer intermediates. CuPy
 has no Python object dtype, so exact integer operations use the Python path;
@@ -325,6 +393,14 @@ Two optional optimizations may still decline to the caller, because their
 alternative is ordinary execution rather than a reference kernel: elementwise
 fusion falls back to running the steps separately, and a batched optimizer
 update falls back to updating each parameter individually.
+
+Optimizer updates themselves are strict selected-backend computations. Their
+dispatchers validate parameter, gradient, and persistent state residency,
+lower those Tensors to native values, and raise
+`BackendOperationUnsupportedError` when an individual selected-backend kernel
+declines. A grouped NumPy or CUDA optimizer kernel may decline only to the
+individual kernels of that same selected backend; it never authorizes Python
+execution.
 
 Small NumPy workloads may use Python when array setup would cost more than the
 numerical work. Explicit CUDA selection keeps supported floating-point work on
@@ -365,8 +441,14 @@ on the selected optional backend when their stable native path is valid, and
 SGD, Adam, and RMSprop batch compatible parameter updates to reduce repeated
 dispatch and launch overhead.
 
-These optimizations do not bypass the behaviour contract. Numerically delicate
-or unsupported cases still use the stable Python implementation.
+These optimizations do not bypass the behaviour contract. Fusion may still
+execute its ordinary unfused steps, and grouped optimizer execution may retry
+individual kernels on the same selected backend. A numerically unsupported
+individual optimizer update raises rather than silently executing in Python.
+`RMSprop._state` remains a private host-materializing inspection view; the
+persistent `(scale, normalized)` state and every active RMSprop update stay on
+the selected backend. Removing that diagnostic materialization is separate
+post-migration cleanup rather than a new optimizer execution surface.
 
 Use the benchmark attribution suites instead of one small operation to choose a
 backend:

@@ -1,26 +1,30 @@
-"""Reference the hyperbolic cosine VJP for the Python backend."""
+"""Python implementation of the cosh VJP."""
 
 from __future__ import annotations
+
+import math
+from collections.abc import Iterable
+
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
-import math
+from tensors.dtype import DataType
 
 
-def _sinh(value):
-    try:
-        return math.sinh(float(value))
-    except OverflowError:
-        return math.copysign(math.inf, value)
-
-
-def cosh_gradient(grad: Tensor, value: Tensor) -> Storage:
-    """Scale the upstream gradient by ``sinh(x)``."""
-    evaluate = lambda upstream, item: upstream * _sinh(item)
-    return PythonStorage.from_values(
-        [evaluate(upstream, item) for upstream, item in zip(grad._data, value._data)],
-        grad.dtype,
-    )
+def cosh_gradient(
+    grad_values: Iterable[int | float],
+    values: Iterable[int | float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate the first-order cosh VJP on prepared native values."""
+    result = []
+    for upstream, item in zip(grad_values, values):
+        try:
+            derivative = math.sinh(float(item))
+        except OverflowError:
+            derivative = math.copysign(math.inf, item)
+        result.append(upstream * derivative)
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("cosh VJP kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)

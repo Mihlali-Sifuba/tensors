@@ -4,6 +4,7 @@ from unittest.mock import patch
 import tensors as ts
 import tensors.backend.numpy.kernels as numpy_backend
 from tensors.backend.cuda.storage import CudaStorage
+from tensors.backend.config import BackendOperationUnsupportedError
 from tests.backend._support import NumPyParityTestCase, requires_cuda, requires_numpy
 
 
@@ -30,39 +31,38 @@ class CudaExtremeGradientTests(unittest.TestCase):
             cancellation = ts.grad(
                 broadcast_value * factor, broadcast_value, ts.Tensor([2.0, 2.0])
             )
-            reduction = ts.sum(ts.Tensor([1e308, 1e308, -1e308, -1e308]))
-            matrix_product = ts.Tensor([1e308, 1e308, -1e308, -1e308]) @ ts.ones((4,))
+            with self.assertRaises(BackendOperationUnsupportedError):
+                ts.sum(ts.Tensor([1e308, 1e308, -1e308, -1e308]))
+            with self.assertRaises(BackendOperationUnsupportedError):
+                ts.Tensor([1e308, 1e308, -1e308, -1e308]) @ ts.ones((4,))
             batched_left = ts.Variable(
                 ts.Tensor([1e308, 1e308, -1e308, -1e308], shape=(4, 1, 1))
             )
             shared_right = ts.Variable([[1.0]])
-            matrix_gradient = ts.grad(
-                batched_left @ shared_right, shared_right, ts.ones((4, 1, 1))
-            )
+            with self.assertRaises(BackendOperationUnsupportedError):
+                ts.grad(
+                    batched_left @ shared_right,
+                    shared_right,
+                    ts.ones((4, 1, 1)),
+                )
         for gradient in (
             division_gradient,
             base_gradient,
             exponent_gradient,
             cancellation,
-            reduction,
-            matrix_product,
-            matrix_gradient,
         ):
-            self.assertIsInstance(gradient._storage, CudaStorage)
-        self.assertEqual(division_gradient[0], -1.0)
-        self.assertAlmostEqual(base_gradient[0], 2.0, places=12)
+            self.assertIsInstance(gradient.backend_storage, CudaStorage)
+        self.assertEqual(division_gradient.tolist()[0], -1.0)
+        self.assertAlmostEqual(base_gradient.tolist()[0], 2.0, places=12)
         self.assertTrue(
             math.isclose(
-                exponent_gradient[0],
+                exponent_gradient.tolist()[0],
                 -4.605170185988183e-290,
                 rel_tol=1e-12,
                 abs_tol=0.0,
             )
         )
         self.assertEqual(cancellation.tolist(), [0.0])
-        self.assertEqual(reduction.tolist(), [0.0])
-        self.assertEqual(matrix_product.item(), 0.0)
-        self.assertEqual(matrix_gradient.tolist(), [0.0])
 
 
 @requires_numpy

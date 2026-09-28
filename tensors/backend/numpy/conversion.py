@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from tensors.tensor import Tensor
 
 
-def _view(tensor: Tensor) -> Any:
+def tensor_to_logical_array(tensor: Tensor) -> Any:
     """Return compact logical values as a NumPy array.
 
     Kernels operate on compact arrays. Tensor metadata remains the source of
@@ -48,7 +48,7 @@ def _operand(value: Tensor | Scalar, dtype: DataType) -> Any:
     """
     from tensors.tensor import Tensor
 
-    result = _view(value) if isinstance(value, Tensor) else value
+    result = tensor_to_logical_array(value) if isinstance(value, Tensor) else value
     working_dtype = numpy.float64 if dtype.kind == "floating" else object
     return numpy.asarray(result, dtype=working_dtype)
 
@@ -109,23 +109,6 @@ def _shape_size(shape: tuple[int, ...]) -> int:
 #  from the helpers above so that the operations outside that contract keep
 #  the behaviour they were written against.
 # ----------------------------------------------------------------------
-
-
-def _arithmetic_operand(value: Tensor | Scalar, dtype: DataType) -> Any:
-    """Return an operand already in the declared dtype.
-
-    A scalar becomes a zero-dimensional array of that dtype rather than a
-    Python number, so NumPy cannot widen the result on its account.
-    """
-    from tensors.tensor import Tensor
-
-    native = numpy.dtype(dtype.name)
-    if isinstance(value, Tensor):
-        array = _view(value)
-        if array.dtype != native:
-            array = array.astype(native, copy=False)
-        return array
-    return native.type(value)
 
 
 def _arithmetic_storage(

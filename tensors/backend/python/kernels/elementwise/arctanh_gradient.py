@@ -1,18 +1,27 @@
-"""Reference the inverse hyperbolic tangent VJP for the Python backend."""
+"""Python implementation of the arctanh VJP."""
 
 from __future__ import annotations
+
+import math
+from collections.abc import Iterable
+
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+from tensors.dtype import DataType
 
 
-def arctanh_gradient(grad: Tensor, value: Tensor) -> Storage:
-    """Scale the upstream gradient by ``1 / (1 - x**2)``."""
-    evaluate = lambda upstream, item: upstream / (1.0 - float(item) * float(item))
-    return PythonStorage.from_values(
-        [evaluate(upstream, item) for upstream, item in zip(grad._data, value._data)],
-        grad.dtype,
-    )
+def arctanh_gradient(
+    grad_values: Iterable[int | float],
+    values: Iterable[int | float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate the first-order arctanh VJP on prepared native values."""
+    result = []
+    for upstream, item in zip(grad_values, values):
+        working = float(item)
+        result.append(upstream / (1.0 - working * working))
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("arctanh VJP kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)

@@ -2,28 +2,23 @@
 
 from __future__ import annotations
 import numpy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _arithmetic_operand
 from tensors.backend.numpy.conversion import _arithmetic_storage
 
 if TYPE_CHECKING:
-    from tensors._typing import Scalar
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
 def subtract(
-    left: Tensor | Scalar,
-    right: Tensor | Scalar,
+    left: Any,
+    right: Any,
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
 ) -> Storage:
     """Return native storage at the declared dtype."""
-    left_array = _arithmetic_operand(left, dtype)
-    right_array = _arithmetic_operand(right, dtype)
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        result = numpy.subtract(left_array, right_array)
+        result = numpy.subtract(left, right)
     return _arithmetic_storage(result, dtype=dtype, output_shape=output_shape)

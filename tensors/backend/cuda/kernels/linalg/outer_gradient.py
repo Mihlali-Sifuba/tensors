@@ -1,52 +1,73 @@
-"""CuPy implementation of the vector outer product VJP."""
+"""CUDA implementation of outer-product VJPs."""
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 import cupy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
-from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.conversion import _finite_operands
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
-from tensors.backend.cuda.kernels.reductions.stability import _stable_sum_candidate
+
+from tensors.backend.cuda.conversion import _storage, _widen
+from tensors.backend.cuda.kernels.linalg.contraction import certified_matmul
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.backend.storage import Storage
+    from tensors.dtype import DataType
 
 
 def outer_gradient(
-    grad: Tensor,
-    left: Tensor,
-    right: Tensor,
+    grad_values: Any,
+    left_values: Any,
+    right_values: Any,
     *,
+    left_shape: tuple[int, ...],
+    right_shape: tuple[int, ...],
+    dtype: DataType,
     needs_input_grad: tuple[bool, ...] = (True, True),
 ) -> tuple[Storage | None, Storage | None] | None:
-    """Run the requested stable native outer-product VJPs."""
-    upstream = _working_values(grad)
-    left_values = _working_values(left)
-    right_values = _working_values(right)
-    if not _finite_operands(upstream, left_values, right_values):
+    """Execute requested certified outer VJPs with CUDA-native values."""
+    if dtype.kind != "floating":
+        return None
+    try:
+        upstream = _widen(grad_values)
+        left = _widen(left_values)
+        right = _widen(right_values)
+    except (TypeError, ValueError):
         return None
     need_left, need_right = needs_input_grad
-    with _errstate(over="ignore", under="ignore", invalid="ignore"):
-        left_terms = upstream * right_values if need_left else None
-        right_terms = upstream * left_values[:, None] if need_right else None
-    if left_terms is not None and (not _stable_sum_candidate(left_terms, (1,))):
+    left_result = (
+        certified_matmul(upstream, right.reshape((right.shape[0], 1)))
+        if need_left
+        else None
+    )
+    right_result = (
+        certified_matmul(left.reshape((1, left.shape[0])), upstream)
+        if need_right
+        else None
+    )
+    if (need_left and left_result is None) or (need_right and right_result is None):
         return None
-    if right_terms is not None and (not _stable_sum_candidate(right_terms, (0,))):
+    if left_result is not None:
+        left_result = cupy.squeeze(left_result, axis=-1)
+    if right_result is not None:
+        right_result = cupy.squeeze(right_result, axis=-2)
+    left_storage = (
+        _storage(
+            cupy.where(left_result == 0.0, 0.0, left_result),
+            dtype=dtype,
+            output_shape=left_shape,
+        )
+        if left_result is not None
+        else None
+    )
+    right_storage = (
+        _storage(
+            cupy.where(right_result == 0.0, 0.0, right_result),
+            dtype=dtype,
+            output_shape=right_shape,
+        )
+        if right_result is not None
+        else None
+    )
+    if (need_left and left_storage is None) or (need_right and right_storage is None):
         return None
-    left_storage = None
-    if left_terms is not None:
-        left_storage = _storage(
-            cupy.sum(left_terms, axis=1), dtype=grad.dtype, output_shape=left.shape
-        )
-        if left_storage is None:
-            return None
-    right_storage = None
-    if right_terms is not None:
-        right_storage = _storage(
-            cupy.sum(right_terms, axis=0), dtype=grad.dtype, output_shape=right.shape
-        )
-        if right_storage is None:
-            return None
     return (left_storage, right_storage)

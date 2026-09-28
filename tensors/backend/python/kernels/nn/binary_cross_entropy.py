@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 from tensors.backend.python.storage import PythonStorage
-from tensors.backend.storage import Storage
-from tensors.utils.summation import stable_float_mean
-from tensors.utils.summation import stable_float_sum
+from tensors.utils.summation import stable_float_mean, stable_float_sum
 
 if TYPE_CHECKING:
     from tensors.backend.types import LossReduction
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
 def _probability_loss(probability: float, target: float) -> float:
-    """Return the loss for a probability input, exact at the boundaries."""
     if probability == 0.0:
         return 0.0 if target == 0.0 else math.inf
     if probability == 1.0:
@@ -26,7 +23,6 @@ def _probability_loss(probability: float, target: float) -> float:
 
 
 def _logit_loss(value: float, target: float) -> float:
-    """Return the loss for a logit input without overflowing ``exp``."""
     if value == math.inf:
         return 0.0 if target == 1.0 else math.inf
     if value == -math.inf:
@@ -37,31 +33,38 @@ def _logit_loss(value: float, target: float) -> float:
 
 
 def binary_cross_entropy(
-    prediction: Tensor,
-    target: Tensor,
+    prediction_values: Sequence[Any],
+    target_values: Sequence[Any],
+    prediction_shape: tuple[int, ...],
+    target_shape: tuple[int, ...],
     *,
     from_logits: bool,
     reduction: LossReduction,
     dtype: DataType,
     output_shape: tuple[int, ...],
-) -> Storage:
-    """Compute the elementwise losses, then apply ``reduction``."""
+) -> PythonStorage | None:
+    """Compute elementwise losses from native values, then reduce them."""
+    if prediction_shape != target_shape:
+        return None
     values = []
-    for raw_prediction, raw_target in zip(prediction._data, target._data):
+    for raw_prediction, raw_target in zip(prediction_values, target_values):
         value = float(raw_prediction)
-        target_value = float(raw_target)
+        target = float(raw_target)
         if from_logits:
-            values.append(_logit_loss(value, target_value))
+            values.append(_logit_loss(value, target))
             continue
         if not 0.0 <= value <= 1.0:
             raise ValueError(
                 "binary cross-entropy probabilities must be between 0 and 1"
             )
-        values.append(_probability_loss(value, target_value))
+        values.append(_probability_loss(value, target))
     if reduction == "none":
-        return PythonStorage.from_values(values, dtype)
-    if reduction == "mean":
-        total = stable_float_mean(values)
+        result = values
+    elif reduction == "mean":
+        result = [stable_float_mean(values)]
     else:
-        total = stable_float_sum(values)
-    return PythonStorage.from_values([total], dtype)
+        result = [stable_float_sum(values)]
+    storage = PythonStorage.from_values(result, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("Python loss kernel returned an unexpected result size")
+    return storage

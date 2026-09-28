@@ -82,19 +82,20 @@ def _scaled_product_sum(left: Any, right: Any, axes: tuple[int, ...]) -> Any:
 
 def _sum_axes(
     source_shape: tuple[int, ...], target_shape: tuple[int, ...]
-) -> tuple[tuple[int, ...], tuple[int, ...]] | None:
-    """Return padded target shape and axes reduced after broadcasting."""
-    if len(target_shape) > len(source_shape):
+) -> tuple[int, ...] | None:
+    """Return the axes reduced after broadcasting, or ``None`` to decline.
+
+    The derivation is :meth:`~tensors.shape.Shape.stretched_axes_from`, which
+    states it once for the whole package. A kernel answers a shape it cannot
+    reduce by declining rather than raising, so the shape error becomes a
+    ``None`` here and the dispatcher reports it.
+    """
+    from tensors.shape import Shape
+
+    try:
+        return Shape.from_iterable(source_shape).stretched_axes_from(target_shape)
+    except ValueError:
         return None
-    padded = (1,) * (len(source_shape) - len(target_shape)) + target_shape
-    axes = []
-    for axis, (source, target) in enumerate(zip(source_shape, padded)):
-        if source == target:
-            continue
-        if target != 1:
-            return None
-        axes.append(axis)
-    return (padded, tuple(axes))
 
 
 def _stable_sum_candidate(values: Any, axes: tuple[int, ...]) -> Any:

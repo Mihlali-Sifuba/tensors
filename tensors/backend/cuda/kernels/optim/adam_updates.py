@@ -15,15 +15,15 @@ from tensors.backend.cuda.kernels.optim.batching import _split_optimizer_storage
 from tensors.backend.cuda.kernels.optim.batch_kernels import _cuda_adam_batch_kernel
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
 def adam_updates(
-    parameters: Sequence[Tensor],
-    gradients: Sequence[Tensor],
-    moments: Sequence[Tensor],
-    scales: Sequence[Tensor],
-    scaled_values: Sequence[Tensor],
+    parameters: Sequence[Any],
+    gradients: Sequence[Any],
+    moments: Sequence[Any],
+    scales: Sequence[Any],
+    scaled_values: Sequence[Any],
     *,
     beta1: float,
     beta2: float,
@@ -31,11 +31,13 @@ def adam_updates(
     epsilon: float,
     first_corrections: Sequence[float],
     second_corrections: Sequence[float],
+    dtypes: Sequence[DataType],
+    shapes: Sequence[tuple[int, ...]],
 ) -> tuple[tuple[Storage, ...], ...] | None:
     """Apply Adam to several parameters with one group of array operations."""
     groups = (parameters, gradients, moments, scales, scaled_values)
     partitions = _optimizer_batch_partitions(
-        parameters, gradients, moments, scales, scaled_values
+        dtypes, shapes, parameters, gradients, moments, scales, scaled_values
     )
     if partitions is None:
         return None
@@ -52,6 +54,8 @@ def adam_updates(
                 epsilon=epsilon,
                 first_corrections=_optimizer_partition(first_corrections, indices),
                 second_corrections=_optimizer_partition(second_corrections, indices),
+                dtypes=_optimizer_partition(dtypes, indices),
+                shapes=_optimizer_partition(shapes, indices),
             )
             if result is None:
                 return None
@@ -77,8 +81,8 @@ def adam_updates(
         scale_values,
         normalized_values,
     ) = arrays
-    first = _optimizer_scalar_batch(first_corrections, parameters)
-    second = _optimizer_scalar_batch(second_corrections, parameters)
+    first = _optimizer_scalar_batch(first_corrections, shapes)
+    second = _optimizer_scalar_batch(second_corrections, shapes)
     parameter_result = cupy.empty_like(parameter_values)
     new_moments = cupy.empty_like(moment_values)
     visible = cupy.empty_like(moment_values)
@@ -107,11 +111,11 @@ def adam_updates(
     if bool(invalid[0]):
         return None
     results = (
-        _split_optimizer_storage(parameter_result, parameters),
-        _split_optimizer_storage(new_moments, gradients),
-        _split_optimizer_storage(visible, gradients),
-        _split_optimizer_storage(new_scales, gradients),
-        _split_optimizer_storage(new_scaled, gradients),
+        _split_optimizer_storage(parameter_result, dtypes, shapes),
+        _split_optimizer_storage(new_moments, dtypes, shapes),
+        _split_optimizer_storage(visible, dtypes, shapes),
+        _split_optimizer_storage(new_scales, dtypes, shapes),
+        _split_optimizer_storage(new_scaled, dtypes, shapes),
     )
     if any((result is None for result in results)):
         return None

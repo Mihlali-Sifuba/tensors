@@ -70,15 +70,13 @@ class Softmax(Operation):
         if not isinstance(axis, int):
             raise TypeError("softmax axis must be an integer")
         axis = _normalize_axis(a, axis)
-        return [_softmax_vjp_tensor(grad, a, axis)]
+        if not needs_input_grad[0]:
+            return [None]
+        from tensors.variable import Variable
 
-    def backward_graph(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Build the differentiable softmax Jacobian-vector product."""
-        axis = self.axis
-        if isinstance(axis, bool) or not isinstance(axis, int):
-            raise TypeError("softmax axis must be an integer")
-        axis = _normalize_axis(inputs[0].data, axis)
-        return [_softmax_vjp(grad, inputs[0], axis)]
+        if isinstance(grad, Variable) or isinstance(a, Variable):
+            return [_softmax_vjp(grad, a, axis)]
+        return [_softmax_vjp_tensor(grad, a, axis)]
 
 
 def _normalization_components(value: Tensor, axis: int) -> tuple[Tensor, list[float]]:
@@ -201,23 +199,6 @@ class SoftmaxCentered(Operation):
             value_gradient,
         ]
 
-    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        from tensors.operations.normalization.log_softmax import _log_softmax_vjp
-        from tensors.operations.reductions.sum import sum
-
-        grad, value = inputs
-        need_grad, need_value = needs_input_grad
-        axis = self.axis
-        return [
-            _log_softmax_vjp(outer_grad, value, axis) if need_grad else None,
-            (
-                -sum(outer_grad, axis=axis, keepdims=True)
-                * _softmax_vjp(grad, value, axis)
-                if need_value
-                else None
-            ),
-        ]
-
 
 class SoftmaxGradient(Operation):
     """Differentiable, cancellation-resistant softmax VJP."""
@@ -241,6 +222,27 @@ class SoftmaxGradient(Operation):
         need_grad, need_value = needs_input_grad
         axis = self.axis
         assert isinstance(axis, int)
+        from tensors.variable import Variable
+
+        if isinstance(outer_grad, Variable):
+            value_gradient = None
+            if need_value:
+                from tensors.operations.reductions.sum import sum as reduce_sum
+
+                probabilities = softmax(value, axis=axis)
+                centered = grad - reduce_sum(
+                    grad * probabilities, axis=axis, keepdims=True
+                )
+                projection = reduce_sum(
+                    outer_grad * probabilities, axis=axis, keepdims=True
+                )
+                vector = outer_grad * centered - grad * projection
+                value_gradient = _softmax_vjp(vector, value, axis)
+            return [
+                _softmax_vjp(outer_grad, value, axis) if need_grad else None,
+                value_gradient,
+            ]
+
         value_gradient = None
         if need_value:
             centered = _centered_softmax_tensor(grad, value, axis)
@@ -260,25 +262,6 @@ class SoftmaxGradient(Operation):
             value_gradient = _softmax_vjp_tensor(vector, value, axis)
         return [
             _softmax_vjp_tensor(outer_grad, value, axis) if need_grad else None,
-            value_gradient,
-        ]
-
-    def backward_graph(self, outer_grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        from tensors.operations.reductions.sum import sum
-
-        grad, value = inputs
-        need_grad, need_value = needs_input_grad
-        axis = self.axis
-        value_gradient = None
-        if need_value:
-            centered = _softmax_centered(grad, value, axis)
-            projection = sum(
-                outer_grad * softmax(value, axis=axis), axis=axis, keepdims=True
-            )
-            vector = outer_grad * centered - grad * projection
-            value_gradient = _softmax_vjp(vector, value, axis)
-        return [
-            _softmax_vjp(outer_grad, value, axis) if need_grad else None,
             value_gradient,
         ]
 

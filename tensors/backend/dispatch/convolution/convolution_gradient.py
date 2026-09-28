@@ -1,12 +1,14 @@
-"""Dispatch for grouped cross-correlation and its VJPs."""
+"""Strict selected-backend dispatch for grouped cross-correlation VJPs."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import _NUMPY_MATMUL_MIN_WORK, _array_work_is_large_enough
-from tensors.backend.storage import Storage
+from typing import TYPE_CHECKING, Any
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
+    from tensors.backend.storage import Storage
     from tensors.tensor import Tensor
 
 
@@ -22,46 +24,38 @@ def execute_convolution_gradient(
     include_bias: bool,
     needs_input_grad: tuple[bool, ...] = (True, True, True),
 ) -> tuple[Storage | None, ...]:
-    """Run the requested convolution VJPs when native accumulation is safe."""
-    from tensors.backend.python.kernels.convolution.convolution_gradient import (
-        convolution_gradient as reference,
+    """Run requested convolution VJPs on the selected backend without fallback."""
+    selected = config.get_backend()
+    validate_backend_residency((grad, inputs, kernel), selected)
+    backend: Any = load_backend(selected)
+    grad_buffer = grad._logical_storage_for(selected).buffer
+    input_buffer = inputs._logical_storage_for(selected).buffer
+    kernel_buffer = kernel._logical_storage_for(selected).buffer
+    grad_values = grad_buffer if selected == "python" else grad_buffer.reshape(grad.shape)
+    input_values = input_buffer if selected == "python" else input_buffer.reshape(inputs.shape)
+    kernel_values = kernel_buffer if selected == "python" else kernel_buffer.reshape(kernel.shape)
+    result = backend.convolution_gradient(
+        grad_values,
+        input_values,
+        kernel_values,
+        tuple(grad.shape),
+        tuple(inputs.shape),
+        tuple(kernel.shape),
+        dtype=grad.dtype,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        groups=groups,
+        include_bias=include_bias,
+        needs_input_grad=needs_input_grad,
     )
-
-    patch = kernel.size // max(kernel.shape[0], 1)
-    if not _array_work_is_large_enough(grad.size * patch, _NUMPY_MATMUL_MIN_WORK):
-        return reference(
-            grad,
-            inputs,
-            kernel,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
-            groups=groups,
-            include_bias=include_bias,
-            needs_input_grad=needs_input_grad,
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute convolution_gradient at "
+            f"dtype {grad.dtype.name} conformingly. The convolution VJP runs "
+            "on the selected backend; select another backend to run it elsewhere."
         )
-    convolution_gradient = _backend_kernel("convolution_gradient")
-    result = convolution_gradient(
-        grad,
-        inputs,
-        kernel,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        groups=groups,
-        include_bias=include_bias,
-        needs_input_grad=needs_input_grad,
+    validate_backend_residency(
+        (storage for storage in result if storage is not None), selected
     )
-    if result is not None:
-        return result
-    return reference(
-        grad,
-        inputs,
-        kernel,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        groups=groups,
-        include_bias=include_bias,
-        needs_input_grad=needs_input_grad,
-    )
+    return result

@@ -15,11 +15,18 @@ package as a typed dependency treats them as an explicit part of its
 interface. ``__all__`` stays the user-facing selection API: the ``execute_*``
 functions are re-exported for use inside ``tensors``, not as a second public
 surface.
+
+What is supported is decided here, by what this module re-exports, rather than
+by whether a name in an implementation module begins with an underscore. A
+module names a function for the operation it performs; a helper that is not
+re-exported is reachable through its own module and is not part of the
+supported API. Underscores are kept for state that no caller may touch.
 """
 
 from __future__ import annotations
 
 from tensors.backend.config import (
+    BackendMismatchError as BackendMismatchError,
     BackendOperationUnsupportedError as BackendOperationUnsupportedError,
     BackendUnavailableError as BackendUnavailableError,
     available_backends as available_backends,
@@ -46,6 +53,7 @@ from tensors.backend.dispatch import (
     execute_arctan_gradient as execute_arctan_gradient,
     execute_arctanh as execute_arctanh,
     execute_arctanh_gradient as execute_arctanh_gradient,
+    execute_assign_indices as execute_assign_indices,
     execute_argmax as execute_argmax,
     execute_argmin as execute_argmin,
     execute_binary_cross_entropy as execute_binary_cross_entropy,
@@ -90,13 +98,15 @@ from tensors.backend.dispatch import (
     execute_minimum_gradient as execute_minimum_gradient,
     execute_multiply as execute_multiply,
     execute_negate as execute_negate,
-    execute_vjp_negate as execute_vjp_negate,
     execute_not_equal as execute_not_equal,
     execute_one_hot_targets as execute_one_hot_targets,
     execute_outer as execute_outer,
     execute_outer_gradient as execute_outer_gradient,
     execute_power as execute_power,
+    execute_power_base_base_gradient as execute_power_base_base_gradient,
     execute_power_base_gradient as execute_power_base_gradient,
+    execute_power_exponent_exponent_gradient as execute_power_exponent_exponent_gradient,
+    execute_power_mixed_gradient as execute_power_mixed_gradient,
     execute_power_exponent_gradient as execute_power_exponent_gradient,
     execute_reduce_max as execute_reduce_max,
     execute_reduce_max_gradient as execute_reduce_max_gradient,
@@ -105,12 +115,12 @@ from tensors.backend.dispatch import (
     execute_reduce_min as execute_reduce_min,
     execute_reduce_min_gradient as execute_reduce_min_gradient,
     execute_reduce_norm as execute_reduce_norm,
+    execute_reduce_norm_gradient as execute_reduce_norm_gradient,
     execute_reduce_prod as execute_reduce_prod,
     execute_reduce_prod_gradient as execute_reduce_prod_gradient,
     execute_reduce_std as execute_reduce_std,
     execute_reduce_std_gradient as execute_reduce_std_gradient,
     execute_reduce_sum as execute_reduce_sum,
-    execute_reduce_sum_gradient as execute_reduce_sum_gradient,
     execute_reduce_variance as execute_reduce_variance,
     execute_reduce_variance_gradient as execute_reduce_variance_gradient,
     execute_relu as execute_relu,
@@ -139,7 +149,6 @@ from tensors.backend.dispatch import (
     execute_subtract as execute_subtract,
     execute_sum_products_to_shape as execute_sum_products_to_shape,
     execute_sum_to_shape as execute_sum_to_shape,
-    execute_vjp_sum_to_shape as execute_vjp_sum_to_shape,
     execute_tan as execute_tan,
     execute_tan_gradient as execute_tan_gradient,
     execute_tanh as execute_tanh,
@@ -170,6 +179,7 @@ from tensors.backend.types import (
 __all__ = [
     "BackendName",
     "BackendSelection",
+    "BackendMismatchError",
     "BackendOperationUnsupportedError",
     "BackendUnavailableError",
     "available_backends",

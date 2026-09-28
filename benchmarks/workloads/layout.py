@@ -39,7 +39,7 @@ def _view_tensor(
     only way to measure what the kernels do with a strided layout.
     """
     return ts.Tensor._from_metadata(
-        source._storage, shape=shape, strides=strides, offset=offset
+        source.backend_storage, shape=shape, strides=strides, offset=offset
     )
 
 
@@ -130,7 +130,9 @@ def _strided_cases(backend: str, side: int) -> list[Case]:
     from tensors.backend.loading import load_backend
 
     kernels = load_backend(backend)
-    _view = importlib.import_module(f"tensors.backend.{backend}.conversion")._view
+    tensor_to_logical_array = importlib.import_module(
+        f"tensors.backend.{backend}.conversion"
+    ).tensor_to_logical_array
     base = tensor((2 * side, 2 * side), dtype_name="float64", kind="ramp")
     layouts: dict[str, ts.Tensor] = {
         "contiguous": tensor((side, side), dtype_name="float64", kind="ramp"),
@@ -157,22 +159,35 @@ def _strided_cases(backend: str, side: int) -> list[Case]:
         cases.append(
             Case(
                 name=f"boundary.view/{name}/{side}x{side}",
-                run=lambda value=value: _view(value),
+                run=lambda value=value: tensor_to_logical_array(value),
                 layer="kernel",
-                validate=lambda value=value: _view(value),
+                validate=lambda value=value: tensor_to_logical_array(value),
                 description="the provider boundary alone: gather logical values into a compact native array",
                 **common,
             )
         )
+        # Prepared once, outside the timed call: this rung measures the
+        # kernel, not the conversion that precedes it.
+        conversion = importlib.import_module(
+            f"tensors.backend.{backend}.conversion"
+        )
+        array_module = importlib.import_module(
+            "numpy" if backend == "numpy" else "cupy"
+        )
+        native = array_module.dtype(ts.float64.name)
+        lowered_value = conversion.tensor_to_logical_array(value).astype(
+            native, copy=False
+        )
+        prepared_layout = (lowered_value, lowered_value)
         cases.append(
             Case(
                 name=f"kernel.add/{name}/{side}x{side}",
-                run=lambda value=value: kernels.add(
-                    value, value, dtype=ts.float64, output_shape=(side, side)
+                run=lambda prepared=prepared_layout: kernels.add(
+                    *prepared, dtype=ts.float64, output_shape=(side, side)
                 ),
                 layer="kernel",
-                validate=lambda value=value: kernels.add(
-                    value, value, dtype=ts.float64, output_shape=(side, side)
+                validate=lambda prepared=prepared_layout: kernels.add(
+                    *prepared, dtype=ts.float64, output_shape=(side, side)
                 ),
                 description="a kernel reading a tensor with this layout",
                 **common,

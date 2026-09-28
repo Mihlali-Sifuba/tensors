@@ -1,28 +1,44 @@
-"""CuPy implementation of elementwise selection."""
+"""CUDA implementation of where."""
 
 from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Any
+
 import cupy
-from typing import TYPE_CHECKING
+
+from tensors.backend.cuda.conversion import _narrow, _widen
+from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.storage import Storage
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _view
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
 def where(
-    condition: Tensor,
-    left: Tensor,
-    right: Tensor,
+    condition_values: Any,
+    left_values: Any,
+    right_values: Any,
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
-) -> Storage | None:
-    """Run broadcasting elementwise selection."""
-    try:
-        result = cupy.where(_view(condition) != 0, _view(left), _view(right))
-    except (TypeError, ValueError):
-        return None
-    return _storage(result, dtype=dtype, output_shape=output_shape)
+) -> Storage:
+    """Select between device data arrays using a device condition array."""
+    expected_shape = tuple(output_shape)
+    if any(
+        tuple(values.shape) != expected_shape
+        for values in (condition_values, left_values, right_values)
+    ):
+        raise RuntimeError(
+            "where kernel received operands not prepared for output_shape"
+        )
+    if left_values.dtype == cupy.float32:
+        left_values = _widen(left_values)
+    if right_values.dtype == cupy.float32:
+        right_values = _widen(right_values)
+    result = cupy.where(condition_values != 0, left_values, right_values)
+    narrowed = _narrow(result, cupy.dtype(dtype.name))
+    storage = CudaStorage(narrowed, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("where kernel returned an unexpected result size")
+    return storage

@@ -310,11 +310,18 @@ class CudaExecutesIntegerPowerNatively(ArithmeticTestCase):
 
     def test_the_provider_kernel_no_longer_declines(self):
         from tensors.backend.loading import _backend_kernel
+        import cupy
+
+        from tensors.backend.cuda.conversion import tensor_to_logical_array
 
         with ts.use_backend("cuda"):
             base = tensor("int32", [2, 3, 4, 5])
+            native = cupy.dtype("int32")
             storage = _backend_kernel("power")(
-                base, 5, dtype=ts.int32, output_shape=(4,)
+                tensor_to_logical_array(base).astype(native, copy=False),
+                native.type(5),
+                dtype=ts.int32,
+                output_shape=(4,),
             )
         self.assertIsNotNone(storage, "the CUDA kernel declined integer operands")
         self.assertEqual(type(storage).__name__, "CudaStorage")
@@ -331,7 +338,7 @@ class CudaExecutesIntegerPowerNatively(ArithmeticTestCase):
                         reference, "power", wraps=reference.power
                     ) as fallback:
                         result = base**5
-                self.assertEqual(type(result._storage).__name__, "CudaStorage")
+                self.assertEqual(type(result.backend_storage).__name__, "CudaStorage")
                 self.assertFalse(
                     fallback.called,
                     "integer power fell back to the Python reference",
@@ -343,7 +350,7 @@ class CudaExecutesIntegerPowerNatively(ArithmeticTestCase):
             with self.subTest(dtype=name), ts.use_backend("cuda"):
                 base = tensor(name, [2, 3]) + 0
                 result = base**5
-                self.assertEqual(type(result._storage).__name__, "CudaStorage")
+                self.assertEqual(type(result.backend_storage).__name__, "CudaStorage")
                 self.assertEqual(
                     [int(v) for v in result.tolist()],
                     [exact(2, 5, name), exact(3, 5, name)],

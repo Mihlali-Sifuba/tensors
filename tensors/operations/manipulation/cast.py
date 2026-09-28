@@ -34,14 +34,5 @@ class Cast(Operation):
     ) -> List[Tensor]:
         return [grad.astype(inputs[0].dtype)]
 
-    def backward_graph(
-        self,
-        grad: Any,
-        *inputs: Any,
-        needs_input_grad: tuple[bool, ...],
-    ) -> List[Any]:
-        """Build a differentiable VJP converted to the input dtype."""
-        return [grad.astype(inputs[0].dtype)]
-
 
 __all__ = ["Cast"]

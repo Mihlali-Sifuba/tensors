@@ -4,10 +4,7 @@ from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
 import builtins
 import math
 from tensors.utils.reductions import reduction_groups
@@ -47,7 +44,8 @@ def sum_exact_ratios(ratios: list[tuple[int, int]], *, divisor: int = 1) -> floa
 
 
 def reduce_sum(
-    value: Tensor,
+    value_values,
+    input_shape: tuple[int, ...],
     axes: tuple[int, ...],
     *,
     keepdims: bool,
@@ -55,17 +53,17 @@ def reduce_sum(
     output_shape: tuple[int, ...],
 ) -> Storage:
     """Return the sum of each group, accumulated stably."""
-    data = value._data
-    if axes == tuple(range(value.ndim)):
-        if value.dtype.kind == "floating":
+    data = value_values
+    if axes == tuple(range(len(input_shape))):
+        if dtype.kind == "floating":
             total = stable_float_sum([float(value) for value in data])
         else:
             total = builtins.sum(data)
         return PythonStorage.from_values([total], dtype)
     _, output_shape, groups = reduction_groups(
-        value.shape, axes, keepdims, scalar_as_vector=True
+        input_shape, axes, keepdims, scalar_as_vector=True
     )
-    if value.dtype.kind == "floating":
+    if dtype.kind == "floating":
         values = [
             stable_float_sum([float(data[index]) for index in group])
             for group in groups

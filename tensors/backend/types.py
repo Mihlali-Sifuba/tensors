@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Literal, TypeAlias
 
-
 BackendName: TypeAlias = Literal["python", "numpy", "cuda"]
 BackendSelection: TypeAlias = Literal["python", "numpy", "cuda", "auto"]
+MatmulMetadata: TypeAlias = tuple[
+    bool, bool, tuple[int, ...], int, int, int, tuple[int, ...], tuple[int, ...]
+]
 BinaryOperation: TypeAlias = Literal[
     "add",
     "subtract",

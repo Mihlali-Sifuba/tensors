@@ -1,24 +1,28 @@
-"""Reference hyperbolic cosine for the Python backend."""
+"""Python implementation of cosh."""
 
 from __future__ import annotations
+
+import math
+from collections.abc import Iterable
+
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
-import math
 
 
-def _cosh(value):
-    try:
-        return math.cosh(float(value))
-    except OverflowError:
-        return math.inf
-
-
-def cosh(value: Tensor, *, dtype: DataType) -> Storage:
-    """Return the hyperbolic cosine of every element."""
-    evaluate = _cosh
-    return PythonStorage.from_values([evaluate(item) for item in value._data], dtype)
+def cosh(
+    values: Iterable[int | float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate cosh on prepared native values."""
+    result = []
+    for item in values:
+        try:
+            result.append(math.cosh(float(item)))
+        except OverflowError:
+            result.append(math.inf)
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("cosh kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)

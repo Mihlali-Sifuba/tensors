@@ -1,22 +1,34 @@
 """Apply SGD using Python arithmetic and its intermediate cast semantics."""
 
-from tensors.tensor import Tensor
-from tensors.dtype import result_dtype
+from itertools import repeat
+from collections.abc import Iterable
+
 from tensors.backend.python.kernels.arithmetic.multiply import multiply
 from tensors.backend.python.kernels.arithmetic.subtract import subtract
+from tensors.backend.storage import Storage
+from tensors.dtype import DataType, result_dtype
 
 
-def sgd_update(parameter, gradient, learning_rate):
+def sgd_update(
+    parameter_values: Iterable[int | float],
+    gradient_values: Iterable[int | float],
+    learning_rate: float,
+    *,
+    dtype: DataType,
+    shape: tuple[int, ...],
+) -> Storage:
     """Step each parameter against its gradient."""
-    dtype = result_dtype(gradient.dtype, learning_rate)
-    scaled = Tensor._from_owned_storage(
-        multiply(gradient, learning_rate, dtype=dtype, output_shape=gradient.shape),
-        dtype=dtype,
-        shape=gradient.shape,
+    scaled_dtype = result_dtype(dtype, learning_rate)
+    scaled_storage = multiply(
+        gradient_values,
+        repeat(learning_rate),
+        dtype=scaled_dtype,
+        output_shape=shape,
     )
+    difference_dtype = result_dtype(dtype, scaled_storage)
     return subtract(
-        parameter,
-        scaled,
-        dtype=result_dtype(parameter.dtype, scaled),
-        output_shape=parameter.shape,
+        parameter_values,
+        scaled_storage.buffer,
+        dtype=difference_dtype,
+        output_shape=shape,
     )

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_ELEMENTWISE_MIN_SIZE,
-    _array_work_is_large_enough,
-)
+from typing import Any
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
 from tensors.backend.storage import Storage
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -15,15 +15,15 @@ if TYPE_CHECKING:
 
 
 def execute_cast(value: Tensor, *, dtype: DataType) -> Storage:
-    """Run accelerated dtype conversion, or the Python reference."""
-    from tensors.backend.python.kernels.manipulation.cast_tensor import (
-        cast_tensor as reference,
-    )
-
-    if not _array_work_is_large_enough(value.size, _NUMPY_ELEMENTWISE_MIN_SIZE):
-        return reference(value, dtype=dtype)
-    cast_tensor = _backend_kernel("cast_tensor")
-    result = cast_tensor(value, dtype=dtype)
-    if result is not None:
-        return result
-    return reference(value, dtype=dtype)
+    """Convert dtype on the active backend without cross-backend fallback."""
+    active = config.get_backend()
+    validate_backend_residency((value,), active)
+    backend: Any = load_backend(active)
+    result = backend.cast_tensor(value, dtype=dtype)
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {active} backend cannot execute cast from {value.dtype.name} "
+            f"to {dtype.name} conformingly"
+        )
+    validate_backend_residency((result,), active)
+    return result

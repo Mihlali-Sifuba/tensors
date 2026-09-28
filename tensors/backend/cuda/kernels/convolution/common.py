@@ -5,15 +5,12 @@ import cupy
 import itertools
 from typing import Any
 from typing import TYPE_CHECKING
-from tensors.backend.cuda.storage import CudaStorage
 from tensors.backend.storage import Storage
-from tensors.backend.cuda.conversion import _finite_operands
 from tensors.backend.cuda.conversion import _shape_size
-from tensors.backend.cuda.conversion import _view
+from tensors.backend.cuda.conversion import _storage, _widen
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 _CONVOLUTION_COLUMN_MAX_ELEMENTS = 4 * 1_024 * 1_024
 
 
@@ -26,7 +23,7 @@ def _convolution_tile_shape(
     """Choose a spatial and batch tile bounded by the column memory budget."""
     patch = channels * _shape_size(kernel_spatial)
     max_positions = max(1, _CONVOLUTION_COLUMN_MAX_ELEMENTS // max(patch, 1))
-    extents = list(output_spatial)
+    extents = [max(1, size) for size in output_spatial]
     while _shape_size(tuple(extents)) > max_positions:
         axis = max(range(len(extents)), key=extents.__getitem__)
         extents[axis] = max(1, (extents[axis] + 1) // 2)
@@ -96,28 +93,20 @@ def _convolution_columns(
 
 
 def _convolution_operands(
-    inputs: Tensor, kernel: Tensor, dtype: DataType
+    input_values: Any,
+    kernel_values: Any,
 ) -> tuple[Any, Any] | None:
-    """Return finite convolution operands in the requested working dtype."""
-    provider_dtype = cupy.dtype(dtype.name)
+    """Return already-native convolution values in safe working precision."""
     try:
-        input_values = _view(inputs).astype(provider_dtype, copy=False)
-        kernel_values = _view(kernel).astype(provider_dtype, copy=False)
+        inputs = _widen(cupy.asarray(input_values))
+        kernel = _widen(cupy.asarray(kernel_values))
     except (TypeError, ValueError):
         return None
-    if not _finite_operands(input_values, kernel_values):
-        return None
-    return (input_values, kernel_values)
+    return inputs, kernel
 
 
 def _convolution_storage(
     result: Any, *, dtype: DataType, output_shape: tuple[int, ...]
-) -> Storage:
-    """Retain a finite native convolution result without precision round trips."""
-    target_dtype = cupy.dtype(dtype.name)
-    contiguous = cupy.ascontiguousarray(result, dtype=target_dtype).reshape(-1)
-    storage: Storage
-    storage = CudaStorage(contiguous, dtype)
-    if storage.size != _shape_size(output_shape):
-        raise RuntimeError("Convolution kernel returned an unexpected result size")
-    return storage
+) -> Storage | None:
+    """Narrow once through the shared safe native-storage boundary."""
+    return _storage(result, dtype=dtype, output_shape=output_shape)

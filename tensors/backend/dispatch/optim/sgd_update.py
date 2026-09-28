@@ -1,28 +1,50 @@
-"""Dispatch for optimizer updates."""
+"""Strict selected-backend dispatch for one SGD update."""
 
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from tensors.backend.loading import _backend_kernel
-from tensors.backend.policy import (
-    _NUMPY_ELEMENTWISE_MIN_SIZE,
-    _array_work_is_large_enough,
-)
-from tensors.backend.storage import Storage
+
+from typing import TYPE_CHECKING, Any
+
+from tensors.backend import config
+from tensors.backend.config import BackendOperationUnsupportedError
+from tensors.backend.loading import load_backend
+from tensors.backend.validation import validate_backend_residency
 
 if TYPE_CHECKING:
+    from tensors.backend.storage import Storage
     from tensors.tensor import Tensor
 
 
 def execute_sgd_update(
     parameter: Tensor, gradient: Tensor, learning_rate: float
 ) -> Storage:
-    """Run a fused SGD parameter update."""
-    from tensors.backend.python.kernels.optim.sgd_update import sgd_update as reference
-
-    if not _array_work_is_large_enough(parameter.size, _NUMPY_ELEMENTWISE_MIN_SIZE):
-        return reference(parameter, gradient, learning_rate)
-    sgd_update = _backend_kernel("sgd_update")
-    result = sgd_update(parameter, gradient, learning_rate)
-    if result is not None:
-        return result
-    return reference(parameter, gradient, learning_rate)
+    """Run one SGD update on the selected backend without fallback."""
+    selected = config.get_backend()
+    validate_backend_residency((parameter, gradient), selected)
+    backend: Any = load_backend(selected)
+    parameter_buffer = parameter._logical_storage_for(selected).buffer
+    gradient_buffer = gradient._logical_storage_for(selected).buffer
+    parameter_values = (
+        parameter_buffer
+        if selected == "python"
+        else parameter_buffer.reshape(parameter.shape)
+    )
+    gradient_values = (
+        gradient_buffer
+        if selected == "python"
+        else gradient_buffer.reshape(gradient.shape)
+    )
+    result = backend.sgd_update(
+        parameter_values,
+        gradient_values,
+        learning_rate,
+        dtype=parameter.dtype,
+        shape=tuple(parameter.shape),
+    )
+    if result is None:
+        raise BackendOperationUnsupportedError(
+            f"The {selected} backend cannot execute sgd_update at dtype "
+            f"{parameter.dtype.name} conformingly. Optimizer updates run on "
+            "the selected backend; select another backend to run it elsewhere."
+        )
+    validate_backend_residency((result,), selected)
+    return result

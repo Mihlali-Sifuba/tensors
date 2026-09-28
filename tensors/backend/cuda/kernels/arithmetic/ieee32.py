@@ -24,6 +24,11 @@ both crossings.
 
 The same applies to exponentiation, which has no PTX instruction: see
 :func:`_build_power`.
+
+This module is internal to the CUDA backend. The arithmetic kernels and
+``conversion`` import it directly and no facade re-exports it, so nothing
+here is supported public API. See "Naming and the public API boundary" in
+docs/backends.md.
 """
 
 from __future__ import annotations

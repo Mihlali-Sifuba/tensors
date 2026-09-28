@@ -79,11 +79,13 @@ from tensors.backend.dispatch.elementwise.minimum_gradient import (
     execute_minimum_gradient as execute_minimum_gradient,
 )
 from tensors.backend.dispatch.elementwise.negate import execute_negate as execute_negate
-from tensors.backend.dispatch.elementwise.vjp_negate import (
-    execute_vjp_negate as execute_vjp_negate,
-)
 from tensors.backend.dispatch.elementwise.not_equal import (
     execute_not_equal as execute_not_equal,
+)
+from tensors.backend.dispatch.elementwise.power_second_gradients import (
+    execute_power_base_base_gradient as execute_power_base_base_gradient,
+    execute_power_exponent_exponent_gradient as execute_power_exponent_exponent_gradient,
+    execute_power_mixed_gradient as execute_power_mixed_gradient,
 )
 from tensors.backend.dispatch.elementwise.power_base_gradient import (
     execute_power_base_gradient as execute_power_base_gradient,

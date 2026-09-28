@@ -260,8 +260,9 @@ a zero Tensor/Variable
 
 Returning a value for an unrequested operand raises, as does returning `None`
 for a requested one. That makes skipping unused work an enforceable contract
-rather than an optimisation an operation may quietly ignore. `backward_graph`
-follows the same contract with `Variable` results.
+rather than an optimisation an operation may quietly ignore. The contract is
+the same when the reverse pass is building a derivative graph; only the kind
+of the results changes, from `Tensor` to `Variable`.
 
 A derivative-specific domain error is raised only when the derivative it
 guards was requested. Differentiating `base ** exponent` with respect to a
@@ -441,16 +442,33 @@ Production behavior includes explicit domain rules:
   real derivative is undefined there.
 - `arctanh(x)` requires `-1 < x < 1`.
 - `sign(x)` has a zero derivative away from zero and raises when differentiated
-  at zero, where the function is discontinuous.
+  at zero, where the function is discontinuous. Its VJP is **routed**: the
+  result is canonical `+0.0` whatever the upstream gradient is, so a negative
+  upstream does not make it `-0.0` and an infinite or NaN upstream does not
+  make it NaN. A NaN primal gives a NaN derivative.
+  ([sign-semantics.md](sign-semantics.md) section 6.)
+- `abs(x)` uses a zero subgradient at the kink, and its VJP is likewise
+  routed rather than multiplied, so the kink is canonical `+0.0` for any
+  upstream. The second derivative is zero away from the kink and raises at
+  it, because the subgradient there is a choice rather than a limit.
+  ([abs-semantics.md](abs-semantics.md) sections 6 and 8.)
 - `sqrt(x)` accepts `x >= 0`, but its derivative raises at `x == 0` because the
-  finite real derivative is undefined there.
+  finite real derivative is undefined there. A **negative** primal is not an
+  error in the VJP: it gives NaN, matching the forward rule. The VJP's
+  evaluation order is specified — root, then doubling, then division, each
+  rounding in the declared dtype.
+  ([sqrt-semantics.md](sqrt-semantics.md) section 6.)
 - A differentiable tensor exponent in `base ** exponent` requires a positive
   base. A constant integer-valued exponent can differentiate negative bases.
 - `norm` and `std` use a zero first-order subgradient at a zero-magnitude
   reduction group. Their higher derivatives raise there.
 - `variance` is the population variance. It remains smooth at zero variance,
   where both its value and first derivative are zero.
-- `relu` uses the conventional zero subgradient at zero.
+- `relu` uses the conventional zero subgradient at zero. Its VJP is routed
+  rather than multiplied, so an infinite or NaN upstream on the inactive
+  side gives canonical `+0.0` rather than NaN. The second derivative is zero
+  away from the kink and raises at it.
+  ([relu-semantics.md](relu-semantics.md) sections 6 and 8.)
 - `min` and `max` divide the first-order gradient equally among tied extrema.
   Higher-order derivatives are not provided because selection changes are
   nondifferentiable.
@@ -465,6 +483,21 @@ Production behavior includes explicit domain rules:
 These boundaries are part of the API. Returning an explicit error is safer
 than manufacturing a gradient at a point where the mathematics does not define
 one.
+
+Four of them — `sign`, `abs`, `sqrt` and `relu` — now have their VJPs
+specified in their own semantics documents, which govern the first-order
+VJP, the graph-built VJP and the named higher-order regions. Two properties
+those documents share are worth stating once here, because they were
+previously inconsistent between backends:
+
+- **A VJP that discards its upstream gradient routes rather than
+  multiplies.** Multiplying by a materialised zero lets a negative upstream
+  leave `-0.0` and an infinite or NaN upstream leave NaN on a branch the
+  derivative says contributes nothing. Selecting a literal zero does not.
+- **The VJP is recorded rather than frozen.** None of the four reads host
+  values to build a mask, so a compiled graph replayed with values that
+  change branch answers for the values it is replayed with, and a domain
+  error that the replayed values deserve is still raised.
 
 ## Mutation and recomputation
 
@@ -598,15 +631,47 @@ are not restated here.
 > arithmetic, which is separate work, and is why two entry points exist for
 > the same reduction.
 >
-> **Power is a partial case, and the distinction matters.** Its two gradient
-> *kernels* now dispatch strictly — no threshold, no fallback, no
-> operand-reading decline — under
-> [arithmetic semantics G6](arithmetic-semantics.md#1271-rules). The broadcast
-> reduction that shapes their results does not, because it is the shared
-> `sum_to_shape` above. So a four-element power backward pass under explicit
-> NumPy returns `NumPyStorage` without broadcasting and `PythonStorage` with
-> it. The gradient's *numerical* contract is met in both cases; only its
-> execution location differs, and the two requirements are separate.
+> **Power is closed for its first derivative.** Its two gradient kernels
+> dispatch strictly — no threshold, no fallback, no operand-reading decline —
+> under [arithmetic semantics G6](arithmetic-semantics.md#1271-rules), and the
+> broadcast reduction that shapes their results now asks for the same
+> selected-backend execution the `+` and `-` reductions do, so a small
+> broadcast power backward pass no longer returns `PythonStorage` where the
+> same pass without broadcasting returns `NumPyStorage`. Section 12.7.4 does
+> not impose `**`'s own accuracy bounds on a whole gradient expression, and
+> the reduction it now uses agrees with the one it replaced to well under an
+> ulp, in both directions, on the cases measured.
+>
+> **Its second derivative is closed too.** `PowerBaseVJP` and
+> `PowerExponentVJP` each state one derivative rule, written against
+> operations, so differentiating a recorded power gradient a second time has
+> one answer wherever it is asked for. The three second partials —
+> \(f_{bb} = e(e-1)b^{e-2}\), the mixed \(f_{be} = b^{e-1}(1 + e\ln b)\) and
+> \(f_{ee} = b^{e}(\ln b)^2\) — are backend primitives, dispatched like the
+> first-order pair with no workload threshold and no fallback.
+>
+> They are primitives rather than compositions for two reasons. Each is a few
+> small factors times a power, and the power is what leaves the representable
+> range while the whole expression stays inside it, so the factors have to be
+> grouped before rounding in one kernel. And the expression would need `log`,
+> which still answers to the workload policy and returns host storage for a
+> small operand, so building it from operations would lose the selected
+> backend for exactly the tensors this branch exists to protect.
+>
+> What this replaced was a host loop that read every operand back, computed in
+> Python whatever backend was selected, raised `ValueError` at a zero base and
+> at a negative one, and in raising discarded the partials that did exist
+> alongside the one that did not. Rules G1 to G3 apply at the second order as
+> they do at the first: an absent derivative is NaN, nothing raises on a
+> numerical condition, and nothing synchronises with the host to detect one.
+> So `(-2.0) ** 3.0` differentiated twice by the base now yields `-12.0`, and
+> its mixed partial `NaN`, where the pair used to be lost together.
+>
+> **The third derivative is not implemented.** Its rules would be power's
+> third partials, and none of those exists; `PowerBaseBaseVJP`,
+> `PowerMixedVJP` and `PowerExponentExponentVJP` raise `NotImplementedError`
+> naming that limit. Differentiating a power three times previously failed
+> with a type error from the reverse pass instead.
 
 > **Consequence worth knowing.** The array `sum_to_shape` and
 > `sum_products_to_shape` kernels decline when a gradient contains an infinity
@@ -794,9 +859,12 @@ class Identity(Operation):
         return [gradient]
 ```
 
-`backward_graph()` is optional and enables higher-order differentiation. The
-base implementation raises `NotImplementedError`, so an operation without it
-reports the limitation instead of silently detaching a gradient.
+`backward()` is the whole derivative contract. It used to be joined by
+`backward_graph()`, which a reverse pass building a derivative graph called
+instead; nothing selects between them now. An operation written against
+operations rather than against Tensors serves both passes and can be
+differentiated again, and one written against Tensors answers the numerical
+pass and stops there.
 
 A configured operation declares its configuration in `__slots__` and assigns it
 in `__init__`, which keeps the instance immutable:
@@ -816,9 +884,8 @@ class Scale(Operation):
         return [gradient * self.factor]
 ```
 
-`Computation` invokes `operation.forward(...)`, `operation.backward(...)`, and
-`operation.backward_graph(...)` directly; it never interprets an operation's
-configuration.
+`Computation` invokes `operation.forward(...)` and `operation.backward(...)`
+directly; it never interprets an operation's configuration.
 
 ## Numerically stable probability functions
 

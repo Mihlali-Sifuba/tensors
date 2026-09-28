@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from tensors.tensor import Tensor
 
 
-def _view(tensor: Tensor) -> Any:
+def tensor_to_logical_array(tensor: Tensor) -> Any:
     """Return compact logical values as a device array.
 
     Kernels operate on compact arrays. Tensor metadata remains the source of
@@ -43,18 +43,18 @@ def _widen(values: Any) -> Any:
     """
     if values.dtype != cupy.float32:
         return cupy.asarray(values, dtype=cupy.float64)
-    from tensors.backend.cuda.kernels.arithmetic import _ieee32
+    from tensors.backend.cuda.kernels.arithmetic import ieee32
 
-    return _ieee32.widen(values)
+    return ieee32.widen(values)
 
 
 def _narrow(values: Any, target: Any) -> Any:
     """Round a binary64 array to ``target``, keeping binary32 subnormals."""
     if target != cupy.float32:
         return cupy.asarray(values, dtype=target)
-    from tensors.backend.cuda.kernels.arithmetic import _ieee32
+    from tensors.backend.cuda.kernels.arithmetic import ieee32
 
-    return _ieee32.narrow(values)
+    return ieee32.narrow(values)
 
 
 def _working_values(tensor: Tensor) -> Any:
@@ -64,7 +64,7 @@ def _working_values(tensor: Tensor) -> Any:
     this is the first of the two format crossings; :func:`_storage` performs
     the second.
     """
-    return _widen(_view(tensor))
+    return _widen(tensor_to_logical_array(tensor))
 
 
 def _errstate(**settings: str) -> Any:
@@ -86,7 +86,7 @@ def _operand(value: Tensor | Scalar, dtype: DataType) -> Any:
 
     if dtype.kind == "integer":
         raise TypeError("CUDA integer kernels require the Python fallback")
-    result = _view(value) if isinstance(value, Tensor) else value
+    result = tensor_to_logical_array(value) if isinstance(value, Tensor) else value
     # The same crossing as _working_values, reached through a second helper.
     # cupy.asarray widens with astype, which flushes a binary32 subnormal.
     return _widen(cupy.asarray(result))
@@ -100,7 +100,7 @@ def _storage(
 ) -> Storage | None:
     """Retain a device result, or decline when it cannot be represented."""
     if dtype.kind == "integer":
-        # Matches _operand: exact integer semantics stay on the Python kernel.
+        # Exact integer semantics stay in kernels that explicitly support them.
         return None
     flattened = cupy.asarray(result).reshape(-1)
     try:
@@ -149,23 +149,6 @@ def _shape_size(shape: tuple[int, ...]) -> int:
 # ----------------------------------------------------------------------
 
 
-def _arithmetic_operand(value: Tensor | Scalar, dtype: DataType) -> Any:
-    """Return an operand already in the declared dtype.
-
-    A scalar becomes a zero-dimensional array of that dtype rather than a
-    Python number, so NumPy cannot widen the result on its account.
-    """
-    from tensors.tensor import Tensor
-
-    native = cupy.dtype(dtype.name)
-    if isinstance(value, Tensor):
-        array = _view(value)
-        if array.dtype != native:
-            array = array.astype(native, copy=False)
-        return array
-    return native.type(value)
-
-
 def _arithmetic_storage(
     result: Any,
     *,
@@ -182,7 +165,7 @@ def _arithmetic_storage(
     flattened = cupy.asarray(result).reshape(-1)
     if flattened.dtype != native:
         with _errstate(over="ignore", under="ignore", invalid="ignore"):
-            flattened = flattened.astype(native, copy=False)
+            flattened = _narrow(flattened, native)
     storage = CudaStorage(cupy.ascontiguousarray(flattened), dtype)
     if storage.size != _shape_size(output_shape):
         raise RuntimeError("Array kernel returned an unexpected result size")

@@ -14,6 +14,8 @@ overhead and not a difference of operand, size, or sampling round.
 
 from __future__ import annotations
 
+import importlib
+import inspect
 from typing import Any
 
 import tensors as ts
@@ -100,6 +102,19 @@ def binary_ladder(
     if backend in ACCELERATED:
         provider = provider_module(backend)
         kernels = load_backend(backend)
+        conversion = importlib.import_module(
+            f"tensors.backend.{backend}.conversion"
+        )
+        array_module = importlib.import_module(
+            "numpy" if backend == "numpy" else "cupy"
+        )
+        native = array_module.dtype(dtype.name)
+        kernel_left = conversion.tensor_to_logical_array(left).astype(
+            native, copy=False
+        )
+        kernel_right = conversion.tensor_to_logical_array(right).astype(
+            native, copy=False
+        )
         raw_left = provider_array(provider, shape, dtype_name=dtype_name, kind="ramp")
         raw_right = provider_array(
             provider, shape, dtype_name=dtype_name, kind="constant", value=2.0
@@ -128,7 +143,10 @@ def binary_ladder(
 
         def run_kernel() -> Any:
             return getattr(kernels, operation)(
-                left, right, dtype=dtype, output_shape=shape
+                kernel_left,
+                kernel_right,
+                dtype=dtype,
+                output_shape=shape,
             )
 
         def validate_kernel() -> None:
@@ -145,7 +163,7 @@ def binary_ladder(
                 run=run_kernel,
                 layer="kernel",
                 validate=validate_kernel,
-                description="internal guarded array kernel over Tensors",
+                description="internal guarded array kernel over native operands",
                 backends=ACCELERATED,
                 **common,
             )
@@ -235,6 +253,19 @@ def binary_ladder(
     return cases
 
 
+def _takes_output_shape(callable_object: Any) -> bool:
+    """Return whether a kernel or dispatcher accepts an ``output_shape``.
+
+    The unary operations are migrating off the older signature one at a
+    time, so at any moment some take an explicit ``output_shape`` and the
+    rest do not yet. Asking the signature lets the ladder measure whichever
+    contract an operation declares, rather than the harness keeping a second
+    copy of that list that would go stale the next time one moves — which is
+    also why this docstring does not name the migrated ones.
+    """
+    return "output_shape" in inspect.signature(callable_object).parameters
+
+
 def unary_ladder(
     backend: str, operation: str, dtype_name: str, size: int
 ) -> list[Case]:
@@ -274,8 +305,28 @@ def unary_ladder(
                 )
             )
 
+        kernel = getattr(kernels, operation)
+        kernel_takes_shape = _takes_output_shape(kernel)
+        kernel_value = value
+        if kernel_takes_shape:
+            # A migrated kernel is handed a lowered native array by dispatch,
+            # so the ladder has to hand it one too. Passing the Tensor instead
+            # makes the provider convert it element by element, which measures
+            # that conversion rather than the kernel.
+            conversion = importlib.import_module(
+                f"tensors.backend.{backend}.conversion"
+            )
+            array_module = importlib.import_module(
+                "numpy" if backend == "numpy" else "cupy"
+            )
+            kernel_value = conversion.tensor_to_logical_array(value).astype(
+                array_module.dtype(dtype_name), copy=False
+            )
+
         def run_kernel() -> Any:
-            return getattr(kernels, operation)(value, dtype=dtype)
+            if kernel_takes_shape:
+                return kernel(kernel_value, dtype=dtype, output_shape=shape)
+            return kernel(kernel_value, dtype=dtype)
 
         def validate_kernel() -> None:
             if run_kernel() is None:
@@ -294,16 +345,20 @@ def unary_ladder(
                 **common,
             )
         )
+        dispatcher = getattr(backend_dispatch, f"execute_{operation}")
+        dispatch_takes_shape = _takes_output_shape(dispatcher)
+
+        def run_dispatch() -> Any:
+            if dispatch_takes_shape:
+                return dispatcher(value, dtype=dtype, output_shape=shape)
+            return dispatcher(value, dtype=dtype)
+
         cases.append(
             Case(
                 name=f"dispatch.{operation}/{dtype_name}/{size}",
-                run=lambda: getattr(backend_dispatch, f"execute_{operation}")(
-                    value, dtype=dtype
-                ),
+                run=run_dispatch,
                 layer="dispatch",
-                validate=lambda: getattr(backend_dispatch, f"execute_{operation}")(
-                    value, dtype=dtype
-                ),
+                validate=run_dispatch,
                 description="execute_unary: policy and kernel lookup",
                 backends=ACCELERATED,
                 **common,

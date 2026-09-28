@@ -80,22 +80,10 @@ def sum_gradient_values(gradients: list[Tensor]) -> Tensor:
     if len(gradients) == 1:
         return gradients[0]
 
-    from ...backend import get_backend
+    from ...operations.manipulation.stack import stack
+    from ...operations.reductions.sum import sum as tensor_sum
 
-    first = gradients[0]
-    if get_backend() != "python" and first.size >= 32:
-        from ...operations.manipulation.stack import stack
-        from ...operations.reductions.sum import sum as tensor_sum
-
-        return tensor_sum(stack(gradients, axis=0), axis=0)
-
-    from ...utils.summation import stable_float_sum
-
-    values = [
-        stable_float_sum([float(gradient._data[index]) for gradient in gradients])
-        for index in range(first.size)
-    ]
-    return Tensor(values, dtype=first.dtype, shape=first.shape)
+    return tensor_sum(stack(gradients, axis=0), axis=0)
 
 
 def sum_gradient_graph(gradients: list[Variable]) -> Variable:
@@ -104,9 +92,11 @@ def sum_gradient_graph(gradients: list[Variable]) -> Variable:
         return gradients[0]
 
     from ...operations.manipulation.stack import stack
-    from ...operations.reductions.sum import sum
+    from ...operations.reductions.sum import Sum
+    from ..expression import apply_operation
 
-    return sum(stack(gradients, axis=0), axis=0)
+    # The reverse-pass reduction follows the active backend selection.
+    return apply_operation(Sum(axis=0), (stack(gradients, axis=0),))
 
 
 def validate_gradients(
@@ -129,7 +119,8 @@ def validate_gradients(
     from ...variable import Variable
 
     label = operation.name
-    mode = "backward_graph" if graph else "backward"
+    # One method serves both reverse passes, so the mode names the pass.
+    mode = "graph backward" if graph else "backward"
     try:
         results = tuple(gradients)
     except TypeError as exc:

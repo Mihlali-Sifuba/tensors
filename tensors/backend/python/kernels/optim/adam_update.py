@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 import math
+from collections.abc import Iterable
 from tensors.backend.python.storage import PythonStorage
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tensors.backend.storage import Storage
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
 def _stable_weighted_sum(
@@ -64,11 +65,11 @@ def _product_quotient(numerators: list[float], denominators: list[float]) -> flo
 
 
 def adam_update(
-    parameter: Tensor,
-    gradient: Tensor,
-    moment: Tensor,
-    scale: Tensor,
-    scaled: Tensor,
+    parameter_values: Iterable[int | float],
+    gradient_values: Iterable[int | float],
+    moment_values: Iterable[int | float],
+    scale_values: Iterable[int | float],
+    scaled_values: Iterable[int | float],
     *,
     beta1: float,
     beta2: float,
@@ -76,15 +77,21 @@ def adam_update(
     epsilon: float,
     first_correction: float,
     second_correction: float,
+    dtype: DataType,
+    shape: tuple[int, ...],
 ) -> tuple[Storage, Storage, Storage, Storage, Storage] | None:
     """Apply one bias-corrected Adam step to a parameter."""
-    moment_values = []
+    new_moment_values = []
     visible_second_values = []
     new_scales = []
     new_scaled_values = []
-    parameter_values = []
+    new_parameter_values = []
     for parameter_value, gradient_value, moment, scale, scaled in zip(
-        parameter._data, gradient._data, moment._data, scale._data, scaled._data
+        parameter_values,
+        gradient_values,
+        moment_values,
+        scale_values,
+        scaled_values,
     ):
         gradient_value = float(gradient_value)
         moment_value = _stable_weighted_sum(
@@ -102,15 +109,15 @@ def adam_update(
             ],
         )
         update = learning_rate * ratio
-        moment_values.append(moment_value)
+        new_moment_values.append(moment_value)
         new_scales.append(new_scale)
         new_scaled_values.append(new_scaled)
         visible_second_values.append(_visible_second_moment(new_scale, new_scaled))
-        parameter_values.append(float(parameter_value) - update)
+        new_parameter_values.append(float(parameter_value) - update)
     return (
-        PythonStorage.from_values(parameter_values, parameter.dtype),
-        PythonStorage.from_values(moment_values, gradient.dtype),
-        PythonStorage.from_values(visible_second_values, gradient.dtype),
-        PythonStorage.from_values(new_scales, gradient.dtype),
-        PythonStorage.from_values(new_scaled_values, gradient.dtype),
+        PythonStorage.from_values(new_parameter_values, dtype),
+        PythonStorage.from_values(new_moment_values, dtype),
+        PythonStorage.from_values(visible_second_values, dtype),
+        PythonStorage.from_values(new_scales, dtype),
+        PythonStorage.from_values(new_scaled_values, dtype),
     )

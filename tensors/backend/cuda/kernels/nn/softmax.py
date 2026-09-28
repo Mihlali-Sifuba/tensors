@@ -1,24 +1,30 @@
-"""CuPy implementation of softmax."""
+"""CUDA-native softmax."""
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 import cupy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
-from tensors.backend.cuda.conversion import _finite_operands
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
+
+from tensors.backend.cuda.conversion import _storage, _widen
 from tensors.backend.cuda.kernels.reductions.logsumexp_ops import _normalization_terms
+from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
-def softmax(value: Tensor, axis: int, *, dtype: DataType) -> Storage | None:
-    """Run fused softmax or log-softmax on finite values."""
-    values = _working_values(value)
-    maximum, correction, probabilities = _normalization_terms(values, axis)
-    result = probabilities
-    if not _finite_operands(values, probabilities, result):
-        return None
-    return _storage(result, dtype=dtype, output_shape=value.shape)
+def softmax(
+    value_values: Any,
+    input_shape: tuple[int, ...],
+    axis: int,
+    *,
+    dtype: DataType,
+) -> Storage | None:
+    """Compute stable softmax probabilities with device-native values."""
+    values = _widen(cupy.asarray(value_values).reshape(input_shape))
+    all_negative_infinity = cupy.all(cupy.isneginf(values), axis=axis, keepdims=True)
+    if bool(cupy.any(all_negative_infinity)):
+        raise ValueError("softmax is undefined when every value along an axis is -inf")
+    _, _, probabilities = _normalization_terms(values, axis)
+    return _storage(probabilities, dtype=dtype, output_shape=input_shape)

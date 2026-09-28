@@ -72,24 +72,10 @@ class Transpose(Operation):
         """Transpose the upstream gradient back to the input layout."""
         axes = self.axes
         if axes is None:
-            return [_transpose_impl(grad)]
-        normalized = tuple(axis + grad.ndim if axis < 0 else axis for axis in axes)
-        inverse = tuple(normalized.index(axis) for axis in range(grad.ndim))
-        return [_transpose_impl(grad, inverse)]
-
-    def backward_graph(
-        self,
-        grad,
-        *inputs,
-        needs_input_grad: tuple[bool, ...],
-    ):
-        """Build a differentiable VJP for transpose."""
-        axes = self.axes
-        if axes is None:
             return [transpose(grad)]
         normalized = tuple(axis + grad.ndim if axis < 0 else axis for axis in axes)
         inverse = tuple(normalized.index(axis) for axis in range(grad.ndim))
-        return [transpose(grad, axes=inverse)]
+        return [transpose(grad, inverse)]
 
 
 @overload

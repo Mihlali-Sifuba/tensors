@@ -1,24 +1,45 @@
-"""NumPy implementation of the elementwise minimum."""
+"""NumPy implementation of minimum."""
 
 from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Any
+
 import numpy
-from typing import TYPE_CHECKING
+
+from tensors.backend.numpy.storage import NumPyStorage
 from tensors.backend.storage import Storage
-from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
 def minimum(
-    left: Tensor, right: Tensor, *, dtype: DataType, output_shape: tuple[int, ...]
-) -> Storage | None:
-    """Run a broadcasting elementwise minimum or maximum."""
-    function = numpy.minimum
-    try:
-        result = function(_view(left), _view(right))
-    except (TypeError, ValueError):
-        return None
-    return _storage(result, dtype=dtype, output_shape=output_shape)
+    left_values: Any,
+    right_values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Select smaller values, propagating NaN and choosing the left tie."""
+    expected_shape = tuple(output_shape)
+    if any(
+        tuple(values.shape) != expected_shape for values in (left_values, right_values)
+    ):
+        raise RuntimeError(
+            "minimum kernel received operands not prepared for output_shape"
+        )
+    result = numpy.where(
+        numpy.isnan(left_values),
+        left_values,
+        numpy.where(
+            numpy.isnan(right_values),
+            right_values,
+            numpy.where(left_values <= right_values, left_values, right_values),
+        ),
+    )
+    narrowed = result.astype(numpy.dtype(dtype.name), copy=False)
+    storage = NumPyStorage(narrowed, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("minimum kernel returned an unexpected result size")
+    return storage

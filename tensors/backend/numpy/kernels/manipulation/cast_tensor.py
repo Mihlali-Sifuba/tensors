@@ -5,7 +5,7 @@ import numpy
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 def cast_tensor(value: Tensor, *, dtype: DataType) -> Storage | None:
     """Convert tensor values with Python-compatible scalar conversion."""
     try:
-        source = _view(value).reshape(-1)
+        source = tensor_to_logical_array(value).reshape(-1)
     except ValueError:
         return None
     if dtype.kind == "integer":

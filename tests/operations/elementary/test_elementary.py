@@ -56,9 +56,14 @@ class ElementaryFunctionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "positive"):
             ts.log(ts.Tensor([-1.0]))
 
-    def test_sqrt_rejects_negative_values(self):
-        with self.assertRaisesRegex(ValueError, "non-negative"):
-            ts.sqrt(ts.Tensor([-1.0]))
+    def test_sqrt_returns_nan_for_negative_values(self):
+        """A negative operand is a value, not a domain error.
+
+        docs/sqrt-semantics.md section 1.4. The derivative below keeps its
+        own domain error, which that milestone leaves alone.
+        """
+        produced = ts.sqrt(ts.Tensor([-1.0])).tolist()
+        self.assertTrue(math.isnan(produced[0]))
 
     def test_sqrt_gradient_rejects_zero_where_derivative_is_undefined(self):
         value = ts.Variable([0.0])

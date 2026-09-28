@@ -1,24 +1,28 @@
-"""Reference hyperbolic sine for the Python backend."""
+"""Python implementation of sinh."""
 
 from __future__ import annotations
+
+import math
+from collections.abc import Iterable
+
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
-import math
 
 
-def _sinh(value):
-    try:
-        return math.sinh(float(value))
-    except OverflowError:
-        return math.copysign(math.inf, value)
-
-
-def sinh(value: Tensor, *, dtype: DataType) -> Storage:
-    """Return the hyperbolic sine of every element."""
-    evaluate = _sinh
-    return PythonStorage.from_values([evaluate(item) for item in value._data], dtype)
+def sinh(
+    values: Iterable[int | float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Evaluate sinh on prepared native values."""
+    result = []
+    for item in values:
+        try:
+            result.append(math.sinh(float(item)))
+        except OverflowError:
+            result.append(math.copysign(math.inf, item))
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError("sinh kernel returned an unexpected result size")
+    return PythonStorage.from_values(result, dtype)

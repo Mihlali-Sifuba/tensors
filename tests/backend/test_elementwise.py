@@ -1,3 +1,4 @@
+import math
 import unittest
 from unittest.mock import patch
 import tensors as ts
@@ -136,10 +137,11 @@ class NumPyElementwiseTests(NumPyParityTestCase):
 
     def test_unary_kernels_preserve_domain_errors(self):
         with ts.use_backend("numpy"):
-            with self.assertRaisesRegex(
-                ValueError, "sqrt is only defined for non-negative values"
-            ):
-                ts.sqrt(ts.full((64,), -1.0))
+            # ``sqrt`` no longer raises for a negative operand: it is a value
+            # with a specified NaN result. See docs/sqrt-semantics.md §1.4.
+            # The derivative domains below are untouched by that milestone.
+            produced = ts.sqrt(ts.full((64,), -1.0)).tolist()
+            self.assertTrue(all(math.isnan(item) for item in produced))
             value = ts.Variable(ts.full((64,), 1.0))
             with self.assertRaisesRegex(
                 ValueError, "arcsin derivative is undefined at -1 and 1"

@@ -151,15 +151,17 @@ def _reduction_cases(
         )
         if operation in ("sum", "mean"):
             array_module = provider_module(backend)
-            _view = importlib.import_module(
+            tensor_to_logical_array = importlib.import_module(
                 f"tensors.backend.{backend}.conversion"
-            )._view
+            ).tensor_to_logical_array
             stability = importlib.import_module(
                 f"tensors.backend.{backend}.kernels.reductions.stability"
             )
             _scaled_sum = stability._scaled_sum
             _summation_guard = stability._summation_guard
-            working = _view(value).astype(array_module.float64, copy=False)
+            working = tensor_to_logical_array(value).astype(
+                array_module.float64, copy=False
+            )
             guard_common = dict(common)
             guard_common["tags"] = dict(common["tags"])
             guard_common["tags"].pop("ladder", None)

@@ -12,8 +12,8 @@ from tensors.operations.losses.cross_entropy import CrossEntropy
 from tensors.operations.selection import Maximum, Minimum
 from tensors.operations.selection.where import Where
 from tensors.ops import Add, Div, Mul, Pow, Sub
-from tensors.operations.arithmetic.divide import DivisionDenominatorGradient
-from tensors.operations.arithmetic.power import PowerBaseGradient, PowerExponentGradient
+from tensors.operations.arithmetic.divide import DivisionDenominatorVJP
+from tensors.operations.arithmetic.power import PowerBaseVJP, PowerExponentVJP
 
 
 class _Recorder:
@@ -64,9 +64,9 @@ class OperationConfigurationTests(unittest.TestCase):
             Mul(),
             Div(),
             Pow(),
-            PowerBaseGradient(),
-            PowerExponentGradient(),
-            DivisionDenominatorGradient(),
+            PowerBaseVJP(),
+            PowerExponentVJP(),
+            DivisionDenominatorVJP(),
             Where(),
             Maximum(),
             Minimum(),
@@ -259,9 +259,73 @@ class ReverseDemandPlanningTests(unittest.TestCase):
             first = ts.grad(y, a, create_graph=True)
 
         self.assertEqual(first.data.tolist(), [3.0])
-        # backward_graph carries the same demand; the numerical VJP is unused.
-        self.assertEqual(recorder.calls, [])
+        # One ``backward`` per operation serves both reverse passes, so the
+        # method the recorder patches is the one graph building calls, and it
+        # carries the demand a numerical pass would carry. ``Mul`` still
+        # answers with Tensors when it is handed Variables, so this currently
+        # fails on the product rather than on the demand it asserts.
+        self.assertEqual(
+            recorder.calls, [("add", (True, False)), ("mul", (True, False))]
+        )
         self.assertEqual(ts.grad(first, b).tolist(), [1.0])
+
+    def test_one_backward_serves_both_reverse_modes(self):
+        """The method a value pass calls is the one graph building calls.
+
+        Addition defines its derivative once. Patching ``Add.backward`` is
+        therefore the whole observation: if graph building reached a second
+        method, the recorder would see nothing in the recorded pass, and if
+        the two disagreed, the gradients would differ.
+        """
+        self.assertFalse(hasattr(Add, "backward_graph"))
+
+        def reverse(create_graph):
+            reset_graph_state()
+            left = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0]]), name="left")
+            right = ts.Variable(ts.Tensor([[10.0], [20.0]]), name="right")
+            seed = ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+            with _Recorder(Add) as recorder:
+                first, second = ts.grad(
+                    left + right,
+                    [left, right],
+                    grad_outputs=seed,
+                    create_graph=create_graph,
+                )
+            if create_graph:
+                first, second = first.data, second.data
+            return recorder.calls, [first.tolist(), second.tolist()]
+
+        numerical_calls, numerical_values = reverse(False)
+        recorded_calls, recorded_values = reverse(True)
+
+        self.assertEqual(numerical_calls, [("add", (True, True))])
+        self.assertEqual(recorded_calls, numerical_calls)
+        self.assertEqual(numerical_values, [[5.0, 7.0, 9.0], [6.0, 15.0]])
+        self.assertEqual(recorded_values, numerical_values)
+
+    def test_an_unrequested_addition_operand_is_skipped_in_both_modes(self):
+        """Demand prunes the recorded reverse pass as it prunes a value pass."""
+        for create_graph in (False, True):
+            with self.subTest(create_graph=create_graph):
+                reset_graph_state()
+                wanted = ts.Variable(ts.Tensor([[1.0, 2.0, 3.0]]), name="wanted")
+                frozen = ts.Variable(
+                    ts.Tensor([[10.0], [20.0]]),
+                    name="frozen",
+                    requires_grad=False,
+                )
+                seed = ts.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+                with _Recorder(Add) as recorder:
+                    result = ts.grad(
+                        wanted + frozen,
+                        wanted,
+                        grad_outputs=seed,
+                        create_graph=create_graph,
+                    )
+                produced = result.data if create_graph else result
+                self.assertEqual(recorder.demand_for("add"), [(True, False)])
+                self.assertEqual(produced.tolist(), [5.0, 7.0, 9.0])
+                self.assertEqual(tuple(produced.shape), (1, 3))
 
     def test_demand_follows_a_requires_grad_change_after_replay(self):
         value = ts.Variable([2.0], name="value")
@@ -422,10 +486,12 @@ class FusionDemandTests(unittest.TestCase):
                 ts.ones((4_096,)),
             )
 
-        self.assertAlmostEqual(actual_base[0], expected_base[0], places=10)
         self.assertAlmostEqual(
-            actual_exponent[0],
-            expected_exponent[0],
+            actual_base.tolist()[0], expected_base.tolist()[0], places=10
+        )
+        self.assertAlmostEqual(
+            actual_exponent.tolist()[0],
+            expected_exponent.tolist()[0],
             places=10,
         )
 
@@ -447,7 +513,7 @@ class FusionDemandTests(unittest.TestCase):
             output = ts.sin(value**2.0) * 2.0 + 1.0
             actual = ts.grad(output, value, ts.ones((4_096,)))
 
-        self.assertAlmostEqual(actual[0], expected[0], places=10)
+        self.assertAlmostEqual(actual.tolist()[0], expected.tolist()[0], places=10)
 
 
 if __name__ == "__main__":

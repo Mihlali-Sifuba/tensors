@@ -3,7 +3,7 @@
 from __future__ import annotations
 import numpy
 from typing import TYPE_CHECKING
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors.tensor import Tensor
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 def distributions_valid(targets: Tensor, axis: int) -> bool:
     """Return whether dense targets are finite normalized probabilities."""
-    values = _view(targets).astype(numpy.float64, copy=False)
+    values = tensor_to_logical_array(targets).astype(numpy.float64, copy=False)
     valid_values = numpy.all(numpy.isfinite(values) & (values >= 0.0) & (values <= 1.0))
     totals = numpy.sum(values, axis=axis)
     class_count = targets.shape[axis]

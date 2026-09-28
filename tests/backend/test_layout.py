@@ -102,7 +102,8 @@ class NumPyLayoutTests(NumPyParityTestCase):
                 self.assertAlmostEqual(actual_item, expected_item)
 
     def test_slice_dispatches_to_numpy(self):
-        value = ts.Variable(ts.full((64, 2), 2.0))
+        with ts.use_backend("numpy"):
+            value = ts.Variable(ts.full((64, 2), 2.0))
         with patch.object(
             numpy_backend, "slice_tensor", wraps=numpy_backend.slice_tensor
         ) as slice_tensor:

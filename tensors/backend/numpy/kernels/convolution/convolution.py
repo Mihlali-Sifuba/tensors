@@ -2,27 +2,30 @@
 
 from __future__ import annotations
 import numpy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _errstate
-from tensors.backend.numpy.conversion import _finite_operands
 from tensors.backend.numpy.conversion import _shape_size
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.kernels.convolution import common as convolution_common
 from tensors.backend.numpy.kernels.convolution.common import _convolution_columns
 from tensors.backend.numpy.kernels.convolution.common import _convolution_operands
 from tensors.backend.numpy.kernels.convolution.common import _convolution_storage
 from tensors.backend.numpy.kernels.convolution.common import _convolution_tiles
 from tensors.backend.numpy.kernels.convolution.common import _pad_convolution_input
+from tensors.backend.numpy.kernels.linalg.contraction import certified_matmul
+from tensors.backend.numpy.kernels.reductions.exact import certified_float_sum
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-    from tensors.tensor import Tensor
 
 
 def convolution(
-    inputs: Tensor,
-    kernel: Tensor,
-    bias: Tensor | None,
+    input_values: Any,
+    kernel_values: Any,
+    bias_values: Any | None,
+    input_shape: tuple[int, ...],
+    kernel_shape: tuple[int, ...],
+    bias_shape: tuple[int, ...] | None,
     *,
     dtype: DataType,
     output_shape: tuple[int, ...],
@@ -34,21 +37,20 @@ def convolution(
     """Run grouped cross-correlation in bounded native matrix-product tiles."""
     if dtype.kind != "floating":
         return None
-    operands = _convolution_operands(inputs, kernel, dtype)
+    operands = _convolution_operands(input_values, kernel_values)
     if operands is None:
         return None
     input_values, kernel_values = operands
     rank = len(stride)
-    batched = inputs.ndim == rank + 2
+    batched = len(input_shape) == rank + 2
     if not batched:
         input_values = input_values.reshape((1,) + tuple(input_values.shape))
-    bias_values = None
-    if bias is not None:
+    if bias_values is not None:
         try:
-            bias_values = _view(bias).astype(numpy.dtype(dtype.name), copy=False)
+            bias_values = numpy.asarray(bias_values).astype(numpy.float64)
         except (TypeError, ValueError):
             return None
-        if not _finite_operands(bias_values):
+        if tuple(bias_values.shape) != bias_shape:
             return None
     batch = int(input_values.shape[0])
     in_channels = int(input_values.shape[1])
@@ -57,6 +59,8 @@ def convolution(
     output_spatial = tuple(
         (int(size) for size in (output_shape[2:] if batched else output_shape[1:]))
     )
+    if any(padding) and not bool(numpy.all(numpy.isfinite(kernel_values))):
+        return None
     padded_values = _pad_convolution_input(input_values, padding)
     result = numpy.empty(
         (batch, out_channels) + output_spatial, dtype=input_values.dtype
@@ -79,19 +83,53 @@ def convolution(
             )
             tile_batch = int(columns.shape[0])
             positions = _shape_size(output_extent)
-            tile = numpy.matmul(
-                matrix, columns.reshape(tile_batch, groups, group_patch, positions)
-            ).reshape((tile_batch, out_channels) + output_extent)
-            target = (batch_slice, slice(None)) + tuple(
-                (
-                    slice(start, start + extent)
-                    for start, extent in zip(output_start, output_extent)
-                )
+            column_matrix = columns.reshape(tile_batch, groups, group_patch, positions)
+            column_elements = int(column_matrix.size)
+            channel_extent = max(
+                1,
+                min(
+                    group_outputs,
+                    convolution_common._CONVOLUTION_COLUMN_MAX_ELEMENTS
+                    // max(column_elements, 1),
+                ),
             )
-            result[target] = tile
+            for group in range(groups):
+                channel_base = group * group_outputs
+                for channel_start in range(0, group_outputs, channel_extent):
+                    channel_stop = min(channel_start + channel_extent, group_outputs)
+                    tile = certified_matmul(
+                        matrix[group : group + 1, channel_start:channel_stop],
+                        column_matrix[:, group : group + 1],
+                    )
+                    if tile is None:
+                        return None
+                    target = (
+                        batch_slice,
+                        slice(
+                            channel_base + channel_start,
+                            channel_base + channel_stop,
+                        ),
+                    ) + tuple(
+                        slice(start, start + extent)
+                        for start, extent in zip(output_start, output_extent)
+                    )
+                    result[target] = tile.reshape(
+                        (tile_batch, channel_stop - channel_start) + output_extent
+                    )
         if bias_values is not None:
-            result += bias_values.reshape((1, out_channels) + (1,) * rank)
-    if not bool(numpy.all(numpy.isfinite(result))):
-        return None
+            terms = numpy.stack(
+                (
+                    result,
+                    numpy.broadcast_to(
+                        bias_values.reshape((1, out_channels) + (1,) * rank),
+                        result.shape,
+                    ),
+                ),
+                axis=0,
+            )
+            summed = certified_float_sum(terms, (0,))
+            if summed is None:
+                return None
+            result = numpy.squeeze(summed, axis=0)
     logical_result = result if batched else result[0]
     return _convolution_storage(logical_result, dtype=dtype, output_shape=output_shape)

@@ -27,6 +27,9 @@ from tensors.backend.dispatch.reductions.reduce_min_gradient import (
 from tensors.backend.dispatch.reductions.reduce_norm import (
     execute_reduce_norm as execute_reduce_norm,
 )
+from tensors.backend.dispatch.reductions.reduce_norm_gradient import (
+    execute_reduce_norm_gradient as execute_reduce_norm_gradient,
+)
 from tensors.backend.dispatch.reductions.reduce_prod import (
     execute_reduce_prod as execute_reduce_prod,
 )
@@ -42,9 +45,6 @@ from tensors.backend.dispatch.reductions.reduce_std_gradient import (
 from tensors.backend.dispatch.reductions.reduce_sum import (
     execute_reduce_sum as execute_reduce_sum,
 )
-from tensors.backend.dispatch.reductions.reduce_sum_gradient import (
-    execute_reduce_sum_gradient as execute_reduce_sum_gradient,
-)
 from tensors.backend.dispatch.reductions.reduce_variance import (
     execute_reduce_variance as execute_reduce_variance,
 )
@@ -56,7 +56,4 @@ from tensors.backend.dispatch.reductions.sum_products_to_shape import (
 )
 from tensors.backend.dispatch.reductions.sum_to_shape import (
     execute_sum_to_shape as execute_sum_to_shape,
-)
-from tensors.backend.dispatch.reductions.vjp_sum_to_shape import (
-    execute_vjp_sum_to_shape as execute_vjp_sum_to_shape,
 )

@@ -4,10 +4,7 @@ from __future__ import annotations
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
 import math
 from tensors.utils.reductions import reduction_groups
 from tensors.utils.summation import stable_float_sum, sum_exact_ratios
@@ -25,7 +22,8 @@ def stable_float_mean(values: list[float]) -> float:
 
 
 def reduce_mean(
-    value: Tensor,
+    value_values,
+    input_shape: tuple[int, ...],
     axes: tuple[int, ...],
     *,
     keepdims: bool,
@@ -33,13 +31,13 @@ def reduce_mean(
     output_shape: tuple[int, ...],
 ) -> Storage:
     """Return the arithmetic mean of each group."""
-    data = value._data
-    if axes == tuple(range(value.ndim)):
+    data = value_values
+    if axes == tuple(range(len(input_shape))):
         return PythonStorage.from_values(
             [stable_float_mean([float(value) for value in data])], dtype
         )
     _, output_shape, groups = reduction_groups(
-        value.shape, axes, keepdims, scalar_as_vector=True
+        input_shape, axes, keepdims, scalar_as_vector=True
     )
     values = [
         stable_float_mean([float(data[index]) for index in group]) for group in groups

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.conversion import _view
+from tensors.backend.numpy.conversion import tensor_to_logical_array
 
 if TYPE_CHECKING:
     from tensors._typing import TensorIndex
@@ -16,7 +16,7 @@ def slice_tensor(
 ) -> Storage | None:
     """Run a NumPy slicing kernel after caller-side key validation."""
     try:
-        result = _view(value)[key].copy()
+        result = tensor_to_logical_array(value)[key].copy()
     except ValueError:
         return None
     return _storage(result, dtype=value.dtype, output_shape=output_shape)

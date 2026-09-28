@@ -39,7 +39,7 @@ STORAGE_FOR = {
 
 
 def storage_name(result) -> str:
-    return type(result._storage).__name__
+    return type(result.backend_storage).__name__
 
 
 class ExplicitSelectionTests(ArithmeticTestCase):

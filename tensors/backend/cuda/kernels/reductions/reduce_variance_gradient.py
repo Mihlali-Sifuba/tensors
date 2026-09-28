@@ -2,24 +2,30 @@
 
 from __future__ import annotations
 import cupy
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 from tensors.backend.storage import Storage
+from tensors.dtype import DataType
 from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+from tensors.backend.cuda.conversion import _arithmetic_storage as _storage
+from tensors.backend.cuda.conversion import _widen
 
 
 def reduce_variance_gradient(
-    grad: Tensor, value: Tensor, axes: tuple[int, ...], *, keepdims: bool
+    upstream: Any,
+    values: Any,
+    input_shape: tuple[int, ...],
+    axes: tuple[int, ...],
+    *,
+    keepdims: bool,
+    dtype: DataType,
 ) -> Storage | None:
     """Run fused VJPs for reductions with regular native fast paths."""
-    values = _working_values(value)
-    upstream = _working_values(grad)
+    values = _widen(values)
+    if values.size == 0:
+        return _storage(values, dtype=dtype, output_shape=input_shape)
+    upstream = _widen(upstream)
     expanded_shape = tuple(
-        (1 if dimension in axes else size for dimension, size in enumerate(value.shape))
+        (1 if dimension in axes else size for dimension, size in enumerate(input_shape))
     )
     try:
         expanded = upstream.reshape(expanded_shape)
@@ -27,21 +33,12 @@ def reduce_variance_gradient(
         return None
     count = 1
     for axis in axes:
-        count *= value.shape[axis]
+        count *= input_shape[axis]
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        if count == 0:
-            return None
-        center = cupy.mean(values, axis=axes, keepdims=True)
-        centered = values - center
-        scale = cupy.max(cupy.abs(centered), axis=axes, keepdims=True)
+        scale = cupy.max(cupy.abs(values), axis=axes, keepdims=True)
         safe_scale = cupy.where(scale == 0.0, 1.0, scale)
-        normalized = centered / safe_scale
+        normalized_values = values / safe_scale
+        center = cupy.mean(normalized_values, axis=axes, keepdims=True)
+        normalized = normalized_values - center
         result = expanded * normalized * scale * (2.0 / count)
-        valid = (
-            cupy.all(cupy.isfinite(values))
-            & cupy.all(cupy.isfinite(centered))
-            & cupy.all(cupy.isfinite(result))
-        )
-        if not bool(valid):
-            return None
-    return _storage(result, dtype=grad.dtype, output_shape=value.shape)
+    return _storage(result, dtype=dtype, output_shape=input_shape)

@@ -93,6 +93,15 @@ from tensors.backend.python.kernels.elementwise.minimum_gradient import (
 )
 from tensors.backend.python.kernels.elementwise.negate import negate as negate
 from tensors.backend.python.kernels.elementwise.not_equal import not_equal as not_equal
+from tensors.backend.python.kernels.elementwise.power_base_base_gradient import (
+    power_base_base_gradient as power_base_base_gradient,
+)
+from tensors.backend.python.kernels.elementwise.power_exponent_exponent_gradient import (
+    power_exponent_exponent_gradient as power_exponent_exponent_gradient,
+)
+from tensors.backend.python.kernels.elementwise.power_mixed_gradient import (
+    power_mixed_gradient as power_mixed_gradient,
+)
 from tensors.backend.python.kernels.elementwise.power_base_gradient import (
     power_base_gradient as power_base_gradient,
 )
@@ -149,6 +158,9 @@ from tensors.backend.python.kernels.linalg.matmul_gradient import (
 from tensors.backend.python.kernels.linalg.outer import outer as outer
 from tensors.backend.python.kernels.linalg.outer_gradient import (
     outer_gradient as outer_gradient,
+)
+from tensors.backend.python.kernels.manipulation.assign_indices import (
+    assign_indices as assign_indices,
 )
 from tensors.backend.python.kernels.manipulation.cast_tensor import (
     cast_tensor as cast_tensor,
@@ -217,6 +229,9 @@ from tensors.backend.python.kernels.reductions.reduce_min_gradient import (
 from tensors.backend.python.kernels.reductions.reduce_norm import (
     reduce_norm as reduce_norm,
 )
+from tensors.backend.python.kernels.reductions.reduce_norm_gradient import (
+    reduce_norm_gradient as reduce_norm_gradient,
+)
 from tensors.backend.python.kernels.reductions.reduce_prod import (
     reduce_prod as reduce_prod,
 )
@@ -231,9 +246,6 @@ from tensors.backend.python.kernels.reductions.reduce_std_gradient import (
 )
 from tensors.backend.python.kernels.reductions.reduce_sum import (
     reduce_sum as reduce_sum,
-)
-from tensors.backend.python.kernels.reductions.reduce_sum_gradient import (
-    reduce_sum_gradient as reduce_sum_gradient,
 )
 from tensors.backend.python.kernels.reductions.reduce_variance import (
     reduce_variance as reduce_variance,

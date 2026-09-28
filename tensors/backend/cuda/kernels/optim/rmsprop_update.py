@@ -8,25 +8,27 @@ from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.conversion import _finite_operands
 from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
+from tensors.backend.cuda.conversion import _widen
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
 def rmsprop_update(
-    parameter: Tensor,
-    gradient: Tensor,
-    scale: Tensor,
-    scaled: Tensor,
+    parameter,
+    gradient,
+    scale,
+    scaled,
     *,
     rho: float,
     learning_rate: float,
     epsilon: float,
+    dtype: DataType,
+    shape: tuple[int, ...],
 ) -> tuple[Storage, Storage, Storage] | None:
     """Apply one fused RMSprop update on finite optimizer state."""
-    tensors = (parameter, gradient, scale, scaled)
-    values = [_working_values(item) for item in tensors]
+    arrays = (parameter, gradient, scale, scaled)
+    values = [_widen(cupy.asarray(item)) for item in arrays]
     parameter_values, gradients, scales, scaled_values = values
     if not _finite_operands(*values):
         return None
@@ -47,14 +49,14 @@ def rmsprop_update(
     if not _finite_operands(new_scales, new_scaled, parameter_result):
         return None
     specifications = (
-        (parameter_result, parameter.dtype),
-        (new_scales, gradient.dtype),
-        (new_scaled, gradient.dtype),
+        (parameter_result, dtype),
+        (new_scales, dtype),
+        (new_scaled, dtype),
     )
     storages = tuple(
         (
-            _storage(result, dtype=dtype, output_shape=gradient.shape)
-            for result, dtype in specifications
+            _storage(result, dtype=result_dtype, output_shape=shape)
+            for result, result_dtype in specifications
         )
     )
     if any((storage is None for storage in storages)):

@@ -495,7 +495,12 @@ class Computation:
             if not any(needs_input_grad):
                 continue
             inputs = tuple(variables[slot] for slot in input_slots)
-            input_gradients = instruction.operation.backward_graph(
+            # An operation defines its derivative once, against operations
+            # rather than against Tensors, so the method that calculates a
+            # numerical VJP is the one that records a differentiable one. The
+            # operands are what differ: this pass hands it Variables, and
+            # ``_backward_values`` hands it Tensors.
+            input_gradients = instruction.operation.backward(
                 output_gradient,
                 *inputs,
                 needs_input_grad=needs_input_grad,

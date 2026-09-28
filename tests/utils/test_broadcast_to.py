@@ -272,12 +272,35 @@ class BroadcastTensorsPairs(unittest.TestCase):
 class BroadcastingDoesNotComputeOrDispatch(unittest.TestCase):
     """The separation this refactor establishes, asserted directly."""
 
-    def test_the_module_exports_only_the_two_transformations(self):
+    def test_the_module_exports_only_broadcasting(self):
+        """Two transformations and the mapping they share, and nothing else.
+
+        ``broadcast_source_indices`` states which source position each
+        result position reads. That is broadcasting itself rather than an
+        addition to it: the transformations apply the mapping to values,
+        and a caller holding values of its own applies it where they are.
+        Neither form computes or dispatches, which is what this class is
+        guarding.
+        """
         from tensors.utils import broadcasting
 
         self.assertEqual(
-            sorted(broadcasting.__all__), ["broadcast_tensors", "broadcast_to"]
+            sorted(broadcasting.__all__),
+            ["broadcast_source_indices", "broadcast_tensors", "broadcast_to"],
         )
+
+    def test_the_shared_mapping_reads_no_values_and_selects_no_backend(self):
+        """It takes two shapes, so there is nothing for it to compute with."""
+        import inspect
+
+        from tensors.utils.broadcasting import broadcast_source_indices
+
+        parameters = list(inspect.signature(broadcast_source_indices).parameters)
+        self.assertEqual(parameters, ["source_shape", "target_shape"])
+        self.assertEqual(broadcast_source_indices((2, 1), (2, 3)), [0, 0, 0, 1, 1, 1])
+        self.assertEqual(broadcast_source_indices((3,), (2, 3)), [0, 1, 2, 0, 1, 2])
+        with self.assertRaises(ValueError):
+            broadcast_source_indices((2, 3), (3,))
 
     def test_the_combined_helper_is_gone(self):
         """``broadcast_binary_values`` mixed broadcasting with computation."""

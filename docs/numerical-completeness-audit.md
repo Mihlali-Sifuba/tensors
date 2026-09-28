@@ -17,14 +17,47 @@ established and are listed as work, not as findings.
 
 ### The headline
 
-**The package has one numerical specification, and it governs five of its
-sixty public numerical operations.**
+**The package has five numerical specifications, and together they govern
+nine of its sixty public numerical operations.**
 
 ```
 public operation functions:                60
-governed by a numerical specification:      5   (+, -, *, /, **)
-ungoverned:                                55
+governed by a numerical specification:      9   (+, -, *, /, **, sign, abs, sqrt, relu)
+ungoverned:                                51
 ```
+
+`sign`, `abs`, `sqrt` and `relu` are governed by their own documents
+([sign-semantics.md](sign-semantics.md),
+[abs-semantics.md](abs-semantics.md),
+[sqrt-semantics.md](sqrt-semantics.md),
+[relu-semantics.md](relu-semantics.md)). The audit
+was originally written at five governed and fifty-five ungoverned; only the
+counts have been restated, not the findings that rest on them.
+
+**Forward and differentiation coverage are counted separately**, because
+they are separate contracts and a count that merges them would hide which
+one is missing. These four now have both; the other five governed
+operations have forward coverage only. Migrating a VJP adds no public
+operation function, so the count of sixty is unchanged by it.
+
+```
+public operation functions:                60
+forward governed:                           9   (+, -, *, /, **, sign, abs, sqrt, relu)
+first-order VJP governed:                   5   (sign, abs, sqrt, relu, /)
+```
+
+Division's VJP joined that second list on 2026-09-21, to the extent its
+tests establish: both first-order gradients, the broadcast reductions that
+shape them, the zero-denominator rule of section 7.2 in eager and replayed
+form, range safety, and the second-order partials — all on the selected
+backend with no fallback. Third and higher order are **not** claimed for
+it. `docs/arithmetic-semantics.md` section 7.5 states the contract and
+names the one deliberate change of floating-point behaviour it required.
+
+For those four, "VJP governed" means the first-order VJP, the graph-built
+VJP and the higher-order regions each document names — not that autodiff
+through them is specified without limit. `sqrt` records one measured limit
+of its own in [section 8.1](sqrt-semantics.md#81-a-limit-on-third-and-higher-order-measured-here).
 
 Within its scope the specification is in good order: the D1–D7 and S3
 milestones are implemented, tested against validated high-precision
@@ -32,7 +65,7 @@ references, and the full suite passes (1,782 tests, 0 failures, 0 expected
 failures, on `python`, `numpy` and `cuda`). Nothing in this audit reopens
 them.
 
-Outside that scope there is no numerical contract at all. Fifty-five public
+Outside that scope there is no numerical contract at all. Fifty-one public
 operations have no stated accuracy bound, no exceptional-value table, no
 signed-zero requirement, no subnormal requirement, and no rule about whether
 fused and eager execution must agree. Their tests establish that the backends
@@ -126,14 +159,14 @@ Discovered from `tensors.__all__` and the submodules, not assumed.
 | `/` `divide` | `operations/arithmetic/divide.py` | R, C |
 | `**` `pow` | `operations/arithmetic/power.py` | E (integer), A (2/4 ULP), C |
 
-### 3.2 Ungoverned — 55 operations
+### 3.2 Ungoverned — 51 operations
 
 | Family | Operations | Location |
 | --- | --- | --- |
-| Elementary | `abs` `exp` `log` `sign` `sqrt` | `operations/elementary/` |
+| Elementary | `exp` `log` | `operations/elementary/` |
 | Trigonometric | `sin` `cos` `tan` `arcsin` `arccos` `arctan` | `operations/trigonometric/` |
 | Hyperbolic | `sinh` `cosh` `tanh` `arcsinh` `arccosh` `arctanh` | `operations/hyperbolic/` |
-| Activations | `relu` `sigmoid` `softplus` | `operations/activations/` |
+| Activations | `sigmoid` `softplus` | `operations/activations/` |
 | Comparison | `equal` `not_equal` `less` `less_equal` `greater` `greater_equal` | `operations/comparison/` |
 | Selection | `where` `clip` `maximum` `minimum` | `operations/selection/` |
 | Reductions | `sum` `mean` `prod` `max` `min` `std` `variance` `norm` `logsumexp` `argmax` `argmin` | `operations/reductions/` |
@@ -192,12 +225,14 @@ tests; **Fus** is a fused-vs-eager requirement.
 | `+ - * /` | §§1–11 | R | yes | §5.4 | yes | yes | **Verified** |
 | `**` | §12 | 2/4 ULP | §12.3.3 | §5.4 | yes | yes | **Verified** |
 | `**` gradients | §12.7 | detection only | §12.7.2 | yes | yes | yes | **Verified** |
-| Elementary `abs` `sign` | — | n/a (class E) | — | — | no | no | **Spec missing**; class-E results **nonconforming** on CUDA, see D-1 |
-| Elementary `sqrt` | — | n/a (class R) | traps | — | no | no | **Spec missing** |
+| Elementary `sign` (forward) | [sign-semantics.md](sign-semantics.md) | n/a (class E) | n/a | §1.5 | yes | yes | **Governed.** Forward only; `sign`'s differentiation remains ungoverned |
+| Elementary `abs` (forward) | [abs-semantics.md](abs-semantics.md) | n/a (class E) | §1.7 | §1.6 | yes | yes | **Governed.** Forward only; `abs`'s differentiation remains ungoverned |
+| Elementary `sqrt` (forward) | [sqrt-semantics.md](sqrt-semantics.md) | correctly rounded (§1.2) | §1.4 **no longer traps** | §1.7 | yes | yes | **Governed.** Forward only; `sqrt`'s differentiation remains ungoverned and still traps at zero |
 | Elementary `exp` `log` | — | — | traps | — | no | no | **Spec missing** |
 | Trigonometric | — | — | traps | — | no | no | **Spec missing** |
 | Hyperbolic | — | — | traps | — | no | no | **Spec missing** |
-| Activations | — | — | — | — | no | no | **Spec missing** |
+| Activations `relu` (forward) | [relu-semantics.md](relu-semantics.md) | n/a (class E) | n/a (§1.6) | §1.4 | yes | yes | **Governed.** Forward only; `relu`'s differentiation remains ungoverned |
+| Activations `sigmoid` `softplus` | — | — | — | — | yes | yes | **Spec missing.** Execution is now governed by [backends.md](backends.md#execution-requirements) — selected backend at every size, forward and first-order gradient — and both are covered across the three backends and against fused execution. What is still missing is the numerical specification: no stated error bound, no exceptional-value contract and no subnormal requirement, so the behaviour the tests pin is the implementation's rather than a document's |
 | Comparison | — | n/a | — | n/a | no | n/a | **Spec missing** |
 | Selection | — | n/a | — | n/a | no | n/a | **Spec missing**, see D-2 |
 | Reductions | — | — | — | — | no | n/a | **Spec missing** |
@@ -225,7 +260,11 @@ returns values that are simply wrong rather than insufficiently accurate.
 
 ### D-1 — Eager CUDA binary32 elementwise kernels flush subnormals
 
-**Status: demonstrated.** Twelve operations.
+**Status when audited: demonstrated.** Twelve operations. **Re-measured on
+2026-09-21: the reproducer no longer reproduces** — see
+[the re-measurement](#d-1-re-measured-2026-09-21) below, which supersedes the
+counts in this section. The finding is kept as written because the cause it
+identifies is still live one layer down.
 
 ```python
 import tensors as ts
@@ -269,13 +308,149 @@ itself depending on whether the planner fused it:
 behaviour corrected for `+ - * /` under D2 and for `**` under the CUDA
 gradual-underflow work — NVRTC applies FTZ to binary32 instructions and
 ignores `--ftz=false`. The eager elementwise kernels were never given the
-inline-PTX treatment that `_ieee32.py` applies to arithmetic, and the fused
+inline-PTX treatment that `ieee32.py` applies to arithmetic, and the fused
 generator was corrected separately. This should be confirmed against each
 kernel before implementation.
 
 **Why it matters beyond the values:** §5.4 requires gradual underflow, and
 `docs/autodiff.md` requires fused execution to produce what unfused execution
 produces. Both are violated.
+
+#### D-1 re-measured (2026-09-21)
+
+The reproducer above was rerun unchanged on `feat/backend-residency-dispatch`
+before the forward `sign` migration. **All twelve operations now agree with
+the Python backend at the smallest binary32 subnormal**, `sign` and `abs`
+included:
+
+```
+python  1.401298464324817e-45 1.0
+numpy   1.401298464324817e-45 1.0
+cuda    1.401298464324817e-45 1.0
+```
+
+`sqrt`, `abs`, `sign`, `sin`, `tan`, `arcsin`, `arctan`, `arcsinh`,
+`arctanh`, `sinh`, `tanh` and `relu` were each measured; none flushes. The
+eager/fused split the finding describes is therefore also closed for these
+twelve. What changed is not the audit's cause but the kernels' route to it:
+the eager elementwise kernels reach their operands through the CUDA
+`conversion` boundary, whose `_working_values` widens binary32 through the
+PTX conversion in `ieee32.py` rather than through `astype`. That widening
+landed after this audit was written.
+
+**The device behaviour the finding identified is unchanged.** Measured
+directly, `cupy.sign` on a native binary32 array still returns `0.0` for
+`±1.401298464324817e-45`, and so does every other binary32 ufunc under FTZ.
+The defect is avoided by the conversion boundary, not eliminated at the
+provider. Any kernel that classifies or computes *directly* in binary32 —
+rather than widening first — reintroduces it. The forward `sign` migration
+hit exactly this: lowering to a native binary32 array moved the operand past
+`_working_values`, so
+`tensors/backend/cuda/kernels/elementwise/sign.py` widens explicitly through
+`ieee32.widen` and [sign-semantics.md](sign-semantics.md) §1.5 pins the
+requirement with a test.
+
+This re-measurement covers the reproducer only. It does not revisit the
+accuracy findings (S-1 to S-3) or the coverage findings (T-1, T-2), which
+were not rerun.
+
+**`abs` re-measured again during its own migration (2026-09-21).** Before the
+migration, `ts.abs` of the smallest binary32 subnormal returned
+`1.401298464324817e-45` on all three backends, and eager agreed with fused;
+after it, the same. Measuring the provider directly showed the finding's
+cause intact in *both* directions for `abs`, not just on the way in:
+
+```
+cupy.abs(native binary32 [±smallest])   -> [0.0, 0.0]
+binary64 magnitude, CuPy-converted down -> [0.0, -0.0]
+ieee32.widen / ieee32.narrow            -> [±1.401298464324817e-45]
+```
+
+`abs` returns the operand's magnitude, which can itself be subnormal, so
+unlike `sign` it needs the PTX conversion on the way out as well. The
+migrated kernel uses both, and [abs-semantics.md](abs-semantics.md) §1.6
+pins the requirement with a test.
+
+**`sqrt` re-measured during its own migration (2026-09-21).** The same cause
+is present on the operand side, and measuring it against an independent
+reference showed a second, separate shortfall the subnormal reproducer does
+not reach:
+
+```
+cupy.sqrt(native binary32 [smallest subnormal]) -> 0.0
+cupy.sqrt(native binary32), 400 random operands -> 2 not correctly rounded
+ieee32.widen -> binary64 sqrt -> ieee32.narrow -> correctly rounded, 3666/3666
+```
+
+The 3,666 cases include operands chosen so that their true roots sit as close
+as possible to a binary32 rounding boundary — the cases a root computed in a
+wider format and rounded down would get wrong. None failed, so **no dedicated
+binary32 PTX square-root instruction was needed**: binary64's 53 significand
+bits exceed the `2p + 2 = 50` that square root requires for the second
+rounding to agree with rounding the true root directly. This is the first
+finding in this audit measured against a reference for *correct rounding*
+rather than for subnormal survival, and the second row above is a defect the
+D-1 reproducer would never have surfaced.
+
+`cupy.sqrt` on binary64 was correctly rounded on all 2,002 operands measured.
+
+**The four VJPs re-measured during their own migration (2026-09-21).** Two
+findings, neither of which the forward reproducers could reach.
+
+*A cross-backend disagreement in the VJPs themselves.* The Python kernels
+routed and returned a literal zero where the array kernels materialised a
+derivative and multiplied. At a finite nonzero primal the sign VJP gave:
+
+```
+g = -2.0   ->  python +0.0   numpy -0.0   cuda -0.0
+g = ±inf   ->  python +0.0   numpy  nan   cuda  nan
+g = nan    ->  python +0.0   numpy  nan   cuda  nan
+```
+
+`abs` and `relu` disagreed the same way on their inactive branches. All four
+specifications settle it in favour of routing, and the three backends now
+agree.
+
+*Flush-to-zero reaches comparisons, not only arithmetic.* This is the part
+D-1's reproducer could not show, because it only ever measured values. On
+native binary32:
+
+```
+subnormal == 0.0   ->  True     (so the sign and sqrt VJPs would raise
+                                 "undefined at zero" for a nonzero primal)
+subnormal >  0.0   ->  False    (so the whole positive subnormal band would
+                                 be routed to ReLU's inactive branch)
+-g for subnormal g ->  ∓0.0     (so abs would lose a subnormal upstream on
+                                 its negation branch, but not on the other)
+```
+
+Each is corrected by widening the operand that the *predicate* or the
+negation reads. Selection itself needs no protection: a `where` preserves a
+subnormal, which is why ReLU's VJP widens only its primal and leaves the
+upstream native.
+
+**`relu` re-measured during its own migration (2026-09-21).** The same cause
+again, on both sides of the format boundary, and it reaches further than the
+D-1 reproducer's single smallest-subnormal probe:
+
+```
+cupy.maximum(native binary32 [smallest subnormal], 0) -> 0.0
+cupy.maximum(native binary32 [largest  subnormal], 0) -> 0.0
+ieee32.widen -> maximum in binary64 -> ieee32.narrow -> both preserved
+```
+
+The **largest** binary32 subnormal flushes as readily as the smallest, so the
+affected input range is the whole subnormal band rather than its lower edge.
+`relu` returns its operand, so like `abs` the result can itself be subnormal
+and the PTX conversion is needed in both directions; the migrated kernel uses
+both, and [relu-semantics.md](relu-semantics.md) §1.4 pins it with a test.
+
+Two further behaviours were measured while choosing the implementation, and
+neither is a defect: `cupy.maximum` and `numpy.maximum` both propagate NaN
+and both return canonical positive zero for `-0.0`. A `where(x > 0, x, 0)`
+selection does neither for NaN — it sends NaN to the zero branch — which is
+why the maximum form was chosen. Eager and fused CUDA `relu` agree, with the
+fused kernel executing rather than declining.
 
 ### D-2 — Two promotion authorities disagree
 
@@ -327,7 +502,8 @@ values, maximum ULP:
 | | float64 | float32 |
 | --- | --- | --- |
 | `exp` `log` `sin` `cos` `tan` `arccos` `arctan` `sinh` `cosh` `tanh` `softmax` | 1 | 0 |
-| `arcsin` `arcsinh` `arctanh` `arccosh` `sigmoid` `softplus` `norm` | 2 | 0 |
+| `arcsin` `arcsinh` `arctanh` `arccosh` `norm` | 2 | 0 |
+| `sigmoid` `softplus` | 2 (CUDA only; NumPy is now 0) | 0 |
 | `sqrt` `abs` `sign` `relu` `max` `min` `std` `variance` `log_softmax` `logsumexp` | 0 | 0 |
 
 These differences are **permitted by legitimate algorithmic variation** and
@@ -376,8 +552,15 @@ Domain violations in the elementary functions **raise**, identically on all
 three backends:
 
 ```
-log(0) log(-1) sqrt(-1) arcsin(2) arccosh(0) arctanh(1) sin(inf)  -> ValueError
+log(0) log(-1) arcsin(2) arccosh(0) arctanh(1) sin(inf)  -> ValueError
 ```
+
+**Corrected 2026-09-21.** `sqrt(-1)` was in that list when this finding was
+written and is no longer: forward `sqrt` now returns `nan`, and
+[sqrt-semantics.md](sqrt-semantics.md) §1.4 specifies it as a value rather
+than a domain error. That settles the question for `sqrt` alone and **leaves
+this finding open** for every function still listed above — the package-wide
+trapping policy is still unstated, which is what S-3 is about.
 
 Arithmetic and exponentiation went the other way: D2 made every exceptional
 value a **result**, explicitly so that no host synchronisation is needed to
@@ -393,9 +576,21 @@ currently **0 disagreements** — a good baseline to specify against.
 
 ### S-4 — Signed zero is unspecified outside arithmetic
 
-`ts.sign(-0.0)` returns `0.0` on all three backends. Whether that should be
-`-0.0`, `+0.0` or `0` is a specification question that has not been asked.
-The same applies to `abs(-0.0)`, `max(-0.0, 0.0)` and `sum([-0.0, -0.0])`.
+**Corrected 2026-09-21; narrowed, not closed.** When this finding was written
+nothing outside arithmetic said what a signed zero should produce. Three
+operations have since been specified and are no longer examples of it:
+
+- `sign(-0.0)` and `abs(-0.0)` return canonical `+0.0`, required by
+  [sign-semantics.md](sign-semantics.md) §1.3 and
+  [abs-semantics.md](abs-semantics.md) §1.3.
+- `sqrt(-0.0)` returns `-0.0`, required by
+  [sqrt-semantics.md](sqrt-semantics.md) §1.3, which keeps the sign
+  deliberately because IEEE 754 defines it that way for a root.
+
+That those three do not agree with each other is the point: each was decided
+on its own operation's terms. **The finding stands for everything else** —
+`max(-0.0, 0.0)`, `sum([-0.0, -0.0])`, the reductions and the comparison and
+selection families still have no stated rule.
 
 ### S-5 — No specification for the adjacent surface
 
@@ -573,7 +768,7 @@ operation.
 **P2.1 Fix D-1.** Confirm the FTZ hypothesis per kernel, then apply the
 established inline-PTX remedy to the twelve eager CUDA binary32 elementwise
 kernels. Depends on P1.3 for the requirement, not for the technique — the
-technique already exists in `_ieee32.py`.
+technique already exists in `ieee32.py`.
 
 *D-1 is the audit's demonstrated **implementation** defect: one backend
 computes results its own package says are wrong. It produces incorrect
@@ -676,7 +871,7 @@ single one is sufficient, and a passing test suite is not among them.
 
 ### Current position against these criteria
 
-| Criterion | `+ - * /` | `**` | Other 55 |
+| Criterion | `+ - * /` | `**` | Other 51 |
 | --- | --- | --- | --- |
 | 1 Classified | met | met | not met |
 | 2 Error bound + reference | n/a (class R) | met | not met |
@@ -703,7 +898,7 @@ repository's `.venv`.
 | --- | --- |
 | Full suite: 1,782 tests, 0 failures, 0 expected failures | `python -m unittest discover -s tests -t .` |
 | Arithmetic + power conformance: 241 tests, 0 failures | `python -m unittest tests.operations.arithmetic.test_power_ieee tests.operations.arithmetic.test_power_integer tests.operations.arithmetic.test_power_dtype tests.operations.arithmetic.test_scalar_rounding tests.operations.arithmetic.test_power_accuracy tests.operations.arithmetic.test_power_reference tests.operations.arithmetic.test_power_gradients tests.backend.test_power_execution` |
-| Inventory: 60 public operation functions, 5 governed | `tensors.__all__` filtered by `__module__` |
+| Inventory: 60 public operation functions, 6 governed (`sign` forward only) | `tensors.__all__` filtered by `__module__` |
 | D-1 reproducer | `ts.abs` / `ts.sign` at `1.401298464324817e-45`, `float32`, three backends |
 | D-1 fused/eager split | 20 fusible operations × 2 dtypes × {ordinary, subnormal}, 16,384 elements, fusion asserted reached |
 | D-2 reproducer | `2**62 + 1` as `int64` against `1.5` as `float32`, eight operations |

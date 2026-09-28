@@ -12,6 +12,7 @@ the case says so.
 """
 
 from __future__ import annotations
+import importlib
 from typing import Any
 import tensors as ts
 from tensors.backend import execute_add, loading
@@ -237,9 +238,20 @@ def _construction_cases(backend: str) -> list[Case]:
     shape = (64,)
     if backend in ACCELERATED:
         kernels = loading.load_backend(backend)
+        conversion = importlib.import_module(
+            f"tensors.backend.{backend}.conversion"
+        )
+        array_module = importlib.import_module(
+            "numpy" if backend == "numpy" else "cupy"
+        )
+        native = array_module.dtype(ts.float64.name)
         left = tensor(shape, dtype_name="float64", kind="ramp")
         right = tensor(shape, dtype_name="float64", kind="constant", value=2.0)
-        storage = kernels.add(left, right, dtype=ts.float64, output_shape=shape)
+        prepared = (
+            conversion.tensor_to_logical_array(left).astype(native, copy=False),
+            conversion.tensor_to_logical_array(right).astype(native, copy=False),
+        )
+        storage = kernels.add(*prepared, dtype=ts.float64, output_shape=shape)
         if storage is None:
             raise Unsupported(
                 "the binary kernel declined this configuration, so there is no native result to wrap"
@@ -264,7 +276,10 @@ def _construction_cases(backend: str) -> list[Case]:
 
         def rejected() -> Any:
             return execute_add(
-                tiny_left, tiny_right, dtype=ts.float64, output_shape=(4,)
+                tiny_left,
+                tiny_right,
+                dtype=ts.float64,
+                output_shape=(4,),
             )
 
         def validate_rejected() -> None:

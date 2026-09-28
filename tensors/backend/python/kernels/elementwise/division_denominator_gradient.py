@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 import math
+from collections.abc import Iterable
 from tensors.backend.python.storage import PythonStorage
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from tensors.backend.storage import Storage
-    from tensors.tensor import Tensor
+from tensors.backend.storage import Storage
+from tensors.dtype import DataType
+from tensors.utils.broadcasting import broadcast_source_indices
 
 _INFINITY = float("inf")
 _NAN = float("nan")
@@ -74,13 +73,39 @@ def _product_over_denominator_power(
 
 
 def division_denominator_gradient(
-    grad: Tensor, numerator: Tensor, denominator: Tensor
-) -> Storage | None:
-    """Scale the upstream gradient by ``-numerator / denominator**2``."""
-    values = [
-        _negative_product_over_square(upstream, value, divisor)
-        for upstream, value, divisor in zip(
-            grad._data, numerator._data, denominator._data
+    grad_values: Iterable[float],
+    numerator_values: Iterable[float],
+    denominator_values: Iterable[float],
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+    grad_shape: tuple[int, ...],
+    numerator_shape: tuple[int, ...],
+    denominator_shape: tuple[int, ...],
+) -> Storage:
+    """Scale the upstream gradient by ``-numerator / denominator**2``.
+
+    The operands arrive as flat native buffers with their logical shapes.
+    Broadcasting is applied as an index mapping, without constructing expanded
+    Tensors or moving values through another backend. A zero divisor is
+    answered numerically, not refused: section 7.2 specifies the signed
+    infinity or the NaN, and the range-safe helper above delivers it.
+    """
+    grad_indices = broadcast_source_indices(grad_shape, output_shape)
+    numerator_indices = broadcast_source_indices(numerator_shape, output_shape)
+    denominator_indices = broadcast_source_indices(denominator_shape, output_shape)
+    result = [
+        _negative_product_over_square(
+            grad_values[grad_index],
+            numerator_values[numerator_index],
+            denominator_values[denominator_index],
+        )
+        for grad_index, numerator_index, denominator_index in zip(
+            grad_indices, numerator_indices, denominator_indices
         )
     ]
-    return PythonStorage.from_arithmetic(values, grad.dtype)
+    if len(result) != math.prod(output_shape):
+        raise RuntimeError(
+            "Division denominator VJP kernel returned an unexpected result size"
+        )
+    return PythonStorage.from_arithmetic(result, dtype)

@@ -2,6 +2,8 @@
 
 import importlib
 import unittest
+
+import numpy
 from unittest.mock import patch
 import tensors as ts
 import tensors.backend as backend_state
@@ -31,9 +33,11 @@ class ArithmeticDispatchTests(unittest.TestCase):
 
     def test_bound_provider_does_not_follow_later_context_changes(self):
         backend = load_backend("numpy")
-        value = ts.Tensor([2.0])
+        with ts.use_backend("numpy"):
+            value = ts.Tensor([2.0])
+            lowered = value._logical_storage_for("numpy").buffer
         with ts.use_backend("python"):
-            result = backend.add(value, 3.0, dtype=ts.float64, output_shape=(1,))
+            result = backend.add(lowered, 3.0, dtype=ts.float64, output_shape=(1,))
         self.assertIsInstance(result, NumPyStorage)
         self.assertEqual(result.buffer.tolist(), [5.0])
 
@@ -43,21 +47,23 @@ class ArithmeticDispatchTests(unittest.TestCase):
         Each operation resolves the selection itself now, so the patch goes
         to the module that owns the entry point rather than to a shared one.
         """
-        value = ts.Tensor([2.0] * 32)
         for name, execute, expected in DISPATCHERS:
             with self.subTest(operation=name):
-                with patch(
-                    f"tensors.backend.dispatch.arithmetic.{name}.get_backend",
-                    return_value="numpy",
-                ) as selection:
-                    result = execute(value, 2.0, dtype=ts.float64, output_shape=(32,))
+                with ts.use_backend("numpy"):
+                    value = ts.Tensor([2.0] * 32)
+                    with patch(
+                        "tensors.backend.config.get_backend",
+                        wraps=config.get_backend,
+                    ) as selection:
+                        result = execute(
+                            value, 2.0, dtype=ts.float64, output_shape=(32,)
+                        )
                 selection.assert_called_once_with()
                 self.assertIsInstance(result, NumPyStorage)
                 self.assertEqual(result.buffer.tolist(), [expected] * 32)
 
-    def test_each_dispatcher_forwards_operands_dtype_and_shape(self):
-        """The kernel receives exactly what the caller passed."""
-        left = ts.Tensor([[2.0, 4.0], [6.0, 8.0]])
+    def test_each_dispatcher_forwards_the_dtype_and_shape_it_resolved(self):
+        """The declared result dtype and shape reach the kernel unchanged."""
         for name, execute, _ in DISPATCHERS:
             with self.subTest(operation=name):
                 backend = load_backend("numpy")
@@ -65,14 +71,40 @@ class ArithmeticDispatchTests(unittest.TestCase):
                 with patch.object(backend, name, wraps=original) as kernel:
                     backend_state._clear_backend_kernel_cache()
                     with ts.use_backend("numpy"):
+                        left = ts.Tensor([[2.0, 4.0], [6.0, 8.0]])
                         execute(left, 2.0, dtype=ts.float32, output_shape=(2, 2))
                 backend_state._clear_backend_kernel_cache()
                 kernel.assert_called_once()
-                arguments, keywords = kernel.call_args
-                self.assertIs(arguments[0], left)
-                self.assertEqual(arguments[1], 2.0)
+                _, keywords = kernel.call_args
                 self.assertIs(keywords["dtype"], ts.float32)
                 self.assertEqual(keywords["output_shape"], (2, 2))
+
+    def test_each_dispatcher_prepares_operands_before_the_kernel(self):
+        """The kernel receives backend-native operands, not Tensors.
+
+        Turning a Tensor or a scalar into something the kernel can evaluate is
+        the preparation boundary's job, so by the time the kernel is called
+        both operands are native arrays already in the declared dtype.
+        """
+        for name, execute, _ in DISPATCHERS:
+            with self.subTest(operation=name):
+                backend = load_backend("numpy")
+                original = getattr(backend, name)
+                with patch.object(backend, name, wraps=original) as kernel:
+                    backend_state._clear_backend_kernel_cache()
+                    with ts.use_backend("numpy"):
+                        left = ts.Tensor([[2.0, 4.0], [6.0, 8.0]])
+                        execute(left, 2.0, dtype=ts.float32, output_shape=(2, 2))
+                backend_state._clear_backend_kernel_cache()
+                arguments, _ = kernel.call_args
+                prepared_left, prepared_right = arguments[:2]
+                for operand in (prepared_left, prepared_right):
+                    self.assertNotIsInstance(operand, ts.Tensor)
+                    self.assertEqual(operand.dtype, numpy.dtype("float32"))
+                self.assertEqual(
+                    prepared_left.tolist(), [[2.0, 4.0], [6.0, 8.0]]
+                )
+                self.assertEqual(float(prepared_right), 2.0)
 
     def test_each_dispatcher_runs_on_the_selected_backend(self):
         """Python, NumPy and auto, at a size the old threshold sent away."""
@@ -84,8 +116,8 @@ class ArithmeticDispatchTests(unittest.TestCase):
             for name, execute, expected in DISPATCHERS:
                 for size in (1, 4, 31, 64):
                     with self.subTest(selection=selection, operation=name, size=size):
-                        value = ts.Tensor([2.0] * size)
                         with ts.use_backend(selection):
+                            value = ts.Tensor([2.0] * size)
                             result = execute(
                                 value, 2.0, dtype=ts.float64, output_shape=(size,)
                             )
@@ -96,7 +128,6 @@ class ArithmeticDispatchTests(unittest.TestCase):
         """An accelerated selection must not reach the reference kernel."""
         import tensors.backend.python.kernels.arithmetic as python_kernels
 
-        value = ts.Tensor([2.0] * 4)
         for name, execute, _ in DISPATCHERS:
             with self.subTest(operation=name):
                 module = importlib.import_module(
@@ -106,18 +137,19 @@ class ArithmeticDispatchTests(unittest.TestCase):
                     module, name, wraps=getattr(module, name)
                 ) as reference:
                     with ts.use_backend("numpy"):
+                        value = ts.Tensor([2.0] * 4)
                         execute(value, 2.0, dtype=ts.float64, output_shape=(4,))
                 reference.assert_not_called()
 
     def test_each_declining_dispatcher_raises_without_falling_back(self):
         """A provider returning None is reported, never replaced."""
-        value = ts.Tensor([2.0] * 4)
         for name, execute, _ in DISPATCHERS:
             with self.subTest(operation=name):
                 backend = load_backend("numpy")
                 with patch.object(backend, name, return_value=None):
                     backend_state._clear_backend_kernel_cache()
                     with ts.use_backend("numpy"):
+                        value = ts.Tensor([2.0] * 4)
                         with self.assertRaises(
                             ts.BackendOperationUnsupportedError
                         ) as raised:
@@ -132,8 +164,8 @@ class ArithmeticDispatchTests(unittest.TestCase):
         # Breaking change B15. Explicit selection is an execution
         # requirement: workload size may decide how an operation runs, never
         # where. See docs/backends.md, Execution requirements.
-        value = ts.Tensor([2.0])
         with ts.use_backend("numpy"):
+            value = ts.Tensor([2.0])
             result = execute_add(value, 3.0, dtype=ts.float64, output_shape=(1,))
         self.assertIsInstance(result, NumPyStorage)
         self.assertEqual(list(result.buffer), [5.0])
@@ -146,8 +178,8 @@ class ArithmeticDispatchTests(unittest.TestCase):
         ``auto``; where an operation runs is now decided by the selection
         alone. See docs/backends.md, Execution requirements.
         """
-        value = ts.Tensor([2.0])
         with ts.use_backend("auto"):
+            value = ts.Tensor([2.0])
             self.assertEqual(ts.get_backend(), "numpy")
             result = execute_add(value, 3.0, dtype=ts.float64, output_shape=(1,))
         self.assertIsInstance(result, NumPyStorage)
@@ -156,7 +188,7 @@ class ArithmeticDispatchTests(unittest.TestCase):
     def test_automatic_selection_without_numpy_executes_on_python(self):
         """With no NumPy installed, ``auto`` resolves to Python."""
         value = ts.Tensor([2.0])
-        with patch.object(config, "_numpy_available", return_value=False):
+        with patch.object(config, "numpy_available", return_value=False):
             with ts.use_backend("auto"):
                 self.assertEqual(ts.get_backend(), "python")
                 result = execute_add(value, 3.0, dtype=ts.float64, output_shape=(1,))
@@ -172,8 +204,8 @@ class ArithmeticDispatchTests(unittest.TestCase):
         ):
             for size in (1, 4, 31, 32, 1000):
                 with self.subTest(selection=selection, size=size):
-                    value = ts.Tensor([2.0] * size)
                     with ts.use_backend(selection):
+                        value = ts.Tensor([2.0] * size)
                         for execute in (
                             execute_add,
                             execute_subtract,
@@ -191,8 +223,8 @@ class ArithmeticDispatchTests(unittest.TestCase):
     def test_a_declining_kernel_raises_rather_than_falling_back(self):
         """An unsupported operation is reported, never quietly reassigned."""
         backend = load_backend("numpy")
-        value = ts.Tensor([2.0] * 64)
         with ts.use_backend("numpy"):
+            value = ts.Tensor([2.0] * 64)
             with patch.object(backend, "add", return_value=None) as declining:
                 with self.assertRaises(ts.BackendOperationUnsupportedError) as raised:
                     execute_add(value, 3.0, dtype=ts.float64, output_shape=(64,))
@@ -205,8 +237,8 @@ class ArithmeticDispatchTests(unittest.TestCase):
     def test_a_declining_kernel_under_auto_also_raises(self):
         """``auto`` earns no fallback by being automatic."""
         backend = load_backend("numpy")
-        value = ts.Tensor([2.0] * 64)
         with ts.use_backend("auto"):
+            value = ts.Tensor([2.0] * 64)
             with patch.object(backend, "multiply", return_value=None):
                 with self.assertRaises(ts.BackendOperationUnsupportedError):
                     execute_multiply(value, 3.0, dtype=ts.float64, output_shape=(64,))
@@ -229,7 +261,9 @@ class CudaArithmeticSelectionTests(unittest.TestCase):
                             lambda a: a - a,
                             lambda a: a * a,
                         ):
-                            self.assertIsInstance(operation(left)._storage, CudaStorage)
+                            self.assertIsInstance(
+                                operation(left).backend_storage, CudaStorage
+                            )
 
     def test_every_dispatcher_executes_on_cuda_including_small_work(self):
         """All four entry points, at sizes the old threshold sent away."""
@@ -238,8 +272,8 @@ class CudaArithmeticSelectionTests(unittest.TestCase):
         for name, execute, expected in DISPATCHERS:
             for size in (1, 4, 31, 64):
                 with self.subTest(operation=name, size=size):
-                    value = ts.Tensor([2.0] * size)
                     with ts.use_backend("cuda"):
+                        value = ts.Tensor([2.0] * size)
                         result = execute(
                             value, 2.0, dtype=ts.float64, output_shape=(size,)
                         )
@@ -247,13 +281,13 @@ class CudaArithmeticSelectionTests(unittest.TestCase):
                     self.assertEqual(result.buffer.tolist(), [expected] * size)
 
     def test_every_declining_cuda_kernel_raises(self):
-        value = ts.Tensor([2.0] * 64)
         for name, execute, _ in DISPATCHERS:
             with self.subTest(operation=name):
                 backend = load_backend("cuda")
                 with patch.object(backend, name, return_value=None):
                     backend_state._clear_backend_kernel_cache()
                     with ts.use_backend("cuda"):
+                        value = ts.Tensor([2.0] * 64)
                         with self.assertRaises(
                             ts.BackendOperationUnsupportedError
                         ) as raised:
@@ -264,9 +298,10 @@ class CudaArithmeticSelectionTests(unittest.TestCase):
                 self.assertIn(name, message)
 
     def test_nested_context_restores_arithmetic_provider(self):
-        value = ts.Tensor([2.0] * 32)
         with ts.use_backend("numpy"):
-            self.assertIsInstance((value + 1.0)._storage, NumPyStorage)
+            value = ts.Tensor([2.0] * 32)
+            self.assertIsInstance((value + 1.0).backend_storage, NumPyStorage)
             with ts.use_backend("python"):
-                self.assertNotIsInstance((value + 1.0)._storage, NumPyStorage)
-            self.assertIsInstance((value + 1.0)._storage, NumPyStorage)
+                with self.assertRaises(ts.BackendMismatchError):
+                    value + 1.0
+            self.assertIsInstance((value + 1.0).backend_storage, NumPyStorage)

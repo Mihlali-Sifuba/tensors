@@ -2,23 +2,27 @@
 
 from __future__ import annotations
 import cupy
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 from tensors.backend.storage import Storage
+from tensors.dtype import DataType
 from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
-
-if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+from tensors.backend.cuda.conversion import _arithmetic_storage as _storage
+from tensors.backend.cuda.conversion import _widen
 
 
 def reduce_mean_gradient(
-    grad: Tensor, value: Tensor, axes: tuple[int, ...], *, keepdims: bool
+    upstream: Any,
+    values: Any,
+    input_shape: tuple[int, ...],
+    axes: tuple[int, ...],
+    *,
+    keepdims: bool,
+    dtype: DataType,
 ) -> Storage | None:
     """Broadcast the averaged upstream gradient back over the reduced axes."""
-    upstream = _working_values(grad)
+    upstream = _widen(upstream)
     expanded_shape = tuple(
-        (1 if dimension in axes else size for dimension, size in enumerate(value.shape))
+        (1 if dimension in axes else size for dimension, size in enumerate(input_shape))
     )
     try:
         expanded = upstream.reshape(expanded_shape)
@@ -26,9 +30,7 @@ def reduce_mean_gradient(
         return None
     count = 1
     for axis in axes:
-        count *= value.shape[axis]
+        count *= input_shape[axis]
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        if count == 0:
-            return None
-        result = cupy.broadcast_to(expanded / count, value.shape)
-    return _storage(result, dtype=grad.dtype, output_shape=value.shape)
+        result = cupy.broadcast_to(expanded / count, input_shape)
+    return _storage(result, dtype=dtype, output_shape=input_shape)

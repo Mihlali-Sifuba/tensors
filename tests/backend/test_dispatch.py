@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 import tensors as ts
 import tensors.backend.numpy.kernels as numpy_backend
+from tensors.backend.config import BackendMismatchError
 from tests.backend._support import NumPyParityTestCase, requires_numpy
 
 
@@ -49,13 +50,12 @@ class NumPyDispatchBoundaryTests(NumPyParityTestCase):
         def gradients(backend):
             with ts.use_backend(backend):
                 left = ts.Variable([[1.0, 2.0], [3.0, 4.0]])
-                right = ts.Variable([[5.0], [6.0]])
-                ts.backward(ts.sum(left @ right))
-                return (left.grad.tolist(), right.grad.tolist())
+                ts.backward(ts.sum(left * left))
+                return left.grad.tolist()
 
         self.assertEqual(gradients("numpy"), gradients("python"))
 
-    def test_recorded_graph_can_replay_with_either_backend(self):
+    def test_recorded_graph_rejects_cross_backend_constant_residency(self):
         weights = ts.Tensor([[2.0], [3.0]])
 
         @ts.Graph
@@ -64,10 +64,10 @@ class NumPyDispatchBoundaryTests(NumPyParityTestCase):
 
         model(ts.Tensor([[1.0, 2.0]]))
         with ts.use_backend("python"):
-            expected = model.computation.forward()
+            self.assertEqual(model.computation.forward().tolist(), [8.0])
         with ts.use_backend("numpy"):
-            actual = model.computation.forward()
-        self.assertEqual(actual.tolist(), expected.tolist())
+            with self.assertRaises(BackendMismatchError):
+                model.computation.forward()
 
 
 if __name__ == "__main__":

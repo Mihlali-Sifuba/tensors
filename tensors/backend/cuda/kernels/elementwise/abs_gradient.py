@@ -1,36 +1,57 @@
-"""CuPy implementation of the absolute value VJP."""
+"""CuPy implementation of the absolute-value VJP."""
 
 from __future__ import annotations
+import math
 import cupy
-from typing import TYPE_CHECKING
-from tensors.backend.storage import Storage
+from typing import TYPE_CHECKING, Any
 from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.conversion import _storage
-from tensors.backend.cuda.conversion import _working_values
+from tensors.backend.cuda.kernels.arithmetic import ieee32
+from tensors.backend.cuda.storage import CudaStorage
+from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
-    from tensors.tensor import Tensor
+    from tensors.dtype import DataType
 
 
-def abs_gradient(grad: Tensor, value: Tensor) -> Storage | None:
-    """Run the vector-Jacobian product for an elementwise unary operation."""
-    try:
-        # Both operands cross into the binary64 working precision, and both
-        # carry values the crossing must not lose: the original operand
-        # decides the local derivative, and the upstream gradient is what
-        # that derivative scales. astype flushes a binary32 subnormal on the
-        # way up, so either one arriving as zero is a wrong answer.
-        upstream = _working_values(grad)
-        values = _working_values(value)
-    except (TypeError, ValueError):
-        return None
-    if upstream.shape != values.shape:
-        return None
+def abs_gradient(
+    grad_values: Any,
+    values: Any,
+    *,
+    dtype: DataType,
+    output_shape: tuple[int, ...],
+) -> Storage:
+    """Return device storage at the declared dtype.
+
+    **Routing, not multiplication**, for the reason given in the NumPy
+    kernel. See docs/abs-semantics.md section 6.
+
+    binary32 is routed in binary64, and the measurement that forces it is
+    narrower than it first appears. A ``where`` selection preserves a
+    subnormal, because selecting is not arithmetic — but **negating** one
+    does not: ``-g`` on a native binary32 subnormal was measured returning
+    minus or plus zero. The negative branch is exactly where this VJP
+    negates, so an upstream subnormal would be lost there and nowhere else.
+    Widening through the PTX conversion, routing, and narrowing back keeps
+    it.
+
+    ``float64`` needs none of that: the device underflows gradually there.
+    """
     with _errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        derivative = cupy.where(
-            cupy.isnan(values),
-            cupy.nan,
-            cupy.where(values > 0.0, 1.0, cupy.where(values < 0.0, -1.0, 0.0)),
+        if dtype.typecode == "f":
+            upstream = ieee32.widen(grad_values)
+            primal = ieee32.widen(values)
+        else:
+            upstream = grad_values
+            primal = values
+        rectified = cupy.where(
+            primal > 0,
+            upstream,
+            cupy.where(primal < 0, -upstream, 0),
         )
-        result = upstream * derivative
-    return _storage(result, dtype=grad.dtype, output_shape=value.shape)
+        result = cupy.where(cupy.isnan(primal), primal, rectified)
+        if dtype.typecode == "f":
+            result = ieee32.narrow(result)
+    storage = CudaStorage(result, dtype)
+    if storage.size != math.prod(output_shape):
+        raise RuntimeError("Abs VJP kernel returned an unexpected result size")
+    return storage

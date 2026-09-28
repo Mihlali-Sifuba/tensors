@@ -74,7 +74,7 @@ class RandomTests(unittest.TestCase):
 
     def test_python_backend_uses_python_native_storage(self):
         value = ts.random.normal((64,))
-        self.assertIsInstance(value._storage, PythonStorage)
+        self.assertIsInstance(value.backend_storage, PythonStorage)
 
     def test_argument_validation_is_explicit(self):
         invalid_calls = (
@@ -107,8 +107,8 @@ class NumPyRandomTests(unittest.TestCase):
             ts.random.seed(101)
             second = ts.random.uniform((128,), dtype=ts.float32)
             integers = ts.random.randint((128,), -4, 7)
-        self.assertIsInstance(first._storage, NumPyStorage)
-        self.assertIsInstance(integers._storage, NumPyStorage)
+        self.assertIsInstance(first.backend_storage, NumPyStorage)
+        self.assertIsInstance(integers.backend_storage, NumPyStorage)
         self.assertEqual(first.tolist(), second.tolist())
 
 
@@ -125,8 +125,8 @@ class CudaRandomTests(unittest.TestCase):
             ts.random.seed(101)
             second = ts.random.normal((128,), dtype=ts.float32)
             integers = ts.random.randint((128,), -4, 7)
-        self.assertIsInstance(first._storage, CudaStorage)
-        self.assertIsInstance(integers._storage, CudaStorage)
+        self.assertIsInstance(first.backend_storage, CudaStorage)
+        self.assertIsInstance(integers.backend_storage, CudaStorage)
         self.assertEqual(first.tolist(), second.tolist())
 
 
