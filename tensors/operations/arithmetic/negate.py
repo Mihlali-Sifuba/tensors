@@ -16,7 +16,7 @@ class Neg(Operation):
         """Negate all elements of a tensor."""
         dtype = negation_dtype(a.dtype)
         accelerated = execute_negate(a, dtype=dtype)
-        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
+        return Tensor.from_backend_storage(accelerated, dtype=dtype, shape=a.shape)
 
     def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Negate the upstream gradient.

@@ -24,7 +24,7 @@ class Tan(Operation):
     def forward(self, value: Tensor) -> Tensor:
         dtype = value.dtype if value.dtype.typecode in {"f", "d"} else float64
         output_shape = value.shape
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             backend_dispatch.execute_tan(value, dtype=dtype, output_shape=output_shape),
             dtype=dtype,
             shape=output_shape,
@@ -49,7 +49,7 @@ class Tan(Operation):
         dtype = value.dtype
         output_shape = value.shape
         return [
-            Tensor._from_owned_storage(
+            Tensor.from_backend_storage(
                 backend_dispatch.execute_tan_gradient(
                     grad, value, dtype=dtype, output_shape=output_shape
                 ),

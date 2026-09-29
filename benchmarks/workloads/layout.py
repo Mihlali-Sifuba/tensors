@@ -38,7 +38,7 @@ def _view_tensor(
     The public API never produces one, so the internal constructor is the
     only way to measure what the kernels do with a strided layout.
     """
-    return ts.Tensor._from_metadata(
+    return ts.Tensor.from_storage_layout(
         source.backend_storage, shape=shape, strides=strides, offset=offset
     )
 

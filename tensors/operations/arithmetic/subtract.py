@@ -33,7 +33,7 @@ class Sub(Operation):
         accelerated = execute_subtract(
             a, other, dtype=dtype, output_shape=output_shape
         )
-        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
+        return Tensor.from_backend_storage(accelerated, dtype=dtype, shape=output_shape)
 
     def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Reduce the upstream gradient, negated for the right operand.
@@ -91,4 +91,4 @@ def subtract_scalar(left: Scalar, right: Tensor) -> Tensor:
     accelerated = execute_subtract(
         converted, right, dtype=dtype, output_shape=right.shape
     )
-    return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=right.shape)
+    return Tensor.from_backend_storage(accelerated, dtype=dtype, shape=right.shape)

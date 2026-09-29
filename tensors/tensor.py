@@ -108,34 +108,34 @@ class Tensor:
             from tensors.backend.config import get_backend
             from tensors.backend.validation import validate_backend_residency
 
-            active = get_backend()
-            validate_backend_residency((data,), active)
+            active_backend = get_backend()
+            validate_backend_residency((data,), active_backend)
             if data.dtype == self.dtype:
-                self._set_storage(
+                self.assign_backend_storage(
                     data._logical_storage_for(data.backend_storage.kind).copy()
                 )
             else:
                 from tensors.backend import execute_cast
 
-                self._set_storage(execute_cast(data, dtype=self.dtype))
+                self.assign_backend_storage(execute_cast(data, dtype=self.dtype))
             inferred_shape = data.shape
         elif isinstance(data, Storage):
             from tensors.backend.config import get_backend
             from tensors.backend.validation import validate_backend_residency
 
-            active = get_backend()
-            validate_backend_residency((data,), active)
-            self._set_storage(data.copy())
+            active_backend = get_backend()
+            validate_backend_residency((data,), active_backend)
+            self.assign_backend_storage(data.copy())
             inferred_shape = (data.size,)
         elif isinstance(data, (int, float)):
-            self._set_storage(storage_from_values((data,), self.dtype))
+            self.assign_backend_storage(storage_from_values((data,), self.dtype))
             inferred_shape = ()
         elif isinstance(data, list):
             flat_data = flatten_nested_list(data)
-            self._set_storage(storage_from_values(flat_data, self.dtype))
+            self.assign_backend_storage(storage_from_values(flat_data, self.dtype))
             inferred_shape = infer_nested_list_shape(data)
         elif isinstance(data, array):
-            self._set_storage(storage_from_values(data, self.dtype))
+            self.assign_backend_storage(storage_from_values(data, self.dtype))
             inferred_shape = (len(data),)
         else:
             raise TypeError(f"Unsupported data type: {type(data)}")
@@ -152,18 +152,21 @@ class Tensor:
             )
 
     @classmethod
-    def _from_owned_storage(
+    def from_backend_storage(
         cls,
         storage: Storage,
         *,
         dtype: str | _dtype.DataType | None = None,
         shape: Shape | Iterable[int],
     ) -> Tensor:
-        """Adopt exclusively owned internal Storage without copying.
+        """Build a Tensor that takes ownership of backend-produced storage.
 
-        This private constructor is reserved for freshly produced backend
-        results whose ownership is transferred to the returned Tensor. Public
-        ``Tensor(Storage)`` construction copies its input instead.
+        This is an internal constructor, not public API: no facade re-exports
+        it. It exists for storage a backend has just produced, whose ownership
+        is transferred to the new Tensor. The storage is adopted as the
+        authoritative representation without copying, so the caller must not
+        retain or reuse it. Public ``Tensor(Storage)`` construction copies its
+        input instead.
         """
         expected_dtype = (
             _dtype.from_typecode(dtype) if isinstance(dtype, str) else dtype
@@ -174,7 +177,7 @@ class Tensor:
             )
         tensor = cls.__new__(cls)
         tensor.tensor_dtype = storage.dtype
-        tensor._set_storage(storage)
+        tensor.assign_backend_storage(storage)
         tensor.logical_shape = (
             shape if isinstance(shape, Shape) else Shape.from_iterable(shape)
         )
@@ -189,36 +192,27 @@ class Tensor:
         return tensor
 
     @classmethod
-    def _from_values(
+    def from_elements(
         cls, values: Iterable[Scalar], dtype: _dtype.DataType, shape: Shape
     ) -> Tensor:
-        """Adopt flat logical values already known to match ``shape``.
+        """Build a Tensor from flat logical values already known to match ``shape``.
 
-        Reserved for internal results whose extents are already resolved, so
-        the public shape-inference path is skipped.
+        This is an internal constructor, not public API: no facade re-exports
+        it. The caller must supply a dtype and shape that are already
+        resolved, so the public shape-inference path is skipped and the
+        Tensor is built directly.
         """
         tensor = cls.__new__(cls)
         tensor.tensor_dtype = dtype
-        tensor._set_storage(storage_from_values(values, dtype))
+        tensor.assign_backend_storage(storage_from_values(values, dtype))
         tensor.logical_shape = shape
         tensor.storage_layout_strides = Strides.contiguous(shape)
         tensor.storage_offset = 0
         tensor.mutation_version = 0
         return tensor
 
-    def _replace_owned_storage(self, storage: Storage) -> None:
-        """Adopt a same-shaped internal result while retaining Tensor identity."""
-        if storage.dtype != self.dtype or storage.size != self.size:
-            raise RuntimeError(
-                "Internal storage replacement changed tensor size or dtype"
-            )
-        self._set_storage(storage)
-        self.storage_layout_strides = Strides.contiguous(self.logical_shape)
-        self.storage_offset = 0
-        self.mutation_version += 1
-
     @classmethod
-    def _from_metadata(
+    def from_storage_layout(
         cls,
         storage: Storage,
         *,
@@ -226,15 +220,19 @@ class Tensor:
         strides: Strides | Iterable[int],
         offset: int = 0,
     ) -> Tensor:
-        """Build an owning Tensor with explicit layout metadata.
+        """Build an owning Tensor with an explicit storage layout.
 
-        Storage is copied deliberately. This internal constructor establishes
-        and tests the future view representation without introducing shared
-        storage or mutation aliasing.
+        This is an internal constructor, not public API: no facade re-exports
+        it. Storage is copied deliberately. It establishes and tests the
+        future view representation without introducing shared storage or
+        mutation aliasing.
+
+        The layout is validated before the Tensor is returned: every logical
+        coordinate must address a position inside the copied storage.
         """
         tensor = cls.__new__(cls)
         tensor.tensor_dtype = storage.dtype
-        tensor._set_storage(storage.copy())
+        tensor.assign_backend_storage(storage.copy())
         tensor.logical_shape = (
             shape if isinstance(shape, Shape) else Shape.from_iterable(shape)
         )
@@ -243,36 +241,37 @@ class Tensor:
         )
         tensor.storage_offset = offset
         tensor.mutation_version = 0
-        tensor._validate_layout()
-        return tensor
-
-    def _validate_layout(self) -> None:
-        """Validate that all logical coordinates address owned storage."""
-        if len(self.strides) != self.shape.rank:
+        if len(tensor.strides) != tensor.shape.rank:
             raise ValueError(
-                f"Stride rank {len(self.strides)} does not match shape rank {self.shape.rank}"
+                f"Stride rank {len(tensor.strides)} does not match shape rank {tensor.shape.rank}"
             )
-        if isinstance(self.offset, bool) or not isinstance(self.offset, int):
+        if isinstance(tensor.offset, bool) or not isinstance(tensor.offset, int):
             raise TypeError("offset must be an integer")
-        if self.size == 0:
-            if not 0 <= self.offset <= self.backend_storage.size:
+        if tensor.size == 0:
+            if not 0 <= tensor.offset <= tensor.backend_storage.size:
                 raise ValueError("empty tensor offset is outside storage")
-            return
-        minimum = self.offset
-        maximum = self.offset
-        for dimension, stride in zip(self.shape, self.strides):
+            return tensor
+        minimum = tensor.offset
+        maximum = tensor.offset
+        for dimension, stride in zip(tensor.shape, tensor.strides):
             extent = (dimension - 1) * stride
             if extent < 0:
                 minimum += extent
             else:
                 maximum += extent
-        if minimum < 0 or maximum >= self.backend_storage.size:
+        if minimum < 0 or maximum >= tensor.backend_storage.size:
             raise ValueError(
-                f"Tensor layout addresses storage range [{minimum}, {maximum}] outside buffer of size {self.backend_storage.size}"
+                f"Tensor layout addresses storage range [{minimum}, {maximum}] outside buffer of size {tensor.backend_storage.size}"
             )
+        return tensor
 
-    def _set_storage(self, storage: Storage) -> None:
+    def assign_backend_storage(self, storage: Storage) -> None:
         """Install authoritative storage and invalidate other representations.
+
+        This is internal, not public API. The storage becomes
+        ``backend_storage`` and ``backend_storage_cache`` is reset to hold
+        only that authoritative representation, so no value converted from
+        earlier storage survives.
 
         A Tensor's dtype and its storage's dtype state the same fact, so every
         installation is the place that holds them to it. Callers that resolve
@@ -285,21 +284,12 @@ class Tensor:
         self.backend_storage = storage
         self.backend_storage_cache: dict[StorageKind, Storage] = {storage.kind: storage}
 
-    def _storage_for(self, kind: StorageKind) -> Storage:
-        """Return the backend-native physical Storage representation."""
-        cached = self.backend_storage_cache.get(kind)
-        if cached is not None:
-            return cached
-        converted = convert_storage(self.backend_storage, kind)
-        self.backend_storage_cache[kind] = converted
-        return converted
-
     @property
-    def _has_compact_storage(self) -> bool:
+    def has_compact_storage(self) -> bool:
         """Whether contiguous values exactly fill storage from offset zero.
 
-        Compact storage is stricter than a contiguous logical layout, which
-        may begin at a non-zero offset.
+        This is internal, not public API. Compact storage is stricter than a
+        contiguous logical layout, which may begin at a non-zero offset.
         """
         return (
             self.storage_offset == 0
@@ -307,8 +297,11 @@ class Tensor:
             and (self.backend_storage.size == self.logical_shape.size)
         )
 
-    def _logical_storage_indices(self) -> Iterator[int]:
-        """Yield physical positions in logical row-major order."""
+    def logical_storage_indices(self) -> Iterator[int]:
+        """Yield physical storage positions in logical row-major order.
+
+        This is internal, not public API.
+        """
         ranges = (range(dimension) for dimension in self.shape)
         for coordinates in product(*ranges):
             yield coordinates_to_storage_index(
@@ -316,11 +309,21 @@ class Tensor:
             )
 
     def _logical_storage_for(self, kind: StorageKind) -> Storage:
-        """Return compact logical values in one backend-native storage kind."""
-        storage = self._storage_for(kind)
-        if self._has_compact_storage:
+        """Return compact logical values in one backend-native storage kind.
+
+        The physical representation for ``kind`` is taken from
+        ``backend_storage_cache`` when present. Otherwise it is converted
+        from the authoritative ``backend_storage`` once and cached, so later
+        requests for the same kind reuse it until a mutation or storage
+        assignment resets the cache.
+        """
+        storage = self.backend_storage_cache.get(kind)
+        if storage is None:
+            storage = convert_storage(self.backend_storage, kind)
+            self.backend_storage_cache[kind] = storage
+        if self.has_compact_storage:
             return storage
-        indices = list(self._logical_storage_indices())
+        indices = list(self.logical_storage_indices())
         if kind == "python":
             if not isinstance(storage, PythonStorage):
                 raise TypeError("Python storage conversion returned an invalid buffer")
@@ -332,7 +335,7 @@ class Tensor:
             return NumPyStorage(selected, self.dtype)
         return CudaStorage(selected, self.dtype)
 
-    def _write_storage_indices(
+    def assign_storage_values(
         self,
         indices: Sequence[int],
         values: Storage | Scalar,
@@ -364,9 +367,14 @@ class Tensor:
         self.backend_storage_cache = {self.backend_storage.kind: self.backend_storage}
         self.mutation_version += 1
 
-    @property
-    def _data(self) -> array:
-        """Logical row-major host values for reference kernels."""
+    def get_host_values(self) -> array:
+        """Return logical row-major host values as an ``array.array``.
+
+        This is internal, not public API. It is a method rather than a
+        property because it can convert storage to the Python backend and so
+        materialise every value on the host; a caller should obtain the
+        values once and reuse them rather than call this repeatedly.
+        """
         storage = self._logical_storage_for("python")
         if not isinstance(storage, PythonStorage):
             raise TypeError("Python storage conversion returned an invalid buffer")
@@ -400,19 +408,19 @@ class Tensor:
                 integer_keys, self.shape, self.strides, self.offset
             )
             storage = execute_slice(self, key, output_shape=Shape())
-            return Tensor._from_owned_storage(
+            return Tensor.from_backend_storage(
                 storage, dtype=self.dtype, shape=Shape()
             ).item()
         _, output_shape = slice_ranges_and_shape_from_key(keys, self.shape)
         storage = execute_slice(self, key, output_shape=output_shape)
-        return Tensor._from_owned_storage(storage, dtype=self.dtype, shape=output_shape)
+        return Tensor.from_backend_storage(storage, dtype=self.dtype, shape=output_shape)
 
-    def _slice_assignment_values(
+    def resolve_slice_assignment(
         self, value: TensorData, selection_shape: tuple[int, ...]
     ) -> tuple[Storage | Scalar, Sequence[int] | None]:
         """Validate assignment values and place them on this tensor's backend.
 
-        Returns the values to write and, when a broadcast decides it, the
+        This is internal, not public API. Returns the values to write and, when a broadcast decides it, the
         source position each written position reads. ``None`` in that second
         place means the values are already in selection order.
 
@@ -457,15 +465,19 @@ class Tensor:
             source_indices,
         )
 
-    def _assign_slice_from_key(
+    def assign_slice(
         self, key: tuple[int | slice, ...], value: TensorData
     ) -> None:
-        """Assign a scalar or broadcast-compatible values to a tensor slice."""
+        """Assign a scalar or broadcast-compatible values to a tensor slice.
+
+        This is internal, not public API; ``__setitem__`` is the supported
+        entry point.
+        """
         ranges, selection_shape = slice_ranges_and_shape_from_key(key, self.shape)
         physical_indices = storage_indices_from_ranges(
             ranges, self.shape, self.strides, self.offset
         )
-        assignment_values, source_indices = self._slice_assignment_values(
+        assignment_values, source_indices = self.resolve_slice_assignment(
             value, selection_shape
         )
         written = (
@@ -475,14 +487,14 @@ class Tensor:
             raise ValueError(
                 f"Slice assignment has {written} values; expected {len(physical_indices)}"
             )
-        self._write_storage_indices(physical_indices, assignment_values, source_indices)
+        self.assign_storage_values(physical_indices, assignment_values, source_indices)
 
     def __setitem__(self, key: TensorIndex, value: TensorData) -> None:
         """Support item assignment for N-dimensional tensors."""
         if isinstance(key, bool):
             raise TypeError("Boolean tensor indices are not supported")
         if isinstance(key, slice):
-            self._assign_slice_from_key((key,), value)
+            self.assign_slice((key,), value)
             return
         if isinstance(key, int):
             if self.ndim != 1:
@@ -492,23 +504,26 @@ class Tensor:
             idx = tensor_indices_to_storage_index(
                 (key,), self.shape, self.strides, self.offset
             )
-            self._write_storage_indices((idx,), self._assignment_scalar(value))
+            self.assign_storage_values((idx,), self.resolve_scalar_assignment(value))
             return
         if isinstance(key, tuple):
             if any((isinstance(part, bool) for part in key)):
                 raise TypeError("Boolean tensor indices are not supported")
             if any((isinstance(part, slice) for part in key)):
-                self._assign_slice_from_key(key, value)
+                self.assign_slice(key, value)
                 return
             idx = tensor_indices_to_storage_index(
                 key, self.shape, self.strides, self.offset
             )
-            self._write_storage_indices((idx,), self._assignment_scalar(value))
+            self.assign_storage_values((idx,), self.resolve_scalar_assignment(value))
             return
         raise TypeError(f"Unsupported index type: {type(key)}")
 
-    def _assignment_scalar(self, value: TensorData) -> Scalar:
-        """Convert one value using the same rules as tensor construction."""
+    def resolve_scalar_assignment(self, value: TensorData) -> Scalar:
+        """Convert one value using the same rules as tensor construction.
+
+        This is internal, not public API.
+        """
         if isinstance(value, (Tensor, list, array)):
             converted = Tensor(value, dtype=self.dtype)
             if converted.size != 1:
@@ -521,34 +536,44 @@ class Tensor:
     def __repr__(self) -> str:
         """String representation of the tensor."""
         dtype_str = self.dtype.name
+        host_values = self.get_host_values()
         if self.ndim == 0:
-            return str(self._data[0])
+            return str(host_values[0])
         if self.ndim == 1:
             return (
-                f"Tensor({list(self._data)}, shape={self.shape}, dtype='{dtype_str}')"
+                f"Tensor({list(host_values)}, shape={self.shape}, dtype='{dtype_str}')"
             )
         if self.ndim > 32:
             return (
-                f"Tensor({list(self._data)}, shape={self.shape}, dtype='{dtype_str}')"
+                f"Tensor({list(host_values)}, shape={self.shape}, dtype='{dtype_str}')"
             )
-        lines = self._format_nested_repr(0, 0)
+        lines = self.render_tensor_representation(host_values, 0, 0)
         bracket_repr = "[\n" + "\n".join(lines) + "\n]"
         return f"Tensor(\n{bracket_repr},\n shape={self.shape}, dtype='{dtype_str}'\n)"
 
-    def _format_nested_repr(self, dim: int, offset: int) -> list:
-        """Build repr lines recursively for N-dimensional display."""
+    def render_tensor_representation(
+        self, host_values: array, dim: int, offset: int
+    ) -> list:
+        """Build repr lines recursively for N-dimensional display.
+
+        This is internal, not public API. ``host_values`` are this tensor's
+        logical row-major host values, obtained once by the caller and passed
+        down unchanged so the recursion never materialises them again.
+        """
         indent = "  " * dim
         stride = 1
         for j in range(dim + 1, self.ndim):
             stride *= self.shape[j]
         if dim == self.ndim - 1:
             values = " ".join(
-                (str(self._data[offset + j]) for j in range(self.shape[dim]))
+                (str(host_values[offset + j]) for j in range(self.shape[dim]))
             )
             return [f"{indent}[{values}]"]
         lines = []
         for i in range(self.shape[dim]):
-            sub_lines = self._format_nested_repr(dim + 1, offset + i * stride)
+            sub_lines = self.render_tensor_representation(
+                host_values, dim + 1, offset + i * stride
+            )
             lines.extend(sub_lines)
             if i < self.shape[dim] - 1 and dim < self.ndim - 2:
                 lines.append("")
@@ -625,12 +650,12 @@ class Tensor:
 
     def tolist(self) -> list[Scalar]:
         """Convert to Python list."""
-        return list(self._data)
+        return list(self.get_host_values())
 
     def clone(self) -> Tensor:
         """Return a copy with the same data and dtype."""
         storage = self._logical_storage_for(self.backend_storage.kind).copy()
-        return Tensor._from_owned_storage(storage, dtype=self.dtype, shape=self.shape)
+        return Tensor.from_backend_storage(storage, dtype=self.dtype, shape=self.shape)
 
     def contiguous(self) -> Tensor:
         """Ensure that this tensor has a contiguous logical layout.
@@ -644,7 +669,7 @@ class Tensor:
         if self.is_contiguous:
             return self
         storage = self._logical_storage_for(self.backend_storage.kind)
-        return Tensor._from_owned_storage(storage, dtype=self.dtype, shape=self.shape)
+        return Tensor.from_backend_storage(storage, dtype=self.dtype, shape=self.shape)
 
     def astype(self, dtype: str | _dtype.DataType) -> Tensor:
         """Return a copy converted to a new dtype."""
@@ -657,7 +682,7 @@ class Tensor:
         from tensors.backend import execute_cast
 
         accelerated = execute_cast(self, dtype=dtype)
-        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=self.shape)
+        return Tensor.from_backend_storage(accelerated, dtype=dtype, shape=self.shape)
 
     def item(self) -> Scalar:
         """Return the Python scalar stored in a single-element tensor."""
@@ -665,7 +690,7 @@ class Tensor:
             raise ValueError(
                 f"item() requires a tensor with one element, got {self.size}"
             )
-        return self._data[0]
+        return self.get_host_values()[0]
 
     def __bool__(self) -> bool:
         """Prevent a Tensor from being used as a Python bool.

@@ -18,12 +18,12 @@ def _power_values(base, exponent):
     # disagrees with the value it differentiates (section 12.5).
     dtype, exponent = resolve_power(base.dtype, exponent)
     storage = power(
-        base._data,
-        exponent._data,
+        base.get_host_values(),
+        exponent.get_host_values(),
         dtype=dtype,
         output_shape=base.shape,
     )
-    return Tensor._from_owned_storage(storage, dtype=dtype, shape=base.shape)
+    return Tensor.from_backend_storage(storage, dtype=dtype, shape=base.shape)
 
 
 def _exponent_gradient_value(
@@ -137,7 +137,7 @@ def power_exponent_gradient(
             float(upstream), float(result), float(base_value), float(power)
         )
         for upstream, result, base_value, power in zip(
-            grad._data, output._data, base._data, exponent._data
+            grad.get_host_values(), output.get_host_values(), base.get_host_values(), exponent.get_host_values()
         )
     ]
     # Rule G5: the gradient carries the *exponent's* declared dtype.

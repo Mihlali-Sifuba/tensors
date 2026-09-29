@@ -228,7 +228,7 @@ class DivisionVjpBoundaryTests(unittest.TestCase):
             with self.subTest(module=module_name):
                 source = inspect.getsource(importlib.import_module(module_name))
                 self.assertNotIn("tensor_to_logical_array", source)
-                self.assertNotIn("._data", source)
+                self.assertNotIn(".get_host_values(", source)
 
     def test_the_division_backward_does_not_use_the_legacy_reduction(self):
         """The broadcast reduction must be the selected-backend one."""

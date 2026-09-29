@@ -161,16 +161,16 @@ class StableLossTests(unittest.TestCase):
         )
 
         self.assertTrue(
-            all(math.isnan(item) for item in probabilities.data._data)
+            all(math.isnan(item) for item in probabilities.data.get_host_values())
         )
         self.assertTrue(
-            all(math.isnan(item) for item in log_probabilities.data._data)
+            all(math.isnan(item) for item in log_probabilities.data.get_host_values())
         )
         self.assertTrue(
-            all(math.isnan(item) for item in normalizers.data._data)
+            all(math.isnan(item) for item in normalizers.data.get_host_values())
         )
         self.assertTrue(
-            all(math.isnan(item) for item in normalizer_gradient._data)
+            all(math.isnan(item) for item in normalizer_gradient.get_host_values())
         )
 
     def test_probability_normalizers_reject_an_all_negative_infinity_axis(self):

@@ -23,7 +23,7 @@ class HostReadCounter:
 
     def __init__(self):
         self.reads = 0
-        self._original = tensor_module.Tensor._data.fget
+        self._original = tensor_module.Tensor.get_host_values
 
     def __enter__(self):
         counter = self
@@ -32,7 +32,7 @@ class HostReadCounter:
             counter.reads += 1
             return counter._original(instance)
 
-        self._patch = patch.object(tensor_module.Tensor, "_data", property(counting))
+        self._patch = patch.object(tensor_module.Tensor, "get_host_values", counting)
         self._patch.__enter__()
         return self
 

@@ -32,9 +32,9 @@ def execute_minimum_gradient(
     if selected == "python":
         from tensors.utils.broadcasting import broadcast_to
 
-        lowered_grad = grad._data
-        lowered_left = broadcast_to(left, output_shape)._data
-        lowered_right = broadcast_to(right, output_shape)._data
+        lowered_grad = grad.get_host_values()
+        lowered_left = broadcast_to(left, output_shape).get_host_values()
+        lowered_right = broadcast_to(right, output_shape).get_host_values()
     elif selected == "numpy":
         import numpy
 

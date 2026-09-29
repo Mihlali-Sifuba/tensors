@@ -345,12 +345,12 @@ class NumericalRegressionTests(unittest.TestCase):
         log_probabilities = ts.log_softmax(
             ts.Tensor([1.0e16, 1.0e16 - 2.0])
         )
-        self.assertAlmostEqual(log_probabilities._data[0], -0.1269280110429725)
-        self.assertAlmostEqual(log_probabilities._data[1], -2.1269280110429727)
+        self.assertAlmostEqual(log_probabilities.get_host_values()[0], -0.1269280110429725)
+        self.assertAlmostEqual(log_probabilities.get_host_values()[1], -2.1269280110429727)
 
         probabilities = ts.softmax(ts.Tensor([0.0, -37.0]))
-        self.assertLess(probabilities._data[0], 1.0)
-        self.assertGreater(probabilities._data[1], 0.0)
+        self.assertLess(probabilities.get_host_values()[0], 1.0)
+        self.assertGreater(probabilities.get_host_values()[1], 0.0)
 
     def test_cross_entropy_uses_stable_group_sums_and_mean(self):
         maximum = sys.float_info.max

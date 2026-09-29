@@ -37,8 +37,8 @@ def execute_sqrt_gradient(
     backend: Any = load_backend(selected)
 
     if selected == "python":
-        lowered_grad = grad._data
-        lowered_value = value._data
+        lowered_grad = grad.get_host_values()
+        lowered_value = value.get_host_values()
     elif selected == "numpy":
         lowered_grad = grad._logical_storage_for("numpy").buffer.reshape(grad.shape)
         lowered_value = value._logical_storage_for("numpy").buffer.reshape(value.shape)

@@ -19,5 +19,5 @@ def negate(value: Tensor, *, dtype: DataType) -> Storage | None:
     section 10.1 rule B1 makes ``-(-128)`` in ``int8`` be ``-128`` rather than
     an error, as ``127 + 1`` already is.
     """
-    data = [-x for x in value._data]
+    data = [-x for x in value.get_host_values()]
     return PythonStorage.from_arithmetic(data, dtype)

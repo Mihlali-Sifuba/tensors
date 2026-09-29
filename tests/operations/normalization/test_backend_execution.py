@@ -26,7 +26,7 @@ class HostReadCounter:
 
     def __init__(self):
         self.reads = 0
-        self._original = tensor_module.Tensor._data.fget
+        self._original = tensor_module.Tensor.get_host_values
 
     def __enter__(self):
         counter = self
@@ -35,7 +35,7 @@ class HostReadCounter:
             counter.reads += 1
             return counter._original(instance)
 
-        self._patch = patch.object(tensor_module.Tensor, "_data", property(counting))
+        self._patch = patch.object(tensor_module.Tensor, "get_host_values", counting)
         self._patch.__enter__()
         return self
 
@@ -249,7 +249,7 @@ class NormalizationBackendExecutionTests(unittest.TestCase):
     def test_noncompact_inputs_are_lowered_without_tensor_host_reads(self):
         def body(backend):
             base = ts.Tensor([0.2, -0.4, 1.5, 0.7, -1.0, 2.0])
-            view = ts.Tensor._from_metadata(
+            view = ts.Tensor.from_storage_layout(
                 base.backend_storage,
                 shape=(2, 3),
                 strides=(1, 2),
@@ -411,7 +411,7 @@ class NormalizationBackendExecutionTests(unittest.TestCase):
                     "Tensor",
                     "tensor_to_logical_array",
                     "_working_values",
-                    "._data",
+                    ".get_host_values(",
                     "asnumpy",
                     ".get(",
                 ):

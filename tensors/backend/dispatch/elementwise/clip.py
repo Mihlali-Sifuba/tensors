@@ -29,7 +29,7 @@ def execute_clip(
     backend: Any = load_backend(selected)
 
     if selected == "python":
-        lowered = value._data
+        lowered = value.get_host_values()
     elif selected == "numpy":
         import numpy
 

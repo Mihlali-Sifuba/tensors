@@ -26,7 +26,7 @@ def slice_tensor(
 
     keys = key if isinstance(key, tuple) else (key,)
     ranges, _ = slice_ranges_and_shape_from_key(keys, value.shape)
-    source = value._storage_for("python").buffer
+    source = value.backend_storage.buffer
     indices = storage_indices_from_ranges(
         ranges,
         value.shape,

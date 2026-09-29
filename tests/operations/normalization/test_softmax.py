@@ -43,7 +43,7 @@ class SoftmaxTests(unittest.TestCase):
 
         result = ts.softmax(values, axis=1)
 
-        self.assertTrue(all(math.isnan(item) for item in result._data))
+        self.assertTrue(all(math.isnan(item) for item in result.get_host_values()))
 
     def test_softmax_validates_axis_and_empty_axis(self):
         with self.assertRaisesRegex(ValueError, "out of bounds"):

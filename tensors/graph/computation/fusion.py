@@ -256,7 +256,7 @@ def execute_fused_forward(
         )
     for instruction, storage in zip(fused, storages):
         output = variables[instruction.output_slot]
-        tensor = Tensor._from_owned_storage(
+        tensor = Tensor.from_backend_storage(
             storage,
             dtype=output.dtype,
             shape=output_shape,
@@ -331,7 +331,7 @@ def execute_fused_backward(
         )
 
     for instruction, storage in zip(fused, storages):
-        gradients[instruction.output_slot] = Tensor._from_owned_storage(
+        gradients[instruction.output_slot] = Tensor.from_backend_storage(
             storage,
             dtype=dtype,
             shape=output_shape,
@@ -342,7 +342,7 @@ def execute_fused_backward(
         if slot not in live:
             return
         variable = variables[slot]
-        gradient = Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
+        gradient = Tensor.from_backend_storage(storage, dtype=dtype, shape=output_shape)
         if gradient.shape != variable.shape:
             from ...operations.gradient_primitives import sum_to_shape
 

@@ -48,7 +48,7 @@ class _ArgExtremum:
         }[
             operation
         ](value, axis, keepdims=keepdims, output_shape=output_shape)
-        return Tensor._from_owned_storage(accelerated, dtype=int64, shape=output_shape)
+        return Tensor.from_backend_storage(accelerated, dtype=int64, shape=output_shape)
 
 
 def _arg_extremum(operation, value: Any, axis: int | None, keepdims: bool) -> Tensor:

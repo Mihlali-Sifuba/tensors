@@ -176,17 +176,20 @@ backend behavior and transfer costs are unchanged.
 ## Internal storage-access boundary
 
 Tensor's internal access helpers distinguish physical Storage from logical
-row-major values:
+row-major values. They are internal, not public API, whatever their spelling:
 
-- `_storage_for(kind)` returns the backend-native representation of the
-  physical Storage, including positions outside the Tensor's logical layout.
-- `_logical_storage_indices()` yields physical storage indices in logical
+- `backend_storage` is the authoritative physical Storage, including positions
+  outside the Tensor's logical layout.
+- `logical_storage_indices()` yields physical storage indices in logical
   row-major traversal order.
 - `_logical_storage_for(kind)` returns compact backend-native Storage
-  containing only logical Tensor values in canonical row-major order.
-- `_data` exposes those logical row-major values through host/Python storage
-  for reference kernels.
-- `_write_storage_indices(indices, values, source_indices)` writes into the
+  containing only logical Tensor values in canonical row-major order. It takes
+  the physical representation for `kind` from `backend_storage_cache`, or
+  converts it from `backend_storage` once and caches it.
+- `get_host_values()` returns those logical row-major values through
+  host/Python storage for reference kernels. It is a method, not a property,
+  because it can convert storage and materialise every value on the host.
+- `assign_storage_values(indices, values, source_indices)` writes into the
   authoritative Storage through `execute_assign_indices`, so callers address
   it with physical storage indices rather than logical linear indices. It
   replaced `_mutable_data()`, which returned a mutable **host** buffer and
@@ -201,7 +204,7 @@ row-major values:
 Backend kernels are not stride-aware. The array-backend boundary uses
 `_logical_storage_for(kind)` and reshapes the resulting compact logical values.
 `is_contiguous` continues to describe logical layout, while
-`_has_compact_storage` additionally requires offset zero and physical Storage
+`has_compact_storage` additionally requires offset zero and physical Storage
 whose size exactly matches the Tensor's logical size.
 
 ## Responsibility boundaries

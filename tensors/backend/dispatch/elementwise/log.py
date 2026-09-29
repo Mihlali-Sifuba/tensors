@@ -60,7 +60,7 @@ def execute_log(
     # outside the domain. Both zeros are refused, since neither has a
     # logarithm.
     if selected == "python":
-        lowered = value._data
+        lowered = value.get_host_values()
         non_positive = any(item <= 0 for item in lowered)
     elif selected == "numpy":
         import numpy

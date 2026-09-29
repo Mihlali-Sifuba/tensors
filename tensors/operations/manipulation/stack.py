@@ -70,7 +70,7 @@ class Stack(Operation):
         accelerated = execute_stack(
             converted, axis, dtype=dtype, output_shape=tuple(out_shape)
         )
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated, dtype=dtype, shape=tuple(out_shape)
         )
 

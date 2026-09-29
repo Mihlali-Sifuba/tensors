@@ -15,5 +15,5 @@ if TYPE_CHECKING:
 
 def cast_tensor(value: Tensor, *, dtype: DataType) -> Storage:
     """Convert every element with Python scalar conversion semantics."""
-    values = cast_values(value._data, source_dtype=value.dtype, target_dtype=dtype)
+    values = cast_values(value.get_host_values(), source_dtype=value.dtype, target_dtype=dtype)
     return PythonStorage.from_values(values, dtype)

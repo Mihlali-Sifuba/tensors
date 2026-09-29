@@ -192,7 +192,7 @@ def tensor(
     # compared against hold identical values rather than merely similar ones.
     buffer = native.pattern(provider, size, dtype_name, kind)
     storage = _native_storage(backend, buffer, dtype)
-    return ts.Tensor._from_owned_storage(
+    return ts.Tensor.from_backend_storage(
         storage, dtype=dtype, shape=Shape.from_iterable(shape)
     )
 

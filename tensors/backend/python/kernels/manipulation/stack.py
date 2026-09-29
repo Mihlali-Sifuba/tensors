@@ -13,5 +13,5 @@ def stack(values, axis, *, dtype, output_shape):
     for group in range(before):
         start = group * stride
         for value in values:
-            result.extend(value._data[start : start + stride])
+            result.extend(value.get_host_values()[start : start + stride])
     return PythonStorage.from_values(result, dtype)

@@ -28,8 +28,8 @@ def execute_arccos_gradient(
     backend: Any = load_backend(selected)
 
     if selected == "python":
-        lowered_grad = grad._data
-        lowered_value = value._data
+        lowered_grad = grad.get_host_values()
+        lowered_value = value.get_host_values()
         endpoint = any(item == -1.0 or item == 1.0 for item in lowered_value)
         outside = any(item < -1.0 or item > 1.0 for item in lowered_value)
     elif selected == "numpy":

@@ -66,7 +66,7 @@ class Clip(Operation):
             dtype=dtype,
             output_shape=output_shape,
         )
-        return Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
+        return Tensor.from_backend_storage(storage, dtype=dtype, shape=output_shape)
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
@@ -122,7 +122,7 @@ class ClipVJP(Operation):
             dtype=grad.dtype,
             output_shape=output_shape,
         )
-        return Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=output_shape)
+        return Tensor.from_backend_storage(storage, dtype=grad.dtype, shape=output_shape)
 
     def backward(
         self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]

@@ -42,7 +42,7 @@ class Max(Operation):
         accelerated = backend_dispatch.execute_reduce_max(
             value, axes, keepdims=keepdims, dtype=value.dtype, output_shape=output_shape
         )
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated, dtype=value.dtype, shape=output_shape
         )
 
@@ -65,7 +65,7 @@ class Max(Operation):
             grad, value, axes, keepdims=keepdims
         )
         return [
-            Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=value.shape)
+            Tensor.from_backend_storage(accelerated, dtype=grad.dtype, shape=value.shape)
         ]
 
 

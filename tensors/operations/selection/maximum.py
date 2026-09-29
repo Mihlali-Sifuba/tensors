@@ -32,7 +32,7 @@ class Maximum(_ElementwiseExtremum):
         shape = left.shape.broadcast_with(right.shape)
         dtype = result_dtype(left.dtype, right)
         storage = execute_maximum(left, right, dtype=dtype, output_shape=shape)
-        return Tensor._from_owned_storage(storage, dtype=dtype, shape=shape)
+        return Tensor.from_backend_storage(storage, dtype=dtype, shape=shape)
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
@@ -114,7 +114,7 @@ class MaximumVJP(Operation):
         storage = left_storage if self.select_left else right_storage
         if storage is None:
             raise RuntimeError("maximum VJP did not return its requested branch")
-        return Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=output_shape)
+        return Tensor.from_backend_storage(storage, dtype=grad.dtype, shape=output_shape)
 
     def backward(
         self, outer_grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]

@@ -27,7 +27,7 @@ def execute_arcsinh(
     backend: Any = load_backend(selected)
 
     if selected == "python":
-        lowered = value._data
+        lowered = value.get_host_values()
     elif selected == "numpy":
         lowered = value._logical_storage_for("numpy").buffer.reshape(value.shape)
     else:

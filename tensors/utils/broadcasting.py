@@ -71,8 +71,8 @@ def broadcast_to(tensor: Tensor, shape: Shape | Iterable[int]) -> Tensor:
     if tensor.shape == output_shape:
         return tensor
     indices = broadcast_source_indices(tensor.shape, output_shape)
-    source_data = tensor._data
-    return Tensor._from_values(
+    source_data = tensor.get_host_values()
+    return Tensor.from_elements(
         [source_data[index] for index in indices], tensor.dtype, output_shape
     )
 

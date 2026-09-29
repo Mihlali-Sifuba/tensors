@@ -82,7 +82,7 @@ class ConvND(Operation):
             dilation=geometry.dilation,
             groups=geometry.groups,
         )
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated, dtype=dtype, shape=geometry.output_shape
         )
 
@@ -137,7 +137,7 @@ class ConvND(Operation):
         )
         return [
             (
-                Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=shape)
+                Tensor.from_backend_storage(storage, dtype=grad.dtype, shape=shape)
                 if storage is not None
                 else None
             )

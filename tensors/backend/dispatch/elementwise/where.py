@@ -31,9 +31,9 @@ def execute_where(
     if selected == "python":
         from tensors.utils.broadcasting import broadcast_to
 
-        lowered_condition = broadcast_to(condition, output_shape)._data
-        lowered_left = broadcast_to(left, output_shape)._data
-        lowered_right = broadcast_to(right, output_shape)._data
+        lowered_condition = broadcast_to(condition, output_shape).get_host_values()
+        lowered_left = broadcast_to(left, output_shape).get_host_values()
+        lowered_right = broadcast_to(right, output_shape).get_host_values()
     elif selected == "numpy":
         import numpy
 

@@ -26,7 +26,7 @@ class HostReadCounter:
 
     def __init__(self):
         self.reads = 0
-        self._original = tensor_module.Tensor._data.fget
+        self._original = tensor_module.Tensor.get_host_values
 
     def __enter__(self):
         counter = self
@@ -37,8 +37,8 @@ class HostReadCounter:
 
         self._patch = patch.object(
             tensor_module.Tensor,
-            "_data",
-            property(counting),
+            "get_host_values",
+            counting,
         )
         self._patch.__enter__()
         return self
@@ -155,12 +155,12 @@ class ManipulationBackendExecutionTests(unittest.TestCase):
                 [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
                 dtype=ts.float64,
             )
-            view = ts.Tensor._from_metadata(
+            view = ts.Tensor.from_storage_layout(
                 base.backend_storage,
                 shape=(3, 2),
                 strides=(1, 3),
             )
-            gradient_view = ts.Tensor._from_metadata(
+            gradient_view = ts.Tensor.from_storage_layout(
                 base.backend_storage,
                 shape=(2,),
                 strides=(2,),
@@ -339,7 +339,7 @@ class ManipulationBackendExecutionTests(unittest.TestCase):
                     self.assertEqual(loops, [])
                     for forbidden in (
                         "Tensor",
-                        "._data",
+                        ".get_host_values(",
                         ".tolist(",
                         ".get(",
                         "asnumpy",

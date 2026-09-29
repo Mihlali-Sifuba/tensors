@@ -82,7 +82,7 @@ def _normalization_components(
 
 def _softmax_values(value: Tensor, axis: int) -> list[float]:
     """Retain the Tensor-facing helper used by unmigrated loss kernels."""
-    return _softmax_buffer_values(value._data, value.shape, axis, value.dtype)
+    return _softmax_buffer_values(value.get_host_values(), value.shape, axis, value.dtype)
 
 
 def _log_softmax_values(value: Tensor, axis: int) -> list[float]:
@@ -90,7 +90,7 @@ def _log_softmax_values(value: Tensor, axis: int) -> list[float]:
     from tensors.backend.python.kernels.nn.log_softmax import log_softmax
 
     storage = log_softmax(
-        value._data,
+        value.get_host_values(),
         value.shape,
         axis,
         dtype=_floating_dtype(value.dtype),

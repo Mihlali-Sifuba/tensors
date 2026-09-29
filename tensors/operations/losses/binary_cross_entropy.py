@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 
 def _validate_targets(target: Tensor) -> None:
-    if any((not 0.0 <= float(value) <= 1.0 for value in target._data)):
+    if any((not 0.0 <= float(value) <= 1.0 for value in target.get_host_values())):
         raise ValueError("binary cross-entropy targets must be between 0 and 1")
 
 
@@ -84,7 +84,7 @@ class BinaryCrossEntropy(Operation):
             dtype=dtype,
             output_shape=output_shape,
         )
-        return Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
+        return Tensor.from_backend_storage(storage, dtype=dtype, shape=output_shape)
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
@@ -130,7 +130,7 @@ class BinaryCrossEntropy(Operation):
         return [
             (
                 sum_to_shape(
-                    Tensor._from_owned_storage(
+                    Tensor.from_backend_storage(
                         prediction_storage, dtype=grad.dtype, shape=expanded_shape
                     ),
                     prediction.shape,
@@ -140,7 +140,7 @@ class BinaryCrossEntropy(Operation):
             ),
             (
                 sum_to_shape(
-                    Tensor._from_owned_storage(
+                    Tensor.from_backend_storage(
                         target_storage, dtype=grad.dtype, shape=expanded_shape
                     ),
                     target.shape,
@@ -174,7 +174,7 @@ class BinaryCrossEntropyVJP(Operation):
         if (
             (not self.select_prediction)
             and (not self.from_logits)
-            and any(not 0.0 < float(value) < 1.0 for value in expanded_prediction._data)
+            and any(not 0.0 < float(value) < 1.0 for value in expanded_prediction.get_host_values())
         ):
             raise ValueError(
                 "Higher-order binary cross-entropy target derivatives require "
@@ -200,7 +200,7 @@ class BinaryCrossEntropyVJP(Operation):
         storage = storages[0] if self.select_prediction else storages[1]
         if storage is None:
             raise RuntimeError("binary cross-entropy VJP omitted its requested branch")
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             storage, dtype=grad.dtype, shape=expanded_prediction.shape
         )
 
@@ -246,7 +246,7 @@ class BinaryCrossEntropyVJP(Operation):
                 else:
                     values = []
                     for raw_probability, raw_target in zip(
-                        expanded_prediction._data, expanded_target._data
+                        expanded_prediction.get_host_values(), expanded_target.get_host_values()
                     ):
                         probability = float(raw_probability)
                         target_value = float(raw_target)
@@ -270,7 +270,7 @@ class BinaryCrossEntropyVJP(Operation):
                     mixed = broadcast_to(Tensor([-1.0], dtype=outer_grad.dtype), shape)
                 else:
                     values = []
-                    for raw_probability in expanded_prediction._data:
+                    for raw_probability in expanded_prediction.get_host_values():
                         probability = float(raw_probability)
                         values.append(
                             -math.inf
@@ -288,7 +288,7 @@ class BinaryCrossEntropyVJP(Operation):
                     mixed = broadcast_to(Tensor([-1.0], dtype=outer_grad.dtype), shape)
                 else:
                     values = []
-                    for raw_probability in expanded_prediction._data:
+                    for raw_probability in expanded_prediction.get_host_values():
                         probability = float(raw_probability)
                         values.append(
                             -math.inf

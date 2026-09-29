@@ -75,7 +75,7 @@ class Pow(Operation):
         accelerated = execute_power(
             base, exponent, dtype=dtype, output_shape=output_shape
         )
-        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
+        return Tensor.from_backend_storage(accelerated, dtype=dtype, shape=output_shape)
 
     def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Return the requested VJPs for a power invocation.
@@ -137,7 +137,7 @@ class PowerBaseBaseVJP(Operation):
         """
         accelerated = execute_power_base_base_gradient(outer, grad, base, exponent)
         # Rule G5: the base's declared dtype, not the upstream gradient's.
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated,
             dtype=base.dtype,
             shape=(
@@ -182,7 +182,7 @@ class PowerMixedVJP(Operation):
         accelerated = execute_power_mixed_gradient(
             outer, grad, base, exponent, dtype=self.dtype
         )
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated,
             dtype=self.dtype,
             shape=(
@@ -215,7 +215,7 @@ class PowerExponentExponentVJP(Operation):
             outer, grad, base, exponent
         )
         # Rule G5: the exponent's declared dtype.
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated,
             dtype=exponent.dtype,
             shape=(
@@ -248,7 +248,7 @@ class PowerBaseVJP(Operation):
         # to perform.
         accelerated = execute_power_base_gradient(grad, base, exponent)
         # Rule G5: the base's declared dtype, not the upstream gradient's.
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated, dtype=base.dtype, shape=grad.shape
         )
 
@@ -317,7 +317,7 @@ class PowerExponentVJP(Operation):
         # to perform.
         accelerated = execute_power_exponent_gradient(grad, base, exponent)
         # Rule G5: the exponent's declared dtype.
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated, dtype=exponent.dtype, shape=grad.shape
         )
 
@@ -414,7 +414,7 @@ def power_scalar_base(base: Scalar, exponent: Tensor) -> Tensor:
     accelerated = execute_power(
         base, exponent, dtype=dtype, output_shape=exponent.shape
     )
-    return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=exponent.shape)
+    return Tensor.from_backend_storage(accelerated, dtype=dtype, shape=exponent.shape)
 
 
 __all__ = ["Pow", "pow", "power", "power_scalar_base"]

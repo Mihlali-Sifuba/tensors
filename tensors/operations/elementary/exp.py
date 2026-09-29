@@ -29,7 +29,7 @@ class Exp(Operation):
         """
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         output_shape = a.shape
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             backend_dispatch.execute_exp(a, dtype=dtype, output_shape=output_shape),
             dtype=dtype,
             shape=output_shape,
@@ -65,7 +65,7 @@ class Exp(Operation):
         dtype = a.dtype
         output_shape = a.shape
         return [
-            Tensor._from_owned_storage(
+            Tensor.from_backend_storage(
                 backend_dispatch.execute_exp_gradient(
                     grad, a, dtype=dtype, output_shape=output_shape
                 ),

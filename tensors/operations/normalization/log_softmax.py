@@ -37,7 +37,7 @@ class LogSoftmax(Operation):
         before, axis_size, trailing = _axis_layout(a, axis)
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         storage = backend_dispatch.execute_log_softmax(a, axis, dtype=dtype)
-        return Tensor._from_owned_storage(storage, dtype=dtype, shape=a.shape)
+        return Tensor.from_backend_storage(storage, dtype=dtype, shape=a.shape)
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
@@ -59,7 +59,7 @@ class LogSoftmax(Operation):
 def _log_softmax_vjp_tensor(grad: Tensor, value: Tensor, axis: int) -> Tensor:
     """Return a cancellation-resistant log-softmax VJP."""
     storage = backend_dispatch.execute_log_softmax_gradient(grad, value, axis)
-    return Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=value.shape)
+    return Tensor.from_backend_storage(storage, dtype=grad.dtype, shape=value.shape)
 
 
 class LogSoftmaxGradient(Operation):
@@ -112,7 +112,7 @@ class LogSoftmaxGradient(Operation):
             value_gradient = Tensor(
                 [
                     -scale * derivative
-                    for scale, derivative in zip(expanded_total._data, value_vjp._data)
+                    for scale, derivative in zip(expanded_total.get_host_values(), value_vjp.get_host_values())
                 ],
                 dtype=outer_grad.dtype,
                 shape=value.shape,

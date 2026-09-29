@@ -8,7 +8,7 @@ from tensors.backend.python.storage import PythonStorage
 
 def synthetic_tensor(values, *, shape, strides, offset=0, dtype=ts.float64):
     storage = PythonStorage.from_values(values, dtype)
-    return ts.Tensor._from_metadata(
+    return ts.Tensor.from_storage_layout(
         storage, shape=ts.Shape(*shape), strides=ts.Strides(*strides), offset=offset
     )
 
@@ -70,7 +70,7 @@ class TensorMetadataTests(unittest.TestCase):
         self.assertEqual(tensor[1], 30.0)
         self.assertEqual(tensor.tolist(), [20.0, 30.0])
         self.assertTrue(tensor.is_contiguous)
-        self.assertFalse(tensor._has_compact_storage)
+        self.assertFalse(tensor.has_compact_storage)
         result = tensor.contiguous()
         self.assertIs(result, tensor)
         self.assertEqual(result.offset, 1)
@@ -80,38 +80,38 @@ class TensorMetadataTests(unittest.TestCase):
         tensor = synthetic_tensor(
             [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], shape=(3, 2), strides=(1, 3)
         )
-        physical = tensor._storage_for("python")
+        physical = tensor.backend_storage
         logical = tensor._logical_storage_for("python")
         self.assertIsInstance(physical, PythonStorage)
         self.assertIsInstance(logical, PythonStorage)
         self.assertEqual(list(physical.buffer), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
-        self.assertEqual(list(tensor._logical_storage_indices()), [0, 3, 1, 4, 2, 5])
+        self.assertEqual(list(tensor.logical_storage_indices()), [0, 3, 1, 4, 2, 5])
         self.assertEqual(list(logical.buffer), [0.0, 3.0, 1.0, 4.0, 2.0, 5.0])
-        self.assertEqual(list(tensor._data), list(logical.buffer))
+        self.assertEqual(list(tensor.get_host_values()), list(logical.buffer))
         self.assertEqual(physical.buffer[1], 1.0)
-        self.assertFalse(tensor._has_compact_storage)
+        self.assertFalse(tensor.has_compact_storage)
 
     def test_nonzero_offset_storage_helpers_preserve_index_spaces(self):
         tensor = synthetic_tensor(
             [10.0, 20.0, 30.0, 40.0], shape=(2,), strides=(1,), offset=1
         )
-        physical = tensor._storage_for("python")
+        physical = tensor.backend_storage
         logical = tensor._logical_storage_for("python")
         self.assertIsInstance(physical, PythonStorage)
         self.assertIsInstance(logical, PythonStorage)
         self.assertEqual(list(physical.buffer), [10.0, 20.0, 30.0, 40.0])
-        self.assertEqual(list(tensor._logical_storage_indices()), [1, 2])
+        self.assertEqual(list(tensor.logical_storage_indices()), [1, 2])
         self.assertEqual(list(logical.buffer), [20.0, 30.0])
-        self.assertEqual(list(tensor._data), [20.0, 30.0])
+        self.assertEqual(list(tensor.get_host_values()), [20.0, 30.0])
         self.assertTrue(tensor.is_contiguous)
-        self.assertFalse(tensor._has_compact_storage)
+        self.assertFalse(tensor.has_compact_storage)
 
     def test_mutation_writes_to_physical_storage_index(self):
         tensor = synthetic_tensor(
             [0.0, 1.0, 2.0, 3.0, 4.0, 5.0], shape=(3, 2), strides=(1, 3)
         )
         tensor[1, 1] = 99.0
-        storage = tensor._storage_for("python")
+        storage = tensor.backend_storage
         self.assertIsInstance(storage, PythonStorage)
         self.assertEqual(list(storage.buffer), [0.0, 1.0, 2.0, 3.0, 99.0, 5.0])
         self.assertEqual(tensor.tolist(), [0.0, 3.0, 1.0, 99.0, 2.0, 5.0])
@@ -166,7 +166,7 @@ class TensorMetadataTests(unittest.TestCase):
         tensor[0] = 9.0
         self.assertEqual(list(storage.buffer), [1.0, 2.0])
         self.assertEqual(tensor.tolist(), [9.0, 2.0])
-        self.assertIsNot(tensor._storage_for("python"), storage)
+        self.assertIsNot(tensor.backend_storage, storage)
 
     def test_tensors_constructed_from_same_storage_do_not_alias(self):
         storage = PythonStorage.from_values([1.0, 2.0], ts.float64)
@@ -186,15 +186,15 @@ class TensorMetadataTests(unittest.TestCase):
 
     def test_owned_storage_factory_transfers_storage_without_copying(self):
         storage = PythonStorage.from_values([1.0, 2.0], ts.float64)
-        tensor = ts.Tensor._from_owned_storage(
+        tensor = ts.Tensor.from_backend_storage(
             storage, dtype=ts.float64, shape=ts.Shape(2)
         )
-        self.assertIs(tensor._storage_for("python"), storage)
+        self.assertIs(tensor.backend_storage, storage)
         self.assertEqual(tensor.tolist(), [1.0, 2.0])
 
     def test_internal_metadata_constructor_copies_storage(self):
         storage = PythonStorage.from_values([1.0, 2.0], ts.float64)
-        tensor = ts.Tensor._from_metadata(
+        tensor = ts.Tensor.from_storage_layout(
             storage, shape=ts.Shape(2), strides=ts.Strides(1)
         )
         storage.buffer[0] = 9.0
@@ -205,11 +205,11 @@ class TensorMetadataTests(unittest.TestCase):
     def test_invalid_layout_bounds_are_rejected(self):
         storage = PythonStorage.from_values([1.0, 2.0], ts.float64)
         with self.assertRaisesRegex(ValueError, "outside buffer"):
-            ts.Tensor._from_metadata(
+            ts.Tensor.from_storage_layout(
                 storage, shape=ts.Shape(2), strides=ts.Strides(1), offset=1
             )
         with self.assertRaisesRegex(ValueError, "Stride rank"):
-            ts.Tensor._from_metadata(storage, shape=ts.Shape(2), strides=ts.Strides())
+            ts.Tensor.from_storage_layout(storage, shape=ts.Shape(2), strides=ts.Strides())
 
     def test_creation_and_layout_operations_return_compact_tensors(self):
         source = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
@@ -252,8 +252,8 @@ class BackendMetadataTests(unittest.TestCase):
         with ts.use_backend("numpy"):
             source = ts.Tensor([float(value) for value in range(64)])
             result = source[8:56]
-        source_storage = source._storage_for("numpy")
-        result_storage = result._storage_for("numpy")
+        source_storage = source.backend_storage
+        result_storage = result.backend_storage
         self.assertFalse(
             numpy.shares_memory(source_storage.buffer, result_storage.buffer)
         )
@@ -274,7 +274,7 @@ class BackendMetadataTests(unittest.TestCase):
             self.skipTest("NumPy backend is unavailable")
         numpy = importlib.import_module("numpy")
         storage = NumPyStorage(numpy.arange(40, dtype=numpy.float64), ts.float64)
-        tensor = ts.Tensor._from_metadata(
+        tensor = ts.Tensor.from_storage_layout(
             storage, shape=ts.Shape(8, 4), strides=ts.Strides(5, 1), offset=1
         )
         expected = [
@@ -293,7 +293,7 @@ class BackendMetadataTests(unittest.TestCase):
             self.skipTest("CUDA backend is unavailable")
         cupy = importlib.import_module("cupy")
         storage = CudaStorage(cupy.asarray([0.0, 1.0, 2.0, 3.0, 4.0, 5.0]), ts.float64)
-        tensor = ts.Tensor._from_metadata(
+        tensor = ts.Tensor.from_storage_layout(
             storage, shape=ts.Shape(2, 2), strides=ts.Strides(3, 1), offset=1
         )
         result = tensor.contiguous()

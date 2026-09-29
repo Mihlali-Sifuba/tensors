@@ -201,16 +201,16 @@ def _metadata_cases(backend: str) -> list[Case]:
             run=lambda: [
                 _add_scalars(x, y)
                 for x, y in zip(
-                    broadcast_to(scalar, Shape(1))._data,
-                    broadcast_to(scalar, Shape(1))._data,
+                    broadcast_to(scalar, Shape(1)).get_host_values(),
+                    broadcast_to(scalar, Shape(1)).get_host_values(),
                 )
             ],
             layer="dispatch",
             validate=lambda: [
                 _add_scalars(x, y)
                 for x, y in zip(
-                    broadcast_to(scalar, Shape(1))._data,
-                    broadcast_to(scalar, Shape(1))._data,
+                    broadcast_to(scalar, Shape(1)).get_host_values(),
+                    broadcast_to(scalar, Shape(1)).get_host_values(),
                 )
             ],
             description="broadcasting both operands and then applying the operation, as the reference kernels now do",
@@ -259,11 +259,11 @@ def _construction_cases(backend: str) -> list[Case]:
         cases.append(
             Case(
                 name="framework.tensor_from_owned_storage",
-                run=lambda: ts.Tensor._from_owned_storage(
+                run=lambda: ts.Tensor.from_backend_storage(
                     storage, dtype=ts.float64, shape=Shape(*shape)
                 ),
                 layer="dispatch",
-                validate=lambda: ts.Tensor._from_owned_storage(
+                validate=lambda: ts.Tensor.from_backend_storage(
                     storage, dtype=ts.float64, shape=Shape(*shape)
                 ),
                 description="wrap an already-computed provider result in a Tensor, which is what every accelerated operation ends with",

@@ -563,7 +563,7 @@ class LossBackendExecutionTests(unittest.TestCase):
                     "Tensor",
                     "tensor_to_logical_array",
                     "_working_values",
-                    "._data",
+                    ".get_host_values(",
                     "asnumpy",
                     ".get(",
                 ):

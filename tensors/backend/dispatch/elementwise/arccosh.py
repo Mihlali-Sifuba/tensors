@@ -27,7 +27,7 @@ def execute_arccosh(
     backend: Any = load_backend(selected)
 
     if selected == "python":
-        lowered = value._data
+        lowered = value.get_host_values()
         outside = any(item < 1.0 for item in lowered)
     elif selected == "numpy":
         import numpy

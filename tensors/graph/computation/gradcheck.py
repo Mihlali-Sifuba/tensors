@@ -30,7 +30,7 @@ def _input_tensors(inputs: Any) -> tuple[Tensor, ...]:
             raise TypeError(f"gradcheck input {index} must be a Tensor or Variable")
         if tensor.dtype.typecode not in {"f", "d"}:
             raise TypeError(f"gradcheck input {index} must have a floating-point dtype")
-        if any(not math.isfinite(float(item)) for item in tensor._data):
+        if any(not math.isfinite(float(item)) for item in tensor.get_host_values()):
             raise ValueError(f"gradcheck input {index} must contain only finite values")
         tensors.append(tensor.clone())
     return tuple(tensors)
@@ -45,7 +45,7 @@ def _scalar_output(
     tensor = output.data if isinstance(output, Variable) else output
     if not isinstance(tensor, Tensor):
         raise TypeError("gradcheck function must return a Tensor or Variable")
-    return math.fsum(float(value) for value in tensor._data)
+    return math.fsum(float(value) for value in tensor.get_host_values())
 
 
 def gradcheck(
@@ -101,8 +101,8 @@ def gradcheck(
             for element_index in range(original.size):
                 positive = [value.clone() for value in originals]
                 negative = [value.clone() for value in originals]
-                positive_value = positive[input_index]._data[element_index]
-                negative_value = negative[input_index]._data[element_index]
+                positive_value = positive[input_index].get_host_values()[element_index]
+                negative_value = negative[input_index].get_host_values()[element_index]
                 coordinates = linear_index_to_coordinates(
                     element_index,
                     original.shape,

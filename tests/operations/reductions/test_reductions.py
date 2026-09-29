@@ -40,8 +40,8 @@ class ReductionTests(unittest.TestCase):
         result = ts.sum(tensor, axis=1, keepdims=True)
 
         self.assertEqual(result.shape, (2, 1))
-        self.assertEqual(result._data[0], 1.0e-300)
-        self.assertEqual(result._data[1], math.inf)
+        self.assertEqual(result.get_host_values()[0], 1.0e-300)
+        self.assertEqual(result.get_host_values()[1], math.inf)
 
     def test_sum_keepdims(self):
         matrix = ts.Tensor([[1, 2, 3], [4, 5, 6]])

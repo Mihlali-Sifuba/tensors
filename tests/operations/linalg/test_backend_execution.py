@@ -370,7 +370,7 @@ class LinearAlgebraBackendExecutionTests(unittest.TestCase):
                     ]
                     self.assertEqual(loops, [])
                     for forbidden in (
-                        "._data",
+                        ".get_host_values(",
                         ".tolist(",
                         ".get(",
                         "asnumpy",

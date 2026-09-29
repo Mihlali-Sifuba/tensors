@@ -39,7 +39,7 @@ class TaggedStorage(Storage):
 
 
 def tagged_tensor(kind, values):
-    return ts.Tensor._from_owned_storage(
+    return ts.Tensor.from_backend_storage(
         TaggedStorage(kind, values), dtype=ts.float64, shape=(len(values),)
     )
 
@@ -247,7 +247,7 @@ class NumPyConstructionResidencyTests(unittest.TestCase):
         from tensors.shape import Shape
 
         with ts.use_backend("numpy"):
-            value = ts.Tensor._from_values((3,), ts.int32, Shape())
+            value = ts.Tensor.from_elements((3,), ts.int32, Shape())
 
         self.assertIsInstance(value.backend_storage, NumPyStorage)
         self.assertEqual(value.item(), 3)

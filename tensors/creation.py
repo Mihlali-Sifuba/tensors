@@ -33,7 +33,7 @@ def full(shape: Shape, fill_value: Scalar, dtype: DType = None) -> Tensor:
     normalized_shape = TensorShape.from_iterable(shape)
     resolved_dtype = _resolve_dtype(dtype)
     storage = execute_full(normalized_shape, fill_value, dtype=resolved_dtype)
-    return Tensor._from_owned_storage(
+    return Tensor.from_backend_storage(
         storage, dtype=resolved_dtype, shape=normalized_shape
     )
 
@@ -62,7 +62,7 @@ def eye(
         raise TypeError("k must be an integer")
     resolved_dtype = _resolve_dtype(dtype)
     storage = execute_eye(rows, columns, k, dtype=resolved_dtype)
-    return Tensor._from_owned_storage(
+    return Tensor.from_backend_storage(
         storage, dtype=resolved_dtype, shape=(rows, columns)
     )
 
@@ -107,7 +107,7 @@ def arange(
                     break
                 count -= 1
     storage = execute_arange(start, step, count, dtype=resolved_dtype)
-    return Tensor._from_owned_storage(storage, dtype=resolved_dtype, shape=(count,))
+    return Tensor.from_backend_storage(storage, dtype=resolved_dtype, shape=(count,))
 
 
 def linspace(
@@ -129,7 +129,7 @@ def linspace(
         raise ValueError("count must be non-negative")
     resolved_dtype = _resolve_dtype(dtype)
     accelerated = execute_linspace(start, stop, count, dtype=resolved_dtype)
-    return Tensor._from_owned_storage(accelerated, dtype=resolved_dtype, shape=(count,))
+    return Tensor.from_backend_storage(accelerated, dtype=resolved_dtype, shape=(count,))
 
 
 __all__ = ["arange", "eye", "full", "linspace", "ones", "zeros"]

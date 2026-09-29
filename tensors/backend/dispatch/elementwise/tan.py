@@ -27,7 +27,7 @@ def execute_tan(
     backend: Any = load_backend(selected)
 
     if selected == "python":
-        lowered = value._data
+        lowered = value.get_host_values()
         import math
 
         invalid = any(math.isinf(float(item)) for item in lowered)

@@ -387,17 +387,17 @@ class ResidencyAndHostTransfers(unittest.TestCase):
         @contextlib.contextmanager
         def counting():
             counter = Counter()
-            original = tensor_module.Tensor._data.fget
+            original = tensor_module.Tensor.get_host_values
 
             def counted(self):
                 counter.count += 1
                 return original(self)
 
-            tensor_module.Tensor._data = property(counted)
+            tensor_module.Tensor.get_host_values = counted
             try:
                 yield counter
             finally:
-                tensor_module.Tensor._data = property(original)
+                tensor_module.Tensor.get_host_values = original
 
         return counting()
 
@@ -708,17 +708,17 @@ class TheOtherFiveConversions(unittest.TestCase):
         @contextlib.contextmanager
         def counting():
             reads = []
-            original = tensor_module.Tensor._data.fget
+            original = tensor_module.Tensor.get_host_values
 
             def counted(self):
                 reads.append(1)
                 return original(self)
 
-            tensor_module.Tensor._data = property(counted)
+            tensor_module.Tensor.get_host_values = counted
             try:
                 yield reads
             finally:
-                tensor_module.Tensor._data = property(original)
+                tensor_module.Tensor.get_host_values = original
 
         for name, function in LATER.items():
             operand = 1.5 if name == "arccosh" else SMALLEST
@@ -1084,17 +1084,17 @@ class GradientExecution(unittest.TestCase):
         @contextlib.contextmanager
         def counting():
             reads = []
-            original = tensor_module.Tensor._data.fget
+            original = tensor_module.Tensor.get_host_values
 
             def counted(self):
                 reads.append(1)
                 return original(self)
 
-            tensor_module.Tensor._data = property(counted)
+            tensor_module.Tensor.get_host_values = counted
             try:
                 yield reads
             finally:
-                tensor_module.Tensor._data = property(original)
+                tensor_module.Tensor.get_host_values = original
 
         for name, function in GRADIENTS.items():
             with self.subTest(operation=name):

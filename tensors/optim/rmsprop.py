@@ -53,8 +53,8 @@ class RMSprop(Optimizer):
                 [
                     _visible_second_moment(float(scale), float(normalized))
                     for scale, normalized in zip(
-                        scales._data,
-                        scaled_values._data,
+                        scales.get_host_values(),
+                        scaled_values.get_host_values(),
                     )
                 ],
                 dtype=scales.dtype,
@@ -145,18 +145,18 @@ class RMSprop(Optimizer):
         ):
             parameter, gradient, identity, _, _ = record
             scaled_state = (
-                Tensor._from_owned_storage(
+                Tensor.from_backend_storage(
                     scale_storage,
                     dtype=gradient.dtype,
                     shape=gradient.shape,
                 ),
-                Tensor._from_owned_storage(
+                Tensor.from_backend_storage(
                     scaled_storage,
                     dtype=gradient.dtype,
                     shape=gradient.shape,
                 ),
             )
-            value = Tensor._from_owned_storage(
+            value = Tensor.from_backend_storage(
                 parameter_storage,
                 dtype=parameter.dtype,
                 shape=parameter.shape,
@@ -220,18 +220,18 @@ class RMSprop(Optimizer):
                 scaled_storage,
             ) = accelerated
             scaled_state = (
-                Tensor._from_owned_storage(
+                Tensor.from_backend_storage(
                     scale_storage,
                     dtype=grad.dtype,
                     shape=grad.shape,
                 ),
-                Tensor._from_owned_storage(
+                Tensor.from_backend_storage(
                     scaled_storage,
                     dtype=grad.dtype,
                     shape=grad.shape,
                 ),
             )
-            new_parameter = Tensor._from_owned_storage(
+            new_parameter = Tensor.from_backend_storage(
                 parameter_storage,
                 dtype=param.dtype,
                 shape=param.shape,

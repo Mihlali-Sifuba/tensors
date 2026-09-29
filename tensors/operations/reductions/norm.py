@@ -42,7 +42,7 @@ class Norm(Operation):
         accelerated = backend_dispatch.execute_reduce_norm(
             value, axes, keepdims=keepdims, dtype=dtype, output_shape=output_shape
         )
-        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
+        return Tensor.from_backend_storage(accelerated, dtype=dtype, shape=output_shape)
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
@@ -59,7 +59,7 @@ class Norm(Operation):
             grad, value, axes, keepdims=self.keepdims
         )
         return [
-            Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=value.shape)
+            Tensor.from_backend_storage(storage, dtype=grad.dtype, shape=value.shape)
         ]
 
 

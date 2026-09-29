@@ -27,7 +27,7 @@ def execute_arcsin(
     backend: Any = load_backend(selected)
 
     if selected == "python":
-        lowered = value._data
+        lowered = value.get_host_values()
         invalid = any(item < -1.0 or item > 1.0 for item in lowered)
     elif selected == "numpy":
         import numpy

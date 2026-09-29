@@ -21,7 +21,7 @@ from tensors.utils.broadcasting import broadcast_tensors, broadcast_to
 
 
 def values_of(tensor):
-    return list(tensor._data)
+    return list(tensor.get_host_values())
 
 
 class TheOutputShape(unittest.TestCase):
@@ -94,7 +94,7 @@ class TheOutputValues(unittest.TestCase):
             for column in range(target[1]):
                 # The second axis is a singleton in the source, so every
                 # column of a row takes the same element.
-                expected.append(source._data[row])
+                expected.append(source.get_host_values()[row])
         self.assertEqual(values_of(produced), expected)
 
 

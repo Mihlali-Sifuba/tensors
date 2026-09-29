@@ -268,7 +268,7 @@ class NonContiguousAssignmentTests(AssignmentResidencyTestCase):
 
     def _synthetic(self, values, *, shape, strides, offset=0):
         storage = PythonStorage.from_values(values, ts.float64)
-        return ts.Tensor._from_metadata(
+        return ts.Tensor.from_storage_layout(
             storage,
             shape=ts.Shape(*shape),
             strides=ts.Strides(*strides),

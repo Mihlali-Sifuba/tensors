@@ -46,7 +46,7 @@ class ProductSumToShape(Operation):
 
         shape = self.target_shape
         accelerated = execute_sum_products_to_shape(left, right, shape)
-        return Tensor._from_owned_storage(accelerated, dtype=left.dtype, shape=shape)
+        return Tensor.from_backend_storage(accelerated, dtype=left.dtype, shape=shape)
 
     def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Differentiate the fused product reduction, which is itself fused.

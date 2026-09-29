@@ -76,7 +76,7 @@ class TensorConstructionTests(unittest.TestCase):
         clone = tensor.clone()
 
         self.assertEqual(clone.tolist(), [1.0, 2.0, 3.0])
-        clone._data[0] = 99
+        clone.get_host_values()[0] = 99
         self.assertEqual(tensor.tolist(), [1.0, 2.0, 3.0])
 
     def test_clone_preserves_dtype(self):

@@ -759,17 +759,17 @@ class CudaDoesNotTransferOrSynchronise(ArithmeticTestCase):
         @contextlib.contextmanager
         def counting():
             counter = Counter()
-            original = tensor_module.Tensor._data.fget
+            original = tensor_module.Tensor.get_host_values
 
             def counted(self):
                 counter.count += 1
                 return original(self)
 
-            tensor_module.Tensor._data = property(counted)
+            tensor_module.Tensor.get_host_values = counted
             try:
                 yield counter
             finally:
-                tensor_module.Tensor._data = property(original)
+                tensor_module.Tensor.get_host_values = original
 
         return counting()
 

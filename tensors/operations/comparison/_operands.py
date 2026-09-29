@@ -50,7 +50,7 @@ def comparison_operands(left: Any, right: Any) -> tuple[Tensor, Tensor, Shape]:
 
 def comparison_mask(storage: Storage, output_shape: Shape) -> Tensor:
     """Wrap a dispatch result as the ``uint8`` mask a comparison returns."""
-    return Tensor._from_owned_storage(storage, dtype=uint8, shape=output_shape)
+    return Tensor.from_backend_storage(storage, dtype=uint8, shape=output_shape)
 
 
 __all__ = ["comparison_mask", "comparison_operands"]

@@ -28,7 +28,7 @@ class ReLU(Operation):
         """
         dtype = value.dtype
         output_shape = value.shape
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             backend_dispatch.execute_relu(
                 value, dtype=dtype, output_shape=output_shape
             ),
@@ -50,7 +50,7 @@ class ReLU(Operation):
         dtype = value.dtype
         output_shape = value.shape
         return [
-            Tensor._from_owned_storage(
+            Tensor.from_backend_storage(
                 backend_dispatch.execute_relu_gradient(
                     grad, value, dtype=dtype, output_shape=output_shape
                 ),

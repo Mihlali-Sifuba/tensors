@@ -46,7 +46,7 @@ class Prod(Operation):
         accelerated = backend_dispatch.execute_reduce_prod(
             value, axes, keepdims=keepdims, dtype=value.dtype, output_shape=output_shape
         )
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated, dtype=value.dtype, shape=output_shape
         )
 
@@ -68,7 +68,7 @@ class Prod(Operation):
             grad, value, axes, keepdims=keepdims
         )
         return [
-            Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=value.shape)
+            Tensor.from_backend_storage(accelerated, dtype=grad.dtype, shape=value.shape)
         ]
 
 

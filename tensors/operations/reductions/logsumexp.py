@@ -26,9 +26,9 @@ def _group_value(a: Tensor, indices: list[int]) -> float:
     """Return ``log(sum(exp(a[indices])))`` without avoidable overflow."""
     if not indices:
         raise ValueError("logsumexp is not defined over an empty reduction")
-    if any((math.isnan(float(a._data[index])) for index in indices)):
+    if any((math.isnan(float(a.get_host_values()[index])) for index in indices)):
         return math.nan
-    group = [float(a._data[index]) for index in indices]
+    group = [float(a.get_host_values()[index]) for index in indices]
     maximum = max(group)
     if maximum == math.inf:
         return math.inf
@@ -59,7 +59,7 @@ class LogSumExp(Operation):
         storage = execute_logsumexp(
             a, axes, keepdims=keepdims, dtype=dtype, output_shape=output_shape
         )
-        return Tensor._from_owned_storage(storage, dtype=dtype, shape=output_shape)
+        return Tensor.from_backend_storage(storage, dtype=dtype, shape=output_shape)
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
@@ -76,7 +76,7 @@ class LogSumExp(Operation):
                 f"Gradient shape {grad.shape} does not match output shape {output_shape}"
             )
         storage = execute_logsumexp_gradient(grad, a, axes, keepdims=keepdims)
-        return [Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=a.shape)]
+        return [Tensor.from_backend_storage(storage, dtype=grad.dtype, shape=a.shape)]
 
 
 class LogSumExpGradient(Operation):
@@ -111,7 +111,7 @@ class LogSumExpGradient(Operation):
         grad_values = [0.0] * grad.size
         value_values = [0.0] * value.size
         for output_index, group in enumerate(groups):
-            group_values = [float(value._data[index]) for index in group]
+            group_values = [float(value.get_host_values()[index]) for index in group]
             maximum = max(group_values)
             at_positive_infinity = maximum == math.inf
             if any((math.isnan(item) for item in group_values)):
@@ -129,17 +129,17 @@ class LogSumExpGradient(Operation):
                 _, _, weights, _ = shifted_normalization(group_values)
             projection = stable_product_sum(
                 [
-                    (float(outer_grad._data[index]), weight)
+                    (float(outer_grad.get_host_values()[index]), weight)
                     for index, weight in zip(group, weights)
                 ]
             )
             grad_values[output_index] = projection
             if at_positive_infinity or not need_value:
                 continue
-            group_grad = float(grad._data[output_index])
+            group_grad = float(grad.get_host_values()[output_index])
             for index, weight in zip(group, weights):
                 value_values[index] = (
-                    group_grad * weight * (float(outer_grad._data[index]) - projection)
+                    group_grad * weight * (float(outer_grad.get_host_values()[index]) - projection)
                 )
         return [
             (

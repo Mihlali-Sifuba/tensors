@@ -33,7 +33,7 @@ def fused_elementwise(
         (value.shape != output_shape for value in values)
     ):
         return None
-    sources = tuple((value._data for value in values))
+    sources = tuple((value.get_host_values() for value in values))
     current = sources[0]
     storages: list[Storage] = []
     functions = {

@@ -59,7 +59,7 @@ class Softmax(Operation):
         before, axis_size, trailing = _axis_layout(a, axis)
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         storage = backend_dispatch.execute_softmax(a, axis, dtype=dtype)
-        return Tensor._from_owned_storage(storage, dtype=dtype, shape=a.shape)
+        return Tensor.from_backend_storage(storage, dtype=dtype, shape=a.shape)
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
@@ -90,12 +90,12 @@ def _normalization_components(value: Tensor, axis: int) -> tuple[Tensor, list[fl
             positions = [
                 group_start + offset + index * trailing for index in range(axis_size)
             ]
-            group_values = [float(value._data[position]) for position in positions]
+            group_values = [float(value.get_host_values()[position]) for position in positions]
             if all((math.isfinite(item) for item in group_values)):
                 _, _, _, group_complements = shifted_normalization(group_values)
             else:
                 group_complements = [
-                    1.0 - float(probabilities._data[position]) for position in positions
+                    1.0 - float(probabilities.get_host_values()[position]) for position in positions
                 ]
             for position, complement in zip(positions, group_complements):
                 complements[position] = complement
@@ -116,10 +116,10 @@ def _centered_softmax_tensor(grad: Tensor, value: Tensor, axis: int) -> Tensor:
                 group_start + offset + index * trailing for index in range(axis_size)
             ]
             for position in positions:
-                terms = [(float(grad._data[position]), complements[position])]
+                terms = [(float(grad.get_host_values()[position]), complements[position])]
                 terms.extend(
                     (
-                        (-float(grad._data[other]), float(probabilities._data[other]))
+                        (-float(grad.get_host_values()[other]), float(probabilities.get_host_values()[other]))
                         for other in positions
                         if other != position
                     )
@@ -131,7 +131,7 @@ def _centered_softmax_tensor(grad: Tensor, value: Tensor, axis: int) -> Tensor:
 def _softmax_vjp_tensor(grad: Tensor, value: Tensor, axis: int) -> Tensor:
     """Return a cancellation-resistant softmax Jacobian-vector product."""
     storage = backend_dispatch.execute_softmax_gradient(grad, value, axis)
-    return Tensor._from_owned_storage(storage, dtype=grad.dtype, shape=value.shape)
+    return Tensor.from_backend_storage(storage, dtype=grad.dtype, shape=value.shape)
 
 
 def _softmax_expectation_tensor(grad: Tensor, value: Tensor, axis: int) -> Tensor:
@@ -149,7 +149,7 @@ def _softmax_expectation_tensor(grad: Tensor, value: Tensor, axis: int) -> Tenso
             ]
             expectation = stable_product_sum(
                 [
-                    (float(grad._data[position]), float(probabilities._data[position]))
+                    (float(grad.get_host_values()[position]), float(probabilities.get_host_values()[position]))
                     for position in positions
                 ]
             )
@@ -189,7 +189,7 @@ class SoftmaxCentered(Operation):
             value_gradient = Tensor(
                 [
                     -scale * derivative
-                    for scale, derivative in zip(expanded_total._data, value_vjp._data)
+                    for scale, derivative in zip(expanded_total.get_host_values(), value_vjp.get_host_values())
                 ],
                 dtype=outer_grad.dtype,
                 shape=value.shape,
@@ -253,7 +253,7 @@ class SoftmaxGradient(Operation):
                         [(float(outer), float(difference)), (-float(item), projection)]
                     )
                     for outer, difference, item, projection in zip(
-                        outer_grad._data, centered._data, grad._data, projections._data
+                        outer_grad.get_host_values(), centered.get_host_values(), grad.get_host_values(), projections.get_host_values()
                     )
                 ],
                 dtype=outer_grad.dtype,

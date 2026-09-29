@@ -579,7 +579,7 @@ class OptimizerSelectedBackendTests(unittest.TestCase):
         )
         forbidden = (
             "Tensor",
-            "._data",
+            ".get_host_values(",
             "tensor_to_logical_array",
             "_working_values",
             ".tolist(",

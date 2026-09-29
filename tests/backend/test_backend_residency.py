@@ -52,7 +52,7 @@ class TaggedStorage(Storage):
 
 
 def tagged_tensor(kind, values):
-    return ts.Tensor._from_owned_storage(
+    return ts.Tensor.from_backend_storage(
         TaggedStorage(kind, values), dtype=ts.float64, shape=(len(values),)
     )
 
@@ -278,7 +278,7 @@ class ResultResidencyTests(BackendTestCase):
         left = tagged_tensor("numpy", [1.0])
         with patch.object(
             ts.Tensor,
-            "_from_owned_storage",
+            "from_backend_storage",
             side_effect=AssertionError("a refused result must not be wrapped"),
         ):
             with selection, loader:

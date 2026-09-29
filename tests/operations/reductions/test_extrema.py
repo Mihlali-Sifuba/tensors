@@ -56,8 +56,8 @@ class ExtremaTests(unittest.TestCase):
         minimum = ts.min(matrix, axis=1)
         maximum = ts.max(matrix, axis=1)
 
-        self.assertTrue(all(math.isnan(item) for item in minimum._data))
-        self.assertTrue(all(math.isnan(item) for item in maximum._data))
+        self.assertTrue(all(math.isnan(item) for item in minimum.get_host_values()))
+        self.assertTrue(all(math.isnan(item) for item in maximum.get_host_values()))
 
     def test_axis_extrema_are_differentiable(self):
         minimum_input = ts.Variable([[1.0, 1.0], [2.0, 3.0]])

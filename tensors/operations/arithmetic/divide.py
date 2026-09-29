@@ -52,11 +52,11 @@ class Div(Operation):
             accelerated = execute_divide(
                 a, b, dtype=dtype, output_shape=shape
             )
-            return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=shape)
+            return Tensor.from_backend_storage(accelerated, dtype=dtype, shape=shape)
         accelerated = execute_divide(
             a, other, dtype=dtype, output_shape=a.shape
         )
-        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=a.shape)
+        return Tensor.from_backend_storage(accelerated, dtype=dtype, shape=a.shape)
 
     def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
         """Route the upstream gradient to both operands.
@@ -127,7 +127,7 @@ class DivisionDenominatorVJP(Operation):
             dtype=grad.dtype,
             output_shape=output_shape,
         )
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated, dtype=grad.dtype, shape=output_shape
         )
     def backward(
@@ -226,4 +226,4 @@ def divide_scalar(numerator: Scalar, denominator: Tensor) -> Tensor:
     accelerated = execute_divide(
         numerator, denominator, dtype=dtype, output_shape=denominator.shape
     )
-    return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=denominator.shape)
+    return Tensor.from_backend_storage(accelerated, dtype=dtype, shape=denominator.shape)

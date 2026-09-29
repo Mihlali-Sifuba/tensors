@@ -201,7 +201,7 @@ class GradientHelperBehaviourTests(unittest.TestCase):
         self.assertEqual(total.shape, (2, 3))
         self.assertEqual(total.size, 6)
         self.assertEqual(
-            [float(total._data[index]) for index in range(total.size)],
+            [float(total.get_host_values()[index]) for index in range(total.size)],
             [0.75] * 6,
         )
 

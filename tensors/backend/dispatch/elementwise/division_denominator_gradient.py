@@ -45,9 +45,9 @@ def execute_division_denominator_gradient(
     backend: Any = load_backend(selected)
 
     if selected == "python":
-        lowered_grad = grad._data
-        lowered_numerator = numerator._data
-        lowered_denominator = denominator._data
+        lowered_grad = grad.get_host_values()
+        lowered_numerator = numerator.get_host_values()
+        lowered_denominator = denominator.get_host_values()
     elif selected == "numpy":
         import numpy
 

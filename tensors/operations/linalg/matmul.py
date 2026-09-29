@@ -64,7 +64,7 @@ def _dot_impl(a: Tensor, b: Tensor) -> Tensor:
     accelerated = execute_matmul(
         a, b, metadata=metadata, dtype=dtype, output_shape=output_shape
     )
-    return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
+    return Tensor.from_backend_storage(accelerated, dtype=dtype, shape=output_shape)
 
 
 class MatMul(Operation):
@@ -98,12 +98,12 @@ class MatMul(Operation):
         a_storage, b_storage = accelerated
         return [
             (
-                Tensor._from_owned_storage(a_storage, dtype=grad.dtype, shape=a.shape)
+                Tensor.from_backend_storage(a_storage, dtype=grad.dtype, shape=a.shape)
                 if a_storage is not None
                 else None
             ),
             (
-                Tensor._from_owned_storage(b_storage, dtype=grad.dtype, shape=b.shape)
+                Tensor.from_backend_storage(b_storage, dtype=grad.dtype, shape=b.shape)
                 if b_storage is not None
                 else None
             ),

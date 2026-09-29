@@ -47,7 +47,7 @@ def _transpose_impl(
         permutation = normalized
     shape = tuple((tensor.shape[axis] for axis in permutation))
     accelerated = execute_transpose(tensor, permutation, output_shape=shape)
-    return Tensor._from_owned_storage(accelerated, dtype=tensor.dtype, shape=shape)
+    return Tensor.from_backend_storage(accelerated, dtype=tensor.dtype, shape=shape)
 
 
 class Transpose(Operation):

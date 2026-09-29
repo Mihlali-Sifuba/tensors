@@ -369,8 +369,8 @@ The folders have deliberately narrow responsibilities:
   it had, since NumPy and CuPy broadcast natively — now read
 
   ```python
-  left_values = broadcast_to(left, output_shape)._data
-  right_values = broadcast_to(right, output_shape)._data
+  left_values = broadcast_to(left, output_shape).get_host_values()
+  right_values = broadcast_to(right, output_shape).get_host_values()
   values = [x + y for x, y in zip(left_values, right_values)]
   ```
 

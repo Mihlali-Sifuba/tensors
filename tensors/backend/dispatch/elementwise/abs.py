@@ -55,7 +55,7 @@ def execute_abs(
             minimum = lower
 
     if selected == "python":
-        lowered = value._data
+        lowered = value.get_host_values()
         unrepresentable = minimum is not None and any(
             item == minimum for item in lowered
         )

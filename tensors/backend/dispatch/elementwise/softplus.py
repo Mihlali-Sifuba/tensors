@@ -46,7 +46,7 @@ def execute_softplus(
     backend: Any = load_backend(selected)
 
     if selected == "python":
-        lowered = value._data
+        lowered = value.get_host_values()
     elif selected == "numpy":
         # Storage owns a flat native buffer and the Tensor owns the layout, so
         # lowering is: take the logical values and give them the Tensor's

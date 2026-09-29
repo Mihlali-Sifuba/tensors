@@ -13,7 +13,7 @@ def validate_distributions(targets: Tensor, axis: int) -> None:
     """Raise unless every row along ``axis`` is a finite probability distribution."""
     _, _, groups = reduction_groups(targets.shape, axis, keepdims=False)
     for group in groups:
-        values = [float(targets._data[index]) for index in group]
+        values = [float(targets.get_host_values()[index]) for index in group]
         if any(
             (not math.isfinite(value) or not 0.0 <= value <= 1.0 for value in values)
         ):

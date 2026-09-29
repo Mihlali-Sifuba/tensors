@@ -22,7 +22,7 @@ def one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Storage | Non
     values = [0.0] * logits.size
     class_count = logits.shape[axis]
     for sample_index in range(sample_count):
-        target = float(targets._data[sample_index])
+        target = float(targets.get_host_values()[sample_index])
         if not math.isfinite(target) or not target.is_integer():
             raise ValueError("Class-index targets must contain integers")
         class_index = int(target)

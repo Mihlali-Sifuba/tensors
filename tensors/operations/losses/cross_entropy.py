@@ -51,7 +51,7 @@ def _one_hot_targets(logits: Tensor, targets: Tensor, axis: int) -> Tensor:
             f"Class-index target shape {targets.shape} does not match logits sample shape {sample_shape}"
         )
     accelerated = execute_one_hot_targets(logits, targets, axis)
-    return Tensor._from_owned_storage(
+    return Tensor.from_backend_storage(
         accelerated, dtype=logits.dtype, shape=logits.shape
     )
 
@@ -79,7 +79,7 @@ def _targets_are_class_indices(logits: Tensor, targets: Tensor, axis: int) -> bo
             return True
         if target_shape != logits.shape:
             return True
-        values = [float(value) for value in targets._data]
+        values = [float(value) for value in targets.get_host_values()]
         if any(
             (not math.isfinite(value) or not value.is_integer() for value in values)
         ):
@@ -181,7 +181,7 @@ class CrossEntropy(Operation):
             dtype=dtype,
             output_shape=result_shape,
         )
-        return Tensor._from_owned_storage(storage, dtype=dtype, shape=result_shape)
+        return Tensor.from_backend_storage(storage, dtype=dtype, shape=result_shape)
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
@@ -241,7 +241,7 @@ class CrossEntropy(Operation):
         return [
             (
                 sum_to_shape(
-                    Tensor._from_owned_storage(
+                    Tensor.from_backend_storage(
                         logits_storage, dtype=grad.dtype, shape=expanded_shape
                     ),
                     logits.shape,
@@ -251,7 +251,7 @@ class CrossEntropy(Operation):
             ),
             (
                 sum_to_shape(
-                    Tensor._from_owned_storage(
+                    Tensor.from_backend_storage(
                         targets_storage, dtype=grad.dtype, shape=expanded_shape
                     ),
                     target_shape,
@@ -313,7 +313,7 @@ class CrossEntropyVJP(Operation):
         storage = storages[0] if self.select_logits else storages[1]
         if storage is None:
             raise RuntimeError("cross-entropy VJP omitted its requested branch")
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             storage, dtype=grad.dtype, shape=expanded_logits.shape
         )
 
@@ -339,10 +339,10 @@ class CrossEntropyVJP(Operation):
             expanded_logits.shape, axis, keepdims=False
         )
         if self.reduction == "none":
-            upstream = [float(value) for value in grad._data]
+            upstream = [float(value) for value in grad.get_host_values()]
         else:
             scale = 1.0 / len(groups) if self.reduction == "mean" and groups else 1.0
-            upstream = [float(grad._data[0]) * scale] * len(groups)
+            upstream = [float(grad.get_host_values()[0]) * scale] * len(groups)
         expanded_upstream = [0.0] * expanded_logits.size
         for output_index, group in enumerate(groups):
             for index in group:
@@ -365,7 +365,7 @@ class CrossEntropyVJP(Operation):
                 local = self.forward(unit, logits, inputs[2])
                 contributions = [
                     math.fsum(
-                        float(outer_grad._data[index]) * float(local._data[index])
+                        float(outer_grad.get_host_values()[index]) * float(local.get_host_values()[index])
                         for index in group
                     )
                     for group in groups
@@ -379,7 +379,7 @@ class CrossEntropyVJP(Operation):
                     [
                         math.fsum(
                             float(outer) * float(value)
-                            for outer, value in zip(outer_grad._data, local._data)
+                            for outer, value in zip(outer_grad.get_host_values(), local.get_host_values())
                         )
                     ],
                     dtype=outer_grad.dtype,
@@ -393,7 +393,7 @@ class CrossEntropyVJP(Operation):
                 masses = [0.0] * expanded_logits.size
                 for group in groups:
                     mass = math.fsum(
-                        float(expanded_targets._data[index]) for index in group
+                        float(expanded_targets.get_host_values()[index]) for index in group
                     )
                     for index in group:
                         masses[index] = mass
@@ -410,13 +410,13 @@ class CrossEntropyVJP(Operation):
                 values = [0.0] * expanded_logits.size
                 for group in groups:
                     expectation = math.fsum(
-                        float(outer_grad._data[index])
-                        * float(probabilities._data[index])
+                        float(outer_grad.get_host_values()[index])
+                        * float(probabilities.get_host_values()[index])
                         for index in group
                     )
                     for index in group:
                         values[index] = (
-                            expectation - float(outer_grad._data[index])
+                            expectation - float(outer_grad.get_host_values()[index])
                         ) * expanded_upstream[index]
                 targets_partial = sum_to_shape(
                     Tensor(

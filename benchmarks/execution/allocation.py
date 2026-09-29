@@ -271,7 +271,7 @@ def _cache_cases(backend: str, size: int) -> list[Case]:
     def populate_all() -> None:
         value = holder["value"]
         for kind in ts.available_backends():
-            value._storage_for(kind)
+            value._logical_storage_for(kind)
 
     return [
         Case(

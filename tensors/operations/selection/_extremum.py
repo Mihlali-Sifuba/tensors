@@ -46,7 +46,7 @@ class _ElementwiseExtremum(Operation):
         return [
             (
                 sum_to_shape(
-                    Tensor._from_owned_storage(
+                    Tensor.from_backend_storage(
                         left_storage, dtype=grad.dtype, shape=grad.shape
                     ),
                     left.shape,
@@ -56,7 +56,7 @@ class _ElementwiseExtremum(Operation):
             ),
             (
                 sum_to_shape(
-                    Tensor._from_owned_storage(
+                    Tensor.from_backend_storage(
                         right_storage, dtype=grad.dtype, shape=grad.shape
                     ),
                     right.shape,

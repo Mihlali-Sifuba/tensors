@@ -525,7 +525,7 @@ class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
                 ).read_text(encoding="utf-8")
                 for forbidden in (
                     "Tensor",
-                    "._data",
+                    ".get_host_values(",
                     "tensor_to_logical_array",
                     "get_backend",
                 ):

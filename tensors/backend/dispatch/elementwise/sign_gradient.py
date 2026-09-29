@@ -39,8 +39,8 @@ def execute_sign_gradient(
     backend: Any = load_backend(selected)
 
     if selected == "python":
-        lowered_grad = grad._data
-        lowered_value = value._data
+        lowered_grad = grad.get_host_values()
+        lowered_value = value.get_host_values()
     elif selected == "numpy":
         # Storage owns a flat native buffer and the Tensor owns the layout,
         # so lowering is: take the logical values and give them the Tensor's

@@ -120,11 +120,11 @@ def _construction_cases(backend: str, size: int, dtype_name: str) -> list[Case]:
         cases.append(
             Case(
                 name=f"storage.from_owned_storage/{dtype_name}/{size}",
-                run=lambda: ts.Tensor._from_owned_storage(
+                run=lambda: ts.Tensor.from_backend_storage(
                     storage, dtype=dtype, shape=Shape.from_iterable(shape)
                 ),
                 layer="storage",
-                validate=lambda: ts.Tensor._from_owned_storage(
+                validate=lambda: ts.Tensor.from_backend_storage(
                     storage, dtype=dtype, shape=Shape.from_iterable(shape)
                 ),
                 description="the internal path every accelerated operation ends with: adopt a provider result without copying it",
@@ -195,7 +195,7 @@ def _conversion_cases(backend: str, size: int, dtype_name: str) -> list[Case]:
         def run_first(
             holder: dict[str, ts.Tensor] = holder, target_kind: str = target_kind
         ) -> Any:
-            return holder["value"]._storage_for(target_kind)
+            return holder["value"]._logical_storage_for(target_kind)
 
         first_common = common(f"first_lookup_{target_kind}")
         cases.append(
@@ -212,15 +212,15 @@ def _conversion_cases(backend: str, size: int, dtype_name: str) -> list[Case]:
             )
         )
         warm = tensor(shape, dtype_name=dtype_name, kind="ramp")
-        warm._storage_for(target_kind)
+        warm._logical_storage_for(target_kind)
         cases.append(
             Case(
                 name=f"storage.cached_lookup/{target_kind}/{dtype_name}/{size}",
-                run=lambda warm=warm, target_kind=target_kind: warm._storage_for(
+                run=lambda warm=warm, target_kind=target_kind: warm._logical_storage_for(
                     target_kind
                 ),
                 layer="storage",
-                validate=lambda warm=warm, target_kind=target_kind: warm._storage_for(
+                validate=lambda warm=warm, target_kind=target_kind: warm._logical_storage_for(
                     target_kind
                 ),
                 description=f"repeated request for an already-cached {target_kind} representation",
@@ -228,7 +228,7 @@ def _conversion_cases(backend: str, size: int, dtype_name: str) -> list[Case]:
             )
         )
     base = tensor(shape, dtype_name=dtype_name, kind="ramp")
-    native_storage = base._storage_for(native_kind)
+    native_storage = base._logical_storage_for(native_kind)
     for target_kind in ("python", "numpy", "cuda"):
         if target_kind == native_kind:
             continue
@@ -287,7 +287,7 @@ def _conversion_cases(backend: str, size: int, dtype_name: str) -> list[Case]:
     def reset_invalidation() -> None:
         value = tensor(shape, dtype_name=dtype_name, kind="ramp")
         for kind in ts.available_backends():
-            value._storage_for(kind)
+            value._logical_storage_for(kind)
         invalidation_holder["value"] = value
 
     def run_invalidation() -> None:

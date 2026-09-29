@@ -31,7 +31,7 @@ class Sqrt(Operation):
         """
         dtype = a.dtype if a.dtype.typecode in {"f", "d"} else float64
         output_shape = a.shape
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             backend_dispatch.execute_sqrt(a, dtype=dtype, output_shape=output_shape),
             dtype=dtype,
             shape=output_shape,
@@ -51,7 +51,7 @@ class Sqrt(Operation):
         dtype = value.dtype
         output_shape = value.shape
         return [
-            Tensor._from_owned_storage(
+            Tensor.from_backend_storage(
                 backend_dispatch.execute_sqrt_gradient(
                     grad, value, dtype=dtype, output_shape=output_shape
                 ),

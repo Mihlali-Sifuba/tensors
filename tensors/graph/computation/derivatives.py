@@ -132,7 +132,7 @@ def _assemble_rows(
 
     values = []
     for row in rows:
-        values.extend(row.data._data if isinstance(row, Variable) else row._data)
+        values.extend(row.data.get_host_values() if isinstance(row, Variable) else row.get_host_values())
     return Tensor(values, dtype=rows[0].dtype, shape=shape)
 
 

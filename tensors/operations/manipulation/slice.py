@@ -66,7 +66,7 @@ class SliceScatter(Operation):
                 f"Slice gradient has {grad.size} values; expected {selection_shape.size}"
             )
         accelerated = execute_slice_scatter(grad, selected, output_shape=source_shape)
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated, dtype=grad.dtype, shape=source_shape
         )
 

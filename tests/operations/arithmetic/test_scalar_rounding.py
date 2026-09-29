@@ -401,7 +401,7 @@ class TheGraphRecordsTheConvertedScalar(S3TestCase):
         import tensors.tensor as tensor_module
 
         expected = _spec.round_to_format(REPORTED_EXPONENT, "float32")
-        original = tensor_module.Tensor._from_values.__func__
+        original = tensor_module.Tensor.from_elements.__func__
         recorded = []
 
         def recording(cls, values, dtype, shape):
@@ -410,7 +410,7 @@ class TheGraphRecordsTheConvertedScalar(S3TestCase):
 
         with ts.use_backend("python"):
             variable = ts.Variable(tensor("float32", [1.0]), requires_grad=False)
-            tensor_module.Tensor._from_values = classmethod(recording)
+            tensor_module.Tensor.from_elements = classmethod(recording)
             try:
                 for label, build in self.expressions().items():
                     recorded.clear()
@@ -421,7 +421,7 @@ class TheGraphRecordsTheConvertedScalar(S3TestCase):
                             for value in values:
                                 self.assertScalarIs(value, expected, label)
             finally:
-                tensor_module.Tensor._from_values = classmethod(original)
+                tensor_module.Tensor.from_elements = classmethod(original)
 
     def test_replay_matches_eager(self):
         from tensors.graph import Computation
@@ -518,7 +518,7 @@ class ConversionInspectsNoTensor(S3TestCase):
         import tensors.tensor as tensor_module
 
         reads = 0
-        original = tensor_module.Tensor._data.fget
+        original = tensor_module.Tensor.get_host_values
 
         def counted(self):
             nonlocal reads
@@ -527,7 +527,7 @@ class ConversionInspectsNoTensor(S3TestCase):
 
         with ts.use_backend("cuda"):
             base = ts.full((4096,), 1.5, dtype=ts.float32) + 0.0
-            tensor_module.Tensor._data = property(counted)
+            tensor_module.Tensor.get_host_values = counted
             try:
                 for value in INEXACT:
                     for form in (
@@ -542,7 +542,7 @@ class ConversionInspectsNoTensor(S3TestCase):
                             type(result.backend_storage).__name__, "CudaStorage"
                         )
             finally:
-                tensor_module.Tensor._data = property(original)
+                tensor_module.Tensor.get_host_values = original
         self.assertEqual(reads, 0, "scalar conversion materialised a tensor")
 
 

@@ -22,8 +22,8 @@ class NumPyStorageTests(unittest.TestCase):
 
         value = ts.Tensor([1.0, 2.0, 3.0])
         original = value.backend_storage
-        first = value._storage_for("numpy")
-        second = value._storage_for("numpy")
+        first = value._logical_storage_for("numpy")
+        second = value._logical_storage_for("numpy")
         self.assertIs(first, second)
         self.assertIs(value.backend_storage, original)
         host_view = numpy.frombuffer(

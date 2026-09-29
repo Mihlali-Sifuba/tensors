@@ -27,28 +27,28 @@ def sum_products_to_shape(
     if expanded_gradient.shape == target:
         values = [
             stable_product_sum([(float(left), float(right))])
-            for left, right in zip(expanded_gradient._data, expanded_factor._data)
+            for left, right in zip(expanded_gradient.get_host_values(), expanded_factor.get_host_values())
         ]
-        return Tensor._from_values(values, gradient.dtype, target).backend_storage
+        return Tensor.from_elements(values, gradient.dtype, target).backend_storage
     if target.size == 1:
         values = [
             stable_product_sum(
                 [
                     (float(left), float(right))
                     for left, right in zip(
-                        expanded_gradient._data, expanded_factor._data
+                        expanded_gradient.get_host_values(), expanded_factor.get_host_values()
                     )
                 ]
             )
         ]
-        return Tensor._from_values(values, gradient.dtype, target).backend_storage
+        return Tensor.from_elements(values, gradient.dtype, target).backend_storage
     padded_shape = (1,) * (expanded_gradient.ndim - len(shape)) + shape
     padding = expanded_gradient.ndim - len(shape)
     groups: list[list[tuple[float, float]]] = [
         [] for _ in range(Shape.from_iterable(shape).size)
     ]
     for index, (left, right) in enumerate(
-        zip(expanded_gradient._data, expanded_factor._data)
+        zip(expanded_gradient.get_host_values(), expanded_factor.get_host_values())
     ):
         coordinates = linear_index_to_coordinates(index, expanded_gradient.shape)
         source_coordinates = tuple(

@@ -29,7 +29,7 @@ def execute_arctanh(
     if selected == "python":
         import math
 
-        lowered = value._data
+        lowered = value.get_host_values()
         outside = any(
             not math.isnan(float(item)) and not -1.0 < item < 1.0 for item in lowered
         )

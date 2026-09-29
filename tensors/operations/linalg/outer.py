@@ -25,7 +25,7 @@ class Outer(Operation):
             raise ValueError("outer requires two 1D vectors")
         dtype = result_dtype(a.dtype, b)
         accelerated = execute_outer(a, b, dtype=dtype, output_shape=(a.size, b.size))
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated, dtype=dtype, shape=(a.size, b.size)
         )
 
@@ -45,14 +45,14 @@ class Outer(Operation):
         left_storage, right_storage = accelerated
         return [
             (
-                Tensor._from_owned_storage(
+                Tensor.from_backend_storage(
                     left_storage, dtype=grad.dtype, shape=left.shape
                 )
                 if left_storage is not None
                 else None
             ),
             (
-                Tensor._from_owned_storage(
+                Tensor.from_backend_storage(
                     right_storage, dtype=grad.dtype, shape=right.shape
                 )
                 if right_storage is not None

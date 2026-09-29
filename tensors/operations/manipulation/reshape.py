@@ -43,7 +43,7 @@ class Reshape(Operation):
         # Reshape returns an independently owned compact tensor, and the
         # gather may have handed back the source's own storage when it was
         # already compact, so the result takes its own copy.
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             storage.copy(), dtype=tensor.dtype, shape=shape
         )
 

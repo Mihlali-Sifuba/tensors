@@ -41,7 +41,7 @@ class Sum(Operation):
         accelerated = backend_dispatch.execute_reduce_sum(
             a, axes, keepdims=keepdims, dtype=a.dtype, output_shape=output_shape
         )
-        return Tensor._from_owned_storage(
+        return Tensor.from_backend_storage(
             accelerated, dtype=a.dtype, shape=output_shape
         )
 

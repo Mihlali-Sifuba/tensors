@@ -44,7 +44,7 @@ class TaggedStorage(Storage):
 
 
 def tagged_tensor(kind, values, dtype=ts.float64):
-    return ts.Tensor._from_owned_storage(
+    return ts.Tensor.from_backend_storage(
         TaggedStorage(kind, values, dtype), dtype=dtype, shape=(len(values),)
     )
 

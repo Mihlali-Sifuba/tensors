@@ -28,8 +28,8 @@ def execute_tan_gradient(
     backend: Any = load_backend(selected)
 
     if selected == "python":
-        lowered_grad = grad._data
-        lowered_value = value._data
+        lowered_grad = grad.get_host_values()
+        lowered_value = value.get_host_values()
         import math
 
         invalid = any(math.isinf(float(item)) for item in lowered_value)

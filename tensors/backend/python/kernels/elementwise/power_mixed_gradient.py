@@ -68,7 +68,7 @@ def power_mixed_gradient(
             float(outer_value), float(upstream), float(base_value), float(power)
         )
         for outer_value, upstream, base_value, power in zip(
-            outer._data, grad._data, base._data, exponent._data
+            outer.get_host_values(), grad.get_host_values(), base.get_host_values(), exponent.get_host_values()
         )
     ]
     return PythonStorage.from_values(values, dtype)

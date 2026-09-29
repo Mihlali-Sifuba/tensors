@@ -48,14 +48,14 @@ def execute_subtract(
         left_is_tensor = isinstance(left, Tensor)
         right_is_tensor = isinstance(right, Tensor)
         if left_is_tensor and right_is_tensor:
-            lowered_left = broadcast_to(left, output_shape)._data
-            lowered_right = broadcast_to(right, output_shape)._data
+            lowered_left = broadcast_to(left, output_shape).get_host_values()
+            lowered_right = broadcast_to(right, output_shape).get_host_values()
         elif left_is_tensor:
-            lowered_left = left._data
+            lowered_left = left.get_host_values()
             lowered_right = repeat(right)
         elif right_is_tensor:
             lowered_left = repeat(left)
-            lowered_right = right._data
+            lowered_right = right.get_host_values()
         else:
             lowered_left = (left,)
             lowered_right = (right,)

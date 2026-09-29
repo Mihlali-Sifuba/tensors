@@ -97,7 +97,7 @@ class NumPyLayoutTests(NumPyParityTestCase):
             self.assertEqual(actual_tensor.shape, expected_tensor.shape)
             self.assertIs(actual_tensor.dtype, expected_tensor.dtype)
             for actual_item, expected_item in zip(
-                actual_tensor._data, expected_tensor._data
+                actual_tensor.get_host_values(), expected_tensor.get_host_values()
             ):
                 self.assertAlmostEqual(actual_item, expected_item)
 

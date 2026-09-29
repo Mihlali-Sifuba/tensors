@@ -42,7 +42,7 @@ class Mean(Operation):
         accelerated = backend_dispatch.execute_reduce_mean(
             a, axes, keepdims=keepdims, dtype=dtype, output_shape=output_shape
         )
-        return Tensor._from_owned_storage(accelerated, dtype=dtype, shape=output_shape)
+        return Tensor.from_backend_storage(accelerated, dtype=dtype, shape=output_shape)
 
     def backward(
         self, grad: Tensor, *inputs: Tensor, needs_input_grad: tuple[bool, ...]
@@ -65,7 +65,7 @@ class Mean(Operation):
             grad, a, axes, keepdims=keepdims
         )
         return [
-            Tensor._from_owned_storage(accelerated, dtype=grad.dtype, shape=a.shape)
+            Tensor.from_backend_storage(accelerated, dtype=grad.dtype, shape=a.shape)
         ]
 
 

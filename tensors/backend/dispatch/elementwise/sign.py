@@ -39,13 +39,13 @@ def execute_sign(
     backend: Any = load_backend(selected)
 
     if selected == "python":
-        lowered = value._data
+        lowered = value.get_host_values()
     elif selected == "numpy":
         # Storage owns a flat native buffer and the Tensor owns the layout, so
         # lowering is: take the logical values and give them the Tensor's
         # shape. Sign is unary, so there is no scalar or broadcasting case.
         #
-        # No cast belongs here. Sign preserves dtype, `_set_storage` holds a
+        # No cast belongs here. Sign preserves dtype, `assign_backend_storage` holds a
         # Tensor's storage dtype equal to its own, and `_logical_storage_for`
         # preserves it, so the buffer already carries the declared dtype.
         storage = value._logical_storage_for("numpy")

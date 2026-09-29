@@ -267,7 +267,7 @@ class Variable:
             operand = Variable(other, requires_grad=False)
         else:
             operand = Variable(
-                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
+                Tensor.from_elements((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -293,7 +293,7 @@ class Variable:
             operand = Variable(other, requires_grad=False)
         else:
             operand = Variable(
-                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
+                Tensor.from_elements((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -326,7 +326,7 @@ class Variable:
             operand = Variable(other, requires_grad=False)
         else:
             operand = Variable(
-                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
+                Tensor.from_elements((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -353,7 +353,7 @@ class Variable:
             operand = Variable(other, requires_grad=False)
         else:
             operand = Variable(
-                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
+                Tensor.from_elements((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -374,7 +374,7 @@ class Variable:
             numerator = Variable(other, requires_grad=False)
         else:
             numerator = Variable(
-                Tensor._from_values((converted,), dtype, _SCALAR_SHAPE),
+                Tensor.from_elements((converted,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -397,7 +397,7 @@ class Variable:
             exponent = Variable(other, requires_grad=False)
         else:
             exponent = Variable(
-                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                Tensor.from_elements((other,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
@@ -421,7 +421,7 @@ class Variable:
             base = Variable(other, requires_grad=False)
         else:
             base = Variable(
-                Tensor._from_values((other,), dtype, _SCALAR_SHAPE),
+                Tensor.from_elements((other,), dtype, _SCALAR_SHAPE),
                 requires_grad=False,
             )
 
