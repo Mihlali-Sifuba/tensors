@@ -874,6 +874,12 @@ class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
             gradient_module = importlib.import_module(
                 f"tensors.backend.{backend}.kernels.convolution.convolution_gradient"
             )
+            # The fused CUDA kernel reduces each tile in one call.
+            reduction = (
+                "pairwise_indexed_product_sum"
+                if backend == "cuda"
+                else "pairwise_float_sum"
+            )
             with (
                 self.subTest(backend=backend),
                 patch.object(common, "_CONVOLUTION_COLUMN_MAX_ELEMENTS", 4),
@@ -891,8 +897,8 @@ class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
                 grad = ts.Tensor([1.0] * 8, shape=output.shape)
                 with patch.object(
                     gradient_module,
-                    "pairwise_float_sum",
-                    wraps=gradient_module.pairwise_float_sum,
+                    reduction,
+                    wraps=getattr(gradient_module, reduction),
                 ) as certified:
                     backend_dispatch.execute_convolution_gradient(
                         grad,
@@ -908,8 +914,8 @@ class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
                 self.assertGreaterEqual(certified.call_count, 2)
                 with patch.object(
                     gradient_module,
-                    "pairwise_float_sum",
-                    wraps=gradient_module.pairwise_float_sum,
+                    reduction,
+                    wraps=getattr(gradient_module, reduction),
                 ) as certified:
                     backend_dispatch.execute_convolution_gradient(
                         grad,

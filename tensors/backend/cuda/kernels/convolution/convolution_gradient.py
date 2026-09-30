@@ -22,16 +22,21 @@ cached map by broadcast additions. Plans are CuPy arrays built on the device, an
 arrays of ``input_positions * kernel_offsets`` or ``kernel_offsets *
 output_positions`` elements; for LeNet-5's layers that is under 0.5 MiB.
 
+**Fused reduction.** Each tile's rows are reduced by
+:func:`~tensors.backend.cuda.kernels.reductions.fused_pairwise.pairwise_indexed_product_sum`,
+which gathers both factors, forms the rounded products, classifies them and
+runs the specified pairwise tree in shared memory, in one kernel launch for
+rows of up to 1024 terms and one more per further factor of 1024. The
+gathered factors, the products and the tree levels are never materialised.
+
 **Temporary memory** is bounded per tile in bytes: ``16 * E``, where ``E``
 is ``_CONVOLUTION_COLUMN_MAX_ELEMENTS``, so 64 MiB at the default ``E`` of
-4 Mi. Each term of a tile costs its two flat 64-bit gather indices and four
-values — the two gathered factors, the product, and the pairwise tree's
-levels, which together hold fewer values than the products — so a tile holds
-``T = 16 * E // (width * (16 + 4 * itemsize))`` destinations, where
-``width`` is the number of terms per destination: about 2 Mi terms for
-float32 and 1.4 Mi for float64. The zero-slotted operand copies add one copy
-of the upstream gradient and of the kernel or input, which are small next to
-a tile.
+4 Mi. Each term of a tile costs only its two flat 64-bit gather indices, so a
+tile holds ``T = 16 * E // (width * 16)`` destinations, about 4 Mi terms;
+the fused reduction adds 16 KiB (float32) or 24 KiB (float64) of shared
+memory per block and, for rows wider than 1024 terms, one value and one flag
+per 1024-term chunk. The zero-slotted operand copies add one copy of the
+upstream gradient and of the kernel or input.
 """
 
 from __future__ import annotations
@@ -47,7 +52,9 @@ from tensors.backend.cuda.conversion import _errstate
 from tensors.backend.cuda.kernels.convolution import common as convolution_common
 from tensors.backend.cuda.kernels.convolution.common import _convolution_operands
 from tensors.backend.cuda.kernels.convolution.common import _convolution_storage
-from tensors.backend.cuda.kernels.reductions.pairwise import _multiply
+from tensors.backend.cuda.kernels.reductions.fused_pairwise import (
+    pairwise_indexed_product_sum,
+)
 from tensors.backend.cuda.kernels.reductions.pairwise import (
     pairwise_float_sum,
     to_declared_dtype,
@@ -77,13 +84,14 @@ def _row_major_strides(shape: tuple[int, ...]) -> Any:
 def _tile_size(width: int, itemsize: int) -> int:
     """Destinations per tile, so one tile's working set stays within budget.
 
-    The budget is in bytes: ``16 * _CONVOLUTION_COLUMN_MAX_ELEMENTS``. Each
-    term costs its two 64-bit gather indices plus four values of ``itemsize``
-    bytes — the two gathered factors, the product, and the pairwise tree's
-    levels, which together hold fewer values than the products.
+    The budget is in bytes: ``16 * _CONVOLUTION_COLUMN_MAX_ELEMENTS``. The
+    fused reduction never materialises factors, products or tree levels, so
+    each term costs only its two 64-bit gather indices; ``itemsize`` is kept
+    so the NumPy and CUDA policies share one signature.
     """
+    del itemsize
     budget = 16 * convolution_common._CONVOLUTION_COLUMN_MAX_ELEMENTS
-    per_term = 2 * 8 + 4 * itemsize
+    per_term = 2 * 8
     return max(1, budget // (max(width, 1) * per_term))
 
 
@@ -233,10 +241,13 @@ def _input_vjp(
         ) * (offset_count + 1)
         upstream_index = upstream_row[:, None, :] + upstream_slot[position][:, :, None]
         kernel_index = kernel_row[:, None, :] + kernel_slot[position][:, :, None]
-        left = cupy.take(upstream_rows, upstream_index.reshape(count, width))
-        right = cupy.take(kernel_rows, kernel_index.reshape(count, width))
-        products = _multiply(left, right)
-        destinations[start:stop] = pairwise_float_sum(products, (1,)).reshape(count)
+        destinations[start:stop] = pairwise_indexed_product_sum(
+            upstream_rows,
+            kernel_rows,
+            upstream_index.reshape(count, width),
+            kernel_index.reshape(count, width),
+        )
+        del upstream_index, kernel_index
 
 
 def _kernel_vjp(
@@ -292,10 +303,13 @@ def _kernel_vjp(
         )
         upstream_index = upstream_row[:, :, None] + upstream_slot[offset][:, None, :]
         input_index = input_row[:, :, None] + input_slot[offset][:, None, :]
-        left = cupy.take(upstream_rows, upstream_index.reshape(count, width))
-        right = cupy.take(input_rows, input_index.reshape(count, width))
-        products = _multiply(left, right)
-        destinations[start:stop] = pairwise_float_sum(products, (1,)).reshape(count)
+        destinations[start:stop] = pairwise_indexed_product_sum(
+            upstream_rows,
+            input_rows,
+            upstream_index.reshape(count, width),
+            input_index.reshape(count, width),
+        )
+        del upstream_index, input_index
 
 
 def convolution_gradient(
