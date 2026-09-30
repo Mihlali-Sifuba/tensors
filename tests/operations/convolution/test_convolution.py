@@ -891,8 +891,8 @@ class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
                 grad = ts.Tensor([1.0] * 8, shape=output.shape)
                 with patch.object(
                     gradient_module,
-                    "pairwise_matmul",
-                    wraps=gradient_module.pairwise_matmul,
+                    "pairwise_float_sum",
+                    wraps=gradient_module.pairwise_float_sum,
                 ) as certified:
                     backend_dispatch.execute_convolution_gradient(
                         grad,
@@ -908,8 +908,8 @@ class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
                 self.assertGreaterEqual(certified.call_count, 2)
                 with patch.object(
                     gradient_module,
-                    "pairwise_matmul",
-                    wraps=gradient_module.pairwise_matmul,
+                    "pairwise_float_sum",
+                    wraps=gradient_module.pairwise_float_sum,
                 ) as certified:
                     backend_dispatch.execute_convolution_gradient(
                         grad,

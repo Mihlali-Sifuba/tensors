@@ -107,9 +107,10 @@ def pairwise_float_sum(values: Any, axes: tuple[int, ...]) -> Any:
         return cupy.zeros(keepdims_shape, dtype=values.dtype)
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
         tree = _pairwise_last_axis(grouped)
-        nan = cupy.any(cupy.isnan(grouped), axis=-1)
-        positive_infinity = cupy.any(cupy.isposinf(grouped), axis=-1)
-        negative_infinity = cupy.any(cupy.isneginf(grouped), axis=-1)
+        classes = _nonfinite_classes(grouped)
+        nan = (classes & 1) != 0
+        positive_infinity = (classes & 2) != 0
+        negative_infinity = (classes & 4) != 0
         result = cupy.where(
             nan | (positive_infinity & negative_infinity),
             cupy.array(cupy.nan, dtype=values.dtype),
@@ -127,6 +128,32 @@ def pairwise_float_sum(values: Any, axes: tuple[int, ...]) -> Any:
             _is_zero(result), cupy.zeros((), dtype=values.dtype), result
         )
     return cupy.asarray(result, dtype=values.dtype).reshape(keepdims_shape)
+
+
+_CLASSIFY: Any = None
+
+
+def _nonfinite_classes(grouped: Any) -> Any:
+    """Classify each group's non-finite inputs in one device pass.
+
+    Each element maps to a bit — 1 for NaN, 2 for ``+inf``, 4 for ``-inf`` —
+    and the bits of a group are combined with bitwise OR, which is exact and
+    order-independent. One fused reduction replaces three elementwise scans
+    and three reductions over the whole group array, and reads nothing back
+    to the host.
+    """
+    global _CLASSIFY
+    if _CLASSIFY is None:
+        _CLASSIFY = cupy.ReductionKernel(
+            "T x",
+            "int32 y",
+            "isnan(x) ? 1 : (isinf(x) ? (x > 0 ? 2 : 4) : 0)",
+            "a | b",
+            "y = a",
+            "0",
+            "tensors_nonfinite_classes",
+        )
+    return _CLASSIFY(grouped, axis=-1)
 
 
 def _is_zero(values: Any) -> Any:

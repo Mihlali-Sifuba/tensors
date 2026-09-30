@@ -16,6 +16,7 @@ against it bit for bit, never against another backend.
 """
 
 import ast
+import importlib
 import itertools
 import math
 import random
@@ -248,6 +249,146 @@ class ConvolutionGradientTermTests(unittest.TestCase):
                     shape=(1,),
                 ).item()
                 self.assertEqual(math.copysign(1.0, zero), 1.0)
+
+
+def _run(backend, grad, inputs, kernel, geometry, shapes, dtype, needs=(True, True, True)):
+    """One gradient call through dispatch; results as host lists."""
+    input_shape, kernel_shape, grad_shape = shapes
+    with ts.use_backend(backend):
+        storages = backend_dispatch.execute_convolution_gradient(
+            ts.Tensor(grad, dtype=dtype, shape=grad_shape),
+            ts.Tensor(inputs, dtype=dtype, shape=input_shape),
+            ts.Tensor(kernel, dtype=dtype, shape=kernel_shape),
+            stride=geometry["stride"],
+            padding=geometry["padding"],
+            dilation=geometry["dilation"],
+            groups=geometry["groups"],
+            include_bias=True,
+            needs_input_grad=needs,
+        )
+        return [
+            None
+            if storage is None
+            else ts.Tensor.from_backend_storage(storage, dtype=dtype, shape=(storage.size,)).tolist()
+            for storage in storages
+        ]
+
+
+def _case(rng, *, spatial, kernel_spatial, stride, padding, dilation, groups, in_ch, out_ch, batch, dtype):
+    rank = len(spatial)
+    output_spatial = tuple(
+        (n + 2 * padding - dilation * (k - 1) - 1) // stride + 1
+        for n, k in zip(spatial, kernel_spatial)
+    )
+    geometry = dict(
+        batch=batch, in_channels=in_ch, spatial=spatial, out_channels=out_ch,
+        kernel_spatial=kernel_spatial, output_spatial=output_spatial,
+        stride=(stride,) * rank, padding=(padding,) * rank, dilation=(dilation,) * rank,
+        groups=groups,
+    )
+    draw = lambda count: [round32(rng.uniform(-2, 2)) if dtype is ts.float32 else rng.uniform(-2, 2) for _ in range(count)]  # noqa: E731
+    inputs = draw(batch * in_ch * math.prod(spatial))
+    kernel = draw(out_ch * (in_ch // groups) * math.prod(kernel_spatial))
+    grad = draw(batch * out_ch * math.prod(output_spatial))
+    shapes = (
+        (batch, in_ch) + spatial,
+        (out_ch, in_ch // groups) + kernel_spatial,
+        (batch, out_ch) + output_spatial,
+    )
+    return grad, inputs, kernel, geometry, shapes
+
+
+class GeometryCacheTests(unittest.TestCase):
+    """Cached index plans never leak between geometries."""
+
+    BASE = dict(
+        spatial=(7, 6), kernel_spatial=(3, 2), stride=1, padding=1, dilation=1,
+        groups=2, in_ch=4, out_ch=4, batch=2,
+    )
+    VARIANTS = {
+        "stride": dict(stride=2),
+        "padding": dict(padding=2),
+        "dilation": dict(dilation=2),
+        "groups": dict(groups=1),
+        "input size": dict(spatial=(8, 6)),
+        "kernel size": dict(kernel_spatial=(2, 3)),
+        "batch size": dict(batch=3),
+    }
+
+    def test_changing_one_key_component_uses_the_matching_plan(self):
+        rng = random.Random(8)
+        for dtype in (ts.float32, ts.float64):
+            base = _case(rng, dtype=dtype, **self.BASE)
+            base_expected = oracle(base[0], base[1], base[2], base[3], dtype.name)
+            for name, change in self.VARIANTS.items():
+                variant = _case(rng, dtype=dtype, **{**self.BASE, **change})
+                variant_expected = oracle(variant[0], variant[1], variant[2], variant[3], dtype.name)
+                for backend in ts.available_backends():
+                    # Interleave so each call runs with the other's plan cached.
+                    for label, (grad, inputs, kernel, geometry, shapes), expected in (
+                        ("base", base, base_expected),
+                        (name, variant, variant_expected),
+                        ("base again", base, base_expected),
+                        (name + " again", variant, variant_expected),
+                    ):
+                        with self.subTest(dtype=dtype.name, backend=backend, call=label):
+                            produced = _run(backend, grad, inputs, kernel, geometry, shapes, dtype)
+                            for got, want in zip(produced, expected):
+                                self.assertEqual(
+                                    [_bits(v, dtype) for v in got],
+                                    [_bits(v, dtype) for v in want],
+                                )
+
+    def test_plans_are_backend_resident_and_reused(self):
+        rng = random.Random(9)
+        grad, inputs, kernel, geometry, shapes = _case(rng, dtype=ts.float64, **self.BASE)
+        for backend in ts.available_backends():
+            if backend == "python":
+                continue
+            with self.subTest(backend=backend):
+                module = importlib.import_module(
+                    f"tensors.backend.{backend}.kernels.convolution.convolution_gradient"
+                )
+                array_type = importlib.import_module(
+                    "numpy" if backend == "numpy" else "cupy"
+                ).ndarray
+                _run(backend, grad, inputs, kernel, geometry, shapes, ts.float64)
+                input_before = module._input_plan.cache_info()
+                kernel_before = module._kernel_plan.cache_info()
+                for _ in range(3):
+                    _run(backend, grad, inputs, kernel, geometry, shapes, ts.float64)
+                input_after = module._input_plan.cache_info()
+                kernel_after = module._kernel_plan.cache_info()
+                self.assertEqual(input_after.misses, input_before.misses)
+                self.assertEqual(kernel_after.misses, kernel_before.misses)
+                self.assertEqual(input_after.hits, input_before.hits + 3)
+                self.assertEqual(kernel_after.hits, kernel_before.hits + 3)
+                self.assertLessEqual(input_after.currsize, module._PLAN_CACHE_ENTRIES)
+                key = (
+                    geometry["spatial"], geometry["kernel_spatial"], geometry["output_spatial"],
+                    geometry["stride"], geometry["padding"], geometry["dilation"],
+                )
+                if backend == "cuda":
+                    import cupy
+
+                    key = key + (cupy.cuda.Device().id,)
+                for plan in (module._input_plan(*key), module._kernel_plan(*key)):
+                    for array in plan:
+                        self.assertIsInstance(array, array_type)
+
+    def test_cuda_helpers_read_nothing_back_to_the_host(self):
+        path = (
+            Path(ts.__file__).parent / "backend" / "cuda" / "kernels" / "convolution"
+            / "convolution_gradient.py"
+        )
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name in {
+                "_input_plan", "_kernel_plan", "_input_vjp", "_kernel_vjp", "_with_zero_slot",
+            }:
+                source = ast.unparse(node)
+                for forbidden in ("asnumpy", ".get(", ".item(", ".tolist(", "bool("):
+                    self.assertNotIn(forbidden, source, node.name)
 
 
 class VectorisedTermConstructionTests(unittest.TestCase):

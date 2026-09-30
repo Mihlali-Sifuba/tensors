@@ -2,27 +2,40 @@
 
 Each gradient element is the pairwise sum of a fixed sequence of product
 terms (docs/summation-semantics.md section 11). The sequences are built for a
-tile of destinations at once with native index arithmetic and gathers; Python
-only iterates over tiles. Terms that contribute nothing are set to exact zero
-in place, never removed, because the pairwise tree is defined over the whole
-sequence.
+tile of destinations at once by gathering both factors with flat indices;
+Python only iterates over tiles.
 
-Temporary memory is bounded per tile by ``_CONVOLUTION_COLUMN_MAX_ELEMENTS``
-(``E``). A tile holds ``T = E // max(width, offsets * rank)`` destinations for
-the input VJP and ``T = E // max(width, positions * rank)`` for the kernel
-VJP, where ``width`` is the number of terms per destination. The principal
-arrays per tile are:
+**Zero slots.** Each operand is viewed as rows (one per batch and channel)
+and given one extra element per row that holds ``+0``. A term that
+contributes nothing indexes that slot for both of its factors, so it is an
+exact ``+0 * +0`` term in its place in the sequence, as the specification
+requires, without a separate masking pass and without removing it.
 
-- integer coordinates, numerators and positions: ``(T, offsets, rank)`` or
-  ``(T, positions, rank)``, at most ``E`` elements each;
-- the two gathered factor arrays, ``(T, width)`` values each, at most ``E``;
-- the products and the pairwise tree's levels, together at most ``2 * E``.
+**Cached geometry.** Which output position a ``(input position, kernel
+offset)`` pair reaches, and which input position a ``(kernel offset, output
+position)`` pair reads, depends only on the spatial geometry. Those maps are
+built once per geometry and kept in a bounded LRU cache of
+``_PLAN_CACHE_ENTRIES`` entries per kind, keyed by the spatial input, kernel
+and output extents, stride, padding and dilation.
+Batch, channels and groups do not enter the key: they are applied to a
+cached map by broadcast additions. Plans are NumPy arrays. A plan holds two integer
+arrays of ``input_positions * kernel_offsets`` or ``kernel_offsets *
+output_positions`` elements; for LeNet-5's layers that is under 0.5 MiB.
 
-So a tile needs roughly ``4 * E`` values plus ``3 * E`` 64-bit integers: about
-224 MiB for float64 and 160 MiB for float32 at the default ``E`` of 4 Mi.
+**Temporary memory** is bounded per tile in bytes: ``16 * E``, where ``E``
+is ``_CONVOLUTION_COLUMN_MAX_ELEMENTS``, so 64 MiB at the default ``E`` of
+4 Mi. Each term of a tile costs its two flat 64-bit gather indices and four
+values — the two gathered factors, the product, and the pairwise tree's
+levels, which together hold fewer values than the products — so a tile holds
+``T = 16 * E // (width * (16 + 4 * itemsize))`` destinations, where
+``width`` is the number of terms per destination: about 2 Mi terms for
+float32 and 1.4 Mi for float64. The zero-slotted operand copies add one copy
+of the upstream gradient and of the kernel or input, which are small next to
+a tile.
 """
 
 from __future__ import annotations
+import functools
 import itertools
 import math
 import numpy
@@ -34,7 +47,6 @@ from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.kernels.convolution import common as convolution_common
 from tensors.backend.numpy.kernels.convolution.common import _convolution_operands
 from tensors.backend.numpy.kernels.convolution.common import _convolution_storage
-from tensors.backend.numpy.kernels.linalg.contraction import pairwise_matmul
 from tensors.backend.numpy.kernels.reductions.pairwise import (
     pairwise_float_sum,
     to_declared_dtype,
@@ -44,6 +56,9 @@ if TYPE_CHECKING:
     from tensors.dtype import DataType
 
 
+_PLAN_CACHE_ENTRIES = 32
+
+
 def _row_major_coordinates(shape: tuple[int, ...]) -> Any:
     """Every coordinate of ``shape`` in row-major order, as ``(count, rank)``."""
     count = math.prod(shape)
@@ -51,25 +66,110 @@ def _row_major_coordinates(shape: tuple[int, ...]) -> Any:
     return numpy.stack(numpy.unravel_index(flat, shape), axis=-1).reshape(count, len(shape))
 
 
-def _tile_size(width: int, index_elements: int) -> int:
-    """Destinations per tile, so term and coordinate arrays stay in budget.
+def _row_major_strides(shape: tuple[int, ...]) -> Any:
+    """The element strides of a contiguous array of ``shape``."""
+    return numpy.asarray(
+        [math.prod(shape[axis + 1 :]) for axis in range(len(shape))], dtype=numpy.int64
+    )
 
-    ``width`` is the number of product terms per destination and
-    ``index_elements`` the number of integer coordinates each destination
-    needs. A tile holds at most ``_CONVOLUTION_COLUMN_MAX_ELEMENTS`` of each.
+
+def _tile_size(width: int, itemsize: int) -> int:
+    """Destinations per tile, so one tile's working set stays within budget.
+
+    The budget is in bytes: ``16 * _CONVOLUTION_COLUMN_MAX_ELEMENTS``. Each
+    term costs its two 64-bit gather indices plus four values of ``itemsize``
+    bytes — the two gathered factors, the product, and the pairwise tree's
+    levels, which together hold fewer values than the products.
     """
-    per_destination = max(width, index_elements, 1)
-    return max(1, convolution_common._CONVOLUTION_COLUMN_MAX_ELEMENTS // per_destination)
+    budget = 16 * convolution_common._CONVOLUTION_COLUMN_MAX_ELEMENTS
+    per_term = 2 * 8 + 4 * itemsize
+    return max(1, budget // (max(width, 1) * per_term))
 
 
-def _zero_invalid(values: Any, valid: Any) -> Any:
-    """Replace invalid terms by exact zero, in place and without compaction.
+def _with_zero_slot(values: Any, rows: int, row_size: int) -> Any:
+    """``values`` as ``rows`` rows with one ``+0`` appended to each, flattened."""
+    grid = values.reshape(rows, row_size)
+    zeros = numpy.zeros((rows, 1), dtype=values.dtype)
+    return numpy.concatenate((grid, zeros), axis=1).reshape(-1)
 
-    Every term keeps its position in the sequence, because the pairwise tree
-    is defined over that sequence and removing a term would reshape it.
+
+@functools.lru_cache(maxsize=_PLAN_CACHE_ENTRIES)
+def _input_plan(
+    spatial: tuple[int, ...],
+    kernel_spatial: tuple[int, ...],
+    output_spatial: tuple[int, ...],
+    stride: tuple[int, ...],
+    padding: tuple[int, ...],
+    dilation: tuple[int, ...],
+) -> tuple[Any, Any]:
+    """Where each ``(input position, kernel offset)`` pair reads its factors.
+
+    Returns two ``(input_positions, kernel_offsets)`` arrays: the row-major
+    output position the pair reaches, and the kernel offset itself. A pair
+    that reaches no output position — ``x + padding - u * dilation`` not a
+    multiple of the stride, or outside the output — reads the zero slot of
+    both rows instead: output position ``output_positions`` and kernel offset
+    ``kernel_offsets``.
     """
-    numpy.putmask(values, ~numpy.broadcast_to(valid, values.shape), 0)
-    return values
+    positions = _row_major_coordinates(spatial)
+    offsets = _row_major_coordinates(kernel_spatial)
+    stride_array = numpy.asarray(stride, dtype=numpy.int64)
+    numerator = (
+        positions[:, None, :]
+        + numpy.asarray(padding, dtype=numpy.int64)
+        - offsets[None, :, :] * numpy.asarray(dilation, dtype=numpy.int64)
+    )
+    reached = numerator // stride_array
+    valid = (
+        (numerator % stride_array == 0)
+        & (reached >= 0)
+        & (reached < numpy.asarray(output_spatial, dtype=numpy.int64))
+    ).all(axis=-1)
+    output_count = math.prod(output_spatial)
+    offset_count = math.prod(kernel_spatial)
+    linear = (reached * _row_major_strides(output_spatial)).sum(axis=-1)
+    upstream_slot = numpy.where(valid, linear, output_count)
+    kernel_slot = numpy.where(
+        valid, numpy.arange(offset_count, dtype=numpy.int64)[None, :], offset_count
+    )
+    return upstream_slot, kernel_slot
+
+
+@functools.lru_cache(maxsize=_PLAN_CACHE_ENTRIES)
+def _kernel_plan(
+    spatial: tuple[int, ...],
+    kernel_spatial: tuple[int, ...],
+    output_spatial: tuple[int, ...],
+    stride: tuple[int, ...],
+    padding: tuple[int, ...],
+    dilation: tuple[int, ...],
+) -> tuple[Any, Any]:
+    """Where each ``(kernel offset, output position)`` pair reads its factors.
+
+    Returns two ``(kernel_offsets, output_positions)`` arrays: the row-major
+    input position ``p * stride - padding + u * dilation`` and the output
+    position itself. A pair whose input position falls in the padding reads
+    the zero slot of both rows: input position ``input_positions`` and output
+    position ``output_positions``.
+    """
+    offsets = _row_major_coordinates(kernel_spatial)
+    positions = _row_major_coordinates(output_spatial)
+    source = (
+        positions[None, :, :] * numpy.asarray(stride, dtype=numpy.int64)
+        - numpy.asarray(padding, dtype=numpy.int64)
+        + offsets[:, None, :] * numpy.asarray(dilation, dtype=numpy.int64)
+    )
+    inside = (
+        (source >= 0) & (source < numpy.asarray(spatial, dtype=numpy.int64))
+    ).all(axis=-1)
+    input_count = math.prod(spatial)
+    output_count = math.prod(output_spatial)
+    linear = (source * _row_major_strides(spatial)).sum(axis=-1)
+    input_slot = numpy.where(inside, linear, input_count)
+    upstream_slot = numpy.where(
+        inside, numpy.arange(output_count, dtype=numpy.int64)[None, :], output_count
+    )
+    return input_slot, upstream_slot
 
 
 def _input_vjp(
@@ -77,6 +177,7 @@ def _input_vjp(
     kernel_values: Any,
     input_result: Any,
     *,
+    spatial: tuple[int, ...],
     kernel_spatial: tuple[int, ...],
     output_spatial: tuple[int, ...],
     stride: tuple[int, ...],
@@ -87,58 +188,50 @@ def _input_vjp(
 ) -> None:
     """Fill ``input_result`` with the input VJP, one destination tile at a time.
 
-    Each destination ``(b, c, x)`` has ``len(offsets) * group_outputs``
-    terms, ordered by kernel offset in row-major order and, within an offset,
-    by the group's output channel. The offset ``u`` reaches output position
-    ``(x + padding - u * dilation) / stride`` when that is an integer inside
-    the output; any other combination is an exact zero term in its place.
+    Destination ``(b, c, x)`` has ``kernel_offsets * group_outputs`` terms,
+    ordered by kernel offset in row-major order and, within an offset, by
+    the group's output channel ``o``: ``upstream[b, o, reached(x, u)] *
+    kernel[o, c % group_channels, u]``, or ``+0 * +0`` where ``u`` reaches no
+    output position.
     """
-    rank = len(kernel_spatial)
-    destination_shape = tuple(int(size) for size in input_result.shape)
-    offsets = _row_major_coordinates(kernel_spatial)
-    offset_count = int(offsets.shape[0])
+    batch, in_channels = (int(input_result.shape[0]), int(input_result.shape[1]))
+    out_channels = int(upstream.shape[1])
+    input_count = math.prod(spatial)
+    offset_count = math.prod(kernel_spatial)
+    output_count = math.prod(output_spatial)
+    upstream_slot, kernel_slot = _input_plan(
+        spatial, kernel_spatial, output_spatial, stride, padding, dilation
+    )
+    upstream_rows = _with_zero_slot(upstream, batch * out_channels, output_count)
+    kernel_rows = _with_zero_slot(
+        kernel_values, out_channels * group_channels, offset_count
+    )
     width = offset_count * group_outputs
-    stride_array = numpy.asarray(stride, dtype=numpy.int64)
-    padding_array = numpy.asarray(padding, dtype=numpy.int64)
-    dilation_array = numpy.asarray(dilation, dtype=numpy.int64)
-    output_array = numpy.asarray(output_spatial, dtype=numpy.int64)
     local_outputs = numpy.arange(group_outputs, dtype=numpy.int64)
     destinations = input_result.reshape(-1)
     total = int(destinations.shape[0])
-    tile = _tile_size(width, offset_count * rank)
+    tile = _tile_size(width, upstream.dtype.itemsize)
     for start in range(0, total, tile):
         stop = min(start + tile, total)
         count = stop - start
-        coordinates = numpy.unravel_index(
-            numpy.arange(start, stop, dtype=numpy.int64), destination_shape
-        )
-        batch_index = coordinates[0]
-        channel = coordinates[1]
-        spatial_index = numpy.stack(coordinates[2:], axis=-1).reshape(count, rank)
-        numerator = (
-            spatial_index[:, None, :] + padding_array - offsets[None, :, :] * dilation_array
-        )
-        position = numerator // stride_array
-        valid = (
-            (numerator % stride_array == 0) & (position >= 0) & (position < output_array)
-        ).all(axis=-1)
-        position = numpy.where(valid[..., None], position, 0)
+        destination = numpy.arange(start, stop, dtype=numpy.int64)
+        position = destination % input_count
+        batch_channel = destination // input_count
+        channel = batch_channel % in_channels
+        batch_index = batch_channel // in_channels
         out_channel = (channel // group_channels)[:, None] * group_outputs + local_outputs
-        local_channel = channel % group_channels
-        upstream_terms = upstream[
-            (batch_index[:, None, None], out_channel[:, None, :])
-            + tuple(position[:, :, None, axis] for axis in range(rank))
-        ]
-        kernel_terms = kernel_values[
-            (out_channel[:, None, :], local_channel[:, None, None])
-            + tuple(offsets[None, :, None, axis] for axis in range(rank))
-        ]
-        mask = valid[:, :, None]
-        left = _zero_invalid(upstream_terms, mask).reshape(count, width)
-        right = _zero_invalid(kernel_terms, mask).reshape(count, width)
-        destinations[start:stop] = pairwise_matmul(
-            left[:, None, :], right[:, :, None]
-        ).reshape(count)
+        upstream_row = (batch_index[:, None] * out_channels + out_channel) * (
+            output_count + 1
+        )
+        kernel_row = (
+            out_channel * group_channels + (channel % group_channels)[:, None]
+        ) * (offset_count + 1)
+        upstream_index = upstream_row[:, None, :] + upstream_slot[position][:, :, None]
+        kernel_index = kernel_row[:, None, :] + kernel_slot[position][:, :, None]
+        left = numpy.take(upstream_rows, upstream_index.reshape(count, width))
+        right = numpy.take(kernel_rows, kernel_index.reshape(count, width))
+        products = left * right
+        destinations[start:stop] = pairwise_float_sum(products, (1,)).reshape(count)
 
 
 def _kernel_vjp(
@@ -147,6 +240,7 @@ def _kernel_vjp(
     kernel_result: Any,
     *,
     spatial: tuple[int, ...],
+    kernel_spatial: tuple[int, ...],
     output_spatial: tuple[int, ...],
     stride: tuple[int, ...],
     padding: tuple[int, ...],
@@ -156,56 +250,47 @@ def _kernel_vjp(
 ) -> None:
     """Fill ``kernel_result`` with the kernel VJP, one destination tile at a time.
 
-    Each weight ``(o, c, u)`` has ``batch * output_positions`` terms, ordered
-    by batch and, within it, output position in row-major order. Position
-    ``p`` reads input ``p * stride - padding + u * dilation``; a source in the
-    padding is an exact zero term in its place.
+    Weight ``(o, c, u)`` has ``batch * output_positions`` terms, ordered by
+    batch and, within it, output position in row-major order:
+    ``upstream[b, o, p] * input[b, i, source(u, p)]`` for the group's input
+    channel ``i``, or ``+0 * +0`` where the source falls in the padding.
     """
-    rank = len(spatial)
-    batch = int(upstream.shape[0])
-    destination_shape = tuple(int(size) for size in kernel_result.shape)
-    positions = _row_major_coordinates(output_spatial)
-    position_count = int(positions.shape[0])
-    width = batch * position_count
-    stride_array = numpy.asarray(stride, dtype=numpy.int64)
-    padding_array = numpy.asarray(padding, dtype=numpy.int64)
-    dilation_array = numpy.asarray(dilation, dtype=numpy.int64)
-    spatial_array = numpy.asarray(spatial, dtype=numpy.int64)
+    batch, out_channels = (int(upstream.shape[0]), int(upstream.shape[1]))
+    in_channels = int(input_values.shape[1])
+    input_count = math.prod(spatial)
+    offset_count = math.prod(kernel_spatial)
+    output_count = math.prod(output_spatial)
+    input_slot, upstream_slot = _kernel_plan(
+        spatial, kernel_spatial, output_spatial, stride, padding, dilation
+    )
+    upstream_rows = _with_zero_slot(upstream, batch * out_channels, output_count)
+    input_rows = _with_zero_slot(input_values, batch * in_channels, input_count)
+    width = batch * output_count
     batches = numpy.arange(batch, dtype=numpy.int64)
     destinations = kernel_result.reshape(-1)
     total = int(destinations.shape[0])
-    tile = _tile_size(width, position_count * rank)
+    tile = _tile_size(width, upstream.dtype.itemsize)
     for start in range(0, total, tile):
         stop = min(start + tile, total)
         count = stop - start
-        coordinates = numpy.unravel_index(
-            numpy.arange(start, stop, dtype=numpy.int64), destination_shape
+        destination = numpy.arange(start, stop, dtype=numpy.int64)
+        offset = destination % offset_count
+        weight_row = destination // offset_count
+        local_channel = weight_row % group_channels
+        out_channel = weight_row // group_channels
+        in_channel = (out_channel // group_outputs) * group_channels + local_channel
+        upstream_row = (batches[None, :] * out_channels + out_channel[:, None]) * (
+            output_count + 1
         )
-        out_channel = coordinates[0]
-        local_channel = coordinates[1]
-        offset = numpy.stack(coordinates[2:], axis=-1).reshape(count, rank)
-        source = (
-            positions[None, :, :] * stride_array
-            - padding_array
-            + offset[:, None, :] * dilation_array
+        input_row = (batches[None, :] * in_channels + in_channel[:, None]) * (
+            input_count + 1
         )
-        inside = ((source >= 0) & (source < spatial_array)).all(axis=-1)
-        source = numpy.where(inside[..., None], source, 0)
-        input_channel = (out_channel // group_outputs) * group_channels + local_channel
-        upstream_terms = upstream[
-            (batches[None, :, None], out_channel[:, None, None])
-            + tuple(positions[None, None, :, axis] for axis in range(rank))
-        ]
-        input_terms = input_values[
-            (batches[None, :, None], input_channel[:, None, None])
-            + tuple(source[:, None, :, axis] for axis in range(rank))
-        ]
-        mask = inside[:, None, :]
-        left = _zero_invalid(upstream_terms, mask).reshape(count, width)
-        right = _zero_invalid(input_terms, mask).reshape(count, width)
-        destinations[start:stop] = pairwise_matmul(
-            left[:, None, :], right[:, :, None]
-        ).reshape(count)
+        upstream_index = upstream_row[:, :, None] + upstream_slot[offset][:, None, :]
+        input_index = input_row[:, :, None] + input_slot[offset][:, None, :]
+        left = numpy.take(upstream_rows, upstream_index.reshape(count, width))
+        right = numpy.take(input_rows, input_index.reshape(count, width))
+        products = left * right
+        destinations[start:stop] = pairwise_float_sum(products, (1,)).reshape(count)
 
 
 def convolution_gradient(
@@ -280,6 +365,7 @@ def convolution_gradient(
                     upstream,
                     kernel_values,
                     input_result,
+                    spatial=spatial,
                     kernel_spatial=kernel_spatial,
                     output_spatial=output_spatial,
                     stride=stride,
@@ -304,6 +390,7 @@ def convolution_gradient(
                     input_values,
                     kernel_result,
                     spatial=spatial,
+                    kernel_spatial=kernel_spatial,
                     output_spatial=output_spatial,
                     stride=stride,
                     padding=padding,

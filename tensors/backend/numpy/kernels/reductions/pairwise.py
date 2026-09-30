@@ -81,24 +81,44 @@ def pairwise_float_sum(values: Any, axes: tuple[int, ...]) -> Any:
         return numpy.zeros(keepdims_shape, dtype=values.dtype)
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
         tree = _pairwise_last_axis(grouped)
-        nan = numpy.any(numpy.isnan(grouped), axis=-1)
-        positive_infinity = numpy.any(numpy.isposinf(grouped), axis=-1)
-        negative_infinity = numpy.any(numpy.isneginf(grouped), axis=-1)
-        result = numpy.where(
-            nan | (positive_infinity & negative_infinity),
-            numpy.array(numpy.nan, dtype=values.dtype),
-            numpy.where(
-                positive_infinity,
-                numpy.array(numpy.inf, dtype=values.dtype),
-                numpy.where(
-                    negative_infinity,
-                    numpy.array(-numpy.inf, dtype=values.dtype),
-                    tree,
-                ),
-            ),
-        )
+        result = _classify_nonfinite(grouped, tree)
         result = numpy.where(result == 0, numpy.zeros((), dtype=values.dtype), result)
     return numpy.asarray(result, dtype=values.dtype).reshape(keepdims_shape)
+
+
+def _classify_nonfinite(grouped: Any, tree: Any) -> Any:
+    """Apply the non-finite classification, scanning only groups that need it.
+
+    A group whose tree result is finite has no non-finite input: an IEEE
+    addition with a NaN operand is NaN, and one with an infinite operand is an
+    infinity or NaN, so a non-finite value never becomes finite on its way to
+    the root, and a one-element group's result is its element. Such a group's
+    classification is therefore the tree result itself. Only the groups whose
+    tree result is non-finite are scanned for NaN and for each infinity, which
+    is exactly the classification of docs/summation-semantics.md section 9.
+    """
+    unfinished = ~numpy.isfinite(tree)
+    if not unfinished.any():
+        return tree
+    result = numpy.array(tree, copy=True)
+    rows = grouped[unfinished]
+    nan = numpy.isnan(rows).any(axis=-1)
+    positive_infinity = numpy.isposinf(rows).any(axis=-1)
+    negative_infinity = numpy.isneginf(rows).any(axis=-1)
+    result[unfinished] = numpy.where(
+        nan | (positive_infinity & negative_infinity),
+        numpy.array(numpy.nan, dtype=result.dtype),
+        numpy.where(
+            positive_infinity,
+            numpy.array(numpy.inf, dtype=result.dtype),
+            numpy.where(
+                negative_infinity,
+                numpy.array(-numpy.inf, dtype=result.dtype),
+                result[unfinished],
+            ),
+        ),
+    )
+    return result
 
 
 __all__ = ["pairwise_float_sum", "to_declared_dtype"]
