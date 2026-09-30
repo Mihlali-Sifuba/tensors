@@ -195,12 +195,15 @@ class LinearAlgebraBackendExecutionTests(unittest.TestCase):
             self.assertEqual(positive, math.inf)
             self.assertTrue(math.isnan(invalid))
             self.assertEqual(math.copysign(1.0, zero), 1.0)
+            # A temporary overflow is not a refusal: the pairwise tree forms
+            # +inf and -inf and then NaN, on every backend.
+            overflowed = ts.matmul(
+                ts.Tensor([1e308, 1e308, -1e308, -1e308]),
+                ts.Tensor([1.0, 1.0, 1.0, 1.0]),
+            )
+            self.assertTrue(math.isnan(overflowed.item()))
+            self.assertEqual(overflowed.backend_storage.kind, backend)
             if backend != "python":
-                with self.assertRaises(BackendOperationUnsupportedError):
-                    ts.matmul(
-                        ts.Tensor([1e308, 1e308, -1e308, -1e308]),
-                        ts.Tensor([1.0, 1.0, 1.0, 1.0]),
-                    )
                 with self.assertRaises(BackendOperationUnsupportedError):
                     ts.matmul(
                         ts.Tensor([[1, 2]], dtype=ts.int32),

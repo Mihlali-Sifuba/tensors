@@ -7,10 +7,8 @@ from typing import Any, TYPE_CHECKING
 import numpy
 
 from tensors.backend.numpy.conversion import _storage
-from tensors.backend.numpy.kernels.reductions.exact import (
-    certified_float_sum,
-    exact_integer_sum,
-)
+from tensors.backend.numpy.kernels.reductions.exact import exact_integer_sum
+from tensors.backend.numpy.kernels.reductions.pairwise import pairwise_float_sum
 from tensors.backend.storage import Storage
 
 if TYPE_CHECKING:
@@ -26,7 +24,7 @@ def reduce_sum(
     dtype: DataType,
     output_shape: tuple[int, ...],
 ) -> Storage | None:
-    """Return a conforming native sum, declining uncertified float groups."""
+    """Return a native sum: exact for integers, pairwise for floats."""
     if values.size == 0:
         return _storage(
             numpy.full(output_shape, 0, dtype=numpy.dtype(dtype.name)),
@@ -36,8 +34,8 @@ def reduce_sum(
     if dtype.kind == "integer":
         result = exact_integer_sum(values, axes, keepdims=keepdims, dtype=dtype)
     else:
-        result = certified_float_sum(values, axes)
-        if result is not None and not keepdims and axes:
+        result = pairwise_float_sum(values, axes)
+        if not keepdims and axes:
             result = numpy.squeeze(result, axis=axes)
     if result is None:
         return None

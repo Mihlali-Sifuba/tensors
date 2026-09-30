@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from tensors.backend.python.storage import PythonStorage
 from tensors.shape import Shape
-from tensors.utils.summation import stable_product_sum
+from tensors.backend.python.kernels.reductions.pairwise import pairwise_product_sum
 
 if TYPE_CHECKING:
     from tensors.backend.storage import Storage
@@ -29,14 +29,15 @@ def outer_gradient(
     need_left, need_right = needs_input_grad
     left_gradient = (
         [
-            stable_product_sum(
+            pairwise_product_sum(
                 [
                     (
                         float(grad_values[row * right_size + column]),
                         float(right_values[column]),
                     )
                     for column in range(right_size)
-                ]
+                ],
+                dtype,
             )
             for row in range(left_size)
         ]
@@ -45,14 +46,15 @@ def outer_gradient(
     )
     right_gradient = (
         [
-            stable_product_sum(
+            pairwise_product_sum(
                 [
                     (
                         float(grad_values[row * right_size + column]),
                         float(left_values[row]),
                     )
                     for row in range(left_size)
-                ]
+                ],
+                dtype,
             )
             for column in range(right_size)
         ]

@@ -7,10 +7,8 @@ from typing import Any
 import cupy
 
 from tensors.backend.cuda.conversion import _arithmetic_storage as _storage
-from tensors.backend.cuda.kernels.reductions.exact import (
-    certified_float_sum,
-    exact_integer_sum,
-)
+from tensors.backend.cuda.kernels.reductions.exact import exact_integer_sum
+from tensors.backend.cuda.kernels.reductions.pairwise import pairwise_float_sum
 from tensors.backend.cuda.kernels.reductions.stability import _sum_axes
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
@@ -23,7 +21,7 @@ def sum_to_shape(
     *,
     dtype: DataType,
 ) -> Storage | None:
-    """Reduce a broadcast gradient only when its native sum is conforming."""
+    """Reduce a broadcast gradient natively with the package summation tree."""
     axes = _sum_axes(input_shape, shape)
     if axes is None:
         return None
@@ -32,7 +30,7 @@ def sum_to_shape(
     elif dtype.kind == "integer":
         result = exact_integer_sum(values, axes, keepdims=True, dtype=dtype)
     else:
-        result = certified_float_sum(values, axes)
+        result = pairwise_float_sum(values, axes)
     if result is None:
         return None
     return _storage(

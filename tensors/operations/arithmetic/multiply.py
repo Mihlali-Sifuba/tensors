@@ -44,12 +44,11 @@ class Mul(Operation):
         operand's VJP is the upstream gradient times the other operand,
         summed back over the axes the forward broadcast stretched.
 
-        Those two steps stay one operation. Multiplying first can overflow to
-        infinities that then cancel to NaN, or underflow to zero, where the
-        exact reduced result is representable, so the products are grouped
-        before they are rounded. That is the specified vector-Jacobian
-        product of multiplication, and expressing it as a multiply followed
-        by a separate reduction would quietly change it.
+        Those two steps stay one operation, a contraction: each product is
+        rounded to the dtype and the products are summed back with the
+        package's pairwise tree (docs/summation-semantics.md). Keeping them
+        one operation keeps the reduction's derivative rule and its recorded
+        graph together.
 
         This is the only derivative multiplication defines. The fused
         reduction is applied as an operation rather than called as a

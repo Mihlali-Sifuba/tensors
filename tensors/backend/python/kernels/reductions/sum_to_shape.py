@@ -1,6 +1,7 @@
 """Reference summation to a broadcast shape, in Python."""
 
 from __future__ import annotations
+from tensors.backend.python.kernels.reductions.pairwise import pairwise_float_sum
 from tensors.backend.python.storage import PythonStorage
 from tensors.backend.storage import Storage
 from tensors.dtype import DataType
@@ -18,13 +19,15 @@ def sum_to_shape(
     *,
     dtype: DataType,
 ) -> Storage | None:
-    """Sum broadcast contributions back down to the original shape."""
+    """Sum broadcast contributions back down to the original shape.
+
+    Each group is gathered in logical order and floating groups are reduced
+    with the package's pairwise tree, as every backend reduces them.
+    """
     target = Shape.from_iterable(shape)
     if target.size == 1:
         if dtype.kind == "floating":
-            from tensors.utils.summation import stable_float_sum
-
-            total = stable_float_sum([float(value) for value in gradient_values])
+            total = pairwise_float_sum(gradient_values, dtype)
         else:
             total = sum(gradient_values)
         return PythonStorage.from_values([total], dtype)
@@ -43,11 +46,7 @@ def sum_to_shape(
         )[padding:]
         groups[coordinates_to_linear_index(source_coordinates, shape)].append(value)
     if dtype.kind == "floating":
-        from tensors.utils.summation import stable_float_sum
-
-        values = [
-            stable_float_sum([float(value) for value in group]) for group in groups
-        ]
+        values = [pairwise_float_sum(group, dtype) for group in groups]
     else:
         values = [sum(group) for group in groups]
     return PythonStorage.from_values(values, dtype)

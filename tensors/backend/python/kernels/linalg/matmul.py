@@ -10,7 +10,7 @@ from tensors.utils.coordinates import (
     coordinates_to_linear_index,
     linear_index_to_coordinates,
 )
-from tensors.utils.summation import stable_product_sum
+from tensors.backend.python.kernels.reductions.pairwise import pairwise_product_sum
 
 if TYPE_CHECKING:
     from tensors.backend.storage import Storage
@@ -80,9 +80,7 @@ def matmul(
                     )
                     factors.append((left_values[left_index], right_values[right_index]))
                 if dtype.kind == "floating":
-                    total = stable_product_sum(
-                        [(float(left), float(right)) for left, right in factors]
-                    )
+                    total = pairwise_product_sum(factors, dtype)
                 else:
                     total = sum(left * right for left, right in factors)
                 values.append(total)

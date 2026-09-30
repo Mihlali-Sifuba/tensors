@@ -317,11 +317,11 @@ The folders have deliberately narrow responsibilities:
   specialised mathematical operation: `F(A, B; S) = ReduceToShape(A ⊙ B, S)`,
   an elementwise product reduced to a target shape. It is a reduction, so it
   sits with the reductions. It is an `Operation` because it defines a forward
-  and a derivative rule of its own, and it is one step rather than two because
-  forming the products before reducing them can overflow or underflow where
-  the reduced result is representable — `sum_to_shape(left * right, shape)` is
-  a different computation, not a slower spelling. Multiplication's VJP is its
-  best-known caller; that does not make it a gradient helper.
+  and a derivative rule of its own. Numerically it is a contraction: each
+  product is rounded to the dtype and the products are reduced with the
+  package's pairwise tree ([summation semantics](summation-semantics.md)).
+  Multiplication's VJP is its best-known caller; that does not make it a
+  gradient helper.
 
   `gradient_primitives.py` holds `sum_to_shape`, which is one: shared
   gradient-shaping logic that reverses a broadcast by composing the existing

@@ -43,7 +43,13 @@ class AutogradRegressionTests(unittest.TestCase):
         derivative = ts.grad(1.0 / denominator, denominator)
         self.assertEqual(derivative.tolist(), [-math.inf])
 
-    def test_broadcast_product_vjp_preserves_exact_cancellation(self):
+    def test_broadcast_product_vjp_rounds_each_product_first(self):
+        """``fl(2 * 1e308)`` and ``fl(2 * -1e308)`` are ``+inf`` and ``-inf``.
+
+        The VJP forms the products in the dtype and then sums them pairwise,
+        so the reduced derivative is NaN. The derivative by the seed is the
+        factor itself and is unaffected.
+        """
         value = ts.Variable([0.0])
         factor = ts.Variable([1.0e308, -1.0e308], requires_grad=False)
         seed = ts.Variable([2.0, 2.0])
@@ -55,7 +61,7 @@ class AutogradRegressionTests(unittest.TestCase):
             create_graph=True,
         )
 
-        self.assertEqual(derivative.data.tolist(), [0.0])
+        self.assertTrue(math.isnan(derivative.data.tolist()[0]))
         self.assertEqual(ts.grad(derivative, seed).tolist(), [1.0e308, -1.0e308])
 
     def test_logsumexp_infinity_subgradient_retains_seed_connectivity(self):

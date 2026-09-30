@@ -1,3 +1,4 @@
+import math
 import unittest
 
 import tensors as ts
@@ -24,21 +25,31 @@ class LinalgTests(unittest.TestCase):
         self.assertEqual(result.shape, ())
         self.assertEqual(result.item(), 11.0)
 
-    def test_dot_recovers_from_temporary_overflow(self):
+    def test_dot_temporary_overflow_follows_the_pairwise_tree(self):
+        """The products ``[1e308, 1e308, -1e308, -1e308]`` are summed pairwise.
+
+        The first round forms ``+inf`` and ``-inf``; the second adds them to
+        NaN. The exact dot product is zero, but the contract is the tree.
+        """
         left = ts.Tensor([1.0e308, 1.0e308, -1.0e308, -1.0e308])
         right = ts.Tensor([1.0, 1.0, 1.0, 1.0])
 
         result = ts.dot(left, right)
 
-        self.assertEqual(result.item(), 0.0)
+        self.assertTrue(math.isnan(result.item()))
 
-    def test_dot_recovers_when_individual_products_overflow(self):
+    def test_dot_rounds_each_product_before_summing(self):
+        """``fl(1e308 * 2)`` and ``fl(1e308 * -2)`` are ``+inf`` and ``-inf``.
+
+        With both infinities in the group the specified result is NaN, even
+        though the exact dot product is ``1e-300``.
+        """
         left = ts.Tensor([1.0e308, 1.0e308, 1.0e-300])
         right = ts.Tensor([2.0, -2.0, 1.0])
 
         result = ts.dot(left, right)
 
-        self.assertEqual(result.item(), 1.0e-300)
+        self.assertTrue(math.isnan(result.item()))
 
     def test_dot_supports_matrix_vector_and_vector_matrix_products(self):
         matrix = ts.Tensor([[1.0, 2.0], [3.0, 4.0]])
@@ -71,7 +82,8 @@ class LinalgTests(unittest.TestCase):
         self.assertEqual(right.grad.shape, (2, 2, 1))
         self.assertEqual(right.grad.tolist(), [1.0, 2.0, 1.0, 2.0])
 
-    def test_matmul_gradient_recovers_from_temporary_overflow(self):
+    def test_matmul_gradient_temporary_overflow_follows_the_pairwise_tree(self):
+        """The right VJP sums ``left * 1`` over four rows pairwise: NaN."""
         left = ts.Tensor(
             [1.0e308, 1.0e308, -1.0e308, -1.0e308],
             shape=(4, 1),
@@ -80,7 +92,7 @@ class LinalgTests(unittest.TestCase):
 
         ts.backward(ts.sum(left @ right))
 
-        self.assertEqual(right.grad.tolist(), [0.0])
+        self.assertTrue(math.isnan(right.grad.tolist()[0]))
 
     def test_dot_rejects_scalar_inputs(self):
         scalar = ts.Tensor([1.0], shape=())

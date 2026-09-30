@@ -6,8 +6,9 @@ from typing import TYPE_CHECKING, Any
 
 import cupy
 
-from tensors.backend.cuda.conversion import _storage, _widen
-from tensors.backend.cuda.kernels.linalg.contraction import certified_matmul
+from tensors.backend.cuda.conversion import _storage
+from tensors.backend.cuda.kernels.linalg.contraction import pairwise_matmul
+from tensors.backend.cuda.kernels.reductions.pairwise import to_declared_dtype
 from tensors.backend.cuda.kernels.reductions.sum_to_shape import sum_to_shape
 
 if TYPE_CHECKING:
@@ -27,14 +28,14 @@ def matmul_gradient(
     dtype: DataType,
     needs_input_grad: tuple[bool, ...] = (True, True),
 ) -> tuple[Storage | None, Storage | None] | None:
-    """Execute requested certified matmul VJPs with CUDA-native values."""
+    """Execute requested matmul VJPs as products then pairwise sums."""
     if dtype.kind != "floating":
         return None
     left_vector, right_vector = metadata[:2]
     try:
-        upstream = _widen(grad_values)
-        left = _widen(left_values)
-        right = _widen(right_values)
+        upstream = to_declared_dtype(grad_values, dtype)
+        left = to_declared_dtype(left_values, dtype)
+        right = to_declared_dtype(right_values, dtype)
     except (TypeError, ValueError):
         return None
     left_matrix = left.reshape((1, left.shape[0])) if left_vector else left
@@ -49,20 +50,17 @@ def matmul_gradient(
         matrix_grad = upstream
     need_left, need_right = needs_input_grad
     left_result = (
-        certified_matmul(matrix_grad, cupy.swapaxes(right_matrix, -1, -2))
+        pairwise_matmul(matrix_grad, cupy.swapaxes(right_matrix, -1, -2))
         if need_left
         else None
     )
     right_result = (
-        certified_matmul(cupy.swapaxes(left_matrix, -1, -2), matrix_grad)
+        pairwise_matmul(cupy.swapaxes(left_matrix, -1, -2), matrix_grad)
         if need_right
         else None
     )
-    if (need_left and left_result is None) or (need_right and right_result is None):
-        return None
     left_storage = None
     if left_result is not None:
-        left_result = cupy.where(left_result == 0.0, 0.0, left_result)
         if left_vector:
             left_result = cupy.squeeze(left_result, axis=-2)
         if tuple(left_result.shape) == left_shape:
@@ -78,7 +76,6 @@ def matmul_gradient(
             return None
     right_storage = None
     if right_result is not None:
-        right_result = cupy.where(right_result == 0.0, 0.0, right_result)
         if right_vector:
             right_result = cupy.squeeze(right_result, axis=-1)
         if tuple(right_result.shape) == right_shape:

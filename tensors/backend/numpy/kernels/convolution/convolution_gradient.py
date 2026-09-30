@@ -12,8 +12,11 @@ from tensors.backend.numpy.conversion import _errstate
 from tensors.backend.numpy.kernels.convolution import common as convolution_common
 from tensors.backend.numpy.kernels.convolution.common import _convolution_operands
 from tensors.backend.numpy.kernels.convolution.common import _convolution_storage
-from tensors.backend.numpy.kernels.linalg.contraction import certified_matmul
-from tensors.backend.numpy.kernels.reductions.exact import certified_float_sum
+from tensors.backend.numpy.kernels.linalg.contraction import pairwise_matmul
+from tensors.backend.numpy.kernels.reductions.pairwise import (
+    pairwise_float_sum,
+    to_declared_dtype,
+)
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -43,16 +46,17 @@ def convolution_gradient(
     need_bias = include_bias and needs_input_grad[2]
     if not (need_input or need_kernel or need_bias):
         return (None,) * (3 if include_bias else 2)
-    operands = _convolution_operands(input_values, kernel_values)
+    operands = _convolution_operands(input_values, kernel_values, dtype)
     if operands is None:
         return None
     input_values, kernel_values = operands
+    working_dtype = input_values.dtype
     rank = len(stride)
     batched = len(input_shape) == rank + 2
     if not batched:
         input_values = input_values.reshape((1,) + tuple(input_values.shape))
     try:
-        upstream = numpy.asarray(grad_values).astype(numpy.float64)
+        upstream = to_declared_dtype(grad_values, dtype)
     except (TypeError, ValueError):
         return None
     if tuple(upstream.shape) != grad_shape:
@@ -70,12 +74,12 @@ def convolution_gradient(
     offsets = tuple(itertools.product(*(range(size) for size in kernel_spatial)))
     output_position_count = math.prod(output_spatial)
     input_result = (
-        numpy.zeros((batch, in_channels) + spatial, dtype=numpy.float64)
+        numpy.zeros((batch, in_channels) + spatial, dtype=working_dtype)
         if need_input
         else None
     )
     kernel_result = (
-        numpy.zeros(kernel_shape, dtype=numpy.float64) if need_kernel else None
+        numpy.zeros(kernel_shape, dtype=working_dtype) if need_kernel else None
     )
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
         if need_input:
@@ -93,7 +97,7 @@ def convolution_gradient(
                     range(batch), range(in_channels), *map(range, spatial)
                 )
                 while tile := list(itertools.islice(destinations, tile_size)):
-                    left = numpy.zeros((len(tile), width), dtype=numpy.float64)
+                    left = numpy.zeros((len(tile), width), dtype=working_dtype)
                     right = numpy.zeros_like(left)
                     for row, (batch_index, channel, *coordinate) in enumerate(tile):
                         group = channel // group_channels
@@ -128,10 +132,8 @@ def convolution_gradient(
                                         (output_channel, local_channel, *offset)
                                     ]
                                 term += 1
-                    certified = certified_matmul(left[:, None, :], right[:, :, None])
-                    if certified is None:
-                        return None
-                    for destination, value in zip(tile, certified.reshape(-1)):
+                    products = pairwise_matmul(left[:, None, :], right[:, :, None])
+                    for destination, value in zip(tile, products.reshape(-1)):
                         input_result[destination] = value
 
         if need_kernel:
@@ -156,7 +158,7 @@ def convolution_gradient(
                 )
                 while tile := list(itertools.islice(kernel_destinations, tile_size)):
                     left = numpy.zeros(
-                        (len(tile), contribution_count), dtype=numpy.float64
+                        (len(tile), contribution_count), dtype=working_dtype
                     )
                     right = numpy.zeros_like(left)
                     for row, (output_channel, local_channel, *offset) in enumerate(
@@ -186,10 +188,8 @@ def convolution_gradient(
                                         (batch_index, input_channel, *source)
                                     ]
                                 term += 1
-                    certified = certified_matmul(left[:, None, :], right[:, :, None])
-                    if certified is None:
-                        return None
-                    for destination, value in zip(tile, certified.reshape(-1)):
+                    products = pairwise_matmul(left[:, None, :], right[:, :, None])
+                    for destination, value in zip(tile, products.reshape(-1)):
                         kernel_result[destination] = value
 
         results: list[Any] = []
@@ -201,12 +201,10 @@ def convolution_gradient(
             if not need_bias:
                 results.append(None)
             elif out_channels == 0 or batch * output_position_count == 0:
-                results.append(numpy.zeros((out_channels,), dtype=numpy.float64))
+                results.append(numpy.zeros((out_channels,), dtype=working_dtype))
             else:
                 grouped = numpy.moveaxis(upstream, 1, 0).reshape(out_channels, -1)
-                bias_result = certified_float_sum(grouped, (1,))
-                if bias_result is None:
-                    return None
+                bias_result = pairwise_float_sum(grouped, (1,))
                 results.append(bias_result.reshape(out_channels))
     shapes: list[tuple[int, ...]] = [input_shape, kernel_shape]
     requested = [need_input, need_kernel]

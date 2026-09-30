@@ -4,7 +4,6 @@ from unittest.mock import patch
 import tensors as ts
 import tensors.backend.numpy.kernels as numpy_backend
 from tensors.backend.cuda.storage import CudaStorage
-from tensors.backend.config import BackendOperationUnsupportedError
 from tests.backend._support import NumPyParityTestCase, requires_cuda, requires_numpy
 
 
@@ -31,25 +30,30 @@ class CudaExtremeGradientTests(unittest.TestCase):
             cancellation = ts.grad(
                 broadcast_value * factor, broadcast_value, ts.Tensor([2.0, 2.0])
             )
-            with self.assertRaises(BackendOperationUnsupportedError):
-                ts.sum(ts.Tensor([1e308, 1e308, -1e308, -1e308]))
-            with self.assertRaises(BackendOperationUnsupportedError):
-                ts.Tensor([1e308, 1e308, -1e308, -1e308]) @ ts.ones((4,))
+            # Each of these reduces [1e308, 1e308, -1e308, -1e308] with the
+            # pairwise tree: +inf and -inf in the first round, NaN in the
+            # second. They are computed on the device, not refused.
+            overflowing_sum = ts.sum(ts.Tensor([1e308, 1e308, -1e308, -1e308]))
+            overflowing_dot = ts.Tensor([1e308, 1e308, -1e308, -1e308]) @ ts.ones(
+                (4,)
+            )
             batched_left = ts.Variable(
                 ts.Tensor([1e308, 1e308, -1e308, -1e308], shape=(4, 1, 1))
             )
             shared_right = ts.Variable([[1.0]])
-            with self.assertRaises(BackendOperationUnsupportedError):
-                ts.grad(
-                    batched_left @ shared_right,
-                    shared_right,
-                    ts.ones((4, 1, 1)),
-                )
+            batched_gradient = ts.grad(
+                batched_left @ shared_right,
+                shared_right,
+                ts.ones((4, 1, 1)),
+            )
         for gradient in (
             division_gradient,
             base_gradient,
             exponent_gradient,
             cancellation,
+            overflowing_sum,
+            overflowing_dot,
+            batched_gradient,
         ):
             self.assertIsInstance(gradient.backend_storage, CudaStorage)
         self.assertEqual(division_gradient.tolist()[0], -1.0)
@@ -62,7 +66,10 @@ class CudaExtremeGradientTests(unittest.TestCase):
                 abs_tol=0.0,
             )
         )
-        self.assertEqual(cancellation.tolist(), [0.0])
+        # fl(2 * 1e308) and fl(2 * -1e308) are +inf and -inf: a NaN group.
+        self.assertTrue(math.isnan(cancellation.tolist()[0]))
+        for overflowed in (overflowing_sum, overflowing_dot, batched_gradient):
+            self.assertTrue(math.isnan(overflowed.tolist()[0]))
 
 
 @requires_numpy

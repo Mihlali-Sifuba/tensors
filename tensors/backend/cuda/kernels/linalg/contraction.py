@@ -1,4 +1,11 @@
-"""Sound CUDA-native floating contraction primitives."""
+"""Deterministic floating contraction for the CUDA backend.
+
+A contraction is a product then a sum. Each product is formed once, rounded to
+the operands' dtype, and the products of one output element are reduced in
+increasing contraction-index order with the package's pairwise tree
+(`docs/summation-semantics.md`). Provider matrix products are not used: their
+blocking and fused multiply-adds would choose a different summation.
+"""
 
 from __future__ import annotations
 
@@ -7,26 +14,23 @@ from typing import Any
 import cupy
 
 from tensors.backend.cuda.conversion import _errstate
-from tensors.backend.cuda.kernels.reductions.exact import certified_float_sum
+from tensors.backend.cuda.kernels.reductions.pairwise import _multiply
+from tensors.backend.cuda.kernels.reductions.pairwise import pairwise_float_sum
 
 
-def certified_matmul(left: Any, right: Any) -> Any | None:
-    """Return a conforming matrix product, or decline without guessing."""
+def pairwise_matmul(left: Any, right: Any) -> Any:
+    """Contract ``[..., m, k] @ [..., k, n]`` as products then a pairwise sum.
+
+    Each product is formed once in the operands' dtype and the ``k``
+    products of an output element are reduced in increasing ``k`` order with
+    :func:`pairwise_float_sum`.
+    """
+    left_factors, right_factors = cupy.broadcast_arrays(
+        left[..., :, :, None], right[..., None, :, :]
+    )
     with _errstate(over="ignore", under="ignore", invalid="ignore"):
-        left_factors = left[..., :, :, None]
-        right_factors = right[..., None, :, :]
-        products = left_factors * right_factors
-        finite_factors = cupy.isfinite(left_factors) & cupy.isfinite(right_factors)
-        range_lost = finite_factors & (
-            cupy.isinf(products)
-            | ((products == 0.0) & (left_factors != 0.0) & (right_factors != 0.0))
-        )
-    if bool(cupy.any(range_lost)):
-        return None
-    if products.shape[-2] == 0:
-        return cupy.sum(products, axis=-2)
-    result = certified_float_sum(products, (-2,))
-    return None if result is None else cupy.squeeze(result, axis=-2)
+        products = _multiply(left_factors, right_factors)
+    return cupy.squeeze(pairwise_float_sum(products, (products.ndim - 2,)), axis=-2)
 
 
-__all__ = ["certified_matmul"]
+__all__ = ["pairwise_matmul"]

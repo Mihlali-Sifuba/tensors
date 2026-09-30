@@ -1,9 +1,10 @@
 """``ProductSumToShape`` as a mathematical operation in its own right.
 
 `F(A, B; S) = ReduceToShape(A ⊙ B, S)`: an elementwise product over the
-operands' broadcast shape, reduced to a target shape. The expectations here
-come from that definition and from the range rules the fused form exists to
-respect, never from another backend's output.
+operands' broadcast shape, each product rounded to the dtype, then reduced to
+a target shape with the package's pairwise tree. The expectations here come
+from that definition (docs/summation-semantics.md), never from another
+backend's output.
 
 The multiplication VJP's use of it is covered in
 ``tests/autograd/test_backward.py``; these cases are about the operation.
@@ -87,12 +88,11 @@ class ProductSumToShapeTests(unittest.TestCase):
                 self.assertEqual(tuple(to_left.shape), (1, 3))
                 self.assertEqual(tuple(to_right.shape), (2, 1))
 
-    def test_the_fusion_survives_products_that_leave_float_range(self):
-        """This is why it is one step and not two.
+    def test_a_two_term_cancellation_is_one_exact_addition(self):
+        """``1 * 1e308`` and ``1 * -1e308`` are both exact products.
 
-        ``1 * 1e308`` and ``1 * -1e308`` are each representable, but a naive
-        sum of them after rounding is ``inf + -inf``. Grouping the factors
-        before rounding keeps the exact reduced result.
+        A two-term group is a single rounded addition, and ``1e308 + -1e308``
+        is exactly zero.
         """
         for backend in BACKENDS:
             with self.subTest(backend=backend):
@@ -106,13 +106,10 @@ class ProductSumToShapeTests(unittest.TestCase):
                 self.assertEqual(fused.backend_storage.kind, backend)
 
     def test_products_below_float_range_reduce_to_zero(self):
-        """Underflow has no value to recover, and none is invented.
+        """``fl(1e-200 * 1e-200)`` underflows to zero, and ``0 + 0`` is zero.
 
-        ``1e-200 * 1e-200`` is ``1e-400``, and the exact sum of two of them,
-        ``2e-400``, is below the smallest subnormal. Zero is therefore the
-        correctly rounded result; the point is that the grouped form returns
-        it rather than a NaN or a spurious magnitude from the logarithms it
-        uses when a product does leave the range.
+        Each product is rounded to the dtype before the reduction, so the
+        group is two zeros; no NaN or spurious magnitude appears.
         """
         for backend in BACKENDS:
             with self.subTest(backend=backend):
@@ -123,12 +120,13 @@ class ProductSumToShapeTests(unittest.TestCase):
                     fused = ProductSumToShape(target_shape=(2, 1)).forward(left, right)
                 self.assertEqual(fused.tolist(), [0.0, 0.0])
 
-    def test_a_product_that_overflows_alone_survives_a_finite_reduction(self):
-        """``1e300 * 1e300`` is not representable; the reduced result is.
+    def test_each_product_is_rounded_before_the_reduction(self):
+        """``fl(1e300 * 1e300)`` is ``+inf`` and ``fl(-1e300 * 1e300)`` is ``-inf``.
 
-        Two terms of ``+1e300 * 1e300`` and ``-1e300 * 1e300`` cancel to an
-        exact zero, which a form that rounded each product first could not
-        reach: it would have ``inf`` and ``-inf`` to add.
+        The products are rounded to the dtype first, so the group holds both
+        infinities and the specified result is NaN, on every backend. The
+        exact reduced value would be zero; the contract is the rounded
+        products then the pairwise tree.
         """
         for backend in BACKENDS:
             with self.subTest(backend=backend):
@@ -138,8 +136,8 @@ class ProductSumToShapeTests(unittest.TestCase):
                     right = ts.Tensor([[1e300, 1e300]], dtype=ts.float64)
                     fused = ProductSumToShape(target_shape=(1, 1)).forward(left, right)
                 produced = fused.tolist()[0]
-                self.assertFalse(math.isnan(produced))
-                self.assertEqual(produced, 0.0)
+                self.assertTrue(math.isnan(produced))
+                self.assertEqual(fused.backend_storage.kind, backend)
 
     def test_the_target_shape_is_configuration_not_forward_state(self):
         """It is recorded with the operation, so a replay reduces the same."""

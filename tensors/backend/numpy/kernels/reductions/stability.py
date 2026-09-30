@@ -56,30 +56,6 @@ def _scaled_sum(values: Any, axes: tuple[int, ...]) -> Any:
     return numpy.where(scale == 0.0, 0.0, result)
 
 
-def _scaled_product_sum(left: Any, right: Any, axes: tuple[int, ...]) -> Any:
-    """Evaluate a product reduction through normalized device operands."""
-    reduction_axes: tuple[int, ...] | None = axes if axes else None
-    left_scale = numpy.max(numpy.abs(left), axis=reduction_axes, keepdims=True)
-    right_scale = numpy.max(numpy.abs(right), axis=reduction_axes, keepdims=True)
-    safe_left = numpy.where(left_scale == 0.0, 1.0, left_scale)
-    safe_right = numpy.where(right_scale == 0.0, 1.0, right_scale)
-    with _errstate(over="ignore", under="ignore", invalid="ignore"):
-        normalized_terms = left / safe_left * (right / safe_right)
-        normalized_sum = (
-            numpy.sum(normalized_terms, axis=axes, keepdims=True)
-            if axes
-            else normalized_terms
-        )
-        log_magnitude = (
-            numpy.log(numpy.abs(normalized_sum))
-            + numpy.log(safe_left)
-            + numpy.log(safe_right)
-        )
-        restored = numpy.copysign(numpy.exp(log_magnitude), normalized_sum)
-    zero = (left_scale == 0.0) | (right_scale == 0.0) | (normalized_sum == 0.0)
-    return numpy.where(zero, 0.0, restored)
-
-
 def _sum_axes(
     source_shape: tuple[int, ...], target_shape: tuple[int, ...]
 ) -> tuple[int, ...] | None:
@@ -96,10 +72,3 @@ def _sum_axes(
         return Shape.from_iterable(source_shape).stretched_axes_from(target_shape)
     except ValueError:
         return None
-
-
-def _stable_sum_candidate(values: Any, axes: tuple[int, ...]) -> Any:
-    """Return a provider-native guard for ordinary reduction summation."""
-    if axes:
-        return _summation_guard(values, axes=axes, keepdims=True)
-    return _summation_guard(values, mixed_signs=False)

@@ -673,17 +673,15 @@ are not restated here.
 > naming that limit. Differentiating a power three times previously failed
 > with a type error from the reverse pass instead.
 
-> **Consequence worth knowing.** The array `sum_to_shape` and
-> `sum_products_to_shape` kernels decline when a gradient contains an infinity
-> or a NaN, and `sum_to_shape` also declines on subnormals, because their
-> scaled accumulation cannot carry those values. A decline used to mean a
-> quiet trip to the Python reference; for the arithmetic VJPs it now means an
-> error. So a reverse pass through `+`, `-` or `*` whose upstream gradient has
-> already become non-finite raises under NumPy or CUDA, where it previously
-> returned a non-finite gradient computed in Python. Verified on both
-> backends. Diverging training is the obvious way to meet this. Teaching those
-> kernels to handle non-finite operands natively would remove it without
-> weakening the contract, and is not part of this change.
+> **Gradient reductions share the summation contract.** The broadcast
+> reductions of the arithmetic VJPs (`sum_to_shape`, and
+> `sum_products_to_shape` for `*`) and the accumulation of several
+> contributions to one Variable all use the deterministic pairwise tree of
+> [summation semantics](summation-semantics.md). They run natively on every
+> backend, including for non-finite and subnormal gradients, which the tree
+> classifies explicitly. A gradient that is the exact sum of large terms can
+> therefore overflow in an intermediate round and become NaN, exactly as
+> `ts.sum` of the same terms does.
 
 > **Exponentiation.** The derivatives of `**` are specified in
 > [arithmetic semantics section 12.7](arithmetic-semantics.md#127-differentiation-d7).

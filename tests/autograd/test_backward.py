@@ -73,23 +73,36 @@ class AutogradTests(unittest.TestCase):
         self.assertEqual(x.grad.tolist(), [9.0, 12.0])
         self.assertEqual(w.grad.tolist(), [3.0, 6.0])
 
-    def test_broadcast_gradient_accumulation_avoids_temporary_overflow(self):
+    def test_broadcast_gradient_accumulation_follows_the_pairwise_tree(self):
+        """The broadcast VJP is reduced by the specified tree, overflow included.
+
+        The seed is summed back to shape ``(1,)`` pairwise: the first round
+        forms ``1e308 + 1e308 = +inf`` and ``-1e308 + -1e308 = -inf``, and the
+        second adds them to NaN. The exact sum is zero, but the contract is
+        the tree, not the exact sum (docs/summation-semantics.md section 8).
+        """
         value = ts.Variable([1.0])
         output = value + ts.Tensor([0.0, 0.0, 0.0, 0.0])
         seed = ts.Tensor([1.0e308, 1.0e308, -1.0e308, -1.0e308])
 
         ts.backward(output, seed)
 
-        self.assertEqual(value.grad.tolist(), [0.0])
+        self.assertTrue(math.isnan(value.grad.tolist()[0]))
 
-    def test_shared_branch_accumulation_avoids_temporary_overflow(self):
+    def test_shared_branch_accumulation_follows_the_pairwise_tree(self):
+        """Contributions to one Variable are summed with the same tree.
+
+        The four concatenated uses contribute ``1e308, 1e308, -1e308,
+        -1e308`` in order, so the accumulation overflows exactly as the
+        broadcast reduction above does.
+        """
         value = ts.Variable([1.0])
         output = ts.concat([value, value, value, value])
         seed = ts.Tensor([1.0e308, 1.0e308, -1.0e308, -1.0e308])
 
         ts.backward(output, seed)
 
-        self.assertEqual(value.grad.tolist(), [0.0])
+        self.assertTrue(math.isnan(value.grad.tolist()[0]))
 
     def test_repeated_backward_does_not_reuse_intermediate_gradients(self):
         x = ts.Variable([1.0, 2.0])
@@ -1138,12 +1151,13 @@ class MultiplicationVjpTests(unittest.TestCase):
                     backend=backend,
                 )
 
-    def test_the_fused_reduction_preserves_exact_cancellation(self):
-        """Products that overflow, reduced to a result that does not.
+    def test_the_product_vjp_rounds_each_product_before_reducing(self):
+        """Products are formed in the dtype, then summed pairwise.
 
-        ``2 * 1e308`` is not representable, so a multiply followed by a
-        separate reduction gives infinities that cancel to NaN. The fused
-        reduction groups the factors before rounding and answers exactly.
+        ``fl(2 * 1e308)`` is ``+inf`` and ``fl(2 * -1e308)`` is ``-inf``, so
+        the group holds both infinities and the specified classification
+        makes it NaN, on every backend. The exact result would be zero; the
+        contract is the products then the tree.
         """
         for backend in self.BACKENDS:
             with self.subTest(backend=backend):
@@ -1158,9 +1172,9 @@ class MultiplicationVjpTests(unittest.TestCase):
                     derivative = ts.grad(
                         value * factor, value, grad_outputs=seed, create_graph=True
                     )
-                    self.assertProduced(
-                        derivative.data, values=[0.0], shape=(1,), backend=backend
-                    )
+                    self.assertTrue(math.isnan(derivative.data.tolist()[0]))
+                    self.assertEqual(tuple(derivative.data.shape), (1,))
+                    self.assertEqual(derivative.data.backend_storage.kind, backend)
 
                     by_seed = ts.grad(derivative, seed)
                 self.assertProduced(
@@ -1170,18 +1184,13 @@ class MultiplicationVjpTests(unittest.TestCase):
                     backend=backend,
                 )
 
-    def test_a_nonfinite_factor_is_computed_or_explicitly_refused(self):
-        """An infinity in the fused reduction is a specified refusal.
+    def test_a_nonfinite_factor_is_computed_on_every_backend(self):
+        """An infinite factor is an ordinary value of the product VJP.
 
-        The array kernels cannot carry an infinity through their scaled
-        accumulation, so they decline, and a decline under an explicit
-        selection is reported rather than answered somewhere else. The
-        Python backend accumulates exactly and returns the value. Both are
-        the specified behaviour; neither is a fallback for the other.
-
-        The other operand's VJP has no infinite factor, so it is unaffected
-        on every backend, which is what makes this a property of the
-        reduction and not of the expression.
+        ``d(a * b)/da`` is ``seed * b = [1 * inf, 1 * 1] = [inf, 1]``. No
+        backend refuses it: the products are formed in the dtype and there is
+        no reduction to perform, so every backend returns the same values on
+        the selected backend.
         """
         for backend in self.BACKENDS:
             with self.subTest(backend=backend):
@@ -1192,18 +1201,9 @@ class MultiplicationVjpTests(unittest.TestCase):
                     b = ts.Variable(ts.Tensor([math.inf, 1.0]))
                     seed = ts.Tensor([1.0, 1.0])
 
-                    if backend == "python":
-                        produced = ts.grad(a * b, a, grad_outputs=seed)
-                        self.assertEqual(produced.tolist(), [math.inf, 1.0])
-                        self.assertEqual(produced.backend_storage.kind, backend)
-                    else:
-                        with self.assertRaises(
-                            ts.BackendOperationUnsupportedError
-                        ) as raised:
-                            ts.grad(a * b, a, grad_outputs=seed)
-                        message = str(raised.exception)
-                        self.assertIn(backend, message)
-                        self.assertIn("sum_products_to_shape", message)
+                    produced = ts.grad(a * b, a, grad_outputs=seed)
+                    self.assertEqual(produced.tolist(), [math.inf, 1.0])
+                    self.assertEqual(produced.backend_storage.kind, backend)
 
                     # d/db is seed * a, which is finite everywhere.
                     other = ts.grad(a * b, b, grad_outputs=seed)

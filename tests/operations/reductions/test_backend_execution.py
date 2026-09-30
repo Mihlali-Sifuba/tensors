@@ -2,6 +2,7 @@
 
 import ast
 import math
+from fractions import Fraction
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -15,6 +16,7 @@ import tensors.backend.python.kernels as python_backend
 from tensors.backend.config import BackendOperationUnsupportedError
 from tensors.graph.computation.gradients import sum_gradient_values
 from tensors.graph.state import reset_graph_state
+from tests._pairwise_oracle import pairwise_sum
 
 BACKENDS = ("python", "numpy", "cuda")
 
@@ -129,12 +131,9 @@ class ReductionBackendExecutionTests(unittest.TestCase):
 
     def test_stability_ties_zeros_and_subnormals(self):
         def body(backend):
+            # The pairwise tree overflows to +inf and -inf, then NaN.
             difficult = ts.Tensor([1e308, 1e308, -1e308, -1e308])
-            if backend == "python":
-                self.assertEqual(ts.sum(difficult).tolist(), [0.0])
-            else:
-                with self.assertRaises(BackendOperationUnsupportedError):
-                    ts.sum(difficult)
+            self.assertTrue(math.isnan(ts.sum(difficult).item()))
             tiny = ts.Tensor([1.401298464324817e-45] * 2, dtype=ts.float32)
             self.assertEqual(ts.sum(tiny).tolist(), [2.802596928649634e-45])
             tied = ts.Variable(ts.Tensor([1.0, 1.0, 2.0]))
@@ -150,11 +149,27 @@ class ReductionBackendExecutionTests(unittest.TestCase):
         self.for_each_backend(body)
 
     def test_sum_obeys_the_documented_numerical_contract(self):
-        difficult = (
-            ("lost units", [1e16, 1.0, -1e16, 1.0] * 8, 16.0),
-            ("temporary overflow", [1e308, 1e308, -1e308, -1e308], 0.0),
-            ("mixed magnitudes", [1e300, 1.0, -1e300, 2.0], 3.0),
+        """Every backend computes the specified pairwise tree.
+
+        The first three cases are where the tree and the exact sum differ, so
+        each expectation is the oracle's tree value and is checked to differ
+        from the exact sum: lost units reduce to 0 (exact 16), the temporary
+        overflow to NaN (exact 0), and the mixed magnitudes to 0 (exact 3).
+        """
+        difficult = tuple(
+            (name, values, pairwise_sum(values))
+            for name, values in (
+                ("lost units", [1e16, 1.0, -1e16, 1.0] * 8),
+                ("temporary overflow", [1e308, 1e308, -1e308, -1e308]),
+                ("mixed magnitudes", [1e300, 1.0, -1e300, 2.0]),
+            )
         )
+        self.assertEqual(difficult[0][2], 0.0)
+        self.assertTrue(math.isnan(difficult[1][2]))
+        self.assertEqual(difficult[2][2], 0.0)
+        for _, values, expected in difficult:
+            exact = float(sum((Fraction(value) for value in values), Fraction(0)))
+            self.assertNotEqual(exact, expected)
         supported = (
             ("canonical zero", [1.0, -1.0, -0.0], 0.0),
             ("positive infinity", [math.inf, 1.0], math.inf),
@@ -169,11 +184,12 @@ class ReductionBackendExecutionTests(unittest.TestCase):
             with ts.use_backend(backend):
                 for name, values, expected in difficult:
                     with self.subTest(backend=backend, case=name):
-                        if backend == "python":
-                            self.assertEqual(ts.sum(ts.Tensor(values)).item(), expected)
+                        result = ts.sum(ts.Tensor(values))
+                        self.assertEqual(result.backend_storage.kind, backend)
+                        if math.isnan(expected):
+                            self.assertTrue(math.isnan(result.item()))
                         else:
-                            with self.assertRaises(BackendOperationUnsupportedError):
-                                ts.sum(ts.Tensor(values))
+                            self.assertEqual(result.item(), expected)
                 for name, values, expected in supported:
                     with self.subTest(backend=backend, case=name):
                         result = ts.sum(ts.Tensor(values)).item()
@@ -213,8 +229,17 @@ class ReductionBackendExecutionTests(unittest.TestCase):
 
         self.for_each_backend(body)
 
-    def test_uncertified_broadcast_sums_raise_instead_of_corrupting_gradients(self):
+    def test_broadcast_gradient_sums_share_the_public_summation_contract(self):
+        """Gradient reductions use the same tree as ``ts.sum``, on every backend.
+
+        The broadcast reduction, the accumulation of separate contributions,
+        and the derivative through ``+`` all reduce the same 32 hostile values
+        in the same order, so all three give the oracle's tree value, 0; the
+        exact sum is 16. Nothing is refused.
+        """
         hostile = [1e16, 1.0, -1e16, 1.0] * 8
+        expected = pairwise_sum(hostile)
+        self.assertEqual(expected, 0.0)
         for backend in BACKENDS:
             if backend not in ts.available_backends():
                 continue
@@ -224,19 +249,15 @@ class ReductionBackendExecutionTests(unittest.TestCase):
                 contributions = [ts.Tensor([value]) for value in hostile]
                 value = ts.Variable(ts.Tensor([1.0]))
                 output = value + ts.Tensor([0.0] * len(hostile))
-                if backend == "python":
-                    storage = backend_dispatch.execute_sum_to_shape(gradient, (1,))
-                    self.assertEqual(list(storage.buffer), [16.0])
-                    self.assertEqual(sum_gradient_values(contributions).item(), 16.0)
-                    derivative = ts.grad(output, value, grad_outputs=gradient)
-                    self.assertEqual(derivative.item(), 16.0)
-                else:
-                    with self.assertRaises(BackendOperationUnsupportedError):
-                        backend_dispatch.execute_sum_to_shape(gradient, (1,))
-                    with self.assertRaises(BackendOperationUnsupportedError):
-                        sum_gradient_values(contributions)
-                    with self.assertRaises(BackendOperationUnsupportedError):
-                        ts.grad(output, value, grad_outputs=gradient)
+                storage = backend_dispatch.execute_sum_to_shape(gradient, (1,))
+                self.assertEqual(storage.kind, backend)
+                self.assertEqual(list(storage.buffer), [expected])
+                accumulated = sum_gradient_values(contributions)
+                self.assertEqual(accumulated.backend_storage.kind, backend)
+                self.assertEqual(accumulated.item(), expected)
+                derivative = ts.grad(output, value, grad_outputs=gradient)
+                self.assertEqual(derivative.backend_storage.kind, backend)
+                self.assertEqual(derivative.item(), expected)
 
     def test_accelerated_exact_reductions_have_no_python_control_flow_loops(self):
         repository = Path(__file__).resolve().parents[3]

@@ -1,3 +1,4 @@
+import math
 import unittest
 from unittest.mock import patch
 import tensors as ts
@@ -29,15 +30,16 @@ class CudaMatmulTests(unittest.TestCase):
 class NumPyMatmulTests(NumPyParityTestCase):
     """Matrix-product kernels, their VJPs, and strict declines."""
 
-    def test_numpy_native_certificate_is_used_for_floating_point_matmul(self):
-        import tensors.backend.numpy.kernels.linalg.contraction as contraction
+    def test_numpy_pairwise_contraction_is_used_for_floating_point_matmul(self):
+        import importlib
 
-        original_sum = contraction.certified_float_sum
+        matmul_kernel = importlib.import_module("tensors.backend.numpy.kernels.linalg.matmul")
+
         with patch.object(
-            contraction, "certified_float_sum", wraps=original_sum
-        ) as certified_sum:
+            matmul_kernel, "pairwise_matmul", wraps=matmul_kernel.pairwise_matmul
+        ) as contraction:
             self._matmul("numpy", ts.full((4, 4), 2.0), ts.full((4, 4), 3.0))
-        certified_sum.assert_called_once()
+        contraction.assert_called_once()
 
     def test_numpy_kernel_is_used_for_floating_point_matmul_gradient(self):
         with patch.object(
@@ -106,12 +108,19 @@ class NumPyMatmulTests(NumPyParityTestCase):
             with self.assertRaises(BackendOperationUnsupportedError):
                 ts.matmul(left, right)
 
-    def test_temporary_overflow_is_explicitly_unsupported(self):
+    def test_temporary_overflow_follows_the_pairwise_tree(self):
+        """The products ``[1e308, 1e308, -1e308, -1e308]`` are summed pairwise.
+
+        The first round overflows to ``+inf`` and ``-inf`` and the second
+        adds them to NaN. That is the specified result on NumPy, not a
+        refusal (docs/summation-semantics.md section 8).
+        """
         with ts.use_backend("numpy"):
             left = ts.Tensor([1e308, 1e308, -1e308, -1e308])
             right = ts.Tensor([1.0, 1.0, 1.0, 1.0])
-            with self.assertRaises(BackendOperationUnsupportedError):
-                ts.matmul(left, right)
+            result = ts.matmul(left, right)
+        self.assertTrue(math.isnan(result.item()))
+        self.assertEqual(result.backend_storage.kind, "numpy")
 
 
 if __name__ == "__main__":

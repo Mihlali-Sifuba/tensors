@@ -6,8 +6,9 @@ from typing import TYPE_CHECKING, Any
 
 import cupy
 
-from tensors.backend.cuda.conversion import _storage, _widen
-from tensors.backend.cuda.kernels.linalg.contraction import certified_matmul
+from tensors.backend.cuda.conversion import _storage
+from tensors.backend.cuda.kernels.linalg.contraction import pairwise_matmul
+from tensors.backend.cuda.kernels.reductions.pairwise import to_declared_dtype
 
 if TYPE_CHECKING:
     from tensors.backend.storage import Storage
@@ -24,35 +25,33 @@ def outer_gradient(
     dtype: DataType,
     needs_input_grad: tuple[bool, ...] = (True, True),
 ) -> tuple[Storage | None, Storage | None] | None:
-    """Execute requested certified outer VJPs with CUDA-native values."""
+    """Execute requested outer-product VJPs as products then pairwise sums."""
     if dtype.kind != "floating":
         return None
     try:
-        upstream = _widen(grad_values)
-        left = _widen(left_values)
-        right = _widen(right_values)
+        upstream = to_declared_dtype(grad_values, dtype)
+        left = to_declared_dtype(left_values, dtype)
+        right = to_declared_dtype(right_values, dtype)
     except (TypeError, ValueError):
         return None
     need_left, need_right = needs_input_grad
     left_result = (
-        certified_matmul(upstream, right.reshape((right.shape[0], 1)))
+        pairwise_matmul(upstream, right.reshape((right.shape[0], 1)))
         if need_left
         else None
     )
     right_result = (
-        certified_matmul(left.reshape((1, left.shape[0])), upstream)
+        pairwise_matmul(left.reshape((1, left.shape[0])), upstream)
         if need_right
         else None
     )
-    if (need_left and left_result is None) or (need_right and right_result is None):
-        return None
     if left_result is not None:
         left_result = cupy.squeeze(left_result, axis=-1)
     if right_result is not None:
         right_result = cupy.squeeze(right_result, axis=-2)
     left_storage = (
         _storage(
-            cupy.where(left_result == 0.0, 0.0, left_result),
+            left_result,
             dtype=dtype,
             output_shape=left_shape,
         )
@@ -61,7 +60,7 @@ def outer_gradient(
     )
     right_storage = (
         _storage(
-            cupy.where(right_result == 0.0, 0.0, right_result),
+            right_result,
             dtype=dtype,
             output_shape=right_shape,
         )

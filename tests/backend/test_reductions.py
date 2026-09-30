@@ -1,8 +1,8 @@
+import math
 import unittest
 from unittest.mock import patch
 import tensors as ts
 import tensors.backend.numpy.kernels as numpy_backend
-from tensors.backend.config import BackendOperationUnsupportedError
 from tests.backend._support import NumPyParityTestCase, requires_numpy
 
 
@@ -156,11 +156,9 @@ class NumPyReductionTests(NumPyParityTestCase):
             with ts.use_backend(backend):
                 value = ts.Tensor([1e308, 1e308, -1e308, -1e308])
                 smallest = ts.Tensor([5e-324, 5e-324])
-                if backend == "python":
-                    self.assertEqual(ts.sum(value).tolist(), [0.0])
-                else:
-                    with self.assertRaises(BackendOperationUnsupportedError):
-                        ts.sum(value)
+                # The pairwise tree overflows to +inf and -inf, then NaN, on
+                # every backend; sum is no longer refused on NumPy.
+                self.assertTrue(math.isnan(ts.sum(value).item()))
                 return (
                     ts.mean(smallest).tolist(),
                     ts.variance(value).tolist(),
@@ -203,7 +201,13 @@ class NumPyReductionTests(NumPyParityTestCase):
 
         self.assertEqual(gradients("numpy"), gradients("python"))
 
-    def test_uncertified_product_cancellation_is_reported(self):
+    def test_two_term_product_cancellation_is_one_exact_addition(self):
+        """Each row of the VJP sums ``1 * 1e308`` and ``1 * -1e308``.
+
+        Both products are exact and a two-term group is a single rounded
+        addition, which is exactly zero. NumPy computes it rather than
+        refusing it, and agrees with Python.
+        """
 
         def gradient(backend):
             with ts.use_backend(backend):
@@ -212,8 +216,7 @@ class NumPyReductionTests(NumPyParityTestCase):
                 return ts.grad(ts.sum(left * right), left)
 
         self.assertEqual(gradient("python").tolist(), [0.0, 0.0])
-        with self.assertRaises(BackendOperationUnsupportedError):
-            gradient("numpy")
+        self.assertEqual(gradient("numpy").tolist(), [0.0, 0.0])
 
 
 if __name__ == "__main__":

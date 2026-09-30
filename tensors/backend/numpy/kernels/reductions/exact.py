@@ -1,4 +1,4 @@
-"""Sound native certification and exact integer reduction primitives."""
+"""Exact integer reduction primitives."""
 
 from __future__ import annotations
 
@@ -11,87 +11,6 @@ from tensors.backend.numpy.conversion import _errstate
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
-
-
-def certified_float_sum(values: Any, axes: tuple[int, ...]) -> Any | None:
-    """Return a correctly rounded native sum, or decline without guessing."""
-    if not axes:
-        return values
-    with _errstate(over="ignore", under="ignore", invalid="ignore", divide="ignore"):
-        direct = numpy.sum(values, axis=axes, keepdims=True, dtype=values.dtype)
-        nan = numpy.any(numpy.isnan(values), axis=axes, keepdims=True)
-        positive_infinity = numpy.any(numpy.isposinf(values), axis=axes, keepdims=True)
-        negative_infinity = numpy.any(numpy.isneginf(values), axis=axes, keepdims=True)
-        finite = numpy.all(numpy.isfinite(values), axis=axes, keepdims=True)
-        absolute = numpy.abs(values)
-        nonzero = numpy.isfinite(values) & (values != 0.0)
-        if values.dtype.itemsize == 8:
-            unsigned_type = numpy.uint64
-            fraction_mask = numpy.uint64((1 << 52) - 1)
-            hidden_bit = numpy.uint64(1 << 52)
-            exponent_shift = numpy.uint64(52)
-            exponent_mask = numpy.uint64(0x7FF)
-            exponent_bias = 1023
-            fraction_bits = 52
-            subnormal_exponent = -1074
-        else:
-            unsigned_type = numpy.uint32
-            fraction_mask = numpy.uint32((1 << 23) - 1)
-            hidden_bit = numpy.uint32(1 << 23)
-            exponent_shift = numpy.uint32(23)
-            exponent_mask = numpy.uint32(0xFF)
-            exponent_bias = 127
-            fraction_bits = 23
-            subnormal_exponent = -149
-        bits = absolute.view(unsigned_type)
-        exponent_field = (bits >> exponent_shift) & exponent_mask
-        mantissa = bits & fraction_mask
-        mantissa = numpy.where(exponent_field == 0, mantissa, mantissa | hidden_bit)
-        low_bit = mantissa & ((~mantissa) + unsigned_type(1))
-        trailing_zeros = numpy.where(
-            nonzero, numpy.log2(low_bit).astype(numpy.int64), 0
-        )
-        base_exponent = numpy.where(
-            exponent_field == 0,
-            subnormal_exponent,
-            exponent_field.astype(numpy.int64) - exponent_bias - fraction_bits,
-        )
-        value_exponent = base_exponent + trailing_zeros
-        quantum_exponent = numpy.min(
-            numpy.where(nonzero, value_exponent, 4096),
-            axis=axes,
-            keepdims=True,
-        )
-        safe_exponent = numpy.where(quantum_exponent == 4096, 0, quantum_exponent)
-        quantum = numpy.ldexp(
-            numpy.ones_like(safe_exponent, dtype=values.dtype), safe_exponent
-        )
-        units = numpy.where(nonzero, absolute / quantum, 0.0)
-        total_units = numpy.sum(units, axis=axes, keepdims=True, dtype=values.dtype)
-        precision = numpy.finfo(values.dtype).nmant + 1
-        exact_lattice = (total_units <= float(2**precision)) & numpy.isfinite(
-            total_units * quantum
-        )
-        minimum = numpy.min(values, axis=axes, keepdims=True)
-        maximum = numpy.max(values, axis=axes, keepdims=True)
-        same_sign_overflow = numpy.isinf(direct) & ((minimum >= 0.0) | (maximum <= 0.0))
-    nonfinite = nan | positive_infinity | negative_infinity
-    at_most_one_addition = math.prod((values.shape[axis] for axis in axes)) <= 2
-    finite_safe = at_most_one_addition | exact_lattice | same_sign_overflow
-    certified = nonfinite | (finite & finite_safe)
-    if not bool(numpy.all(certified)):
-        return None
-    both_infinities = positive_infinity & negative_infinity
-    result = numpy.where(
-        nan | both_infinities,
-        numpy.nan,
-        numpy.where(
-            positive_infinity,
-            numpy.inf,
-            numpy.where(negative_infinity, -numpy.inf, direct),
-        ),
-    )
-    return numpy.where(finite & (result == 0.0), 0.0, result)
 
 
 def _uint64_sum(items: Any, axes: tuple[int, ...], keepdims: bool) -> tuple[Any, Any]:

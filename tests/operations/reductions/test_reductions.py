@@ -20,7 +20,15 @@ class ReductionTests(unittest.TestCase):
         self.assertEqual(ts.sum(matrix, axis=0).tolist(), [5.0, 7.0, 9.0])
         self.assertEqual(ts.sum(matrix, axis=1).tolist(), [6.0, 15.0])
 
-    def test_sum_recovers_from_temporary_overflow(self):
+    def test_sum_temporary_overflow_follows_the_pairwise_tree(self):
+        """Each row is reduced with the specified tree.
+
+        Row 0 is ``[1e308, 1e308, -1e308, -1e308, 1e-300]``: the first round
+        gives ``+inf, -inf`` and carries ``1e-300``, the second gives NaN and
+        carries it again, and the third is NaN. The exact sum is ``1e-300``.
+        Row 1 is ``[1e308, 1e308, 0, 0, 0]``, whose first addition is
+        ``+inf``.
+        """
         tensor = ts.Tensor(
             [
                 1.0e308,
@@ -40,7 +48,7 @@ class ReductionTests(unittest.TestCase):
         result = ts.sum(tensor, axis=1, keepdims=True)
 
         self.assertEqual(result.shape, (2, 1))
-        self.assertEqual(result.get_host_values()[0], 1.0e-300)
+        self.assertTrue(math.isnan(result.get_host_values()[0]))
         self.assertEqual(result.get_host_values()[1], math.inf)
 
     def test_sum_keepdims(self):

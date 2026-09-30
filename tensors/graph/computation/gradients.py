@@ -76,7 +76,13 @@ def gradient_seed(
 
 
 def sum_gradient_values(gradients: list[Tensor]) -> Tensor:
-    """Combine gradient contributions without order-dependent overflow."""
+    """Combine gradient contributions with the package summation tree.
+
+    The contributions are stacked in the order the reverse pass produced
+    them and summed along that axis, so they are reduced with the same
+    deterministic pairwise tree as every other floating sum
+    (docs/summation-semantics.md).
+    """
     if len(gradients) == 1:
         return gradients[0]
 

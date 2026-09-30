@@ -1,3 +1,4 @@
+import math
 import unittest
 
 import tensors as ts
@@ -46,7 +47,13 @@ class OuterTests(unittest.TestCase):
         self.assertEqual(left.grad.tolist(), [12.0, 12.0])
         self.assertEqual(right.grad.tolist(), [3.0, 3.0, 3.0])
 
-    def test_outer_gradient_recovers_from_temporary_overflow(self):
+    def test_outer_gradient_temporary_overflow_follows_the_pairwise_tree(self):
+        """The left VJP sums ``[1e308, 1e308, -1e308]`` pairwise.
+
+        ``fl(1e308 + 1e308)`` is ``+inf`` and the odd final value is carried,
+        so the second round is ``+inf + -1e308 = +inf``. The exact sum would
+        be ``1e308``.
+        """
         left = ts.Variable([1.0])
         right = ts.Variable([1.0, 1.0, 1.0])
         result = ts.outer(left, right)
@@ -57,7 +64,7 @@ class OuterTests(unittest.TestCase):
 
         ts.backward(result, gradient)
 
-        self.assertEqual(left.grad.tolist(), [1.0e308])
+        self.assertEqual(left.grad.tolist(), [math.inf])
 
     def test_outer_recomputes_from_current_vector_values(self):
         left = ts.Variable([1.0, 2.0])

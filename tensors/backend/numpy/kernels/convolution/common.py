@@ -95,11 +95,14 @@ def _convolution_columns(
 def _convolution_operands(
     input_values: Any,
     kernel_values: Any,
+    dtype: DataType,
 ) -> tuple[Any, Any] | None:
-    """Return already-native convolution values in binary64 working precision."""
+    """Return convolution values in the declared dtype, converted exactly."""
+    from tensors.backend.numpy.kernels.reductions.pairwise import to_declared_dtype
+
     try:
-        inputs = numpy.asarray(input_values).astype(numpy.float64)
-        kernel = numpy.asarray(kernel_values).astype(numpy.float64)
+        inputs = to_declared_dtype(input_values, dtype)
+        kernel = to_declared_dtype(kernel_values, dtype)
     except (TypeError, ValueError):
         return None
     return inputs, kernel

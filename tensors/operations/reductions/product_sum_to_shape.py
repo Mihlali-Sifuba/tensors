@@ -13,13 +13,13 @@ class ProductSumToShape(Operation):
     or has as singletons. The target shape is the operation's own state, so a
     recorded invocation reduces to the shape it was written with.
 
-    The multiplication and the reduction are one step rather than two, and
-    that is the point of the operation rather than an optimisation. Forming
-    the products first can overflow to infinities that cancel to NaN, or
-    underflow to zero, where the exact reduced result is representable; the
-    kernel groups the factors before rounding them. ``sum_to_shape(left *
-    right, shape)`` is therefore a different computation, not a slower
-    spelling of this one.
+    It is a contraction and follows the package's contraction contract
+    (docs/summation-semantics.md): each product is formed once, rounded to
+    the dtype, and the products that reduce to one target position are
+    summed in logical order with the pairwise tree. A product that overflows
+    is therefore an infinity in its group, exactly as it would be for
+    ``sum_to_shape(left * right, shape)``; keeping it one operation keeps the
+    derivative rule and the recorded graph together.
 
     Multiplication's vector-Jacobian product is its best-known caller — the
     gradient with respect to one operand is the upstream gradient times the
@@ -36,11 +36,12 @@ class ProductSumToShape(Operation):
         object.__setattr__(self, "target_shape", target_shape)
 
     def forward(self, left: Tensor, right: Tensor) -> Tensor:
-        """Multiply and reduce in one step, so the product cannot lose range.
+        """Multiply in the dtype, then reduce the products pairwise.
 
-        Forming the products first can overflow to infinities that cancel to
-        NaN, or underflow to zero, where the exact reduced result is
-        representable. The kernel groups the factors before rounding them.
+        Each product is rounded once to the dtype and the products that reach
+        one target position are summed in logical order with the package's
+        pairwise tree, the contraction contract of
+        docs/summation-semantics.md.
         """
         from tensors.backend import execute_sum_products_to_shape
 
@@ -49,14 +50,13 @@ class ProductSumToShape(Operation):
         return Tensor.from_backend_storage(accelerated, dtype=left.dtype, shape=shape)
 
     def backward(self, grad, *inputs, needs_input_grad: tuple[bool, ...]):
-        """Differentiate the fused product reduction, which is itself fused.
+        """Differentiate the product reduction, which is itself one.
 
         Each operand's derivative is the same shape of computation as the
         multiplication VJP this operation implements: the upstream gradient
-        times the other operand, grouped before rounding and summed back to
-        that operand's shape. So it is expressed as this operation again,
-        and the grouping the fused kernel performs is preserved at every
-        derivative level rather than only at the first.
+        times the other operand, summed back to that operand's shape. So it
+        is expressed as this operation again, and every derivative level
+        follows the same products-then-pairwise-sum contract.
 
         The gradient arrives at the reduced shape and the reduction needs it
         at the shape the products had. Multiplying by ones is that expansion,

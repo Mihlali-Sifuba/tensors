@@ -10,6 +10,7 @@ from tensors.backend.config import (
 from tensors.backend import dispatch as backend_dispatch
 from tensors.graph import Computation
 from tensors.graph.state import reset_graph_state
+from tests._pairwise_oracle import pairwise_dot, pairwise_sum
 
 
 def _identity_case():
@@ -242,11 +243,16 @@ class ConvolutionExactnessTests(unittest.TestCase):
         self.assertIs(result.dtype, ts.int64)
         self.assertEqual(result.tolist(), [2**61 + 1])
 
-    def test_convolution_recovers_from_a_temporary_product_overflow(self):
+    def test_convolution_rounds_each_product_before_summing(self):
+        """``fl(1e300 * 1e300)`` is ``+inf`` and its negation ``-inf``.
+
+        The products are formed in the dtype and then summed pairwise, so the
+        group holds both infinities and the specified result is NaN.
+        """
         inputs = ts.Tensor([[[1e300, 1e300]]])
         kernel = ts.Tensor([[[1e300, -1e300]]])
         result = ts.conv1d(inputs, kernel)
-        self.assertEqual(result.tolist(), [0.0])
+        self.assertTrue(math.isnan(result.item()))
 
 
 class ConvolutionValidationTests(unittest.TestCase):
@@ -877,16 +883,16 @@ class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
                 kernel = ts.Tensor([1.0] * 4, shape=(4, 1, 1))
                 with patch.object(
                     forward_module,
-                    "certified_matmul",
-                    wraps=forward_module.certified_matmul,
+                    "pairwise_matmul",
+                    wraps=forward_module.pairwise_matmul,
                 ) as certified:
                     output = ts.conv1d(inputs, kernel)
                 self.assertGreaterEqual(certified.call_count, 2)
                 grad = ts.Tensor([1.0] * 8, shape=output.shape)
                 with patch.object(
                     gradient_module,
-                    "certified_matmul",
-                    wraps=gradient_module.certified_matmul,
+                    "pairwise_matmul",
+                    wraps=gradient_module.pairwise_matmul,
                 ) as certified:
                     backend_dispatch.execute_convolution_gradient(
                         grad,
@@ -902,8 +908,8 @@ class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
                 self.assertGreaterEqual(certified.call_count, 2)
                 with patch.object(
                     gradient_module,
-                    "certified_matmul",
-                    wraps=gradient_module.certified_matmul,
+                    "pairwise_matmul",
+                    wraps=gradient_module.pairwise_matmul,
                 ) as certified:
                     backend_dispatch.execute_convolution_gradient(
                         grad,
@@ -918,38 +924,46 @@ class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
                     )
                 self.assertGreaterEqual(certified.call_count, 2)
 
-    def test_hostile_finite_forward_cancellation_conforms_or_declines(self):
-        with ts.use_backend("python"):
-            expected = ts.conv1d(
-                ts.Tensor([1e16, 1.0, -1e16], shape=(1, 1, 3)),
-                ts.Tensor([1.0, 1.0, 1.0], shape=(1, 1, 3)),
-            ).tolist()
-        self.assertEqual(expected, [1.0])
-        for backend in ts.available_backends():
-            if backend == "python":
-                continue
-            with self.subTest(backend=backend), ts.use_backend(backend):
-                try:
-                    result = ts.conv1d(
-                        ts.Tensor([1e16, 1.0, -1e16], shape=(1, 1, 3)),
-                        ts.Tensor([1.0, 1.0, 1.0], shape=(1, 1, 3)),
-                    )
-                except BackendOperationUnsupportedError:
-                    continue
-                self.assertEqual(result.tolist(), expected)
+    def test_hostile_finite_forward_cancellation_follows_the_pairwise_tree(self):
+        """The products ``[1e16, 1, -1e16]`` are summed pairwise.
 
-    def test_hostile_vjp_cancellation_conforms_or_declines(self):
+        ``fl(1e16 + 1)`` is ``1e16``, because the spacing of doubles at
+        ``1e16`` is 2, and adding ``-1e16`` then gives exactly zero. The exact
+        sum is 1; the specified result is 0 on every backend.
+        """
+        self.assertEqual(pairwise_dot([1e16, 1.0, -1e16], [1.0, 1.0, 1.0]), 0.0)
+        for backend in ts.available_backends():
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                result = ts.conv1d(
+                    ts.Tensor([1e16, 1.0, -1e16], shape=(1, 1, 3)),
+                    ts.Tensor([1.0, 1.0, 1.0], shape=(1, 1, 3)),
+                )
+                self.assertEqual(result.tolist(), [0.0])
+                self.assertEqual(result.backend_storage.kind, backend)
+
+    def test_hostile_vjp_cancellation_follows_the_pairwise_tree(self):
+        """Each VJP element is a fixed term sequence summed pairwise.
+
+        Input VJP, padding 1, unit upstream: position ``c`` runs over kernel
+        offsets 0, 1, 2 and each offset reaches output ``c + 1 - offset`` or
+        contributes an exact zero term. The sequences are
+        ``[1e16, 1, 0]``, ``[1e16, 1, -1e16]`` and ``[0, 1, -1e16]``, which
+        reduce to ``1e16``, ``0`` and ``-1e16``.
+
+        Kernel VJP: the one weight's gradient runs over the three positions,
+        ``[1e16, 1, -1e16]``, which reduces to ``0``.
+        """
         cases = (
             (
                 [0.0, 0.0, 0.0],
                 (1, 1, 3),
                 [1e16, 1.0, -1e16],
                 (1, 1, 3),
-                [1.0] * 5,
-                (1, 1, 5),
+                [1.0] * 3,
+                (1, 1, 3),
                 (True, False),
                 (1,),
-                [1.0, 1.0, 1.0],
+                [1e16, 0.0, -1e16],
             ),
             (
                 [1e16, 1.0, -1e16],
@@ -960,7 +974,7 @@ class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
                 (1, 1, 3),
                 (False, True),
                 (0,),
-                [1.0],
+                [0.0],
             ),
         )
         for case in cases:
@@ -976,8 +990,6 @@ class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
                 expected,
             ) = case
             for backend in ts.available_backends():
-                if backend == "python":
-                    continue
                 with (
                     self.subTest(backend=backend, needs=needs),
                     ts.use_backend(backend),
@@ -985,56 +997,59 @@ class ConvolutionSelectedBackendExecutionTests(unittest.TestCase):
                     inputs = ts.Tensor(input_values, shape=input_shape)
                     kernel = ts.Tensor(kernel_values, shape=kernel_shape)
                     grad = ts.Tensor(grad_values, shape=grad_shape)
-                    try:
-                        result = backend_dispatch.execute_convolution_gradient(
-                            grad,
-                            inputs,
-                            kernel,
-                            stride=(1,),
-                            padding=padding,
-                            dilation=(1,),
-                            groups=1,
-                            include_bias=False,
-                            needs_input_grad=needs,
-                        )
-                    except BackendOperationUnsupportedError:
-                        continue
-                    storage = result[0] if needs[0] else result[1]
-                    self.assertEqual(list(storage.buffer), expected)
-
-    def test_hostile_bias_vjp_reduction_conforms_or_declines(self):
-        for backend in ts.available_backends():
-            if backend == "python":
-                continue
-            with self.subTest(backend=backend), ts.use_backend(backend):
-                inputs = ts.Tensor([0.0, 0.0, 0.0], shape=(1, 1, 3))
-                kernel = ts.Tensor([1.0], shape=(1, 1, 1))
-                grad = ts.Tensor([1e16, 1.0, -1e16], shape=(1, 1, 3))
-                try:
                     result = backend_dispatch.execute_convolution_gradient(
                         grad,
                         inputs,
                         kernel,
                         stride=(1,),
-                        padding=(0,),
+                        padding=padding,
                         dilation=(1,),
                         groups=1,
-                        include_bias=True,
-                        needs_input_grad=(False, False, True),
+                        include_bias=False,
+                        needs_input_grad=needs,
                     )
-                except BackendOperationUnsupportedError:
-                    continue
-                self.assertEqual(list(result[2].buffer), [1.0])
+                    storage = result[0] if needs[0] else result[1]
+                    self.assertEqual(storage.kind, backend)
+                    self.assertEqual(list(storage.buffer), expected)
 
-    def test_accelerated_product_underflow_is_explicitly_unsupported(self):
+    def test_hostile_bias_vjp_reduction_follows_the_pairwise_tree(self):
+        """The bias gradient is the upstream ``[1e16, 1, -1e16]`` summed pairwise.
+
+        ``fl(1e16 + 1) + (-1e16)`` is exactly zero on every backend.
+        """
+        self.assertEqual(pairwise_sum([1e16, 1.0, -1e16]), 0.0)
         for backend in ts.available_backends():
-            if backend == "python":
-                continue
+            with self.subTest(backend=backend), ts.use_backend(backend):
+                inputs = ts.Tensor([0.0, 0.0, 0.0], shape=(1, 1, 3))
+                kernel = ts.Tensor([1.0], shape=(1, 1, 1))
+                grad = ts.Tensor([1e16, 1.0, -1e16], shape=(1, 1, 3))
+                result = backend_dispatch.execute_convolution_gradient(
+                    grad,
+                    inputs,
+                    kernel,
+                    stride=(1,),
+                    padding=(0,),
+                    dilation=(1,),
+                    groups=1,
+                    include_bias=True,
+                    needs_input_grad=(False, False, True),
+                )
+                self.assertEqual(list(result[2].buffer), [0.0])
+                self.assertEqual(result[2].kind, backend)
+
+    def test_product_underflow_is_rounded_like_any_product(self):
+        """``fl(1e-300 * 1e-300)`` underflows to zero on every backend.
+
+        The product is formed once in the dtype; it is a result, not a
+        reason to refuse the convolution.
+        """
+        for backend in ts.available_backends():
             with self.subTest(backend=backend), ts.use_backend(backend):
                 inputs = ts.Tensor([1e-300], shape=(1, 1, 1))
                 kernel = ts.Tensor([1e-300], shape=(1, 1, 1))
-                with self.assertRaises(BackendOperationUnsupportedError):
-                    ts.conv1d(inputs, kernel)
+                result = ts.conv1d(inputs, kernel)
+                self.assertEqual(result.tolist(), [0.0])
+                self.assertEqual(result.backend_storage.kind, backend)
 
     def test_nonfinite_padded_kernel_declines_instead_of_using_padding_as_data(self):
         for backend in ts.available_backends():

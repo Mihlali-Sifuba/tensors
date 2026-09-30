@@ -1,205 +1,287 @@
 # Summation semantics
 
-The numerical contract for floating reductions, and the algorithm intended
-to implement it.
+The numerical contract for multi-term floating accumulation: sums, the
+reductions inside contractions, and gradient accumulation.
 
-**Status: specification and validated algorithm; exact accumulation is not yet
-implemented.** The contract below is decided. The algorithm below is prototyped
-and checked against an exact oracle. NumPy and CUDA currently use the sound
-native certification boundary described in §7: they return a value only when
-correct rounding is established, and otherwise report the operation as
-unsupported. The cost measured in §5 and the product decision in §6 still
-block a complete native implementation.
+**Status: implemented on the Python, NumPy and CUDA backends.** Every backend
+executes the algorithm below natively on its own storage. None refuses an
+ordinary finite reduction, and none answers through another backend.
 
 ## 1. The contract
 
-For `float32` and `float64` reductions:
+> **Floating summation uses a deterministic balanced pairwise reduction tree
+> in the declared dtype.**
 
-> **Sum the represented finite input values exactly, then round once to the
-> declared output dtype, round-to-nearest, ties-to-even.**
+A floating sum is **not** defined as the exact real sum rounded once. It is
+defined as a specified sequence of correctly rounded additions, and the
+result of that sequence is the answer, including where it differs from the
+exact sum.
 
-Consequences, each of which is a requirement:
+Two things are deliberately *not* relaxed:
 
-- Cancellation survives even when an intermediate floating sum would
-  overflow. `[1e308, 1e308, -1e308, -1e308]` sums to `0.0`, not NaN.
-- A representable result never becomes an infinity or a zero through
-  intermediate range loss.
-- A `float32` result rounds **directly** to `float32`. Rounding through
-  `float64` and narrowing is not assumed equivalent and is not permitted as
-  the implementation.
-- Subnormal operands and subnormal results are preserved.
-- Permuting the inputs, or changing how the reduction is partitioned, does
-  not change the result.
-- A final value beyond the format's range rounds to the correctly signed
-  infinity.
-- Any NaN input gives NaN.
-- Both `+inf` and `-inf` present in one group gives NaN.
-- `+inf` without `-inf` or NaN gives `+inf`; the mirror case gives `-inf`.
-- An exactly zero finite sum gives canonical `+0.0` — including a sum that
-  cancels to zero, and a group containing only negative zeros.
-- An empty reduction group gives `+0.0`.
-- NaN payload and NaN sign are unspecified.
+- **Elementary arithmetic is unchanged.** `a + b`, `a - b`, `a * b` and
+  `a / b` remain correctly rounded in the declared dtype, as
+  [arithmetic semantics](arithmetic-semantics.md) specifies. The pairwise
+  tree is built out of exactly those correctly rounded additions.
+- **Integer reductions are unchanged.** They are exact, and overflow of the
+  declared width raises `OverflowError`.
 
-An empty reduction *group* is distinct from a zero-sized *output* and from
-an axis selection that reduces nothing; the existing axis, shape, `keepdims`
-and dtype-selection behaviour is unchanged.
+Backend selection decides where a sum runs. It does not decide how the sum is
+computed.
 
-**Scope.** This governs floating summation only. Integer reduction
-behaviour is unchanged and is not given a new policy here.
+## 2. The algorithm
 
-This is a specification-owned contract. Python, NumPy and CUDA are three
-implementations of it. None is the reference for the others.
+For one reduction group `x[0], x[1], ..., x[n-1]`, taken in the logical order
+of §3:
 
-## 2. Why the obvious algorithms do not qualify
+1. **Round 1.** Add adjacent pairs: `s[0] = fl(x[0] + x[1])`,
+   `s[1] = fl(x[2] + x[3])`, and so on. If the round has an odd number of
+   values, the final unpaired value is carried into the next round unchanged.
+2. **Later rounds.** Repeat the same adjacent-pair step on the previous
+   round's values: `s'[j] = fl(s[2j] + s[2j+1])`, carrying an odd final value.
+3. Continue until one value remains. That value is the tree result.
+4. Apply the non-finite classification of §9 and the zero rule of §10.
 
-**Native `sum`** is order-dependent and loses cancellation. Measured
-against the stable Python reference over 400 ordinary random reductions,
-the NumPy kernel differed in **101** of them — the disagreement is routine,
-not exotic.
+`fl` is one correctly rounded addition in the declared dtype (§4). No
+provider may choose another tree: not NumPy's `sum`, not CuPy's `sum`, not a
+BLAS blocking, not a thread schedule.
 
-**Pairwise summation** does not satisfy the contract and must not be
-described as though it does. For `[1e16, 1.0, -1e16, 1.0] * 8` the exact
-sum is `16.0`, and an adjacent-pair reduction tree returns `0.0`.
+For example, `[a, b, c, d, e]` reduces as `((a + b) + (c + d)) + e`, and
+`[a, b, c]` as `(a + b) + c`.
 
-**Compensated (Kahan/Neumaier) summation** carries one correction term. It
-improves accuracy but is neither exact nor overflow-tolerant: the contract
-requires a finite answer where an intermediate would overflow, and a
-compensated accumulator overflows with the sum.
+## 3. Logical order
 
-## 3. The algorithm: exact fixed-point accumulation
+The input sequence of a group is determined by the tensor's **logical**
+values, never its physical layout:
 
-### 3.1 Accumulator representation
+- Reduced axes are taken in increasing axis order, whatever order the caller
+  named them in.
+- The group is the reduced coordinates in row-major order over those axes.
+- Strides, offset, tiling, kernel launch geometry and provider partitioning
+  do not enter.
 
-Every finite binary64 is exactly `s · m · 2**q` with `m` a 53-bit integer
-and `q` in `[-1074, 971]`. So **every finite binary64 is an integer
-multiple of `2**-1074`**, and `|x| < 2**1024`.
+So `ts.sum(x, axis=(3, 1))` and `ts.sum(x, axis=(1, 3))` reduce the same
+sequence, and a transposed view reduces in its logical order.
 
-Working in units of `2**-1074` therefore turns a floating sum into an
-**integer** sum. The accumulator is a signed fixed-point integer with that
-unit, held as `int64` limbs of `B = 24` bits.
+## 4. Dtype rounding
 
-For binary32 the same argument gives units of `2**-149` and `|x| < 2**128`.
+Every addition in the tree rounds to the declared reduction dtype
+immediately:
 
-### 3.2 How cancellation is preserved
+- `float64`: each addition is one binary64 addition.
+- `float32`: each addition is one binary32 addition. A `float32` group is
+  never accumulated in binary64 and narrowed at the end, which would be a
+  different algorithm with different results.
 
-It is not preserved — it is *exact*. No rounding happens during
-accumulation, so `1e16 + 1.0 - 1e16 + 1.0` loses nothing: the four integers
-cancel in the fixed-point accumulator and the `1.0` terms remain. Range
-loss cannot occur either, because no intermediate is ever a float.
+How each backend achieves that:
 
-### 3.3 Capacity against reduction length
+- **Python** computes each two-operand addition in binary64, where the exact
+  sum of two binary32 values fits, and rounds that single result to binary32
+  before it enters the next round.
+- **NumPy** adds `float32` arrays in `float32`.
+- **CUDA** adds `float32` arrays with the explicit `add.rn.f32` PTX instruction
+  (`kernels/arithmetic/ieee32.py`). CuPy's generated `float32` code flushes
+  subnormals on this toolchain, and the explicit instruction does not.
 
-An N-term binary64 sum needs `1074 + 1024 + ceil(log2 N)` bits, so
-`L = ceil(2098 / 24) + 3 = 91` limbs covers any reduction up to
-`2**(3·24)` terms — far beyond any representable tensor.
+Dtype promotion outside summation is unchanged.
 
-Each element contributes to at most 6 limb slots: the 53-bit mantissa is
-split into three ≤24-bit pieces, each piece shifted by at most 23 bits
-stays below `2**47`, and each lands across two adjacent limbs. A limb
-therefore grows by less than `2**47` per element, so an `int64` limb absorbs
-more than `2**15` elements before needing a carry, and a carry
-normalisation pass restores headroom.
+## 5. Determinism and cross-backend identity
 
-### 3.4 Combining partial accumulators
+For a fixed logical value sequence, shape, reduction axes and dtype, the
+result is deterministic. Each step is a correctly rounded IEEE addition, so
+every backend that implements the same tree produces the **same bits** for
+every finite and infinite result. NaN payload and NaN sign are unspecified.
 
-Two accumulators combine by limb-wise integer addition — associative,
-commutative and exact. Carries are propagated once, at the end. This is
-what makes a partitioned or parallel reduction give the same answer as a
-serial one.
+Tests compare backends bit for bit, and every backend is compared against an
+independent reference implementation of this tree (`tests/_pairwise_oracle.py`),
+not against another backend.
 
-### 3.5 Order independence
+## 6. Error bound
 
-Integer addition is associative and commutative, and no step rounds. The
-result depends only on the multiset of inputs, so permutation and partition
-cannot change it. This is an argument, not a sampling result.
+For a finite group of `n` elements without intermediate overflow, let
+`k = ceil(log2 n)` be the depth of the tree and `S = sum(x)` the exact real
+sum. With the unit roundoff `u` (`2**-24` for `float32`, `2**-53` for
+`float64`) and the smallest positive subnormal `η` of the dtype:
 
-### 3.6 Final rounding
+```text
+|Ŝ - S|  <=  ((1 + u)**k - 1) * sum(|x_i|)  +  (n - 1) * (η / 2) * (1 + u)**k
+```
 
-From the exact fixed-point integer:
+**Justification.** Model each addition as
+`fl(a + b) = (a + b)(1 + δ) + ε` with `|δ| <= u` and `|ε| <= η/2`. Unrolling
+the tree:
 
-1. Locate the most significant set bit to get the result exponent.
-2. Take the leading 53 bits (24 for binary32) as the candidate significand.
-3. Form the round bit and the sticky bit from everything below it.
-4. Apply round-to-nearest, ties-to-even.
-5. If the exponent is below the format's minimum normal, re-round at the
-   subnormal quantum instead — which is why the accumulator's unit is the
-   subnormal quantum, so this needs no separate path.
-6. If the rounded value exceeds the format's maximum, return the signed
-   infinity.
-7. An accumulator of exactly zero returns `+0.0`.
+- each input `x_i` reaches the root through at most `k` additions, so it is
+  multiplied by at most `k` factors `(1 + δ)`;
+- each of the `n - 1` additions contributes one `ε`, which is then multiplied
+  by at most `k` further factors.
 
-Rounding happens **once**, from the exact value, directly into the
-destination format. That is what makes the binary32 result correct without
-a double-rounding argument.
+Bounding `|Π(1 + δ) - 1| <= (1 + u)**k - 1` for each input, and
+`|ε · Π(1 + δ)| <= (η/2)(1 + u)**k` for each addition, gives the bound.
 
-Non-finite inputs are classified before accumulation: any NaN gives NaN;
-both infinities give NaN; one infinity gives that infinity.
+The second term is conservative. With gradual underflow, an addition whose
+result is subnormal is exact, so `ε` is in fact zero for additions. It is kept
+so that the bound needs no appeal to that theorem.
 
-## 4. Validation of the algorithm
+For small `k·u`, `(1 + u)**k - 1 <= k·u / (1 - k·u)`. The error therefore
+grows with `log2 n` rather than with `n`, as sequential summation's does.
 
-The accumulator was prototyped in NumPy and compared against an exact
-Python-integer oracle built from `float.as_integer_ratio`. It reproduced
-the exact sum on cancellation (`[1e16, 1, -1e16, 1] * 8`), intermediate
-overflow (`[1e308, 1e308, -1e308, -1e308]`), subnormals, mixed magnitudes
-spanning `2**-200` to `2**200`, and random values.
+The bound applies only without intermediate overflow (§8). Tests check it
+against an exact rational oracle for random signs, cancellation, mixed
+magnitudes, subnormals, and odd and even lengths, in both dtypes.
 
-That validates the *accumulation*. The rounding path of §3.6 is specified
-but not yet prototyped, and it is where the remaining risk sits.
+## 7. Underflow and subnormals
 
-## 5. Measured cost
+Gradual underflow is required. Subnormal inputs, intermediate values and
+results take part according to the declared dtype. No backend enables or
+relies on flush-to-zero; §4 describes how CUDA avoids it for `float32`.
 
-Exact accumulation against `numpy.sum`, float64, one reduction:
+## 8. Intermediate overflow
 
-| elements | `numpy.sum` | exact | ratio |
+**Breaking change.** The previous contract summed exactly and so survived
+intermediate overflow. It required `[1e308, 1e308, -1e308, -1e308]` to sum to
+`0.0`. Under this contract:
+
+1. round 1 gives `fl(1e308 + 1e308) = +inf` and `fl(-1e308 + -1e308) = -inf`;
+2. round 2 gives `+inf + -inf = NaN`.
+
+`NaN` is the specified result. No exact recovery is attempted. The algorithm
+stays fully specified when an intermediate overflows; only the error bound of
+§6 does not apply.
+
+## 9. Non-finite inputs
+
+A group containing non-finite **inputs** is classified explicitly, whatever
+the tree would give:
+
+| inputs | result |
+| --- | --- |
+| any NaN | NaN |
+| both `+inf` and `-inf` | NaN |
+| `+inf`, no `-inf`, no NaN | `+inf` |
+| `-inf`, no `+inf`, no NaN | `-inf` |
+
+So `[-1e308, -1e308, +inf]` is `+inf`, even though its first round
+overflows to `-inf`. The classification runs on the selected backend; CUDA
+values are never copied to the host to classify them.
+
+## 10. Zero and empty groups
+
+- An empty group sums to `+0.0`.
+- A result that compares equal to zero is returned as canonical `+0.0`. That
+  includes exact cancellation and groups of only `-0.0`.
+
+No backend exposes a `-0.0` sum.
+
+## 11. Contractions
+
+A contraction is a product then a sum:
+
+```text
+C[i, j] = pairwise_sum( fl(A[i, 0] * B[0, j]), ..., fl(A[i, m-1] * B[m-1, j]) )
+```
+
+Each product is formed once and rounded to the dtype, then the products are
+reduced in increasing contraction-index order with the tree of §2. No fused
+multiply-add replaces the rounded product. Provider matrix products (BLAS,
+cuBLAS, `numpy.matmul`) are not used, because their blocking and FMA choose a
+different summation.
+
+This applies to:
+
+- **`dot` and `matmul`**, including batched and broadcast products, over the
+  contracted axis.
+- **The `matmul` VJPs**, in two stages. First the contraction over the
+  broadcast batch (the left VJP sums over columns, the right VJP over rows).
+  Then any batch axes the operand was broadcast along are summed back to its
+  shape with the tree.
+- **The `outer` VJPs**: each is a contraction over the other vector's index.
+- **Convolution.** An output element contracts its whole receptive field:
+  the group's input channels in order, and within each channel the kernel
+  offsets in row-major order. A tap that falls in the padding is an exact
+  zero term, not skipped, so every backend's tree has the same shape. A bias
+  is then one more rounded addition. The array backends still refuse a padded
+  convolution whose kernel contains a non-finite weight, because `0 * inf`
+  would otherwise be used as data.
+- **Convolution VJPs**, each over a fixed term sequence, with an exact zero
+  for a combination that contributes nothing:
+  - an input gradient runs over the kernel offsets and, within each offset,
+    over the group's output channels;
+  - a kernel gradient runs over the batch and, within it, the output positions;
+  - a bias gradient sums the upstream over the batch and the output positions.
+- **`ProductSumToShape`** (the broadcast VJP of `*`): products in the dtype,
+  then the tree over the broadcast axes.
+
+An overflowing product is therefore an infinity in its group. For example,
+`fl(1e308 * 2)` and `fl(1e308 * -2)` are `+inf` and `-inf`, so the dot
+product `[1e308, 1e308] · [2, -2]` is NaN.
+
+## 12. Gradients
+
+There are no separate gradient summation semantics:
+
+- Broadcast gradient reductions (`sum_to_shape`) use the tree over the
+  stretched axes.
+- Contributions to one Variable from several uses are stacked in the order
+  the reverse pass produces them and summed with the tree.
+- The contraction VJPs follow §11.
+
+A backward pass never fails because a reduction group cannot be proved
+exactly rounded.
+
+## 13. Execution and residency
+
+- The selected backend executes the tree, and its result stays in that
+  backend's storage. There is no fallback to Python and no migration between
+  backends.
+- NumPy and CUDA run each tree level as one native array operation over every
+  group at once. Only the `O(log n)` levels are iterated in Python; no
+  per-element Python loop runs on those backends.
+- CUDA reads nothing back to the host to compute or classify a sum.
+- `BackendOperationUnsupportedError` remains the answer for an operation a
+  backend genuinely does not implement (for example integer matrix products
+  on the array backends). An ordinary finite floating sum is always supported.
+
+## 14. How the tree differs from the exact sum
+
+| inputs | pairwise tree | exact sum | why |
 | --- | --- | --- | --- |
-| 1,000 | 14.3 µs | 272.6 µs | 19× |
-| 100,000 | 30.8 µs | 14.3 ms | 464× |
-| 1,000,000 | 599.6 µs | 139.1 ms | 232× |
+| `[0.1, 0.2, 0.3]` | `0.6000000000000001` | `0.6` (rounded) | `fl(fl(0.1 + 0.2) + 0.3)` |
+| `[1e16, 1, -1e16, 1]` | `0.0` | `2.0` | `fl(1e16 + 1) = 1e16` and `fl(-1e16 + 1) = -1e16` |
+| `[-1e16, 1, 1e16, 1, -2]` | `-2.0` | `0.0` | left-to-right summation gives `-1.0` |
+| `[1e308, 1e308, -1e308, -1e308]` | `NaN` | `0.0` | intermediate overflow, §8 |
+| `[1e308, 1e308, -1e308]` | `+inf` | `1e308` | `+inf` carried, then `+inf - 1e308` |
 
-The cost is dominated by the scatter into limbs, not by arithmetic.
+For `float32`, `[-1.0, 2**-24, -2**-24, -0.001, -0.001]` (inputs rounded to
+binary32) reduces to `-1.002000093460083` with per-addition rounding. It
+would be `-1.0019999742507935` if the group were accumulated in binary64 and
+narrowed once.
 
-**Memory.** A grouped reduction needs one accumulator per output element:
-`groups × 91 × 8` bytes. Reducing `(1e6, 10)` along the last axis therefore
-needs about **728 MB** of accumulator for an 80 MB input.
+## 15. Scope
 
-## 6. The decision this forces
+This contract governs multi-term floating accumulation performed by the
+summation machinery: `ts.sum`, `sum_to_shape`, gradient accumulation, and the
+contractions of §11. Operations with their own specified numerics are not
+redefined by it: `mean`, `variance`, `std`, `norm`, `logsumexp`, softmax and
+log-softmax, the losses and the optimizer updates. They run natively on
+ordinary data on every backend.
 
-Applying §3 unconditionally would make every floating reduction — and so
-every broadcast gradient reduction — 19× to 464× slower, with the memory
-cost above. That is a product decision, not an implementation detail:
+## Appendix A. Historical: exact accumulation (not implemented, not required)
 
-1. **Accept the cost.** Simplest and unconditionally correct.
-2. **Fast path with an exact fallback.** Take a native sum plus a *sound*
-   certificate that it is already correctly rounded, and fall back to §3
-   only when the certificate fails. Both paths native, so the contract and
-   residency both hold, and ordinary data pays almost nothing. The
-   certificate has to be provably sound; an unsound one silently breaks the
-   contract.
-3. **Restrict the contract's scope**, for example to gradient reductions
-   only, leaving `ts.sum` as it is.
+The previous contract was *"sum the represented finite inputs exactly, then
+round once to the destination dtype"*. To meet it without refusing, the NumPy
+and CUDA backends would have needed an exact fixed-point accumulator: every
+finite binary64 is an integer multiple of `2**-1074`, so a sum can be
+accumulated exactly in about 91 integer limbs of 24 bits and rounded once at
+the end.
 
-Option 2 is the recommendation. It is also materially more work than
-option 1 and needs its own soundness argument.
+A prototype matched an exact oracle on cancellation, intermediate overflow,
+subnormals and mixed magnitudes. It measured 19× to 464× slower than
+`numpy.sum` (1,000 to 1,000,000 elements), with an accumulator of
+`groups × 91 × 8` bytes. Until then the array backends used a certificate that
+accepted only the few groups it could prove exactly rounded, and refused
+ordinary data such as `[0.1, 0.2, 0.3]`.
 
-## 7. What the package does today
-
-Until the exact accumulator is implemented:
-
-- The Python backend uses its stable reference summation, including the exact
-  ratio recovery needed when a temporary binary64 total would overflow.
-- NumPy and CUDA perform the reduction on their own native values only when a
-  sound certificate proves the provider result conforming. The certificate
-  accepts IEEE non-finite classifications, empty and zero groups, a single
-  correctly rounded addition, finite groups whose exact binary lattice sum fits
-  both the dtype significand and its intermediate range. The certificate uses
-  only a bounded number of provider-native array operations; it never iterates
-  over reduction elements in Python.
-- A finite group that is not certified returns `None`; strict dispatch turns
-  that into `BackendOperationUnsupportedError`. There is no Python fallback.
-- `reduce_sum`, `sum_to_shape`, and gradient accumulation through `Sum` share
-  this boundary, so an uncertified broadcast gradient fails explicitly rather
-  than returning an inaccurate derivative.
-
-This preserves the numerical contract and selected-backend residency while
-leaving full support for all finite groups to the exact accumulator described
-above.
+That design is kept here only as background for a possible future opt-in
+exact mode. It is not implemented and it is not the package contract. The
+full earlier text is in the Git history of this file.

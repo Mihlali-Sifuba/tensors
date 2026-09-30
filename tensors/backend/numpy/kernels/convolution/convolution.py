@@ -12,8 +12,11 @@ from tensors.backend.numpy.kernels.convolution.common import _convolution_operan
 from tensors.backend.numpy.kernels.convolution.common import _convolution_storage
 from tensors.backend.numpy.kernels.convolution.common import _convolution_tiles
 from tensors.backend.numpy.kernels.convolution.common import _pad_convolution_input
-from tensors.backend.numpy.kernels.linalg.contraction import certified_matmul
-from tensors.backend.numpy.kernels.reductions.exact import certified_float_sum
+from tensors.backend.numpy.kernels.linalg.contraction import pairwise_matmul
+from tensors.backend.numpy.kernels.reductions.pairwise import (
+    pairwise_float_sum,
+    to_declared_dtype,
+)
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -37,7 +40,7 @@ def convolution(
     """Run grouped cross-correlation in bounded native matrix-product tiles."""
     if dtype.kind != "floating":
         return None
-    operands = _convolution_operands(input_values, kernel_values)
+    operands = _convolution_operands(input_values, kernel_values, dtype)
     if operands is None:
         return None
     input_values, kernel_values = operands
@@ -47,7 +50,7 @@ def convolution(
         input_values = input_values.reshape((1,) + tuple(input_values.shape))
     if bias_values is not None:
         try:
-            bias_values = numpy.asarray(bias_values).astype(numpy.float64)
+            bias_values = to_declared_dtype(bias_values, dtype)
         except (TypeError, ValueError):
             return None
         if tuple(bias_values.shape) != bias_shape:
@@ -97,12 +100,10 @@ def convolution(
                 channel_base = group * group_outputs
                 for channel_start in range(0, group_outputs, channel_extent):
                     channel_stop = min(channel_start + channel_extent, group_outputs)
-                    tile = certified_matmul(
+                    tile = pairwise_matmul(
                         matrix[group : group + 1, channel_start:channel_stop],
                         column_matrix[:, group : group + 1],
                     )
-                    if tile is None:
-                        return None
                     target = (
                         batch_slice,
                         slice(
@@ -127,9 +128,7 @@ def convolution(
                 ),
                 axis=0,
             )
-            summed = certified_float_sum(terms, (0,))
-            if summed is None:
-                return None
+            summed = pairwise_float_sum(terms, (0,))
             result = numpy.squeeze(summed, axis=0)
     logical_result = result if batched else result[0]
     return _convolution_storage(logical_result, dtype=dtype, output_shape=output_shape)

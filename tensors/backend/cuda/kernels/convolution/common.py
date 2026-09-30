@@ -7,7 +7,7 @@ from typing import Any
 from typing import TYPE_CHECKING
 from tensors.backend.storage import Storage
 from tensors.backend.cuda.conversion import _shape_size
-from tensors.backend.cuda.conversion import _storage, _widen
+from tensors.backend.cuda.conversion import _storage
 
 if TYPE_CHECKING:
     from tensors.dtype import DataType
@@ -95,11 +95,14 @@ def _convolution_columns(
 def _convolution_operands(
     input_values: Any,
     kernel_values: Any,
+    dtype: DataType,
 ) -> tuple[Any, Any] | None:
-    """Return already-native convolution values in safe working precision."""
+    """Return convolution values in the declared dtype, converted exactly."""
+    from tensors.backend.cuda.kernels.reductions.pairwise import to_declared_dtype
+
     try:
-        inputs = _widen(cupy.asarray(input_values))
-        kernel = _widen(cupy.asarray(kernel_values))
+        inputs = to_declared_dtype(input_values, dtype)
+        kernel = to_declared_dtype(kernel_values, dtype)
     except (TypeError, ValueError):
         return None
     return inputs, kernel
